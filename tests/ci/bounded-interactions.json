@@ -14196,10 +14196,42 @@
       "rollback": "Revert fix(move) per-folder cover lookup, with its contract."
     },
     {
-      "id": "py:services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository.refresh",
-      "action": "Run refresh MusicBrainzCorrectionsPostgresRepository.refresh",
+      "id": "py:services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository._refresh_albums",
+      "action": "Run refresh MusicBrainzCorrectionsPostgresRepository._refresh_albums",
       "entrypoints": [
-        "py:music_app/services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository.refresh:refresh:name"
+        "py:music_app/services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository._refresh_albums:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/musicbrainz_corrections_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository._refresh_marked",
+      "action": "Run refresh MusicBrainzCorrectionsPostgresRepository._refresh_marked",
+      "entrypoints": [
+        "py:music_app/services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository._refresh_marked:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/musicbrainz_corrections_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository.refresh",
+      "action": "Run background MusicBrainzCorrectionsPostgresRepository.refresh",
+      "entrypoints": [
+        "py:music_app/services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository.refresh:background:while"
       ],
       "owners": [
         "music_app/services/musicbrainz_corrections_postgres.py"

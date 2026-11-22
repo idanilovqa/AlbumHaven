@@ -3,9 +3,11 @@
 
 Each certainly matched album is compared with its edition (the release decision) in Python
 (musicbrainz_correction_kinds) and every difference is stored as a row with its kind and mode:
-trivial kinds apply automatically, the rest wait for the owner. A tag signature makes a refresh
-recompare only albums that changed; refreshes run when a release decision is recorded and in
-the background after Problematic Files is invalidated (tag edits, rescans, watcher). The
+trivial kinds apply automatically, the rest wait for the owner. Whatever changes an album's
+comparison marks that album (0260), so a refresh reads only those albums, and a tag signature
+recompares only those that differ; refreshes run when a release decision is recorded and in the
+background after Problematic Files is invalidated (tag edits, rescans, watcher). Each album's
+Edits Queue groups and their totals are stored (0260): nothing here reads the whole library. The
 owner's undo, skip and approval decisions are kept by the exact change, so a refresh never
 reapplies an undone change. "Applied" is display only until Bulk Correction (needs PR 65) writes tags; nothing here
 writes media tags.
@@ -33,6 +35,7 @@ from music_app.services.musicbrainz_release_identity_postgres import parse_track
 
 # The review group of albums the guard (or an ambiguous pairing) sends to review whole.
 WHOLE_ALBUM_GROUP = "whole_album"
+REFRESH_BATCH_MARKS = 200
 DECISIONS = frozenset({"undone", "skipped", "approved"})
 
 _DECISION_MATCH = """
@@ -55,7 +58,7 @@ _STATE_SQL = f"""
     end
 """
 
-# Each certainly matched album's signature: everything a comparison reads.
+# The given albums' signatures: everything a comparison reads. A new input needs a mark in 0260's triggers.
 _SIGNATURES_SQL = _active_library_cte() + """
     select albums.id as album_id, albums.library_id, albums.album_key, decision.release_mbid::text,
            md5(concat_ws(E'\\x1f', decision.release_mbid, releases.refreshed_at, decision.disc_position,
@@ -76,7 +79,7 @@ _SIGNATURES_SQL = _active_library_cte() + """
     left join library.local_artists artists on artists.id = albums.artist_id
     left join library.local_album_musicbrainz_corrections stored
       on stored.library_id = albums.library_id and stored.album_key = albums.album_key
-    where %(album_ids)s::bigint[] is null or albums.id = any(%(album_ids)s::bigint[]);
+    where albums.id = any(%(album_ids)s::bigint[]);
 """
 
 # Everything one comparison needs, for the given albums.
@@ -99,21 +102,40 @@ _COMPARE_SQL = """
     where albums.id = any(%(album_ids)s::bigint[]);
 """
 
+# One writer of stored corrections at a time: two refreshes of one album would both insert its rows.
+_LOCK_SQL = """
+    select pg_advisory_xact_lock(hashtextextended('album-haven:musicbrainz-corrections', 0));
+"""
+_MARKS_SQL = """
+    select id, album_id from library.musicbrainz_correction_refresh_marks order by id limit %(limit)s;
+"""
+# Only the marks read: one added meanwhile waits for the next batch.
+_CLEAR_MARKS_SQL = """
+    delete from library.musicbrainz_correction_refresh_marks where id = any(%(mark_ids)s::bigint[]);
+"""
+_ALBUM_KEYS_SQL = _active_library_cte() + """
+    select albums.album_key
+    from library.local_albums albums
+    join active_library on active_library.library_id = albums.library_id
+    where albums.id = any(%(album_ids)s::bigint[]);
+"""
+
 # Stored results whose album is no longer certainly matched (within the refreshed albums).
 _PRUNE_SQL = _active_library_cte() + """
     delete from library.local_album_musicbrainz_corrections stored
-    using active_library, library.local_albums albums
+    using active_library
     where stored.library_id = active_library.library_id
-      and albums.library_id = stored.library_id and albums.album_key = stored.album_key
-      and (%(album_ids)s::bigint[] is null or albums.id = any(%(album_ids)s::bigint[]))
+      and stored.album_key = any(%(album_keys)s::text[])
       and not exists (select 1 from library.local_album_musicbrainz_releases decision
                       where decision.library_id = stored.library_id and decision.album_key = stored.album_key
-                        and decision.state = 'release')
-    returning stored.album_key;
+                        and decision.state = 'release');
 """
-_PRUNE_ROWS_SQL = """
+_PRUNE_ROWS_SQL = _active_library_cte() + """
     delete from library.local_album_musicbrainz_correction_rows correction
-    where not exists (select 1 from library.local_album_musicbrainz_corrections stored
+    using active_library
+    where correction.library_id = active_library.library_id
+      and correction.album_key = any(%(album_keys)s::text[])
+      and not exists (select 1 from library.local_album_musicbrainz_corrections stored
                       where stored.library_id = correction.library_id and stored.album_key = correction.album_key);
 """
 
@@ -180,11 +202,11 @@ _ALBUM_ROWS_SQL = _active_library_cte() + f"""
     order by correction.disc_number, correction.track_number, correction.field;
 """
 
-# The Edits Queue: "applied" (the automatic history) or "review" (waiting), by kind, then a
-# page of albums with their rows. Albums sent to review whole form their own group. These are
-# a page's rows with their state, for its albums only (%(album_keys)s). A row has at most one
-# decision (its primary key is _DECISION_MATCH), so one join gives _STATE_SQL's state.
-_GROUP_SQL = _active_library_cte() + f"""
+# The Edits Queue: "applied" (the automatic history, and what was approved) or "review" (waiting),
+# by kind; albums sent to review whole form their own review group. These are the given albums'
+# rows with section and group. A row has at most one decision (its primary key is _DECISION_MATCH),
+# so one join gives _STATE_SQL's state.
+_LISTED_SQL = _active_library_cte() + f"""
     , rows as (
       select correction.*, stored.review_whole,
              case decision.decision when 'approved' then 'applied' when 'undone' then 'undone'
@@ -197,84 +219,71 @@ _GROUP_SQL = _active_library_cte() + f"""
         on stored.library_id = correction.library_id and stored.album_key = correction.album_key
       left join library.local_album_musicbrainz_correction_decisions decision on {_DECISION_MATCH}
       where correction.album_key = any(%(album_keys)s::text[])
-        and (%(kind)s::text = '{WHOLE_ALBUM_GROUP}' or correction.kind = %(kind)s::text)
     ), listed as (
-      select case when %(section)s = 'review' and review_whole then '{WHOLE_ALBUM_GROUP}' else kind end as grouping,
+      select case when state = 'pending' then 'review' else 'applied' end as section,
+             case when state = 'pending' and review_whole then '{WHOLE_ALBUM_GROUP}' else kind end as grouping,
              rows.*
       from rows
-      where (%(section)s = 'applied' and state in ('applied', 'undone') and (mode = 'auto' or state = 'applied'))
-         or (%(section)s = 'review' and state = 'pending')
+      where state in ('pending', 'applied') or (state = 'undone' and mode = 'auto')
     )
 """
-# A section's rows by group, without each row's state: _STATE_SQL's rules restated per section.
-# "applied": automatic rows (applied or undone; one skipped never shows) and review rows
-# approved; "review": review rows with no decision, grouped whole when the album is reviewed
-# whole. One kind (or the whole-album group) when %(kind)s is set. A decision matters only on
-# its own album, so an album without one takes its rows straight from the (library, mode,
-# kind, album) index, and only albums with decisions are checked row by row (measured: each
-# row's state cost a page 1.3 s on CI with 10,800 albums).
-_SECTION_ROWS_SQL = _active_library_cte() + f"""
-    , decided_albums as materialized (
-      select distinct decision.library_id, decision.album_key, decision.decision
-      from library.local_album_musicbrainz_correction_decisions decision
-      join active_library on active_library.library_id = decision.library_id
-    ), section_rows as (
-      select correction.library_id, correction.album_key, correction.kind as grouping
-      from library.local_album_musicbrainz_correction_rows correction
-      join active_library on active_library.library_id = correction.library_id
-      where %(section)s = 'applied' and correction.mode = 'auto'
-        and (%(kind)s::text is null or correction.kind = %(kind)s::text)
-        and not exists (select 1 from decided_albums where decided_albums.library_id = correction.library_id
-                          and decided_albums.album_key = correction.album_key and decided_albums.decision = 'skipped')
-      union all
-      select correction.library_id, correction.album_key, correction.kind
-      from (select distinct library_id, album_key from decided_albums where decision = 'skipped') skipped
-      join library.local_album_musicbrainz_correction_rows correction
-        on correction.library_id = skipped.library_id and correction.album_key = skipped.album_key
-      where %(section)s = 'applied' and correction.mode = 'auto'
-        and (%(kind)s::text is null or correction.kind = %(kind)s::text)
-        and not exists (select 1 from library.local_album_musicbrainz_correction_decisions decision
-                        where {_DECISION_MATCH} and decision.decision = 'skipped')
-      union all
-      select correction.library_id, correction.album_key, correction.kind
-      from library.local_album_musicbrainz_correction_decisions decision
-      join active_library on active_library.library_id = decision.library_id
-      join library.local_album_musicbrainz_correction_rows correction on {_DECISION_MATCH}
-      where %(section)s = 'applied' and correction.mode = 'review' and decision.decision = 'approved'
-        and (%(kind)s::text is null or correction.kind = %(kind)s::text)
-      union all
-      select correction.library_id, correction.album_key,
-             case when stored.review_whole then '{WHOLE_ALBUM_GROUP}' else correction.kind end
-      from library.local_album_musicbrainz_correction_rows correction
-      join active_library on active_library.library_id = correction.library_id
-      join library.local_album_musicbrainz_corrections stored
-        on stored.library_id = correction.library_id and stored.album_key = correction.album_key
-      where %(section)s = 'review' and correction.mode = 'review'
-        and (%(kind)s::text is null
-             or (%(kind)s::text = '{WHOLE_ALBUM_GROUP}' and stored.review_whole)
-             or (correction.kind = %(kind)s::text and not stored.review_whole))
-        and (not exists (select 1 from decided_albums where decided_albums.library_id = correction.library_id
-                           and decided_albums.album_key = correction.album_key)
-             or not exists (select 1 from library.local_album_musicbrainz_correction_decisions decision
-                            where {_DECISION_MATCH}))
+# The given albums' stored groups follow their rows and decisions. Only a changed group is
+# written, so only a change adds to the totals.
+_STORE_GROUPS_SQL = _LISTED_SQL + """
+    , desired as (
+      select listed.library_id, listed.album_key, listed.section, listed.grouping,
+             left(lower(coalesce(local.title, '')), 256) as sort_title, count(*)::integer as row_count
+      from listed
+      join library.local_albums local on local.library_id = listed.library_id and local.album_key = listed.album_key
+      group by listed.library_id, listed.album_key, listed.section, listed.grouping, local.title
+    ), removed as (
+      delete from library.local_album_musicbrainz_correction_groups groups
+      using active_library
+      where groups.library_id = active_library.library_id
+        and groups.album_key = any(%(album_keys)s::text[])
+        and not exists (select 1 from desired
+                        where desired.album_key = groups.album_key and desired.section = groups.section
+                          and desired.grouping = groups.grouping)
     )
+    insert into library.local_album_musicbrainz_correction_groups as groups
+      (library_id, album_key, section, grouping, sort_title, row_count)
+    select library_id, album_key, section, grouping, sort_title, row_count from desired
+    on conflict (library_id, album_key, section, grouping) do update
+    set sort_title = excluded.sort_title, row_count = excluded.row_count
+    where (groups.sort_title, groups.row_count) is distinct from (excluded.sort_title, excluded.row_count);
 """
-_KIND_COUNTS_SQL = _SECTION_ROWS_SQL + """
-    select grouping as kind, count(distinct album_key)::integer as albums, count(*)::integer as rows
-    from section_rows group by grouping order by grouping;
-"""
-# A page is two reads: its albums' keys, then only those albums' rows (by the album index).
-_KIND_PAGE_ALBUMS_SQL = _SECTION_ROWS_SQL + """
-    , kind_albums as (
-      select library_id, album_key from section_rows group by library_id, album_key
+# The totals' deltas fold into one row per section and group.
+_COMPACT_COUNTS_SQL = """
+    with removed as (
+      delete from library.musicbrainz_correction_group_counts returning *
     )
-    select kind_albums.album_key
-    from kind_albums
-    join library.local_albums local
-      on local.library_id = kind_albums.library_id and local.album_key = kind_albums.album_key
-    order by lower(local.title), kind_albums.album_key offset %(offset)s limit %(limit)s;
+    insert into library.musicbrainz_correction_group_counts (library_id, section, grouping, album_count, row_count)
+    select library_id, section, grouping, sum(album_count), sum(row_count)
+    from removed
+    group by library_id, section, grouping
+    having sum(album_count) <> 0 or sum(row_count) <> 0;
 """
-_KIND_PAGE_SQL = _GROUP_SQL + """
+_KIND_COUNTS_SQL = _active_library_cte() + """
+    select counts.grouping as kind, sum(counts.album_count)::integer as albums, sum(counts.row_count)::integer as rows
+    from library.musicbrainz_correction_group_counts counts
+    join active_library on active_library.library_id = counts.library_id
+    where counts.section = %(section)s
+    group by counts.grouping
+    having sum(counts.album_count) > 0
+    order by counts.grouping;
+"""
+# A page is two reads: its albums from the page index, after the previous page's last, then only
+# those albums' rows (by the album index).
+_KIND_PAGE_ALBUMS_SQL = _active_library_cte() + """
+    select groups.album_key, groups.sort_title
+    from library.local_album_musicbrainz_correction_groups groups
+    where groups.library_id = (select library_id from active_library)
+      and groups.section = %(section)s and groups.grouping = %(kind)s
+      and (groups.sort_title, groups.album_key) > (%(after_title)s, %(after_key)s)
+    order by groups.sort_title, groups.album_key
+    limit %(limit)s;
+"""
+_KIND_PAGE_SQL = _LISTED_SQL + """
     select listed.album_key, local.title as album_title, artists.name as artist_name, local.release_year as year,
            local.cover_path,
            json_agg(json_build_object('field', listed.field, 'disc_number', listed.disc_number,
@@ -285,24 +294,15 @@ _KIND_PAGE_SQL = _GROUP_SQL + """
     from listed
     join library.local_albums local on local.library_id = listed.library_id and local.album_key = listed.album_key
     left join library.local_artists artists on artists.id = local.artist_id
-    where listed.grouping = %(kind)s
-    group by listed.album_key, local.title, artists.name, local.release_year, local.cover_path
-    order by lower(local.title), listed.album_key;
+    where listed.section = %(section)s and listed.grouping = %(kind)s
+    group by listed.album_key, local.title, artists.name, local.release_year, local.cover_path;
 """
 
-# Record one decision for the chosen rows: an album's applied automatic rows (undone), or its
-# waiting rows (approved, skipped), or every waiting row of one kind outside whole-album review.
-_DECIDE_SQL = _active_library_cte() + f"""
-    , chosen as (
+_CHOSEN_COLUMNS_SQL = """
       select correction.library_id, correction.album_key, correction.field, correction.disc_number,
              correction.track_number, correction.current_value, correction.proposed_value
-      from library.local_album_musicbrainz_correction_rows correction
-      join active_library on active_library.library_id = correction.library_id
-      join library.local_album_musicbrainz_corrections stored
-        on stored.library_id = correction.library_id and stored.album_key = correction.album_key
-      where (%(album_key)s::text is null or correction.album_key = %(album_key)s::text)
-        and (%(kind)s::text is null or (correction.kind = %(kind)s::text and not stored.review_whole))
-        and ({_STATE_SQL}) = %(from_state)s
+"""
+_RECORD_DECISION_SQL = """
     ), decided as (
       insert into library.local_album_musicbrainz_correction_decisions (
         library_id, album_key, field, disc_number, track_number, current_value, proposed_value, decision,
@@ -313,21 +313,43 @@ _DECIDE_SQL = _active_library_cte() + f"""
       on conflict (library_id, album_key, field, disc_number, track_number, current_value, proposed_value)
       do update set decision = excluded.decision, decided_by_account_id = excluded.decided_by_account_id,
                     decided_at = excluded.decided_at
-      returning 1
+      returning album_key
     )
-    select count(*)::integer as decided from decided;
+    select count(*)::integer as decided, coalesce(array_agg(distinct album_key), '{}'::text[]) as album_keys
+    from decided;
 """
+# Record one decision for an album's applied automatic rows (undone) or its waiting rows
+# (approved, skipped).
+_DECIDE_ALBUM_SQL = _active_library_cte() + f"""
+    , chosen as ({_CHOSEN_COLUMNS_SQL}
+      from library.local_album_musicbrainz_correction_rows correction
+      join active_library on active_library.library_id = correction.library_id
+      where correction.album_key = %(album_key)s::text
+        and ({_STATE_SQL}) = %(from_state)s
+""" + _RECORD_DECISION_SQL
+# Every waiting row of one kind outside whole-album review (those are their own group): the
+# albums come from the page index.
+_DECIDE_KIND_SQL = _active_library_cte() + f"""
+    , chosen as ({_CHOSEN_COLUMNS_SQL}
+      from library.local_album_musicbrainz_correction_groups groups
+      join active_library on active_library.library_id = groups.library_id
+      join library.local_album_musicbrainz_correction_rows correction
+        on correction.library_id = groups.library_id and correction.album_key = groups.album_key
+       and correction.kind = groups.grouping
+      where groups.section = 'review' and groups.grouping = %(kind)s
+        and ({_STATE_SQL}) = %(from_state)s
+""" + _RECORD_DECISION_SQL
 
 # Write the applied values beside the tag-derived ones (local_albums.corrected_title and
 # corrected_album_artist, local_tracks.corrected_title and corrected_artist) for the given
-# albums, or all; null where nothing is applied. Returns the albums whose values changed.
+# albums; null where nothing is applied. Returns the albums whose values changed.
 _SYNC_SQL = _active_library_cte() + f"""
     , scope as (
       select albums.id, albums.library_id, albums.album_key
       from library.local_albums albums
       join active_library on active_library.library_id = albums.library_id
-      where %(album_keys)s::text[] is null or albums.album_key = any(%(album_keys)s::text[])
-    ), applied as (
+      where albums.album_key = any(%(album_keys)s::text[])
+    ), applied as materialized (
       select correction.album_key, correction.field, correction.disc_number, correction.track_number,
              correction.proposed_value
       from library.local_album_musicbrainz_correction_rows correction
@@ -335,11 +357,11 @@ _SYNC_SQL = _active_library_cte() + f"""
       where ({_STATE_SQL}) = 'applied'
     ), album_values as (
       select scope.id,
-             (select proposed_value from applied where applied.album_key = scope.album_key
-                and applied.field = 'album') as title,
-             (select proposed_value from applied where applied.album_key = scope.album_key
-                and applied.field = 'album_artist') as album_artist
+             max(applied.proposed_value) filter (where applied.field = 'album') as title,
+             max(applied.proposed_value) filter (where applied.field = 'album_artist') as album_artist
       from scope
+      left join applied on applied.album_key = scope.album_key and applied.field in ('album', 'album_artist')
+      group by scope.id
     ), albums_changed as (
       update library.local_albums albums
       set corrected_title = album_values.title, corrected_album_artist = album_values.album_artist
@@ -350,14 +372,15 @@ _SYNC_SQL = _active_library_cte() + f"""
       returning albums.album_key
     ), track_values as (
       select tracks.id, scope.album_key,
-             (select proposed_value from applied where applied.album_key = scope.album_key and applied.field = 'title'
-                and applied.disc_number = coalesce(nullif(tracks.disc_number, 0), 1)
-                and applied.track_number = tracks.track_number) as title,
-             (select proposed_value from applied where applied.album_key = scope.album_key and applied.field = 'artist'
-                and applied.disc_number = coalesce(nullif(tracks.disc_number, 0), 1)
-                and applied.track_number = tracks.track_number) as artist
+             max(applied.proposed_value) filter (where applied.field = 'title') as title,
+             max(applied.proposed_value) filter (where applied.field = 'artist') as artist
       from scope
       join library.local_tracks tracks on tracks.album_id = scope.id
+      left join applied
+        on applied.album_key = scope.album_key and applied.field in ('title', 'artist')
+       and applied.disc_number = coalesce(nullif(tracks.disc_number, 0), 1)
+       and applied.track_number = tracks.track_number
+      group by tracks.id, scope.album_key
     ), tracks_changed as (
       update library.local_tracks tracks
       set corrected_title = track_values.title, corrected_artist = track_values.artist
@@ -430,10 +453,12 @@ class MusicBrainzCorrectionsPostgresRepository:
         self._connect = connect or _connect
         self._on_change = on_change
 
-    def _sync(self, connection: Any, album_keys: Iterable[str] | None) -> tuple[str, ...]:
-        params = {"album_keys": None if album_keys is None else sorted({str(key) for key in album_keys})}
-        if params["album_keys"] == []:
-            return ()
+    def _store_derived(self, connection: Any, album_keys: list[str]) -> tuple[str, ...]:
+        """Store the given albums' groups, totals and corrected values. Returns the albums whose
+        corrected values changed."""
+        params = {"album_keys": album_keys}
+        connection.execute(_STORE_GROUPS_SQL, params)
+        connection.execute(_COMPACT_COUNTS_SQL)
         return tuple(sorted(str(_row_mapping(row)["album_key"]) for row in connection.execute(
             _SYNC_SQL, params).fetchall()))
 
@@ -461,17 +486,22 @@ class MusicBrainzCorrectionsPostgresRepository:
     def kinds(self, *, section: str) -> list[dict[str, object]]:
         with self._connect(self._database_url) as connection:
             return [_row_mapping(row) for row in connection.execute(
-                _KIND_COUNTS_SQL, {"section": section, "kind": None}).fetchall()]
+                _KIND_COUNTS_SQL, {"section": section}).fetchall()]
 
-    def kind_page(self, *, section: str, kind: str, offset: int, limit: int) -> list[dict[str, object]]:
-        params = {"section": section, "kind": kind, "offset": max(0, int(offset)), "limit": max(1, int(limit))}
+    def kind_page(self, *, section: str, kind: str, after: tuple[str, str] | None,
+                  limit: int) -> list[dict[str, object]]:
+        """The next albums of one group in title order, after the (sort_title, album_key) of the
+        previous page's last album."""
+        after_title, after_key = after or ("", "")
+        params = {"section": section, "kind": kind, "after_title": after_title, "after_key": after_key,
+                  "limit": max(1, int(limit))}
         with self._connect(self._database_url) as connection:
-            keys = [_row_mapping(row)["album_key"] for row in connection.execute(_KIND_PAGE_ALBUMS_SQL, params)]
-            rows = [_row_mapping(row) for row in connection.execute(
-                _KIND_PAGE_SQL, {**params, "album_keys": keys}).fetchall()] if keys else []
-        for row in rows:
-            row["rows"] = _json(row["rows"])
-        return rows
+            page = [_row_mapping(row) for row in connection.execute(_KIND_PAGE_ALBUMS_SQL, params).fetchall()]
+            albums = {row["album_key"]: row for row in map(_row_mapping, connection.execute(_KIND_PAGE_SQL, {
+                "section": section, "kind": kind, "album_keys": [entry["album_key"] for entry in page],
+            }).fetchall())} if page else {}
+        return [{**albums[key], "rows": _json(albums[key]["rows"]), "sort_title": entry["sort_title"]}
+                for entry in page if (key := entry["album_key"]) in albums]
 
     def decide(self, *, decision: str, from_state: str, album_key: str | None, kind: str | None,
                actor_account_id: int | None, observed_at: datetime) -> int:
@@ -479,47 +509,84 @@ class MusicBrainzCorrectionsPostgresRepository:
             raise ValueError("Name one album or one kind.")
         if kind is not None and (kind not in REVIEW_KINDS or kind in ARTIST_KINDS):
             raise ValueError("Artist changes are approved per album only.")
-        params = {"decision": decision, "from_state": from_state, "album_key": album_key, "kind": kind,
-                  "account_id": actor_account_id, "now": _aware_utc(observed_at)}
+        params = {"decision": decision, "from_state": from_state, "account_id": actor_account_id,
+                  "now": _aware_utc(observed_at),
+                  **({"album_key": album_key} if album_key is not None else {"kind": kind})}
+        statement = _DECIDE_ALBUM_SQL if album_key is not None else _DECIDE_KIND_SQL
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
-                decided = int(_row_mapping(connection.execute(_DECIDE_SQL, params).fetchone()).get("decided") or 0)
-                changed = self._sync(connection, [album_key] if album_key is not None else None) if decided else ()
+                connection.execute(_LOCK_SQL)
+                result = _row_mapping(connection.execute(statement, params).fetchone())
+                decided = int(result.get("decided") or 0)
+                changed = self._store_derived(
+                    connection, sorted(str(key) for key in result["album_keys"])) if decided else ()
         self._changed(changed)
         return decided
 
     def refresh(self, *, album_ids: Iterable[int] | None = None, observed_at: datetime | None = None) -> int:
-        """Recompare the albums (all, or ``album_ids``) whose signature moved and store their
-        classified rows. Returns how many albums were recompared."""
-        params = {"album_ids": None if album_ids is None else sorted({_positive_id(value) for value in album_ids})}
-        if params["album_ids"] == []:
-            return 0
+        """Recompare ``album_ids``, or else every album marked as changed (a batch per
+        transaction), where the signature moved. Returns how many albums were recompared."""
         now = _aware_utc(observed_at or datetime.now(timezone.utc))
+        if album_ids is not None:
+            ids = sorted({_positive_id(value) for value in album_ids})
+            if not ids:
+                return 0
+            with self._connect(self._database_url) as connection:
+                with _transaction(connection):
+                    connection.execute(_LOCK_SQL)
+                    compared, synced = self._refresh_albums(connection, ids, now)
+            self._changed(synced)
+            return compared
+        total = 0
+        while True:
+            compared, synced, marks_read = self._refresh_marked(now)
+            self._changed(synced)
+            total += compared
+            if marks_read < REFRESH_BATCH_MARKS:
+                return total
+
+    def _refresh_marked(self, now: datetime) -> tuple[int, tuple[str, ...], int]:
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
-                pruned = [str(_row_mapping(row)["album_key"]) for row in connection.execute(_PRUNE_SQL, params).fetchall()]
-                connection.execute(_PRUNE_ROWS_SQL)
-                changed = {row["album_id"]: row for row in map(_row_mapping, connection.execute(
-                    _SIGNATURES_SQL, params).fetchall()) if row["signature"] != row.get("stored_signature")}
-                albums, rows = [], []
-                for compared in map(_row_mapping, connection.execute(
-                        _COMPARE_SQL, {"album_ids": sorted(changed)}).fetchall()):
-                    signed = changed[compared["album_id"]]
-                    result = compare_stored_album(compared)
-                    auto = sum(1 for row in result["rows"] if row["mode"] == "auto")
-                    albums.append({"library_id": signed["library_id"], "album_key": signed["album_key"],
-                                   "signature": signed["signature"], "release_mbid": signed["release_mbid"],
-                                   "correction_count": len(result["rows"]), "auto_count": auto,
-                                   "review_count": len(result["rows"]) - auto, "review_whole": result["review_whole"]})
-                    rows.extend({**row, "library_id": signed["library_id"], "album_key": signed["album_key"]}
-                                for row in result["rows"])
-                if albums:
-                    connection.execute(_STORE_SQL, {"albums": json.dumps(albums), "now": now})
-                if rows:
-                    connection.execute(_STORE_ROWS_SQL, {"rows": json.dumps(rows)})
-                synced = self._sync(connection, [*pruned, *(album["album_key"] for album in albums)])
-        self._changed(synced)
-        return len(changed)
+                connection.execute(_LOCK_SQL)
+                marks = [_row_mapping(row) for row in connection.execute(
+                    _MARKS_SQL, {"limit": REFRESH_BATCH_MARKS}).fetchall()]
+                if not marks:
+                    return 0, (), 0
+                compared, synced = self._refresh_albums(
+                    connection, sorted({int(mark["album_id"]) for mark in marks}), now)
+                connection.execute(_CLEAR_MARKS_SQL, {"mark_ids": [mark["id"] for mark in marks]})
+        return compared, synced, len(marks)
+
+    def _refresh_albums(self, connection: Any, album_ids: list[int], now: datetime) -> tuple[int, tuple[str, ...]]:
+        scope = {"album_ids": album_ids}
+        keys = sorted(str(_row_mapping(row)["album_key"])
+                      for row in connection.execute(_ALBUM_KEYS_SQL, scope).fetchall())
+        if not keys:
+            return 0, ()  # marked, then deleted: its stored results went with it
+        connection.execute(_PRUNE_SQL, {"album_keys": keys})
+        connection.execute(_PRUNE_ROWS_SQL, {"album_keys": keys})
+        changed = {row["album_id"]: row for row in map(_row_mapping, connection.execute(
+            _SIGNATURES_SQL, scope).fetchall()) if row["signature"] != row.get("stored_signature")}
+        compared_albums = connection.execute(
+            _COMPARE_SQL, {"album_ids": sorted(changed)}).fetchall() if changed else ()
+        albums, rows = [], []
+        for compared in map(_row_mapping, compared_albums):
+            signed = changed[compared["album_id"]]
+            result = compare_stored_album(compared)
+            auto = sum(1 for row in result["rows"] if row["mode"] == "auto")
+            albums.append({"library_id": signed["library_id"], "album_key": signed["album_key"],
+                           "signature": signed["signature"], "release_mbid": signed["release_mbid"],
+                           "correction_count": len(result["rows"]), "auto_count": auto,
+                           "review_count": len(result["rows"]) - auto, "review_whole": result["review_whole"]})
+            rows.extend({**row, "library_id": signed["library_id"], "album_key": signed["album_key"]}
+                        for row in result["rows"])
+        if albums:
+            connection.execute(_STORE_SQL, {"albums": json.dumps(albums), "now": now})
+        if rows:
+            connection.execute(_STORE_ROWS_SQL, {"rows": json.dumps(rows)})
+        # Every given album, also one whose signature held: it may have lost its match or been renamed.
+        return len(changed), self._store_derived(connection, keys)
 
     def settings(self) -> dict[str, object]:
         with self._connect(self._database_url) as connection:

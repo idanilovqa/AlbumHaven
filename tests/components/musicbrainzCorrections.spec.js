@@ -66,8 +66,8 @@ async function showQueue(page, tab, section = 'applied') {
           { kind: 'whole_album', albums: 1, rows: 6 }],
       openKind: chosen === 'applied' ? 'accents' : 'album_artist_renamed',
       pages: chosen === 'applied'
-        ? { 'applied:accents': { albums: [album('wurdah', 'Wurdah Ïtah', [caseRow]), album('kohntark', 'Köhntarkösz', [caseRow])], nextOffset: null } }
-        : { 'review:album_artist_renamed': { albums: [album('wurdah', 'Wurdah Ïtah', [artistRow])], nextOffset: null } },
+        ? { 'applied:accents': { albums: [album('wurdah', 'Wurdah Ïtah', [caseRow]), album('kohntark', 'Köhntarkösz', [caseRow])], nextAfter: null } }
+        : { 'review:album_artist_renamed': { albums: [album('wurdah', 'Wurdah Ïtah', [artistRow])], nextAfter: null } },
       queueStartsAt: '2026-11-16T11:20:00Z',
       lookups: [
         { request_id: 9, target_kind: 'album', album_key: 'live', album_title: 'Live At Budokan', artist_name: 'Dream Theater', year: 2004, requested_at: '2026-11-16T10:20:00Z' },

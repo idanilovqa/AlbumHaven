@@ -8,6 +8,7 @@ here writes tags.
 """
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping
 
@@ -80,17 +81,29 @@ async def get_edits_queue(request: Request, section: str = "applied"):
 
 
 @router.get("/edits/{kind}")
-async def get_edits_queue_page(kind: str, request: Request, section: str = "applied", offset: int = 0,
+async def get_edits_queue_page(kind: str, request: Request, section: str = "applied", after: str = "",
                                limit: int = 50):
-    """A page of albums of one kind, each with its rows."""
+    """A page of albums of one kind, each with its rows; ``after`` is the previous page's ``next_after``."""
     await _require_current_library_owner(request)
-    if section not in SECTIONS or offset < 0 or not 1 <= limit <= _PAGE_LIMIT:
+    cursor = _page_cursor(after) if after else None
+    if section not in SECTIONS or not 1 <= limit <= _PAGE_LIMIT or (after and cursor is None):
         raise HTTPException(400, "Invalid page.")
-    albums = await _call(request, "edits_queue_page", section=section, kind=kind, offset=offset, limit=limit + 1)
+    albums = await _call(request, "edits_queue_page", section=section, kind=kind, after=cursor, limit=limit + 1)
     return {"albums": [{**{field: album.get(field) for field in ("album_key", "album_title", "artist_name", "year",
                                                                   "cover_path")},
                         "rows": _rows(album.get("rows"))} for album in albums[:limit]],
-            "next_offset": offset + limit if len(albums) > limit else None}
+            "next_after": json.dumps([albums[limit - 1]["sort_title"], albums[limit - 1]["album_key"]],
+                                     ensure_ascii=False) if len(albums) > limit else None}
+
+
+def _page_cursor(after: str) -> tuple[str, str] | None:
+    try:
+        value = json.loads(after) if len(after) <= 4096 else None
+    except ValueError:
+        return None
+    if isinstance(value, list) and len(value) == 2 and all(isinstance(part, str) and "\x00" not in part for part in value):
+        return value[0], value[1]
+    return None
 
 
 @router.post("/albums/{action}")

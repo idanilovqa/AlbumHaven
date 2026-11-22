@@ -123,10 +123,10 @@ function queueContext(extra = {}) {
   return loadContext({ activeTab: 'edits-queue', responses: {
     'GET /api/musicbrainz/corrections/edits?section=applied': { status: 200, body: APPLIED },
     'GET /api/musicbrainz/corrections/edits?section=review': { status: 200, body: REVIEW },
-    'GET /api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50': { status: 200,
-      body: { albums: [{ ...ALBUM, rows: [CASE_ROW] }], next_offset: 50 } },
-    'GET /api/musicbrainz/corrections/edits/case?section=applied&offset=50&limit=50': { status: 200,
-      body: { albums: [{ ...ALBUM, album_key: 'secret', album_title: 'The Secret', rows: [CASE_ROW] }], next_offset: null } },
+    'GET /api/musicbrainz/corrections/edits/case?section=applied&limit=50': { status: 200,
+      body: { albums: [{ ...ALBUM, rows: [CASE_ROW] }], next_after: '["wurdah","wurdah"]' } },
+    'GET /api/musicbrainz/corrections/edits/case?section=applied&after=%5B%22wurdah%22%2C%22wurdah%22%5D&limit=50': { status: 200,
+      body: { albums: [{ ...ALBUM, album_key: 'secret', album_title: 'The Secret', rows: [CASE_ROW] }], next_after: null } },
     'GET /api/musicbrainz/lookups': { status: 200, body: LOOKUPS }, ...extra } });
 }
 
@@ -147,7 +147,7 @@ test('Applied automatically lists kinds; opening one pages its albums with their
   context.handleMusicBrainzCorrectionEvent({ target: closest({ 'data-edits-queue-more': 'case' }), preventDefault() {} });
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(text(detail.innerHTML), /The Secret/);
-  assert.deepEqual(requests.filter(([, url]) => url.includes('/edits/case')).map(([, url]) => new URL(url, 'http://x').searchParams.get('offset')), ['0', '50']);
+  assert.deepEqual(requests.filter(([, url]) => url.includes('/edits/case')).map(([, url]) => new URL(url, 'http://x').searchParams.get('after')), [null, '["wurdah","wurdah"]']);
 });
 
 test('Waiting for approval offers Approve kind except for artist kinds and whole albums', async () => {
@@ -455,8 +455,8 @@ const { measureInteractionContract } = require('../helpers/request-capture');
 function queueOf(albumCount) {
   const albums = Array.from({ length: albumCount }, (_, index) => ({ ...ALBUM, album_key: `album-${index}`, rows: [CASE_ROW] }));
   return queueContext({
-    'GET /api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50': { status: 200,
-      body: { albums: albums.slice(0, 50), next_offset: albumCount > 50 ? 50 : null } },
+    'GET /api/musicbrainz/corrections/edits/case?section=applied&limit=50': { status: 200,
+      body: { albums: albums.slice(0, 50), next_after: albumCount > 50 ? '["album","album-49"]' : null } },
     'PUT /api/musicbrainz/corrections/settings': { status: 200, body: { settings: { auto_submit_bulks: true } } },
     'POST /api/musicbrainz/corrections/albums/undo': { status: 200, body: { decided: 1 } },
     'POST /api/musicbrainz/corrections/kinds/edition_suffix/approve': { status: 200, body: { decided: albumCount } },
@@ -475,7 +475,7 @@ test('request capture: the Edits Queue reads only its queue endpoints, one page 
       const sent = requests.slice(before).map(([method, url]) => ({ method, url }));
       if (pass === 1) {
         assert.deepEqual(sent.map(({ url }) => url), ['/api/musicbrainz/corrections/edits?section=applied', '/api/musicbrainz/lookups',
-          '/api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50']);
+          '/api/musicbrainz/corrections/edits/case?section=applied&limit=50']);
       }
       return { requests: sent };
     },

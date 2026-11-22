@@ -63,9 +63,10 @@ with psycopg.connect(database_url, row_factory=dict_row) as connection:
         " select %s, rows.album_key, 'release', %s, rows.release, 2, now()"
         " from jsonb_to_recordset(%s::jsonb) as rows(album_key text, release uuid)"
         " on conflict (library_id, album_key) do nothing", (library_id, group, json.dumps(rows)))
-MusicBrainzCorrectionsPostgresRepository(
+repository = MusicBrainzCorrectionsPostgresRepository(
     {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
-    connect=lambda url: psycopg.connect(url, row_factory=dict_row)).refresh()
+    connect=lambda url: psycopg.connect(url, row_factory=dict_row))
+repository.refresh()
 with psycopg.connect(database_url, row_factory=dict_row) as connection:
     # sandbox6 stores about 64,000 rows: give each synthetic album five automatic track-title
     # case changes beside its compared album-title row (idempotent; no tracks or files added).
@@ -78,6 +79,12 @@ with psycopg.connect(database_url, row_factory=dict_row) as connection:
     connection.execute(
         "update library.local_album_musicbrainz_corrections set auto_count = 5, correction_count = correction_count + 5"
         " where album_key like 's4-correction::%%' and auto_count = 0")
+    synthetic_ids = [row["id"] for row in connection.execute(
+        "select id from library.local_albums where album_key like 's4-correction::%%'").fetchall()]
+# Rows written directly: store those albums' Edits Queue groups and totals (0260).
+repository.refresh(album_ids=synthetic_ids)
+with psycopg.connect(database_url, row_factory=dict_row) as connection:
+    connection.execute("analyze")
     stored = connection.execute(
         "select count(*) filter (where correction_count > 0) as needing,"
         " count(*) filter (where correction_count > 0 and album_key not like 's4-correction::%%') as listed,"

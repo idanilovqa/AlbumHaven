@@ -236,7 +236,7 @@ function buildEditsQueueKindHtml(section, group) {
       attributes: { 'data-edits-queue-approve-kind': group.kind } }) : '';
   const albums = open && page
     ? `<div class="version-picker-list">${page.albums.map((album) => buildEditsQueueAlbumHtml(album, section, group.kind)).join('')}</div>
-      ${page.nextOffset !== null ? ButtonComponent.renderButton({ label: 'Show more', disabled: editsQueue.busy,
+      ${page.nextAfter !== null ? ButtonComponent.renderButton({ label: 'Show more', disabled: editsQueue.busy,
     attributes: { 'data-edits-queue-more': group.kind } }) : ''}`
     : open ? '<div class="utility-empty-state">Loading…</div>' : '';
   return `<section class="edits-queue-kind" data-edits-queue-kind-group="${escapeHtml(group.kind)}">
@@ -374,11 +374,11 @@ const EDITS_QUEUE_PAGE_SIZE = 50;
 async function loadEditsQueueKindPage(kind, { more = false } = {}) {
   const key = `${editsQueue.section}:${kind}`;
   const previous = more ? editsQueue.pages[key] : null;
-  const offset = previous?.nextOffset ?? 0;
+  const after = previous?.nextAfter ? `&after=${encodeURIComponent(previous.nextAfter)}` : '';
   try {
-    const payload = await readEditsQueueJson(`/api/musicbrainz/corrections/edits/${encodeURIComponent(kind)}?section=${editsQueue.section}&offset=${offset}&limit=${EDITS_QUEUE_PAGE_SIZE}`);
+    const payload = await readEditsQueueJson(`/api/musicbrainz/corrections/edits/${encodeURIComponent(kind)}?section=${editsQueue.section}${after}&limit=${EDITS_QUEUE_PAGE_SIZE}`);
     editsQueue.pages[key] = { albums: [...(previous?.albums || []), ...(payload.albums || [])],
-      nextOffset: payload.next_offset ?? null };
+      nextAfter: payload.next_after ?? null };
   } catch (error) {
     showToast(error?.message || 'Unable to load these changes.', 'error', 3200);
   }

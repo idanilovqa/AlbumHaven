@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 
@@ -64,11 +65,11 @@ class Corrections:
         return {"kinds": [{"kind": "case", "albums": 1, "rows": 2, "private": "x"}],
                 "settings": {"auto_submit_bulks": True, "next_run_at": NOW.isoformat(), "changed_by": 7}}
 
-    def edits_queue_page(self, *, section, kind, offset, limit):
-        self.calls.append(("edits_queue_page", {"section": section, "kind": kind, "offset": offset, "limit": limit}))
-        albums = [{**ALBUM, "album_key": f"album-{number}", "rows": [{**CORRECTION, "private": "x"}]}
-                  for number in range(3)]
-        return albums[offset:offset + limit]
+    def edits_queue_page(self, *, section, kind, after, limit):
+        self.calls.append(("edits_queue_page", {"section": section, "kind": kind, "after": after, "limit": limit}))
+        albums = [{**ALBUM, "album_key": f"album-{number}", "sort_title": "wurdah ïtah",
+                   "rows": [{**CORRECTION, "private": "x"}]} for number in range(3)]
+        return [album for album in albums if after is None or (album["sort_title"], album["album_key"]) > after][:limit]
 
     def _decide(self, name, album_key, actor_account_id):
         self.calls.append((name, {"album_key": album_key, "actor_account_id": actor_account_id}))
@@ -192,13 +193,18 @@ def test_the_edits_queue_lists_kinds_and_pages_albums_without_private_fields():
     corrections = Corrections()
 
     status, kinds = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections/edits?section=review")
+    after = quote(json.dumps(["wurdah ïtah", "album-0"]))
     _status, page = request(app(corrections=corrections), "GET",
-                            "/api/musicbrainz/corrections/edits/case?section=applied&offset=1&limit=1")
+                            f"/api/musicbrainz/corrections/edits/case?section=applied&after={after}&limit=1")
 
     assert status == 200
     assert kinds["kinds"] == [{"kind": "case", "albums": 1, "rows": 2}]
     assert kinds["settings"] == {"auto_submit_bulks": True, "next_run_at": NOW.isoformat()}
-    assert [album["album_key"] for album in page["albums"]] == ["album-1"] and page["next_offset"] == 2
+    assert [album["album_key"] for album in page["albums"]] == ["album-1"]
+    assert json.loads(page["next_after"]) == ["wurdah ïtah", "album-1"]
+    assert "sort_title" not in page["albums"][0]
+    for bad in ("nonsense", '["only one"]', '[1, 2]', '["a", "\\u0000"]'):
+        assert request(app(), "GET", f"/api/musicbrainz/corrections/edits/case?after={quote(bad)}")[0] == 400
     assert "private" not in page["albums"][0]["rows"][0]
     assert request(app(), "GET", "/api/musicbrainz/corrections/edits?section=all")[0] == 400
 

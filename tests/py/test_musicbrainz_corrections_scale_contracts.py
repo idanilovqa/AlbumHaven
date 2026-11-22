@@ -21,7 +21,7 @@ from tests.py.test_musicbrainz_lookup_asgi import request
 
 URL = "postgresql://contract/corrections"
 CHANGED = 1
-TRIGGER_BURST = 50
+TRIGGER_BURST = 1000
 
 # Tables that hold a row per album, track or correction of the library.
 _LIBRARY_SIZED = re.compile(
@@ -49,7 +49,7 @@ class _Library:
     """A library of ``albums`` albums of which ``changed`` changed since the last refresh."""
 
     def __init__(self, albums: int, counts: OperationCounts, *, changed: int = CHANGED):
-        self.albums, self.counts, self.pending = albums, counts, changed
+        self.albums, self.counts, self.pending, self.in_kind = albums, counts, changed, changed
 
     def connect(self, _url):
         self.counts.pool_leases += 1
@@ -82,6 +82,8 @@ class _Library:
         keyset = "> (%(after_title)s, %(after_key)s)" in sql
         if paged and keyset:
             return params["limit"]
+        if "where groups.section = 'review' and groups.grouping = %(kind)s" in sql:
+            return self.in_kind
         return self.albums
 
     def execute(self, sql, params=None):

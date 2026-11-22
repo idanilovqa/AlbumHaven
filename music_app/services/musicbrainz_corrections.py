@@ -68,9 +68,10 @@ class MusicBrainzCorrectionService:
         return {"section": section, "kinds": self._repository.kinds(section=section),
                 "settings": self._settings_payload(self._repository.settings())}
 
-    def edits_queue_page(self, *, section: str, kind: str, offset: int, limit: int) -> list[dict[str, object]]:
+    def edits_queue_page(self, *, section: str, kind: str, after: tuple[str, str] | None,
+                         limit: int) -> list[dict[str, object]]:
         _section(section)
-        albums = self._repository.kind_page(section=section, kind=kind, offset=offset, limit=limit)
+        albums = self._repository.kind_page(section=section, kind=kind, after=after, limit=limit)
         return [{**album, "rows": label_rows(album["rows"])} for album in albums]
 
     def undo_album(self, *, album_key: str, actor_account_id: int | None) -> int:

@@ -4722,7 +4722,7 @@
         "production": 14000
       },
       "budgets": {
-        "requests": 1,
+        "requests": 9,
         "timers": 1,
         "itemsVisited": 0
       },
@@ -4731,9 +4731,9 @@
         "largeMinusSmallMax": 0
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
-      "testIdentity": "bounded interaction: an artist availability pass sends one request and arms at most one retry at any library size",
+      "testIdentity": "bounded interaction: an artist availability pass sends one request, keeps one retry and stops at the same bound at any library size",
       "performanceTargets": [],
-      "rollback": "Test-only contract; one availability pass already shares one request per artist scope and arms at most one retry. The uncapped retry cadence while the server stays deferred is a reported finding (6.5), not covered here."
+      "rollback": "Reverting the shared deferred back-off makes a still-deferred count re-poll every 250 ms without end: requests then grow until the test's firing cap and the contract fails."
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks",

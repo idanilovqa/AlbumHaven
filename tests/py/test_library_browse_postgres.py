@@ -13564,6 +13564,23 @@ def _retain_after_tag_save(monkeypatch, *, revision, scope, previous_entries, ro
     return connection
 
 
+@pytest.mark.parametrize("cached_revision, revision, at_most_one_behind", [
+    (None, "1", True),
+    (None, None, True),
+    (None, "2", False),
+    ("7", "8", True),
+    ("8", "7", False),
+])
+def test_a_library_without_an_inventory_revision_counts_as_revision_zero(cached_revision, revision, at_most_one_behind):
+    """FTC-TAGS-015: the first save of a library that never recorded a revision keeps its cache."""
+    import music_app.services.library_browse_postgres as browse
+
+    assert browse._fingerprint_at_most_one_save_behind(
+        {"fingerprint": (1, cached_revision, "roots", 1, None, 0)},
+        {"fingerprint": (1, revision, "roots", 1, None, 0)},
+    ) is at_most_one_behind
+
+
 @pytest.mark.parametrize("revision, kept", [
     ((1, "8", "roots", 1, None, 0), True),
     ((1, "7", "roots", 1, None, 0), True),

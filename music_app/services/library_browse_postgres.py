@@ -267,7 +267,8 @@ def _fingerprint_at_most_one_save_behind(cached: Mapping[str, object], fingerpri
     if len(old) != len(new) or len(new) < 2 or old[:1] + old[2:] != new[:1] + new[2:]:
         return False
     try:
-        return int(new[1]) - int(old[1]) in (0, 1)
+        # A library no save has touched yet has no revision: count it as revision 0.
+        return int(new[1] or 0) - int(old[1] or 0) in (0, 1)
     except (TypeError, ValueError):
         return False
 

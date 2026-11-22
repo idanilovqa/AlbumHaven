@@ -227,7 +227,7 @@ async function syncCustomCollectionSearchIndicator() {
     return;
   }
   // Owner 2026-11-18: a search with no artist match must not flash the Artists tree's empty result before its best
-  // collection opens; the tree keeps saying "Loading" until that choice is made.
+  // collection opens; the tree keeps saying "Searching" until that choice is made.
   const deciding = state.ui.customCollectionSearchAutoOpenQuery === query && !state.ui.pendingViewTransition
     && !(Array.isArray(state.view?.artists_sidebar) && state.view.artists_sidebar.length);
   if (deciding) setLibraryTreeSearchLoading(true);

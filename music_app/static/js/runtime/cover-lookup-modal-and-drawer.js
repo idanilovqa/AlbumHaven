@@ -828,7 +828,7 @@ const COVER_SOURCE_PROVIDERS = Object.freeze({
     legal: ['Cover art from Deezer.'],
     linkLabel: 'Open on Deezer',
     search: (query) => `https://www.deezer.com/search/${query}`,
-    icon: '/static/images/icons/deezer-favicon-32.png',
+    icon: '/static/images/icons/deezer-icon-color-144.png',
   }),
   bandcamp: Object.freeze({
     label: 'Bandcamp',

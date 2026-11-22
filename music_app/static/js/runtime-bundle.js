@@ -3262,24 +3262,6 @@ function renderStars(rating) {
   return html;
 }
 
-// Owner 2026-11-18: a search result shows, in a neutral highlight, the characters the search matched.
-// The ranges come from the server's search matcher as [start, end) code-point offsets; every part stays escaped.
-function buildHighlightedTextHtml(value, ranges) {
-  const text = String(value ?? '');
-  if (!Array.isArray(ranges) || !ranges.length) return escapeHtml(text);
-  const chars = Array.from(text);
-  let html = '';
-  let cursor = 0;
-  for (const range of ranges) {
-    const start = Math.max(cursor, Number(range?.[0]));
-    const end = Math.min(chars.length, Number(range?.[1]));
-    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) continue;
-    html += `${escapeHtml(chars.slice(cursor, start).join(''))}<mark class="search-match-highlight">${escapeHtml(chars.slice(start, end).join(''))}</mark>`;
-    cursor = end;
-  }
-  return html + escapeHtml(chars.slice(cursor).join(''));
-}
-
 // END js/runtime/markup-format-helpers.js
 
 // BEGIN js/runtime/loader-status-helpers.js
@@ -6805,7 +6787,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
-  // Owner 2026-11-18: whichever tree is shown says "Loading" while a search runs, instead of keeping the old results.
+  // Owner 2026-11-22: whichever tree is shown says "Searching" while a search runs, instead of keeping the old results.
   document.getElementById('artist-tree-expanded')?.classList?.toggle('is-search-loading', searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
@@ -12392,7 +12374,7 @@ async function syncCustomCollectionSearchIndicator() {
     return;
   }
   // Owner 2026-11-18: a search with no artist match must not flash the Artists tree's empty result before its best
-  // collection opens; the tree keeps saying "Loading" until that choice is made.
+  // collection opens; the tree keeps saying "Searching" until that choice is made.
   const deciding = state.ui.customCollectionSearchAutoOpenQuery === query && !state.ui.pendingViewTransition
     && !(Array.isArray(state.view?.artists_sidebar) && state.view.artists_sidebar.length);
   if (deciding) setLibraryTreeSearchLoading(true);
@@ -16353,8 +16335,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
-    // Search highlights mark the matched characters of track titles only (owner 2026-11-21).
-    const titleHighlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges(title) : null;
+    // A search tints the rows whose title matches, as in Album Details, and marks no letters (owner 2026-11-22).
+    const isSearchMatch = Boolean(typeof searchHighlightRanges === 'function' && searchHighlightRanges(title));
     return {
       path: trackPath,
       mediaRef,
@@ -16385,7 +16367,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
-      titleHighlightRanges,
+      isSearchMatch,
     };
   });
 }
@@ -24465,11 +24447,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const mobileTitleSupplement = typeof config.mobileTitleSupplement === 'function'
     ? String(config.mobileTitleSupplement(track, index) || '')
     : '';
-  // Search highlights (owner 2026-11-18): the matched characters of the title.
-  const titleTextHtml = track.titleHighlightRanges?.length
-    ? buildHighlightedTextHtml(track.title || '', track.titleHighlightRanges)
-    : escapeHtml(track.title || '');
-  const titleHtml = `<span class="album-track-table__title">${titleTextHtml}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
+  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
@@ -37278,7 +37256,7 @@ const COVER_SOURCE_PROVIDERS = Object.freeze({
     legal: ['Cover art from Deezer.'],
     linkLabel: 'Open on Deezer',
     search: (query) => `https://www.deezer.com/search/${query}`,
-    icon: '/static/images/icons/deezer-favicon-32.png',
+    icon: '/static/images/icons/deezer-icon-color-144.png',
   }),
   bandcamp: Object.freeze({
     label: 'Bandcamp',

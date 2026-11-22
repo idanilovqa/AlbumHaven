@@ -979,7 +979,7 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(title.textContent, 'Searching');
   assert.equal(scroll.hidden, true, 'previous results must not remain visible during submitted search');
   assert.equal(loader.classList.contains('is-searching'), true);
-  // Owner 2026-11-18: the side tree shows "Loading" while the search runs.
+  // Owner 2026-11-22: the side tree shows "Searching" while the search runs.
   assert.equal(treeClasses.has('is-search-loading'), true);
   vm.runInContext(`
     state.ui.pendingViewTransition = false;

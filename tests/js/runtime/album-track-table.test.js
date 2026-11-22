@@ -476,16 +476,14 @@ test('AlbumTrackTable splits a main disc and bonus disc into separate tables wit
   assert.match(html, /album-track-table__row--search-match/);
 });
 
-test('AlbumTrackTable marks the characters a search matched in a title and keeps the rest escaped', () => {
-  const context = loadTrackTable();
-  context.buildHighlightedTextHtml = (value, ranges) => `${value.slice(0, ranges[0][0])}<mark>${value.slice(ranges[0][0], ranges[0][1])}</mark>${value.slice(ranges[0][1])}`;
-  const html = context.buildAlbumTrackTableHtml({
+test('AlbumTrackTable shows a matched title whole and escaped, without marks', () => {
+  const html = loadTrackTable().buildAlbumTrackTableHtml({
     groups: [{ tracks: [
-      { path: 'one', title: 'Alas de Sal', trackNumber: 1, titleHighlightRanges: [[8, 11]] },
+      { path: 'one', title: 'Alas de Sal', trackNumber: 1, isSearchMatch: true, titleHighlightRanges: [[8, 11]] },
       { path: 'two', title: '<Spark>', trackNumber: 2 },
     ] }],
   });
-  assert.match(html, /album-track-table__title">Alas de <mark>Sal<\/mark>/);
+  assert.match(html, /album-track-table__title">Alas de Sal/);
   assert.match(html, /album-track-table__title">&lt;Spark&gt;/);
 });
 
@@ -798,14 +796,25 @@ test('the shared track table owns the Album Details type scale on every surface'
   assert.match(rule, /line-height:\s*1\.3/);
 });
 
-test('the neutral search highlight lives in the track table stylesheet the page loads', () => {
+test('no track table marks part of its text for a search (owner 2026-11-22)', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
-  const index = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'index.html'), 'utf8');
-  assert.match(index, /css\/runtime\/album-track-table\.css/);
-  const rule = css.match(/\.album-track-table mark\.search-match-highlight \{([^}]*)\}/);
-  assert.ok(rule, 'track tables style their own <mark> instead of the browser default yellow');
-  assert.match(rule[1], /color: inherit/);
-  assert.match(rule[1], /background: color-mix\(in srgb, currentColor 24%, transparent\)/);
+  const table = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js'), 'utf8');
+  assert.doesNotMatch(css, /search-match-highlight/);
+  assert.doesNotMatch(table, /titleHighlightRanges|buildHighlightedTextHtml/);
+});
+
+test('cover badges, their captions and the searching tree read as the owner asked (owner 2026-11-22)', () => {
+  const read = (...parts) => fs.readFileSync(path.join(repoRoot, 'music_app', 'static', ...parts), 'utf8').replace(/\r\n/g, '\n');
+  const badge = read('css', 'runtime', 'cover-lookup-modal.css')
+    .match(/^\.cover-source-badge__mark,\n\.cover-source-badge__mark :is\(svg, img\) \{([^}]*)\}/m);
+  assert.match(badge[1], /width: 18px;\s*height: 18px/);
+  assert.match(read('css', 'app-chrome.css'), /is-search-loading \.library-navigation-body::after \{\s*content: 'Searching…'/);
+  const appearance = read('js', 'appearance-backgrounds.js');
+  assert.match(appearance, /'Loaded from Deezer'/);
+  assert.match(appearance, /'Local cover downloaded from Deezer'/);
+  const icon = read('js', 'runtime', 'cover-lookup-modal-and-drawer.js').match(/icon: '\/static\/images\/icons\/(deezer-[^']+)'/)[1];
+  assert.equal(icon, 'deezer-icon-color-144.png');
+  assert.ok(fs.existsSync(path.join(repoRoot, 'music_app', 'static', 'images', 'icons', icon)));
 });
 
 test('TrackSelectionController selects a mouse-held row without movement (owner 2026-11-21)', () => {
@@ -830,7 +839,7 @@ test('TrackSelectionController selects a mouse-held row without movement (owner 
   assert.deepEqual(Array.from(controller.getSelectedPaths()), ['two', 'three', 'four'], 'shift still selects a range');
 });
 
-test('Album Details marks a matching track row but never its letters; Loose Tracks marks the letters (owner 2026-11-21)', () => {
+test('every track table marks a matching row, never its letters (owner 2026-11-22)', () => {
   const read = name => fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', name), 'utf8');
   const albumDetails = read('tag-editor-and-optimistic-updates.js');
   const highlightPass = albumDetails.slice(albumDetails.indexOf('function refreshAlbumTrackSearchHighlights'),
@@ -840,5 +849,5 @@ test('Album Details marks a matching track row but never its letters; Loose Trac
   const trackList = albumDetails.slice(albumDetails.indexOf('function buildTrackListHtml'));
   assert.match(trackList, /isSearchMatch: Boolean\(highlightRanges\(displayTitle\)\)/);
   assert.doesNotMatch(trackList.slice(0, trackList.indexOf('isSearchMatch')), /titleHighlightRanges/);
-  assert.match(read('modal-and-overlay-helpers.js'), /titleHighlightRanges/, 'Loose Tracks and collections keep letter marks');
+  assert.match(read('modal-and-overlay-helpers.js'), /isSearchMatch/, 'Loose Tracks and collections tint the row too');
 });

@@ -27,8 +27,7 @@ discogs-favicon-32.png above is reused there unchanged.
 
 From the same musicbrainz-server external-favicons set (master, root/static/images/
 external-favicons/, downloaded 2026-11-19), unmodified; same GPL-2.0-or-later repository
-terms as above. The marks remain trademarks of Deezer and Google:
-  deezer-favicon-32.png        deezer-32.png
+terms as above. The mark remains a trademark of Google:
   youtubemusic-favicon-32.png  youtubemusic-32.png
 
 Official provider artwork, downloaded 2026-11-19 from each provider's own brand page:
@@ -41,8 +40,11 @@ Official provider artwork, downloaded 2026-11-19 from each provider's own brand 
   bandcamp-button-circle-aqua-64.png
                                from https://bandcamp.com/img/buttons/bandcamp-button-circle-aqua.zip
                                (bandcamp.com/buttons), unmodified
+  deezer-icon-color-144.png    Deezer's own site icon, downloaded 2026-11-22 from
+                               https://cdn-files.dzcdn.net/cache/images/common/favicon/favicon-144x144.07ae81558433f1009494.png
+                               (linked from https://www.deezer.com), unmodified
   coverartarchive-icon.svg     the two hexagon halves of
                                https://coverartarchive.org/img/navbar_caa_logo.svg, without the wordmark
 
-Spotify, Apple Music, Bandcamp and Cover Art Archive are trademarks of their owners. Each mark
+Spotify, Apple Music, Bandcamp, Deezer and Cover Art Archive are trademarks of their owners. Each mark
 only identifies where a cover came from and links to that service's page for the release.

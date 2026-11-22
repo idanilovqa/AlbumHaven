@@ -1521,17 +1521,6 @@ test('scan stage elapsed detail uses independent stage and cover timers', () => 
   assert.equal(scanStageElapsedDetail({}, 'relations'), '');
 });
 
-test('search highlights mark the server ranges by code point and escape every part', () => {
-  const { buildHighlightedTextHtml } = loadHelpers();
-  assert.equal(
-    buildHighlightedTextHtml('<b>Sal</b> & Sal', [[3, 6], [13, 16]]),
-    '&lt;b&gt;<mark class="search-match-highlight">Sal</mark>&lt;/b&gt; &amp; <mark class="search-match-highlight">Sal</mark>',
-  );
-  assert.equal(buildHighlightedTextHtml('🎵 Ālap', [[2, 6]]), '🎵 <mark class="search-match-highlight">Ālap</mark>');
-  assert.equal(buildHighlightedTextHtml('Spark', [[3, 'x'], [9, 12], [2, 1]]), 'Spark');
-  assert.equal(buildHighlightedTextHtml('Spark', null), 'Spark');
-});
-
 test('the artist tree never highlights artist names, only track names are highlighted', () => {
   const context = loadHelpers();
   const view = { query: 'sal' };

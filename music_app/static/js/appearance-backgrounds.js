@@ -1015,7 +1015,7 @@
     })).join('');
   }
   function coverBadgePreviewMarkup({ artbox, coverSourceBadge }) {
-    return [['downloaded', 'Downloaded from Deezer: always badged', ['#2c3e5c', '#7aa0c8']], ['local', 'Local cover chosen from Deezer', ['#5b3424', '#c8873b']]]
+    return [['downloaded', 'Loaded from Deezer', ['#2c3e5c', '#7aa0c8']], ['local', 'Local cover downloaded from Deezer', ['#5b3424', '#c8873b']]]
       .map(([kind, caption, colors]) => `<figure class="appearance-cover-badge-preview__sample" data-cover-badge-sample="${kind}"><span class="appearance-cover-badge-preview__art">${artbox({ state: 'ready', label: caption, coverHtml: sampleCoverHtml(...colors) })}${coverSourceBadge('deezer', { artist: '10cc', album: 'How Dare You!' })}</span><figcaption>${caption}</figcaption></figure>`).join('');
   }
   function albumPageMarkup({ mobile = false, components }) {

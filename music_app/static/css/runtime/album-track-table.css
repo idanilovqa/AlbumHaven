@@ -258,14 +258,3 @@
 .album-track-table [role="columnheader"][data-cdt-column="number"] { width: 28px; text-align: center; }
 
 .album-track-table .compact-data-table { color: var(--appearance-ink, var(--text)); }
-
-/* Search match highlight (owner 2026-11-21: track names only, neutral, never the browser's yellow): the matched
-   characters of a track title, tinted with the surrounding text colour so it reads on every light and dark palette,
-   selected or playing. */
-.album-track-table mark.search-match-highlight {
-  color: inherit;
-  background: color-mix(in srgb, currentColor 24%, transparent);
-  border-radius: 3px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-}

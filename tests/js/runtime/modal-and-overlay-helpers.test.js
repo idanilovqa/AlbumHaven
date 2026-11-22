@@ -2975,7 +2975,7 @@ test('non-album artist folder match is literal and never drops a plural s', () =
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[1]]);
 });
 
-test('Loose Tracks highlight matched track titles and never mark a row for its artist (owner 2026-11-21)', () => {
+test('Loose Tracks and collections tint matched track rows and never mark a row for its artist (owner 2026-11-22)', () => {
   const { context } = loadHelper();
   context.buildProblematicAlbumTrackPathIndex = () => new Map();
   context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: true });
@@ -2987,9 +2987,9 @@ test('Loose Tracks highlight matched track titles and never mark a row for its a
     { path: 'D:/Music/Two.flac', title: 'Spark', artist: 'Salvador' },
   ], 0, new Map());
 
-  assert.deepEqual(titled.titleHighlightRanges, [[8, 11]]);
-  assert.equal(byArtist.titleHighlightRanges, null);
-  assert.equal('isSearchMatch' in titled || 'isSearchMatch' in byArtist, false);
+  assert.equal(titled.isSearchMatch, true);
+  assert.equal(byArtist.isSearchMatch, false);
+  assert.equal('titleHighlightRanges' in titled, false);
 });
 
 

@@ -2529,7 +2529,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         artist: track.artist || track.album_artist || '',
         albumArtist: track.album_artist || album?.album_artist || '',
         album: track.album || album?.name || '',
-        coverRef: track.cover_ref || album?.cover_ref || '',
+        coverRef: (album ? album.cover_ref : track.cover_ref) || '',
         durationSeconds: Number(track.duration_seconds) || 0,
         duration: currentTimeDisplay || duration,
         originalDuration: duration,
@@ -2592,7 +2592,8 @@ function buildPlayerTrackPayload(track, album = null) {
     artist: track.artist || track.album_artist || '',
     albumArtist: track.album_artist || album?.album_artist || '',
     album: track.album || '',
-    coverRef: track.cover_ref || '',
+    // Tracks have no artwork: the album being played supplies it.
+    coverRef: (album ? album.cover_ref : track.cover_ref) || '',
     durationSeconds: Number(track.duration_seconds) || 0,
     year: String(album?.display_year || album?.year || track.year || '').trim(),
   };

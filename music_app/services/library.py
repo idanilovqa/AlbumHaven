@@ -661,7 +661,12 @@ def _build_album_detail_track_payloads(
             for track, container in zip(tracks, track_containers)
             if os.path.normcase(container) == folder
         ]
-    track_payloads = [_track_to_dict(track) for track in tracks]
+    # Tracks have no artwork; each shows its album's. A track's cover is a folder cache.
+    album_artwork = {
+        "cover_path": str(album.cover_path) if album.cover_path else None,
+        "cover_revision": getattr(album, "cover_revision", None),
+    }
+    track_payloads = [{**_track_to_dict(track), **album_artwork} for track in tracks]
     track_rows = build_track_rows(
         tracks,
         album=album,

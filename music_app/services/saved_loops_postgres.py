@@ -7,6 +7,7 @@ import math
 import re
 from typing import Any
 
+from music_app.services.album_display_cover import album_display_cover_sql
 from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
@@ -112,7 +113,7 @@ class SavedLoopsPostgresAdapter:
 
     def get_scoped_track_cover(self, *, account_id, library_id, track_id):
         with self._connect_to_database() as connection:
-            row = connection.execute("""select a.cover_path from library.local_tracks t
+            row = connection.execute(f"""select {album_display_cover_sql("a")} as cover_path from library.local_tracks t
                 join library.local_albums a on a.id=t.album_id and a.library_id=t.library_id
                 where t.id=%s and t.library_id=%s""", (track_id,library_id)).fetchone()
             return str(row['cover_path'] or '') if row else ''

@@ -254,9 +254,16 @@ function setCurrentPlayerTrack(track, options = {}) {
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
   }
-  if (track && !String(track.coverRef || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
-    const resolvedCoverRef = String(resolveAlbumForPlayerTrack(track)?.cover_ref || '').trim();
-    if (resolvedCoverRef) track = { ...track, coverRef: resolvedCoverRef };
+  if (track && typeof resolveAlbumForPlayerTrack === 'function') {
+    const album = resolveAlbumForPlayerTrack(track);
+    const albumCoverRef = String(album?.cover_ref || '').trim();
+    const currentCoverRef = String(track.coverRef || '').trim();
+    // A match by name alone may be another album, so it only fills a gap; the track's own album always wins.
+    const holdsTrack = () => Array.isArray(album?.tracks)
+      && album.tracks.some((item) => String(item?.path || '') === String(track.path || ''));
+    if (albumCoverRef && albumCoverRef !== currentCoverRef && (!currentCoverRef || holdsTrack())) {
+      track = { ...track, coverRef: albumCoverRef };
+    }
   }
   state.player.current = track;
   state.player.timelineDragging = false;

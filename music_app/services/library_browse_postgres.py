@@ -68,6 +68,7 @@ from music_app.services.metadata import (
     build_text_repairs_for_entry,
     normalize_exception_value,
 )
+from music_app.services.album_display_cover import album_display_cover_sql
 from music_app.services.album_local_membership import (
     local_album_membership_ctes_sql,
 )
@@ -96,6 +97,7 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
     psycopg = None
 
 
+_DISPLAY_COVER_SQL = album_display_cover_sql("library.local_albums")
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _UTILITY_PROJECTION_PREWARM_CONFIG_KEY = "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED"
 _LIBRARY_BROWSE_SEAM_ID = "library_browse"
@@ -6718,8 +6720,12 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "total_discs": file_entry.get("total_discs"),
         "disc_subtitle": file_entry.get("disc_subtitle"),
         "duration_seconds": file_entry.get("duration_seconds", row_payload.get("duration_seconds")),
-        "cover_path": file_entry.get("cover_path", row_payload.get("album_cover_path")),
-        "cover_revision": file_entry.get("cover_revision", row_payload.get("album_cover_revision")),
+        "cover_path": row_payload.get("album_cover_path") or file_entry.get("cover_path"),
+        "cover_revision": (
+            row_payload.get("album_cover_revision")
+            if row_payload.get("album_cover_path")
+            else file_entry.get("cover_revision")
+        ),
         "year": raw_year,
         "edition": file_entry.get("edition"),
         "album_rating": file_entry.get("album_rating"),
@@ -10231,7 +10237,7 @@ def _selected_artist_sql() -> str:
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            {_DISPLAY_COVER_SQL} as album_cover_path,
             library.local_albums.metadata as album_metadata
           from target_artists
           join library.local_album_featured_artists
@@ -10431,7 +10437,7 @@ def _album_detail_sql() -> str:
           library.local_albums.album_key,
           library.local_albums.title as album_title,
           library.local_albums.release_year as album_release_year,
-          library.local_albums.cover_path as album_cover_path,
+          __DISPLAY_COVER__ as album_cover_path,
           library.local_albums.metadata as album_metadata,
           __ARTIST_MUSICBRAINZ_COLUMNS__
           (select array_agg(release_key) from library.separate_releases
@@ -10519,7 +10525,7 @@ def _album_detail_sql() -> str:
           library.local_tracks.title,
           library.local_tracks.track_key;
     """
-    return query.replace(
+    return query.replace("__DISPLAY_COVER__", _DISPLAY_COVER_SQL).replace(
         "__ARTIST_MUSICBRAINZ_COLUMNS__",
         _artist_musicbrainz_projection_columns_sql(),
     ).replace(
@@ -10555,7 +10561,7 @@ def _root_album_browse_sql() -> str:
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            {_DISPLAY_COVER_SQL} as album_cover_path,
             library.local_albums.metadata as album_metadata
           from library.local_artists
           join bootstrap_context
@@ -10838,7 +10844,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            {_DISPLAY_COVER_SQL} as album_cover_path,
             library.local_albums.metadata as album_metadata
           from preview_artists
           join library.local_album_featured_artists
@@ -11287,7 +11293,7 @@ def _selected_artist_preview_sql(
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            {_DISPLAY_COVER_SQL} as album_cover_path,
             library.local_albums.metadata as album_metadata
           from target_artists
           join library.local_album_featured_artists
@@ -11393,7 +11399,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            {_DISPLAY_COVER_SQL} as album_cover_path,
             library.local_albums.metadata as album_metadata
           from target_artists
           join library.local_album_featured_artists
@@ -11802,7 +11808,7 @@ def _search_preview_sql(
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            {_DISPLAY_COVER_SQL} as album_cover_path,
             library.local_albums.metadata as album_metadata,
             featured_credits.album_featured_artists
           from matched_album_ids
@@ -12744,7 +12750,7 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             albums.album_key,
             albums.title as album_title,
             albums.release_year as album_release_year,
-            albums.cover_path as album_cover_path,
+            {album_display_cover_sql("albums")} as album_cover_path,
             albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             coalesce(
                 nullif(albums.metadata ->> 'album_artist', ''),
@@ -13152,7 +13158,7 @@ def _problematic_files_sql(
             or __ALBUM_MOJIBAKE_CANDIDATE__
             or library.local_albums.release_year is null
             or library.local_albums.release_year <= 0
-            or nullif(btrim(coalesce(library.local_albums.cover_path, '')), '') is null
+            or nullif(btrim(coalesce(__DISPLAY_COVER__, '')), '') is null
             or (library.local_albums.id::text || ':search_spotify') in (select task_key from spotify_quota_albums)
             or (
               case
@@ -13263,6 +13269,7 @@ def _problematic_files_sql(
         """
         candidate_ctes = (
             candidate_ctes
+            .replace("__DISPLAY_COVER__", _DISPLAY_COVER_SQL)
             .replace(
                 "__ALBUM_MOJIBAKE_CANDIDATE__",
                 _mojibake_candidate_fields_sql(album_text_expressions),
@@ -13380,14 +13387,14 @@ def _problematic_files_sql(
             "where library.local_albums.id = any(%(album_ids)s::bigint[])"
         )
     if duplicate_sources_only:
-        selected_album_projection = """
+        selected_album_projection = f"""
             library.local_albums.id,
             library.local_albums.library_id,
             library.local_albums.artist_id,
             library.local_albums.album_key,
             library.local_albums.title,
             library.local_albums.release_year,
-            library.local_albums.cover_path,
+            {_DISPLAY_COVER_SQL} as cover_path,
             library.local_albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             library.local_albums.metadata ->> 'album_artist' as album_artist
         """
@@ -13395,14 +13402,14 @@ def _problematic_files_sql(
         file_result_projection = "active_track_files.file_entry,"
         album_artist_result_expression = "selected_albums.album_artist"
     elif candidate_summary:
-        selected_album_projection = """
+        selected_album_projection = f"""
             library.local_albums.id,
             library.local_albums.library_id,
             library.local_albums.artist_id,
             library.local_albums.album_key,
             library.local_albums.title,
             library.local_albums.release_year,
-            library.local_albums.cover_path,
+            {_DISPLAY_COVER_SQL} as cover_path,
             library.local_albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             library.local_albums.metadata ->> 'album_artist' as album_artist,
             library.local_albums.metadata ->> 'artists' as album_artists,
@@ -13484,14 +13491,14 @@ def _problematic_files_sql(
         """
         album_artist_result_expression = "selected_albums.album_artist"
     else:
-        selected_album_projection = """
+        selected_album_projection = f"""
             library.local_albums.id,
             library.local_albums.library_id,
             library.local_albums.artist_id,
             library.local_albums.album_key,
             library.local_albums.title,
             library.local_albums.release_year,
-            library.local_albums.cover_path,
+            {_DISPLAY_COVER_SQL} as cover_path,
             library.local_albums.metadata
         """
         active_track_file_projection = """
@@ -13901,7 +13908,7 @@ def _utility_rules_sql() -> str:
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            __DISPLAY_COVER__ as album_cover_path,
             library.local_albums.metadata as album_metadata,
             coalesce(
               nullif(library.local_albums.metadata ->> 'album_artist', ''),
@@ -13930,7 +13937,7 @@ def _utility_rules_sql() -> str:
             library.local_albums.album_key,
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
-            library.local_albums.cover_path as album_cover_path,
+            __DISPLAY_COVER__ as album_cover_path,
             library.local_albums.metadata as album_metadata,
             coalesce(
               nullif(library.local_albums.metadata ->> 'album_artist', ''),
@@ -13988,4 +13995,4 @@ def _utility_rules_sql() -> str:
         union all
         select * from repair_rows
         order by row_kind, ignored_version_key nulls last, ignored_repair_key nulls last;
-    """
+    """.replace("__DISPLAY_COVER__", _DISPLAY_COVER_SQL)

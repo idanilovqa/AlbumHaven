@@ -353,6 +353,7 @@ test('BFCache fallback rejects an expired retained claim without acquiring anony
     paused: false, ended: false, currentTime: 19,
   }), false);
   assert.equal(requests, 0);
+  assert.equal(context.holdsPlaybackClaim(), false, 'a claim it may have given away never sounds first');
 });
 
 test('new document restore rejects a malformed envelope without retained ownership', async () => {
@@ -1121,6 +1122,7 @@ function leaseHarness({ clientOffsetMs = 0, renew }) {
         expiresAt: new Date(serverNow + clock.monotonic + 30_000).toISOString(), leaseMs: 30_000,
         playbackState: { is_playing_here: true } });
       if (!body.claimToken) return answer();
+      if (options.method === 'DELETE') return jsonResponse({ protocol: 1 }); // a give-back renews nothing
       renewals += 1;
       return renew ? renew(answer, options.signal) : answer();
     },
@@ -1366,7 +1368,8 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   assert.equal(await context.canStartPlaybackInThisTab(localTrack), true);
   assert.equal(context.getPlaybackOwnershipTabId(), nativeClientId);
   await context.handlePlaybackOwnershipEvent();
-  assert.deepEqual(requests, [{ url: `/playback/state?client_id=${nativeClientId}`, method: 'GET' }]);
+  const read = { url: `/playback/state?client_id=${nativeClientId}`, method: 'GET' };
+  assert.deepEqual(requests, [read, read], 'before the start, and the mirror: never a web claim');
   assert.equal(context.isActivePlaybackOwner(), false);
 });
 
@@ -1705,12 +1708,74 @@ test('a tab that holds and gave back no claim answers nothing', async () => {
   assert.deepEqual(answers, []);
 });
 
-test('a handover that did not go through leaves the stopped tab its claim to play on with', async () => {
-  const { context, state } = handoverHolder();
-  await context.answerPlaybackHandover('request-5');
-  context.syncMirroredPlaybackState({ is_playing_here: true, is_playing_elsewhere: false });
-  assert.equal(state.player.ownership.activeClaim?.claimToken, 'departing-claim');
-  assert.equal(state.player.ownership.lockStatus, 'unlocked');
+// Owner, 2026-11-22: "I don't want plays to overlap", and a refused press never leaves the holder stopped.
+for (const [name, here, paused, playsOn] of [
+  ['was refused', true, false, true],
+  ['went through', false, false, false],
+  ['was refused for a tab that was paused', true, true, false],
+]) {
+  test(`a press that ${name}: the asked tab ${playsOn ? 'plays on, as a new claim' : 'stays silent'}`, async () => {
+    const { context } = handoverHolder({ paused });
+    const resumed = [];
+    await context.answerPlaybackHandover('request-5');
+    assert.equal(context.holdsPlaybackClaim(), false, 'the token it answered with is never sounded on again');
+    context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: false, currentTime: 117.6, duration: 195 });
+    context.togglePlayerPlayback = () => { resumed.push(context.state.player.ownership.activeClaim); };
+    context.fetch = async () => jsonResponse({ protocol: 1, is_playing_here: here, is_playing_elsewhere: !here,
+      track: { title: 'Theirs' } });
+
+    await context.settlePlaybackHandover();
+
+    assert.deepEqual(resumed, playsOn ? [null] : []);
+  });
+}
+
+test('told the press is over while still falling silent, the asked tab still plays on', async () => {
+  const { context } = handoverHolder();
+  const drained = deferred();
+  const resumed = [];
+  context.silenceStreamingPlaybackForHandover = async () => async () => drained.promise;
+  const answering = context.answerPlaybackHandover('request-11');
+  await new Promise((resolve) => setImmediate(resolve));
+  context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: false, currentTime: 117.6, duration: 195 });
+  context.togglePlayerPlayback = () => { resumed.push(true); };
+  context.fetch = async () => jsonResponse({ protocol: 1, is_playing_here: true, is_playing_elsewhere: false });
+
+  const settled = context.settlePlaybackHandover();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(resumed, [], 'not while its answer may still go out');
+  drained.resolve(true);
+  await answering;
+  await settled;
+
+  assert.deepEqual(resumed, [true]);
+});
+
+test('a tab with nothing to hand on says it is silent only once its output drained', async () => {
+  const { context, answers } = handoverHolder({ claim: null, paused: true });
+  const drained = deferred();
+  context.drainStreamingOutput = () => drained.promise;
+  const answering = context.answerPlaybackHandover('request-12');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(answers, []);
+  drained.resolve();
+  await answering;
+  assert.equal(answers[0].type, 'handover-silent');
+});
+
+test('an unanswered Play here is refused with the toast there is, and starts nothing', async () => {
+  const toasts = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    showToast: (text) => toasts.push(text),
+    playTrackFromPayload: async () => assert.fail('nothing starts without proof'),
+    fetch: async (_url, init = {}) => (init.method === 'PUT'
+      ? jsonResponse({}, { ok: false, status: 409 })
+      : jsonResponse({ protocol: 1, is_playing_elsewhere: true, track: { title: 'Theirs' } })),
+  });
+
+  assert.equal(await context.takeOverPlaybackHere(), false);
+  assert.deepEqual(toasts, ['Playback is active in another tab.']);
 });
 
 test('Play here is one confirmed request and starts exactly at the place the playing tab answered', async () => {
@@ -1829,3 +1894,187 @@ test('a renewal refused because another client took over shows that client as pl
   assert.equal(context.isPlaybackPlayingElsewhere(), true);
   assert.equal(context.getMirroredPlaybackTrack().title, 'Taken Song');
 });
+
+test('a give-back nobody answered is sent again until it is answered', async () => {
+  let offline = true;
+  let heartbeat = null;
+  const released = [];
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false, currentTime: 5 }),
+    setInterval: (callback) => { heartbeat = callback; return 1; },
+    fetch: async (_url, init = {}) => {
+      if (init.method !== 'DELETE') return jsonResponse({ protocol: 1, is_playing_elsewhere: false });
+      if (offline) throw new TypeError('Failed to fetch');
+      assert.equal(init.keepalive, true, 'a closing page still delivers it');
+      released.push(JSON.parse(init.body).claimToken);
+      return jsonResponse({ protocol: 1 });
+    },
+  });
+  context.startPlaybackOwnershipHeartbeat();
+  await context.releasePlaybackOwnership();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(released, []);
+
+  offline = false;
+  heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(released, ['departing-claim']);
+});
+
+test('a claim lost without a takeover is given back only after the audio stopped', async () => {
+  const stopped = deferred();
+  const released = [];
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 5 }),
+    stopStreamingPlayback: () => stopped.promise,
+    fetch: async (url, init = {}) => {
+      if (url === '/playback/refs') return jsonResponse({}, { ok: false, status: 404 });
+      if (init.method === 'DELETE') released.push(JSON.parse(init.body).claimToken);
+      return jsonResponse({ protocol: 1 });
+    },
+  });
+
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(released, [], 'not while it may still sound');
+
+  stopped.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(released, ['departing-claim']);
+});
+
+test('a claim held by a tab that is not playing is given back', async () => {
+  let heartbeat = null;
+  const released = [];
+  const paused = [];
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    pauseStreamingPlayback: async () => { paused.push(true); },
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false, currentTime: 5 }),
+    setInterval: (callback) => { heartbeat = callback; return 1; },
+    fetch: async (_url, init = {}) => {
+      if (init.method === 'DELETE') released.push(JSON.parse(init.body).claimToken);
+      return jsonResponse({ protocol: 1, is_playing_here: true });
+    },
+  });
+  context.startPlaybackOwnershipHeartbeat();
+
+  heartbeat();
+  heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(released, [], 'a pause first drains its listen writes');
+  heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(released, ['departing-claim'], 'with no lease to lapse it would lock every client');
+  assert.deepEqual(paused, [true], 'a start the browser held back cannot sound after the give-back');
+});
+
+test('a paused tab that closes says it is silent', async () => {
+  const released = [];
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false, currentTime: 5 }),
+    setSessionStorageItem: () => true,
+    fetch: async (_url, init = {}) => {
+      if (init.method === 'DELETE') released.push(JSON.parse(init.body).claimToken);
+      return jsonResponse({ protocol: 1 });
+    },
+  });
+
+  context.keepPlaybackClaimForThisTab();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(released, ['departing-claim']);
+  assert.equal(context.holdsPlaybackClaim(), false, 'back from the page cache it asks before it sounds');
+});
+
+for (const [name, answer, allowed] of [
+  ['nobody plays', { protocol: 1, is_playing_elsewhere: false }, true],
+  ['another client may sound', { protocol: 1, is_playing_elsewhere: true, track: { title: 'Theirs' } }, false],
+  ['the server does not answer', null, false],
+]) {
+  test(`an app with its own claim is let start only on the server's word: ${name}`, async () => {
+    const toasts = [];
+    const { context } = loadHelper({
+      currentPlaybackEngine: () => ({ holdsOwnClaim: true, claimClientId: () => 'app-client', ownsPlayback: () => false }),
+      showToast: (message) => toasts.push(message),
+      fetch: async () => {
+        if (!answer) throw new TypeError('Failed to fetch');
+        return jsonResponse(answer);
+      },
+    });
+
+    assert.equal(await context.claimPlaybackOwnership(localTrack), allowed);
+    assert.equal(toasts.length, allowed ? 0 : 1);
+  });
+}
+
+test('an app that owns playback switches without asking', async () => {
+  const { context } = loadHelper({
+    currentPlaybackEngine: () => ({ holdsOwnClaim: true, claimClientId: () => 'app-client', ownsPlayback: () => true }),
+    fetch: async () => assert.fail('no request'),
+  });
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+});
+
+test('a page that said it is leaving has no claim to sound on before the server answers', async () => {
+  const state = activeOwnershipState();
+  state.player.ownership.handoffAttempted = true;
+  const { context } = loadHelper({ state });
+
+  assert.equal(context.holdsPlaybackClaim(), false);
+});
+
+test('a taken-over tab identity is not confused with the claim its previous page left', async () => {
+  const stored = JSON.stringify({ clientId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', claimToken: 'P'.repeat(43) });
+  const offered = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    getSessionStorageItem: (key) => (key === 'albumhaven.playbackSameTab.v1' ? stored : ''),
+    removeSessionStorageItem: () => {},
+    playTrackFromPayload: async () => true,
+    fetch: async (url, init = {}) => {
+      if (url === '/playback/refs') {
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
+      }
+      if (init.method === 'PUT') offered.push(JSON.parse(init.body).claimToken);
+      return jsonResponse({ protocol: 1, claimToken: 'taker-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000,
+        path: 'C:/Music/their.flac', track: { playbackRef: 'their-ref', title: 'Theirs', artist: '', album: '' } });
+    },
+  });
+  await context.takeOverPlaybackHere();
+  context.state.player.ownership.activeClaim = null;
+
+  await context.claimPlaybackOwnership(localTrack);
+
+  assert.equal(offered.at(-1), null);
+});
+
+for (const first of [true, false]) {
+  test(`a refused press that stopped a ${first ? 'first start' : 'switch'} plays the pressed song on`, async () => {
+    const { context, state } = handoverHolder();
+    const pressed = { ...localTrack, title: 'Pressed', durationSeconds: 195 };
+    if (first) {
+      context.getSoundingStreamingPlayback = () => null;
+      state.player.current = null;
+    }
+    state.player.selectedTrack = pressed;
+    state.player.selectedStartSeconds = 87;
+    await context.answerPlaybackHandover('request-13');
+    const played = [];
+    context.playTrackFromPayload = async (track, options) => { played.push([track.title, options.startSeconds]); };
+    context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: false, currentTime: 0, duration: 195 });
+    context.fetch = async () => jsonResponse({ protocol: 1, is_playing_here: true, is_playing_elsewhere: false });
+
+    await context.settlePlaybackHandover();
+
+    assert.deepEqual(played, [['Pressed', 87]]);
+    assert.equal(state.player.ownership.unreleasedClaim?.claimToken, 'departing-claim', 'given back if it cannot');
+  });
+}

@@ -387,11 +387,10 @@ async function playTrackFromPayload(track, options = {}) {
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
-  // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
-  // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
-  // Except when another client is known to play: then the press waits for the answer instead of
-  // starting and then stopping (sandbox5, 2026-11-21). A holder gone silent (a browser closed without
-  // a word) gives way and the song plays; a live one keeps playback, and the overlay offers Play here.
+  // Instant start only with a claim already held: nobody else can have started, so queue steps keep
+  // their starts. Without one the press paints at once and sounds when the server grants it (owner,
+  // 2026-11-22: "You cannot just start without an answer"). With another client known to play it paints
+  // nothing either: the overlay offers Play here (sandbox5, 2026-11-21).
   const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
     && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
@@ -403,7 +402,14 @@ async function playTrackFromPayload(track, options = {}) {
     return false;
   };
   if (pendingClaim === false) return refused();
-  if (knownElsewhere && !await pendingClaim) return refused();
+  if (pendingClaim !== true && !(typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim())) {
+    if (!knownElsewhere && options.takeover !== true && track?.path) {
+      showSelectedTrackImmediately(track, shouldAutoplay, Math.max(0, Number(options.startSeconds) || 0));
+    }
+    const granted = await pendingClaim;
+    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (!granted) return refused();
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return refused();
@@ -581,16 +587,21 @@ async function handleStreamingPlaybackEnded(event = {}) {
       finishedFully: true,
     });
   }
-  if (typeof releasePlaybackOwnership === 'function'
-      && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
-    await releasePlaybackOwnership('stopped', track);
+  const isStillThisEnd = () => ownershipVersion === null
+    || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0);
+  // The engine names a queued successor it could not continue into: a new sample rate, or a
+  // native queue that ended its window. It starts on the claim still held, with no wait for a new one.
+  const continues = Boolean(event.startNextTrackPath)
+    && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath;
+  if (!continues && typeof releasePlaybackOwnership === 'function' && isStillThisEnd()) {
+    // Released is what lets another client sound: the last rendered audio leaves the output first.
+    if (typeof drainStreamingOutput === 'function') await drainStreamingOutput();
+    if (isStillThisEnd()) await releasePlaybackOwnership('stopped', track);
   }
   updatePlayerUi();
-  // The engine names a queued successor it could not continue into: a new sample rate, or a
-  // native queue that ended its window.
-  if (event.startNextTrackPath
-      && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath) {
-    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+  if (continues) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it. A successor that
+    // does not start leaves the claim to the heartbeat, which gives a silent tab's back.
     await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
   }
 }
@@ -989,8 +1000,9 @@ function togglePlayerPlayback(options = {}) {
     Promise.resolve().then(async () => {
       if (selectionToken !== playerTrackSelectionToken) return false;
       const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
-      // Instant resume: the paused stream sounds while the claim is asked for; a refusal pauses it again.
-      const early = claim !== true && playback.mode !== 'stopped' && !playback.ended
+      // Instant resume only on a claim still held; given back, it sounds when the server grants a new one.
+      const early = claim !== true && typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim()
+        && playback.mode !== 'stopped' && !playback.ended
         ? resumeStreamingPlayback()
         : null;
       // The controls follow the sound as soon as it resumes, not after the claim's round trip.

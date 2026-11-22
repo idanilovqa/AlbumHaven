@@ -220,8 +220,8 @@ function persistPlayerStateForUnload(reason) {
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  // Let the lease expire: an unload release could overtake the final beacon. The next page of this
-  // tab renews the claim under the same identity, whether or not the beacon arrives.
+  // A playing page releases by its final beacon alone, which a release could overtake; one that is not
+  // playing releases now, as no lease frees it. The next page of this tab knows the claim either way.
   if (typeof keepPlaybackClaimForThisTab === 'function') keepPlaybackClaimForThisTab();
   flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {

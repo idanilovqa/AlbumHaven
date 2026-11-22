@@ -1,4 +1,10 @@
-"""One transactional, expiring playback owner per account and library."""
+"""One transactional playback owner per account and library, replaced only on proof that it is silent.
+
+The owner, 2026-11-22: "You cannot just start without an answer [...] I don't want plays to overlap". An
+expired lease is no proof, as a client plays on through an outage (B-D4): it only ends listen writes. Proof
+is the holder's own word: its release, its answer to Play here, or its page saying it is leaving once its
+output has drained.
+"""
 
 from datetime import datetime, timedelta, timezone
 import hmac
@@ -14,11 +20,9 @@ from music_app.services.postgres_connections import pooled_connection
 
 
 _CLAIM_LEASE_SECONDS = 30
-# A holder that has not renewed for this long is gone (a browser closed or crashed without a word): the
-# first fresh claim replaces it, so a press elsewhere plays at once (sandbox5, 2026-11-21). Browsers
-# renew every 4 s, the Android app every 10 s; each limit leaves room for a slow renewal.
-_STALE_HOLDER_SECONDS = {"private_web": 10, "mobile": 16}
 _HANDOFF_LEASE_SECONDS = 15
+# A page says it is leaving just before it stops its audio: what it rendered still has to leave the output.
+_LEAVING_DRAIN_SECONDS = 1
 
 
 def _client(value):
@@ -59,6 +63,11 @@ def validate_taker(client_id, client_surface):
     _client(client_id)
     if client_surface not in ("private_web", "mobile"):
         raise PlaybackContractError()
+
+
+def _left_before(now):
+    """A staged handoff expiring at or before this was staged long enough ago to be silence."""
+    return now + timedelta(seconds=_HANDOFF_LEASE_SECONDS - _LEAVING_DRAIN_SECONDS)
 
 
 class PostgresPlaybackClaims:
@@ -118,8 +127,9 @@ class PostgresPlaybackClaims:
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
             row = connection.execute("""select client_id, client_surface, expires_at, track
-                from app.playback_claims where account_id = %s and library_id = %s and expires_at > %s""",
-                (account_id, library_id, self._clock())).fetchone()
+                from app.playback_claims where account_id = %s and library_id = %s
+                and (pending_handoff_expires_at is null or pending_handoff_expires_at > %s)""",
+                (account_id, library_id, _left_before(self._clock()))).fetchone()
         return self._state(row, client_id, actor if include_path else None)
 
     def acquire(self, actor, *, client_id, client_surface, track, claim_token=None, handoff=None,
@@ -129,8 +139,8 @@ class PostgresPlaybackClaims:
             raise PlaybackContractError()
         if handoff is not None and client_surface != "private_web":
             raise PlaybackContractError()
-        # playback.claim.takeover (owner, 2026-11-17): a fresh claim may replace another client's
-        # live claim of the same account and library.
+        # playback.claim.takeover is still sent by Play here, also of installed apps. It is no proof that
+        # the holder is silent, so by itself it replaces nothing (owner, 2026-11-22).
         if type(takeover) is not bool or (takeover and (claim_token is not None or handoff is not None)):
             raise PlaybackContractError()
         track = self._track(actor, track)
@@ -176,10 +186,8 @@ class PostgresPlaybackClaims:
                         (expires, json.dumps(stored_track), account_id, library_id,
                          client_id, digest, now)).fetchone()
             elif issued:
-                # A tab that closed (or reloaded) while playing staged a handoff on its way out: its
-                # claim gives way to the first fresh claim, so one Play press elsewhere plays at once
-                # (sandbox5, 2026-11-18: Play after closing a playing tab was refused for 15-30 s). A
-                # reload that comes back first takes its handoff as before.
+                # Only over silence: no row, this client's own row (its grant's answer was lost, or it
+                # restarted), or a page that said it was leaving. Never over a holder that is only quiet.
                 row = connection.execute("""insert into app.playback_claims
                     (account_id, library_id, client_id, client_surface, token_digest, expires_at, track)
                     values (%s, %s, %s, %s, %s, %s, %s::jsonb)
@@ -189,20 +197,15 @@ class PostgresPlaybackClaims:
                       track = excluded.track, pending_handoff_id = null,
                       pending_handoff_digest = null, pending_completion_digest = null,
                       pending_handoff_expires_at = null
-                    where %s or app.playback_claims.pending_handoff_id is not null
-                      or app.playback_claims.expires_at <= %s
-                      or (app.playback_claims.client_surface = 'private_web' and app.playback_claims.expires_at <= %s)
-                      or (app.playback_claims.client_surface = 'mobile' and app.playback_claims.expires_at <= %s)
+                    where app.playback_claims.client_id = excluded.client_id
+                      or app.playback_claims.pending_handoff_expires_at <= %s
                     returning client_id, client_surface, expires_at, track""",
                     (account_id, library_id, client_id, client_surface, digest, expires,
-                     json.dumps(stored_track), takeover, now,
-                     now + timedelta(seconds=_CLAIM_LEASE_SECONDS - _STALE_HOLDER_SECONDS["private_web"]),
-                     now + timedelta(seconds=_CLAIM_LEASE_SECONDS - _STALE_HOLDER_SECONDS["mobile"]))).fetchone()
+                     json.dumps(stored_track), _left_before(now))).fetchone()
             else:
                 # The token renews its claim even past the lease, as for a client that played on
-                # without a network: until another client's acquire replaces the row or its release
-                # deletes it, nobody else has played since. The owner renewing (a page of the same
-                # tab after a reload) is no longer leaving: a handoff it staged no longer applies.
+                # without a network: nobody else can start until it says it is silent. The owner renewing
+                # (a page of the same tab after a reload) is no longer leaving: its handoff no longer applies.
                 row = connection.execute("""update app.playback_claims set expires_at = %s, track = %s::jsonb,
                       pending_handoff_id = null, pending_handoff_digest = null,
                       pending_completion_digest = null, pending_handoff_expires_at = null
@@ -244,8 +247,6 @@ class PostgresPlaybackClaims:
                                and str(row["pending_handoff_id"]) == handoff_id
                                and bytes(row["pending_handoff_digest"]) == handoff_digest
                                and bytes(row["pending_completion_digest"]) == completion_digest)
-            if row["expires_at"] <= now and not pending_matches:
-                raise PlaybackContractError(403)
             if pending_live and not pending_matches:
                 raise PlaybackContractError(409)
             if persist_completion is not None:
@@ -263,15 +264,19 @@ class PostgresPlaybackClaims:
                     "expiresAt": handoff_expires.astimezone(timezone.utc).isoformat()}
 
     def holder(self, actor):
-        """Who a confirmed Play here asks; `client_id` is None when nobody holds a live claim."""
+        """Who a confirmed Play here asks, however long quiet; `client_id` is None when nobody holds the
+        claim. `silent` when its page said it was leaving and its output has drained: it needs no asking.
+        """
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
-            row = connection.execute("""select client_id, token_digest from app.playback_claims
-                where account_id = %s and library_id = %s and expires_at > %s""",
-                (account_id, library_id, self._clock())).fetchone()
+            row = connection.execute("""select client_id, token_digest, pending_handoff_expires_at
+                from app.playback_claims where account_id = %s and library_id = %s""",
+                (account_id, library_id)).fetchone()
+        left = row["pending_handoff_expires_at"] if row else None
         return {"account_id": account_id, "library_id": library_id,
                 "client_id": str(row["client_id"]) if row else None,
-                "digest": bytes(row["token_digest"]) if row else None}
+                "digest": bytes(row["token_digest"]) if row else None,
+                "silent": left is not None and left <= _left_before(self._clock())}
 
     def holds(self, holder, token):
         try:
@@ -280,14 +285,19 @@ class PostgresPlaybackClaims:
             return False
 
     def hand_over(self, actor, *, client_id, client_surface, observed, answer):
-        """Replaces the observed holder's claim with the taker's: at the holder's [answer] or, without
-        one, at its saved place. It is one statement, only over the token that was observed, so no
-        later save of the holder lands after it and a third client that claimed meanwhile keeps playback.
+        """Replaces the holder's claim with the taker's, only on proof that it is silent: its [answer], at
+        the place that names or else its saved one, or, with no answer, its page having left. It is one
+        statement, only over the token that was observed, so no later save of the holder lands after it,
+        a holder that sounds again (always as a new claim) or came back keeps playback, and so does a
+        third client that claimed meanwhile.
         """
         validate_taker(client_id, client_surface)
         client_id = _client(client_id)
         if client_id == observed["client_id"]:
             raise PlaybackContractError(409)
+        if answer is None and not observed.get("silent"):
+            raise PlaybackContractError(409)
+        answered = answer is not None
         track = position = None
         if answer is not None:
             try:
@@ -327,9 +337,10 @@ class PostgresPlaybackClaims:
                   pending_handoff_digest = null, pending_completion_digest = null,
                   pending_handoff_expires_at = null
                 where app.playback_claims.token_digest = %s
+                  and (%s or app.playback_claims.pending_handoff_expires_at <= %s)
                 returning client_id""",
                 (account_id, library_id, client_id, client_surface, issued.digest, expires,
-                 json.dumps(stored), observed["digest"])).fetchone()
+                 json.dumps(stored), observed["digest"], answered, _left_before(now))).fetchone()
             if row is None:
                 raise PlaybackContractError(409)
         return {"protocol": 1, "claimToken": issued.raw, "expiresAt": expires.isoformat(),
@@ -353,9 +364,11 @@ class PostgresPlaybackClaims:
             account_id, library_id = require_playback_membership(connection, actor)
             row = connection.execute("""select client_id, token_digest, expires_at from app.playback_claims
                 where account_id = %s and library_id = %s for update""", (account_id, library_id)).fetchone()
-            if row is None or row["expires_at"] <= self._clock():
+            if row is None:
                 return
             if str(row["client_id"]) != client_id or bytes(row["token_digest"]) != digest:
+                if row["expires_at"] <= self._clock():
+                    return
                 raise PlaybackContractError(403)
             connection.execute("delete from app.playback_claims where account_id = %s and library_id = %s", (account_id, library_id))
         return {"account_id": account_id, "library_id": library_id, "client_id": client_id, "digest": digest}

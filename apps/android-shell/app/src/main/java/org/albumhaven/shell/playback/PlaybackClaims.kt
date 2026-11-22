@@ -161,13 +161,15 @@ class PlaybackClaimOwner(
     /**
      * Play here on another device asked this one (owner, 2026-11-22): the token to answer with, after
      * which this client no longer owns playback and gives nothing back, so no save of it lands later.
-     * If nobody took over, its next acquire offers that token again. Null when it holds none.
+     * If nobody took over, its next acquire is a new claim, which voids that answer: it never sounds
+     * beside a taker still on its way. Asked again, it answers with that token. Null when it holds none.
      */
     fun handOver(): String? {
         val held = token
         if (held == null) return releasedToken
         drop()
-        unansweredRelease = held
+        unansweredRelease = null
+        releasedToken = held
         events(ClaimEvent.Lost)
         return held
     }

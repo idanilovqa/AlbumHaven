@@ -616,7 +616,8 @@ test('a playback claim inside the APK waits for the handshake that names the nat
   const claim = `claimPlaybackOwnership(${JSON.stringify(tracks[0])}, { showBlockedToast: false })`;
   assert.equal(await vm.runInContext(claim, context), true);
   assert.notEqual(vm.runInContext('getPlaybackOwnershipState().lockStatus', context), 'locked');
-  assert.deepEqual(urls, [], 'Android claims for itself; the web never asks');
+  assert.equal(urls.length, 1, 'Android claims for itself, and starts only on the word that nobody plays');
+  assert.match(urls[0], /^\/playback\/state\?client_id=/, 'read as the native client, never a web claim');
 });
 
 test('events the stopped queue still emits never revive playback or ownership', async () => {

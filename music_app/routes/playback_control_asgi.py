@@ -42,7 +42,7 @@ _SCROBBLE_ACTION = "integration.lastfm.scrobble"
 _NOTIFICATION_ARTWORK_EDGE = 768
 # A claim heartbeat every ten seconds is logged only when it is this slow.
 _QUIET_STEP_LOG_MS = 1000
-# How long Play here waits for the playing client's answer before it uses the saved place.
+# How long Play here waits for the playing client to say anything before it is refused.
 HANDOVER_ANSWER_SECONDS = 1.5
 ARTWORK_PREFIX = "/playback/artwork/"
 # A resume token never expires, and its payload names library files.
@@ -188,7 +188,8 @@ async def acquire_playback(request: Request):
 
 
 async def _confirmed_takeover(request, payload):
-    """playback.claim.takeover, confirmed: the holder stops and says what sounds and where (owner, 2026-11-22)."""
+    """playback.claim.takeover, confirmed: the holder stops and says what sounds and where. Without its word
+    that it is silent the press is refused (owner, 2026-11-22: "You cannot just start without an answer")."""
     claims, actor = PostgresPlaybackClaims(playback_config(request)), request.state.current_actor
     hub = request.app.state.playback_pcm_registry.handover
     client_id = payload.get("clientId")
@@ -206,18 +207,22 @@ async def _confirmed_takeover(request, payload):
         holder = (observed["account_id"], observed["library_id"], observed["client_id"])
         asked_at = time.perf_counter()
         answer = None
-        if observed["client_id"] != client_id:
+        taken = False
+        if observed["client_id"] != client_id and not observed.get("silent"):
             answer = await hub.ask(*holder, accepts=lambda token: claims.holds(observed, token),
                 timeout=HANDOVER_ANSWER_SECONDS)
         timing["ask_ms"] = round((time.perf_counter() - asked_at) * 1000)
         try:
-            if paused and answer is None:
+            if paused and not (answer and answer["track"]):
                 return JSONResponse(await playback_call(claims.get, actor, client_id),
                     headers={"Cache-Control": "no-store"})
+            if answer is None and not observed.get("silent"):
+                raise HTTPException(409, "Playback is active on another client.")
             result = await playback_call(claims.hand_over, actor, client_id=client_id,
                 client_surface=payload.get("clientSurface"), observed=observed, answer=answer)
+            taken = True
         finally:
-            await hub.settled(*holder)
+            await hub.settled(*holder, taken=taken)
         timing["confirmed"] = result["confirmed"]
         # A client of this same account and library: the one tab the taker may silence in its own browser.
         result = {**result, "previousClientId": observed["client_id"]}

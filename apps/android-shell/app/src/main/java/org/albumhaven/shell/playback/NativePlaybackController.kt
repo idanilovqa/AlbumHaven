@@ -679,7 +679,7 @@ class NativePlaybackController(
                 }
                 ClaimOutcome.BLOCKED -> {
                     wantPlay = false
-                    // Unloading silences an instant start at once: another client owns playback.
+                    // Another client owns playback: what was buffered is never heard.
                     unload("ownership-blocked")
                     setState(NativePlaybackState.PAUSED)
                 }
@@ -691,16 +691,16 @@ class NativePlaybackController(
                 }
             }
         }
-        // Sound starts from what is buffered now; the claim's answer arrives meanwhile.
+        // A claim already held starts from what is buffered now.
         startWhenReady()
         listens.begin(item.listenTrack(), heldPositionMs / 1000.0)
     }
 
     /**
-     * Playback is heard while it owns the claim, and also while a play asks for it: the owner chose
-     * an instant start from the buffer (2026-11-08). A refused claim silences it on its answer.
+     * Playback is heard only while it owns the claim (owner, 2026-11-22: "You cannot just start without
+     * an answer"). This replaces the instant start of 2026-11-08: a play fills its buffer while it asks.
      */
-    private fun mayBeHeard(): Boolean = claims.owned || (wantPlay && claims.acquiring)
+    private fun mayBeHeard(): Boolean = claims.owned
 
     /**
      * Starts or resumes once the socket is ready, or the stream plays on without one, and the claim
@@ -1129,7 +1129,8 @@ class NativePlaybackController(
     }
 
     /**
-     * Play here on another device asks this one over the socket (owner, 2026-11-22): it falls silent
+     * Play here on another device asks this one over the socket (owner, 2026-11-22): it asks whether the
+     * press is still wanted. Told to stop, it falls silent
      * at once and, once the paused output's last buffer has left the device, answers the item it
      * sounded and where (owner, round 10: never both at once). A skip silences the outgoing item at
      * once and a gapless move changes the item at its boundary, so the queue's current item is the one
@@ -1139,21 +1140,38 @@ class NativePlaybackController(
     private fun answerHandover(text: String): Boolean {
         if (!text.contains("\"handover")) return false
         val message = runCatching { JSONObject(text) }.getOrNull() ?: return false
+        val requestId = message.optString("requestId")
         when (message.optString("type")) {
-            "handover-done" -> return true
-            "handover" -> Unit
+            "handover-done" -> {
+                val playsOn = stoppedForHandover && !message.optBoolean("takenOver", true) && !wantPlay
+                stoppedForHandover = false
+                // A press refused after it stopped never leaves it stopped.
+                if (playsOn) {
+                    handoverAnswer = null
+                    requestPlay()
+                }
+                return true
+            }
+            "handover" -> {
+                // It stops for nothing yet: the question may have waited until the press was over.
+                val wanted = JSONObject().put("type", "handover-wanted").put("requestId", requestId)
+                transport?.send(wanted.toString())
+                return true
+            }
+            "handover-stop" -> Unit
             else -> return false
         }
-        val requestId = message.optString("requestId")
+        val wasPlaying = wantPlay
         val item = queue.getOrNull(index)
         val token = if (item == null) null else claims.handOver()
         if (item == null || token == null) {
             if (!wantPlay) {
                 val silent = JSONObject().put("type", "handover-silent").put("requestId", requestId)
-                transport?.send(silent.toString())
+                handoverAnswer = HandoverAnswer(clock() + HANDOVER_DRAIN_MS, silent.toString())
             }
             return true
         }
+        stoppedForHandover = stoppedForHandover || wasPlaying
         // Read once paused: what is still in the sink is not heard, so it is not skipped there.
         val heardMs = positionMs()
         val position = if (item.durationMs > 0) {
@@ -1188,6 +1206,9 @@ class NativePlaybackController(
     private class HandoverAnswer(val atMs: Long, val text: String)
 
     private var handoverAnswer: HandoverAnswer? = null
+
+    /** It was playing when Play here elsewhere stopped it, and has not heard how that press ended. */
+    private var stoppedForHandover = false
 
     private fun transportOpened() {
         transportOpen = true
@@ -1263,7 +1284,8 @@ class NativePlaybackController(
     }
 
     private fun maybeRelease() {
-        if (!releasePending || effectsInFlight > 0) return
+        // Released is what lets another device sound: never during this one's fade.
+        if (!releasePending || effectsInFlight > 0 || pausing()) return
         releasePending = false
         claims.release()
     }

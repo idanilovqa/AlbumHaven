@@ -6391,6 +6391,11 @@ test('the socket names its client, hands a handover to the player and answers on
   assert.equal(new URL(socket.url).searchParams.get('client_id'), '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70');
 
   socket.receive({ type: 'handover', requestId: 'request-1' });
+  await harness.settle();
+  assert.deepEqual(asked, [], 'it stops for nothing before it knows the press is still wanted');
+  assert.equal(socket.sent.at(-1).type, 'handover-wanted');
+  assert.equal(socket.sent.at(-1).requestId, 'request-1');
+  socket.receive({ type: 'handover-stop', requestId: 'request-1' });
   socket.receive({ type: 'handover-done', requestId: 'request-1' });
   await harness.settle();
   assert.deepEqual(asked, ['request-1']);

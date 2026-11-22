@@ -25,7 +25,8 @@ class Claims:
         pass
 
     def holder(self, actor):
-        return {"account_id": actor.account_id, "library_id": 1, "client_id": HOLDER, "digest": b"held"}
+        return {"account_id": actor.account_id, "library_id": 1, "client_id": HOLDER, "digest": b"held",
+                "silent": False}
 
     def get(self, actor, client_id):
         return {"protocol": 1, "is_playing_elsewhere": False}
@@ -35,8 +36,8 @@ class Claims:
 
     def hand_over(self, actor, *, client_id, client_surface, observed, answer):
         Claims.replaced.append({"client_id": client_id, "observed": observed, "answer": answer})
-        chosen = answer or SAVED
-        return {"protocol": 1, "claimToken": "taker-token", "confirmed": answer is not None,
+        chosen = answer if answer and answer["track"] else SAVED
+        return {"protocol": 1, "claimToken": "taker-token", "confirmed": chosen is not SAVED,
                 "track": chosen["track"], "position": chosen["position"], "path": "opened-as-the-browse-names-it"}
 
 
@@ -68,6 +69,8 @@ def test_play_here_starts_where_the_holder_says_not_where_it_last_saved(handover
             pressing = asyncio.create_task(press(handover_app))
             asked = await holder.receive_json()
             assert set(asked) == {"type", "requestId"} and asked["type"] == "handover"
+            await holder.send_json({"type": "handover-wanted", "requestId": asked["requestId"]})
+            assert await holder.receive_json() == {"type": "handover-stop", "requestId": asked["requestId"]}
             await holder.send_json({"type": "handover-answer", "requestId": asked["requestId"],
                                     "claimToken": "holder-token", "track": SOUNDING, "position": PLACE})
             status, _, body = await pressing
@@ -76,48 +79,63 @@ def test_play_here_starts_where_the_holder_says_not_where_it_last_saved(handover
             assert (answer["confirmed"], answer["track"], answer["position"]) == (True, SOUNDING, PLACE)
             assert answer["previousClientId"] == HOLDER, "whom the taker may silence in its own browser"
             assert Claims.replaced[0]["observed"]["digest"] == b"held"
-            assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"]}
+            assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"],
+                                                   "takenOver": True}
 
     asyncio.run(scenario())
 
 
-def test_play_here_with_no_socket_of_the_holder_uses_the_saved_place_without_waiting(handover_app, monkeypatch):
+def test_play_here_with_no_socket_of_the_holder_is_refused_without_waiting(handover_app, monkeypatch):
     from music_app.routes import playback_control_asgi
 
     monkeypatch.setattr(playback_control_asgi, "HANDOVER_ANSWER_SECONDS", 30)
 
     async def scenario():
-        status, _, body = await asyncio.wait_for(press(handover_app), 5)
-        assert status == 200
-        answer = decode_json(body)
-        assert (answer["confirmed"], answer["position"]) == (False, SAVED["position"])
+        status, _, _ = await asyncio.wait_for(press(handover_app), 5)
+        assert status == 409
+        assert Claims.replaced == [], "a closed socket is no proof of silence"
 
     asyncio.run(scenario())
 
 
-def test_an_answer_with_another_token_is_ignored_and_the_saved_place_is_used(handover_app):
+def test_an_answer_with_another_token_is_no_proof(handover_app):
     async def scenario():
         async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}") as holder:
             pressing = asyncio.create_task(press(handover_app))
             asked = await holder.receive_json()
             await holder.send_json({"type": "handover-answer", "requestId": asked["requestId"],
                                     "claimToken": "stale", "track": SOUNDING, "position": PLACE})
-            status, _, body = await pressing
-            assert status == 200 and decode_json(body)["confirmed"] is False
-            assert Claims.replaced[0]["answer"] is None
+            status, _, _ = await pressing
+            assert status == 409
+            assert Claims.replaced == []
 
     asyncio.run(scenario())
 
 
-def test_a_holder_that_did_not_answer_is_told_at_once_that_the_press_is_over(handover_app):
+def test_a_holder_that_did_not_answer_keeps_playback_and_is_told_the_press_is_over(handover_app):
     async def scenario():
         async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}") as holder:
             pressing = asyncio.create_task(press(handover_app))
             asked = await holder.receive_json()
-            status, _, body = await pressing
-            assert status == 200 and decode_json(body)["confirmed"] is False
-            # It learns now that another client plays, not at its next renewal.
-            assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"]}
+            status, _, _ = await pressing
+            assert status == 409
+            assert Claims.replaced == [], "a timeout is no proof of silence"
+            assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"],
+                                                   "takenOver": False}
+
+    asyncio.run(scenario())
+
+
+def test_a_page_that_said_it_left_gives_way_without_being_asked(handover_app, monkeypatch):
+    def left(self, actor):
+        return {"account_id": actor.account_id, "library_id": 1, "client_id": HOLDER, "digest": b"held", "silent": True}
+
+    monkeypatch.setattr(Claims, "holder", left)
+
+    async def scenario():
+        status, _, body = await press(handover_app)
+        assert status == 200
+        assert decode_json(body)["position"] == SAVED["position"]
 
     asyncio.run(scenario())
 
@@ -142,8 +160,13 @@ def test_a_claim_taken_by_a_third_client_meanwhile_is_refused(handover_app, monk
     monkeypatch.setattr(Claims, "hand_over", lost)
 
     async def scenario():
-        status, _, _ = await press(handover_app)
-        assert status == 409
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}") as holder:
+            pressing = asyncio.create_task(press(handover_app))
+            asked = await holder.receive_json()
+            await holder.send_json({"type": "handover-answer", "requestId": asked["requestId"],
+                                    "claimToken": "holder-token", "track": SOUNDING, "position": PLACE})
+            status, _, _ = await pressing
+            assert status == 409
 
     asyncio.run(scenario())
 
@@ -152,8 +175,8 @@ def test_a_socket_naming_no_valid_client_still_plays_and_is_never_asked(handover
     async def scenario():
         async with websocket_session(handover_app, "/playback/pcm?client_id=not-a-uuid") as socket:
             assert socket.accepted
-            status, _, body = await press(handover_app)
-            assert status == 200 and decode_json(body)["confirmed"] is False
+            status, _, _ = await press(handover_app)
+            assert status == 409, "nobody to ask is no proof of silence"
 
     asyncio.run(scenario())
 

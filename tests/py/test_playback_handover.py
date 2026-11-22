@@ -137,7 +137,7 @@ def test_a_holder_with_nothing_sounding_says_so_and_ends_the_wait_at_once():
         hub.register(ACCOUNT, HOLDER, holder.send)
         asking = asyncio.create_task(ask(hub, timeout=30))
         assert hub.silent(holder.send, await holder.request_id())
-        assert await asyncio.wait_for(asking, 0.5) is None
+        assert await asyncio.wait_for(asking, 0.5) == {"track": None, "position": None}, "its word, not no answer"
 
     asyncio.run(scenario())
 
@@ -149,7 +149,7 @@ def test_a_holder_that_was_asked_and_did_not_answer_is_still_told_the_press_is_o
         assert await ask(hub, timeout=0.05) is None
         await hub.settled(ACCOUNT, LIBRARY, HOLDER)
         await asyncio.sleep(0.05)
-        assert holder.sent[-1] == {"type": "handover-done", "requestId": holder.sent[0]["requestId"]}
+        assert holder.sent[-1] == {"type": "handover-done", "requestId": holder.sent[0]["requestId"], "takenOver": False}
 
     asyncio.run(scenario())
 
@@ -272,5 +272,55 @@ def test_a_handover_never_holds_one_database_connection_while_it_takes_another(m
     claims = playback_claims_postgres.PostgresPlaybackClaims(
         {}, clock=lambda: datetime.now(timezone.utc), connect=connect)
     claims.hand_over(object(), client_id="6b1f2e0a-9c4d-4e53-8a77-2f0d9e8c1b22", client_surface="private_web",
-                     observed={"client_id": HOLDER, "digest": b"held"}, answer=None)
+                     observed={"client_id": HOLDER, "digest": b"held", "silent": True}, answer=None)
     assert deepest[0] == 1
+
+def test_a_holder_stops_only_for_a_press_still_wanted_and_then_gets_time_to_fall_silent():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send)
+        asking = asyncio.create_task(hub.ask(ACCOUNT, LIBRARY, HOLDER, accepts=accepts, timeout=0.2, stopping=2))
+        request_id = await holder.request_id()
+        assert hub.wanted(holder.send, request_id)
+        await asyncio.sleep(0.4)
+        assert holder.sent[-1] == {"type": "handover-stop", "requestId": request_id}
+        assert not asking.done(), "told to stop, it is not abandoned while its output drains"
+        assert hub.answer(holder.send, answer(request_id))
+        assert await asking == ANSWER
+
+    asyncio.run(scenario())
+
+
+def test_a_holder_that_asks_too_late_is_never_told_to_stop():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send)
+        assert await ask(hub, timeout=0.05) is None
+        assert not hub.wanted(holder.send, await holder.request_id())
+        await asyncio.sleep(0.05)
+        assert [event["type"] for event in holder.sent] == ["handover"]
+
+    asyncio.run(scenario())
+
+
+def test_only_the_asked_socket_can_ask_whether_it_is_still_wanted():
+    async def scenario():
+        hub, holder, other = PlaybackHandoverHub(), Socket(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send)
+        asking = asyncio.create_task(ask(hub, timeout=0.1))
+        assert not hub.wanted(other.send, await holder.request_id())
+        assert await asking is None
+        assert other.sent == []
+
+    asyncio.run(scenario())
+
+
+def test_a_holder_told_to_stop_that_never_answers_is_no_proof():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send)
+        asking = asyncio.create_task(hub.ask(ACCOUNT, LIBRARY, HOLDER, accepts=accepts, timeout=0.05, stopping=0.1))
+        assert hub.wanted(holder.send, await holder.request_id())
+        assert await asyncio.wait_for(asking, 1) is None
+
+    asyncio.run(scenario())

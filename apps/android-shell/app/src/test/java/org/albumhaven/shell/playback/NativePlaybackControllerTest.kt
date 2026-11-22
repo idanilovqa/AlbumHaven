@@ -261,6 +261,11 @@ class NativePlaybackControllerTest {
 
         checkNotNull(harness.listener).onText("""{"type":"handover","requestId":"request-1"}""")
         harness.step()
+        assertEquals("it stops only once told the press is still wanted", NativePlaybackState.PLAYING, harness.state())
+        assertEquals("handover-wanted", org.json.JSONObject(harness.handoverAnswers.single()).getString("type"))
+        harness.handoverAnswers.clear()
+        checkNotNull(harness.listener).onText("""{"type":"handover-stop","requestId":"request-1"}""")
+        harness.step()
         assertEquals(NativePlaybackState.PAUSED, harness.state())
         assertEquals("no answer before the paused output drained", emptyList<String>(), harness.handoverAnswers)
         harness.runUntil { harness.handoverAnswers.isNotEmpty() }
@@ -311,15 +316,15 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun aPlayIsHeardFromItsBufferWhileTheClaimIsRequested() {
+    fun aPlayFillsItsBufferAndIsHeardOnlyOnceTheClaimIsGranted() {
         val claimIo = ManualExecutor()
         val harness = ControllerHarness(first, claimIo = claimIo)
         harness.load(1, first)
         repeat(20) { harness.step() }
 
-        // The owner chose an instant start: the buffered stream plays before the claim answers.
-        assertEquals(NativePlaybackState.PLAYING, harness.state())
-        assertTrue(harness.sinks.last().writtenFrames > 0)
+        // Owner, 2026-11-22: "You cannot just start without an answer".
+        assertEquals(NativePlaybackState.LOADING, harness.state())
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
 
         claimIo.drain()
         harness.runUntil { harness.state() == NativePlaybackState.ENDED }
@@ -327,23 +332,18 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun aRefusedClaimSilencesAnInstantStartAtOnce() {
+    fun aClaimRefusedAfterAWaitWasNeverHeard() {
         val claimIo = ManualExecutor()
         val harness = ControllerHarness(first, claimIo = claimIo)
         harness.claims.acquireResponse = { ClaimResponse.Conflict }
         harness.load(1, first)
         repeat(20) { harness.step() }
-        val output = harness.sinks.last()
-        assertTrue(output.writtenFrames > 0)
 
         claimIo.drain()
-        harness.step()
-        val written = output.writtenFrames
         repeat(20) { harness.step() }
 
         assertEquals(NativePlaybackState.PAUSED, harness.state())
-        assertEquals(written, output.writtenFrames)
-        assertTrue("the output was stopped and flushed", output.operations.takeLast(2) == listOf("pause", "flush"))
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
     }
 
     @Test

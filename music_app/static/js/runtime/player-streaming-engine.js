@@ -633,13 +633,24 @@ async function silenceStreamingPlaybackForHandover() {
   }
   if (!await engine.pendingSilence.promise) return null;
   return async () => {
-    const latencySeconds = (Number(context.baseLatency) || 0)
-      + (Number(context.outputLatency) || STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS);
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.ceil(latencySeconds * 1000) + STREAMING_OUTPUT_DRAIN_MARGIN_MS);
-    });
+    await waitOutStreamingOutputLatency(context);
     return engine.snapshot.paused !== false;
   };
+}
+
+// What was rendered is heard only after the output's latency: "I am silent" waits that long.
+function waitOutStreamingOutputLatency(context) {
+  const latencySeconds = (Number(context.baseLatency) || 0)
+    + (Number(context.outputLatency) || STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS);
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.ceil(latencySeconds * 1000) + STREAMING_OUTPUT_DRAIN_MARGIN_MS);
+  });
+}
+
+// For output that already ended: a suspended context has nothing left to play out.
+async function drainStreamingOutput() {
+  const { context } = streamingEngineState();
+  if (context?.state === 'running') await waitOutStreamingOutputLatency(context);
 }
 
 // Tells the relay which client this tab is now and, given a new [node], hands it a port to that node.
@@ -920,6 +931,11 @@ function handleStreamingControl(message) {
     return;
   }
   if (message.type === 'handover') {
+    // It stops for nothing yet: the question may have waited behind audio until the press was over.
+    sendStreamingHandoverAnswer({ type: 'handover-wanted', requestId: message.requestId });
+    return;
+  }
+  if (message.type === 'handover-stop') {
     if (typeof answerPlaybackHandover === 'function') {
       void Promise.resolve(answerPlaybackHandover(message.requestId)).catch((error) => {
         console.warn('[AlbumHaven][Playback] Play here elsewhere was not answered.', error);

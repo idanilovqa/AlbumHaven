@@ -14160,7 +14160,7 @@
     },
     {
       "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._run",
-      "action": "Re-list only the album folders a scan, live root change or watcher event changed",
+      "action": "Re-list only what a scan, live root change, watcher event or open named; an idle poll reads nothing",
       "entrypoints": [
         "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryWorker._run:background:thread"
       ],

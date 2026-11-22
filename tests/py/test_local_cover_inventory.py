@@ -50,8 +50,8 @@ def test_unreadable_refresh_never_publishes_empty_inventory(monkeypatch):
     calls = []
     worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
     worker._wake.set()
-    worker.repository.next_context = lambda **kwargs: None
-    worker.repository.next_pending = lambda **kwargs: {"root_path": "missing", "revision": 7, "foreground_requested": True}
+    worker._listings.add(["missing"], foreground=True)
+    worker.repository.next_pending = lambda key: {"root_path": key, "revision": 7, "foreground_requested": True}
     worker.repository.publish = lambda *args: pytest.fail("Unreadable inventory must not become complete/empty")
     def defer(*args):
         calls.append(args)
@@ -67,8 +67,8 @@ def test_unreadable_refresh_never_publishes_empty_inventory(monkeypatch):
 def test_canceled_worker_never_publishes_partial_inventory(monkeypatch):
     worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
     worker._wake.set()
-    worker.repository.next_context = lambda **kwargs: None
-    worker.repository.next_pending = lambda **kwargs: {"root_path": "root", "revision": 1, "foreground_requested": True}
+    worker._listings.add(["root"], foreground=True)
+    worker.repository.next_pending = lambda key: {"root_path": key, "revision": 1, "foreground_requested": True}
     worker.repository.publish = lambda *args: pytest.fail("Shutdown must not publish incomplete inventory")
     released = []
     worker.repository.defer = lambda *args, **kwargs: released.append((args, kwargs))
@@ -81,20 +81,50 @@ def test_canceled_worker_never_publishes_partial_inventory(monkeypatch):
     assert released == [(("root", 1), {"delay_seconds": 0})]
 
 
-def test_foreground_activity_holds_background_invalidations_and_backfill():
+def test_foreground_activity_holds_background_invalidations():
     calls = []
     worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
     worker._wake.set()
-    worker.repository.next_context = lambda **kwargs: calls.append(("context", kwargs))
-    def pending(**kwargs):
-        calls.append(("inventory", kwargs))
+    worker._contexts.add(["changed-album"])
+    worker._contexts.add(["opened-album"], foreground=True)
+    worker._listings.add(["changed-folder"])
+    worker._listings.add(["opened-folder"], foreground=True)
+    worker.repository.next_context = lambda key: calls.append(("context", key))
+    def pending(key):
+        calls.append(("inventory", key))
         worker._stop.set()
     worker.repository.next_pending = pending
-    worker.repository.next_album = lambda *args: pytest.fail("Backfill competes with foreground work")
 
     worker._run()
 
-    assert calls == [("context", {"background": False}), ("inventory", {"background": False})]
+    assert calls == [("context", "opened-album"), ("inventory", "opened-folder")]
+
+
+def test_an_idle_worker_reads_nothing_and_takes_no_work_slot(monkeypatch):
+    # The large-data rule: a restart never works through a stored backlog or the library's albums.
+    worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace())
+    worker._foreground_at -= 3600
+    waits = []
+
+    def wait(_timeout):
+        waits.append(True)
+        if len(waits) == 3:
+            worker._stop.set()
+
+    monkeypatch.setattr(worker._wake, "wait", wait)
+    worker._logger = SimpleNamespace(exception=lambda *args: pytest.fail("An idle worker must not reach Postgres"))
+    worker._run()
+
+    assert len(waits) == 3
+
+
+def test_a_waiting_open_preempts_background_work_without_a_database_poll():
+    worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(request=lambda root: None))
+    worker._foreground_at -= 10
+    assert not worker._cancel_requested(False)
+    worker.request("album")
+    assert worker._cancel_requested(False)
+    assert not worker._cancel_requested(True)
 
 
 def test_exact_track_set_context_keys_do_not_alias_sibling_albums(tmp_path):
@@ -109,9 +139,8 @@ def test_foreground_request_preempts_an_already_running_background_scan(monkeypa
     worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
     worker._foreground_at -= 10
     worker._wake.set()
-    worker.repository.has_foreground_requests = lambda: False
-    worker.repository.next_context = lambda **kwargs: None
-    worker.repository.next_pending = lambda **kwargs: {"root_path": "background", "revision": 3, "foreground_requested": False}
+    worker._listings.add(["background"])
+    worker.repository.next_pending = lambda key: {"root_path": key, "revision": 3, "foreground_requested": False}
     worker.repository.publish = lambda *args: pytest.fail("Preempted inventory must not be published")
     released = []
     def defer(*args, **kwargs):
@@ -155,8 +184,9 @@ def test_context_shutdown_and_read_error_do_not_publish_a_root(monkeypatch, unre
     deferred = []
     worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
     worker._wake.set()
-    worker.repository.next_context = lambda **kwargs: {
-        "context_key": "context", "revision": 4, "track_paths": ["album/song.mp3"],
+    worker._contexts.add(["context"], foreground=True)
+    worker.repository.next_context = lambda key: {
+        "context_key": key, "revision": 4, "track_paths": ["album/song.mp3"],
         "foreground_requested": True,
     }
     worker.repository.publish_context = lambda *args, **kwargs: pytest.fail("An unresolved or canceled root must not be published")
@@ -179,12 +209,14 @@ def test_context_shutdown_and_read_error_do_not_publish_a_root(monkeypatch, unre
 def test_worker_forwards_deleted_subtree_without_filesystem_discovery():
     calls = []
     worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(
-        invalidate_paths=lambda *args, **kwargs: calls.append((args, kwargs)),
+        invalidate_paths=lambda *args, **kwargs: calls.append((args, kwargs)) or (["album"], ["context"]),
     ))
     worker.invalidate_paths(["library/artist"], subtree_paths=["library/artist"], context_changed=True)
     assert calls == [((["library/artist"],), {
-        "subtree_paths": ["library/artist"], "context_changed": True,
+        "subtree_paths": ["library/artist"], "context_changed": True, "pending_contexts": [],
     })]
+    assert worker._listings.take(background=True) == "album", "what changed is what the worker re-lists"
+    assert worker._contexts.take(background=True) == "context"
     assert worker._wake.is_set()
 
 
@@ -196,6 +228,7 @@ def test_invalidation_retry_coalesces_backs_off_and_eventually_drains(monkeypatc
         attempts.append((tuple(paths), kwargs))
         if len(attempts) in {1, 3}:
             raise RuntimeError("database unavailable")
+        return [], []
 
     monkeypatch.setattr(inventory.time, "monotonic", lambda: now[0])
     worker = inventory.LocalCoverInventoryWorker(
@@ -243,10 +276,10 @@ def test_failed_invalidation_retry_does_not_starve_normal_inventory_work():
         repository=SimpleNamespace(
             work_slot=lambda: nullcontext(True),
             invalidate_paths=invalidate_paths,
-            next_context=lambda **_kwargs: None,
-            next_pending=lambda **_kwargs: normal_work_reached.set() or None,
+            next_pending=lambda _key: normal_work_reached.set() or None,
         ),
     )
+    worker._listings.add(["opened-folder"], foreground=True)
     worker.schedule_invalidation_retry(["library/artist/cover.jpg"])
     thread = Thread(target=worker._run, daemon=True)
     thread.start()
@@ -259,6 +292,79 @@ def test_failed_invalidation_retry_does_not_starve_normal_inventory_work():
 
     assert not thread.is_alive()
     assert invalidation_attempts == [(inventory.root_key("library/artist/cover.jpg"),)]
+
+
+def _scan_check(checked_at, **options):
+    calls = []
+    worker = SimpleNamespace(
+        invalidate_or_retry=lambda paths, **kwargs: calls.append((sorted(paths), kwargs)) or options.get("saved", True),
+    )
+    check = inventory.LocalCoverScanCheck(1000.0, checked_at, full_rescan=options.get("full_rescan", False))
+    return check, worker, calls
+
+
+def test_a_scan_advances_the_check_time_only_of_roots_it_could_read():
+    check, worker, _calls = _scan_check({"main": 500.0, "offline": 500.0})
+    assert check.apply(worker, previous={}, scanned={}, readable_root_ids={"main"}) == {"main": 1000.0}
+
+
+def test_a_scan_whose_invalidation_failed_advances_no_check_time():
+    check, worker, _calls = _scan_check({"main": 500.0}, saved=False)
+    assert check.apply(
+        worker, previous={"a.mp3": {"mtime": 1, "size": 1}}, scanned={"a.mp3": {"mtime": 2, "size": 1}},
+        readable_root_ids={"main"},
+    ) == {}
+
+
+def test_no_recorded_check_time_uses_the_changed_tracks_only():
+    check, worker, calls = _scan_check({})
+    assert check.changed_since("main") is None
+    previous = {
+        "same.mp3": {"mtime": 1, "size": 1}, "edited.mp3": {"mtime": 1, "size": 1},
+        "gone.mp3": {"mtime": 1, "size": 1, "library_root_id": "main"},
+        "unreachable.mp3": {"mtime": 1, "size": 1, "library_root_id": "offline"},
+    }
+    scanned = {"same.mp3": {"mtime": 1, "size": 1}, "edited.mp3": {"mtime": 2, "size": 1}, "new.mp3": {"mtime": 3, "size": 1}}
+
+    check.apply(worker, previous=previous, scanned=scanned, readable_root_ids={"main"})
+
+    assert calls == [(["edited.mp3", "new.mp3"], {}), (["gone.mp3"], {"context_changed": True})]
+
+
+def test_an_empty_previous_cache_never_counts_every_track_as_changed():
+    check, worker, calls = _scan_check({})
+    check.apply(worker, previous={}, scanned={"a.mp3": {"mtime": 1, "size": 1}}, readable_root_ids={"main"})
+    assert calls == []
+
+
+def test_a_scan_check_reaches_behind_the_last_one_for_clock_granularity(tmp_path):
+    check, worker, calls = _scan_check({"main": 500.0})
+    since = check.changed_since("main")
+    assert since == 500.0 - inventory._SCAN_CHECK_OVERLAP_SECONDS
+    for name, modified_at in (("edge.jpg", since), ("older.jpg", since - 1)):
+        check.note(tmp_path / name, tmp_path, since, lambda: SimpleNamespace(st_mtime=modified_at))
+
+    check.apply(worker, previous={}, scanned={}, readable_root_ids={"main"})
+
+    assert calls == [([str(tmp_path / "edge.jpg")], {})]
+
+
+def test_generated_previews_are_not_a_changed_album_folder(tmp_path):
+    check, worker, calls = _scan_check({"main": 500.0})
+    preview = tmp_path / "Album" / ".album-haven" / "preview.jpg"
+    check.note(preview, tmp_path, 1.0, lambda: SimpleNamespace(st_mtime=2.0))
+    check.apply(worker, previous={}, scanned={}, readable_root_ids={"main"})
+    assert calls == []
+
+
+def test_only_added_removed_or_relaid_roots_are_changed_roots():
+    main = {"id": "main", "path": "library/main", "layout_mode": "artist", "category": "main_library_roots"}
+    extra = {"id": "extra", "path": "library/extra"}
+    assert inventory.changed_library_root_paths([main, extra], [dict(main, category="hoarding"), extra]) == []
+    assert inventory.changed_library_root_paths([main, extra], [main]) == [inventory.root_key("library/extra")]
+    assert inventory.changed_library_root_paths([main], [dict(main, layout_mode="genre/artist")]) == [
+        inventory.root_key("library/main"),
+    ]
 
 
 def _touch(*paths):
@@ -296,8 +402,9 @@ def test_unresolved_context_reports_storage_unavailable_only_when_files_are_miss
     calls = []
     worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
     worker._wake.set()
-    worker.repository.next_context = lambda **kwargs: {
-        "context_key": "context", "revision": 4, "track_paths": ["a/cd1/01.mp3", "a/cd2/01.mp3"], "foreground_requested": True,
+    worker._contexts.add(["context"], foreground=True)
+    worker.repository.next_context = lambda key: {
+        "context_key": key, "revision": 4, "track_paths": ["a/cd1/01.mp3", "a/cd2/01.mp3"], "foreground_requested": True,
     }
 
     def publish(key, revision, root, **kwargs):

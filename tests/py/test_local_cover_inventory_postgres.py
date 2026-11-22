@@ -25,7 +25,7 @@ def test_unrelated_context_change_preserves_inflight_local_cover_result(event_ki
     keys = [context_key(value) for value in paths]
     try:
         repository.request_context(paths[0])
-        claimed = repository.next_context(background=False)
+        claimed = repository.next_context(keys[0])
         assert claimed["context_key"] == keys[0]
         repository.request_context(paths[1])
         repository.defer_context(keys[1], 1)
@@ -35,7 +35,9 @@ def test_unrelated_context_change_preserves_inflight_local_cover_result(event_ki
             ).fetchone()
         changed = roots[1] / ("CD2" if event_kind == "disc" else "CD1/new.mp3")
         subtrees = [roots[1]] if event_kind == "subtree" else []
-        repository.invalidate_paths(subtrees or [changed], subtree_paths=subtrees, context_changed=True)
+        repository.invalidate_paths(
+            subtrees or [changed], subtree_paths=subtrees, context_changed=True, pending_contexts=keys,
+        )
         with isolatedPostgres._connect(setup_url) as connection:
             after = connection.execute(
                 "select revision,retry_after from library.local_cover_inventory_contexts where context_key=%s", (keys[0],)
@@ -75,7 +77,7 @@ def test_parent_subtree_invalidation_preserves_neighbors_and_rejects_inflight_co
             repository.publish_context(context_key(paths), 1, root, foreground=True)
             assert repository.publish(root, 1, [])
         repository.request_context(unresolved_paths)
-        claimed = repository.next_context(background=False)
+        claimed = repository.next_context(context_key(unresolved_paths))
         assert claimed["context_key"] == context_key(unresolved_paths)
 
         removed_disc = parent / "CD2"
@@ -83,7 +85,7 @@ def test_parent_subtree_invalidation_preserves_neighbors_and_rejects_inflight_co
         assert repository.root_for_tracks(path_sets[2]) is None
         assert repository.root_for_tracks(path_sets[1]) == Path(root_key(roots[1]))
 
-        repository.invalidate_paths([parent], subtree_paths=[parent], context_changed=True)
+        repository.invalidate_paths([parent], subtree_paths=[parent], context_changed=True, pending_contexts=keys)
 
         assert repository.get(roots[0])["complete"] is False
         assert repository.get(roots[1])["complete"] is True
@@ -110,15 +112,15 @@ def test_local_inventory_context_revisions_leases_and_confirmed_empty(monkeypatc
     try:
         assert repository.root_for_tracks(paths) is None
         repository.request_context(paths)
-        context = repository.next_context(background=False)
+        context = repository.next_context(context_key(paths))
         assert context["context_key"] == context_key(paths)
-        assert repository.next_context(background=False) is None
+        assert repository.next_context(context_key(paths)) is None
         repository.publish_context(context["context_key"], context["revision"], root, foreground=True)
         assert repository.root_for_tracks(paths) == Path(root_key(root))
         assert repository.root_for_tracks({str(root / "different-album.mp3")}) is None
 
-        pending = repository.next_pending(background=False)
-        assert repository.next_pending(background=False) is None
+        pending = repository.next_pending(root_key(root))
+        assert repository.next_pending(root_key(root)) is None
         assert repository.publish(root, pending["revision"], [])
         assert repository.get(root) == {"candidates": [], "error": None, "available": True, "complete": True}
 
@@ -132,6 +134,33 @@ def test_local_inventory_context_revisions_leases_and_confirmed_empty(monkeypatc
         with isolatedPostgres._connect(setup_url) as connection:
             connection.execute("delete from library.local_cover_inventory_contexts where context_key = %s", (context_key(paths),))
             connection.execute("delete from library.local_cover_inventories where root_path = %s", (root_key(root),))
+
+
+@pytest.mark.parametrize(("retry_in", "cleared"), [
+    (20, False),  # an active claim, or the 30 s storage deferral
+    (3595, False),  # deferred for the hour seconds ago: the modal polls every second
+    (3500, True),  # deferred for the hour a while ago
+])
+def test_an_open_retries_only_an_older_unresolved_folder_deferral(retry_in, cleared):
+    if not os.environ.get(isolatedPostgres.SETUP_DATABASE_ENV) or not os.environ.get(isolatedPostgres.RUNTIME_DATABASE_ENV):
+        pytest.skip("Dedicated isolated Postgres URLs are required.")
+    setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    repository = LocalCoverInventoryRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=isolatedPostgres._connect,
+    )
+    paths = {f"/int028-retry-{uuid4()}/track.mp3"}
+    key = context_key(paths)
+    try:
+        repository.request_context(paths)
+        repository.defer_context(key, 1, delay_seconds=retry_in, error=None)
+
+        repository.request_context(paths)
+
+        assert (repository.next_context(key) is not None) is cleared
+    finally:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute("delete from library.local_cover_inventory_contexts where context_key = %s", (key,))
 
 
 @pytest.mark.parametrize("windows_paths", [True, False])

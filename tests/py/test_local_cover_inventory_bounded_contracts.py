@@ -1,9 +1,10 @@
 """Bounded-interaction contract for the local cover inventory.
 
 A scan, a live root change and a watcher event each re-list only the folders they
-changed. The real scan, root-change wiring, repository and worker run over real
-folders; only the two inventory tables are an in-memory stand-in that counts the
-rows each statement writes.
+changed, and a restart re-lists none, whatever backlog is stored. The real scan,
+root-change wiring, repository and worker run over real folders; only the two
+inventory tables are an in-memory stand-in that counts the rows each statement
+writes and the folders it hands out.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
 _WORKER = "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._run"
 _DAY = 86400.0
+# A pass that finds its queued key already done writes nothing, so one quiet pass is not the end.
+_QUIET_PASSES = 3
 
 
 class _InventoryTables:
@@ -39,8 +42,10 @@ class _InventoryTables:
     def __init__(self):
         self.listings: dict[str, dict[str, object]] = {}
         self.contexts: dict[str, dict[str, object]] = {}
+        self.listed: list[str] = []
         self.written = 0
-        self.idle = False
+        self.statements = 0
+        self.album_walk_steps = 0
 
     def seed(self, album: Path, tracks: list[Path]) -> None:
         self.listings[root_key(album)] = {"revision": 1, "indexed": 1, "claimed": False}
@@ -61,8 +66,8 @@ class _InventoryTables:
         pass
 
     def execute(self, query, params=None):
-        sql = " ".join(str(query).split())
-        rows = self._answer(sql, params or {})
+        self.statements += 1
+        rows = self._answer(" ".join(str(query).split()), params or {})
         return SimpleNamespace(fetchone=lambda: rows[0] if rows else None, fetchall=lambda: rows, rowcount=len(rows))
 
     def _write(self, row: dict[str, object], **values) -> None:
@@ -76,24 +81,13 @@ class _InventoryTables:
             return []
         if "as waiting" in sql:
             return [{"waiting": False}]
-        if "with pending as (select library_id, context_key" in sql:
-            for key, row in self.contexts.items():
-                if not row["root"] and not row["claimed"]:
-                    self.idle = False
-                    self._write(row, claimed=True)
-                    return [{"context_key": key, "track_paths": row["paths"], "revision": row["revision"],
-                             "foreground_requested": False}]
-            self.idle = True
-            return []
-        if "with pending as (select library_id, root_path" in sql:
-            for key, row in self.listings.items():
-                if row["indexed"] < row["revision"] and not row["claimed"]:
-                    self.idle = False
-                    self._write(row, claimed=True)
-                    return [{"root_path": key, "revision": row["revision"], "foreground_requested": False}]
-            return []
         if "with next_album as" in sql:
+            self.album_walk_steps += 1
             return []
+        if "interval '30 seconds'" in sql and "insert into" not in sql:
+            return self._claim_context(params)
+        if "interval '5 minutes'" in sql:
+            return self._claim_listing(params)
         if "insert into library.local_cover_inventories " in sql:
             self._write(self.listings.setdefault(params["root"], {"revision": 1, "indexed": 0, "claimed": False}))
             return []
@@ -104,7 +98,7 @@ class _InventoryTables:
         if "update library.local_cover_inventory_contexts set root_path = %(root)s" in sql:
             self._write(self.contexts[params["key"]], root=params["root"], claimed=False)
             return []
-        if "update library.local_cover_inventory_contexts set error" in sql or "retry_after = now() + %(delay)s" in sql:
+        if "retry_after = now() + %(delay)s" in sql:
             self.written += 1  # a deferral: the row stays claimed, so this run does not retry it
             return []
         if "update library.local_cover_inventories set revision = revision + 1" in sql:
@@ -112,6 +106,22 @@ class _InventoryTables:
         if "set root_path = null" in sql:
             return self._invalidate_contexts(params)
         raise AssertionError(f"unexpected inventory statement: {sql}")
+
+    def _claim_context(self, params) -> list[dict[str, object]]:
+        for key, row in self.contexts.items():
+            if params.get("key", key) == key and not row["root"] and not row["claimed"]:
+                self._write(row, claimed=True)
+                return [{"context_key": key, "track_paths": row["paths"], "revision": row["revision"],
+                         "foreground_requested": False}]
+        return []
+
+    def _claim_listing(self, params) -> list[dict[str, object]]:
+        for key, row in self.listings.items():
+            if params.get("root", key) == key and row["indexed"] < row["revision"] and not row["claimed"]:
+                self._write(row, claimed=True)
+                self.listed.append(key)
+                return [{"root_path": key, "revision": row["revision"], "foreground_requested": False}]
+        return []
 
     def _invalidate_listings(self, params) -> list[dict[str, object]]:
         changed = []
@@ -131,7 +141,9 @@ class _InventoryTables:
                     prefixes = (*params["prefixes"], *params.get("disc_prefixes", ()))
                     affected = root in params["roots"] or root.startswith(prefixes)
                 else:
-                    affected = any(path.startswith(tuple(params["context_prefixes"])) for path in row["paths"])
+                    affected = key in params.get("pending_contexts", (key,)) and any(
+                        path.startswith(tuple(params["context_prefixes"])) for path in row["paths"]
+                    )
                 if not affected:
                     continue
             self._write(row, root=None, revision=row["revision"] + 1, claimed=False)
@@ -172,9 +184,12 @@ def _seed_library(base: Path, album_count: int):
         "_library_root_paths_snapshot": tuple(Path(root["path"]) for root in roots),
     }
     worker = LocalCoverInventoryWorker(
-        config, repository=LocalCoverInventoryRepository(
+        config,
+        repository=LocalCoverInventoryRepository(
             {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://inventory.invalid/contract"}, connect=lambda _url: tables,
         ),
+        # The worker logs and retries what fails; here that is a failed contract.
+        logger=SimpleNamespace(exception=lambda message, *_args: pytest.fail(message)),
     )
     return SimpleNamespace(
         roots=roots, album=albums[0], file_cache=file_cache, tables=tables, config=config, worker=worker,
@@ -249,20 +264,20 @@ def _change_roots(monkeypatch, library, roots: list[dict[str, object]]) -> None:
     asyncio.run(change())
 
 
-def _drain(monkeypatch, library) -> None:
-    """Run the real worker, idle long enough for background work, until nothing is left."""
-    worker = LocalCoverInventoryWorker(library.config, repository=library.worker.repository)
+def _drain(monkeypatch, library, worker) -> None:
+    """Run the real worker, idle long enough for background work, until it writes nothing more."""
+    worker._stop.clear()  # the application's shutdown stopped it
     worker._foreground_at -= 3600
-    passes = 0
+    passes = quiet = 0
+    written = None
 
     def next_pass(_timeout=None):
-        nonlocal passes
+        nonlocal passes, quiet, written
         passes += 1
         assert passes < 2000, "the inventory worker did not settle"
-        settled = library.tables.idle and all(
-            row["claimed"] or row["indexed"] >= row["revision"] for row in library.tables.listings.values()
-        )
-        if settled:
+        quiet = quiet + 1 if library.tables.written == written else 0
+        written = library.tables.written
+        if quiet >= _QUIET_PASSES:
             worker._stop.set()
         return True
 
@@ -280,6 +295,9 @@ def _drain(monkeypatch, library) -> None:
     ("root removed", 1),
     ("roots saved unchanged", 0),
     ("watcher reports an image", 1),
+    ("watcher reports a removed track", 1),
+    ("watcher reports a moved folder", 1),
+    ("restart over a stale backlog", 0),
 ])
 def test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size(
     tmp_path, monkeypatch, change, relisted,
@@ -288,13 +306,17 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
 
     def run(album_count: int) -> OperationCounts:
         library = _seed_library(tmp_path / str(album_count), album_count)
+        album, tables, worker = library.album, library.tables, library.worker
         checked_at = {} if "without" in change else {root["id"]: time.time() - 3600 for root in library.roots}
+        moved = album.with_name("Album moved")
         if change == "scan finds an image the watcher missed":
-            shutil.copy2(library.album / "cover.jpg", library.album / "back.jpg")
+            shutil.copy2(album / "cover.jpg", album / "back.jpg")
         elif change == "scan finds an overwritten image":
-            (library.album / "cover.jpg").write_bytes(b"replaced in place")
-        elif change == "scan finds a removed track":
-            (library.album / "02.mp3").unlink()
+            (album / "cover.jpg").write_bytes(b"replaced in place")
+        elif change in ("scan finds a removed track", "watcher reports a removed track"):
+            (album / "02.mp3").unlink()
+        elif change == "watcher reports a moved folder":
+            album.rename(moved)
 
         if change.startswith("scan"):
             _scan(monkeypatch, library, checked_at)
@@ -302,17 +324,31 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
             _change_roots(monkeypatch, library, library.roots[:1])
         elif change == "roots saved unchanged":
             _change_roots(monkeypatch, library, library.roots)
+        elif change == "watcher reports an image":
+            worker.invalidate_paths([str(album / "cover.jpg")])
+        elif change == "watcher reports a removed track":
+            worker.invalidate_paths([str(album / "02.mp3")], context_changed=True)
+        elif change == "watcher reports a moved folder":
+            worker.invalidate_paths([album, moved], subtree_paths=[album, moved], context_changed=True)
         else:
-            library.worker.invalidate_paths([str(library.album / "cover.jpg")])
+            for row in (*tables.listings.values(), *tables.contexts.values()):
+                row["revision"] += 1
+            for row in list(tables.contexts.values())[1:]:
+                row["root"] = None
+            worker = LocalCoverInventoryWorker(library.config, repository=worker.repository, logger=worker._logger)
+            tables.statements = 0
 
-        listed_before = {key: row["revision"] for key, row in library.tables.listings.items()}
-        stale = [key for key, row in library.tables.listings.items() if row["indexed"] < row["revision"]]
+        restarted = change.startswith("restart")
+        invalidated = [] if restarted else [key for key, row in tables.listings.items() if row["revision"] > 1]
         counts = OperationCounts()
         with count_filesystem_and_media(monkeypatch, counts):
-            _drain(monkeypatch, library)
-        counts.affected_rows = library.tables.written
-        assert len(stale) == relisted, stale
-        assert all(row["indexed"] == listed_before[key] for key, row in library.tables.listings.items())
+            _drain(monkeypatch, library, worker)
+        counts.affected_rows = tables.written
+        assert len(invalidated) == relisted, invalidated
+        assert sorted(set(tables.listed)) == sorted(invalidated), "only the changed folders are listed again"
+        assert tables.album_walk_steps == 0, "nothing walks the library's albums"
+        if restarted:
+            assert tables.statements == 0, "an idle poll reads nothing, whatever backlog is stored"
         return counts
 
     entry = _checked_in_entries()[_WORKER]

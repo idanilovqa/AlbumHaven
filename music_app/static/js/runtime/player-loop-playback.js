@@ -422,8 +422,9 @@ async function playTrackFromPayload(track, options = {}) {
   }
   showSelectedTrackImmediately(track, shouldAutoplay);
   // The pressed song paints before its stream starts: the start's own work never holds the frame
-  // that shows the press (owner: instant even at 100% CPU).
-  if (shouldAutoplay) await afterNextPlayerPaint();
+  // that shows the press (owner: instant even at 100% CPU). Audio that is not yet running (the first
+  // press after load) starts in the press itself, where every browser lets the press start sound.
+  if (shouldAutoplay && state.player.streaming?.context?.state === 'running') await afterNextPlayerPaint();
   if (selectionToken !== playerTrackSelectionToken) return false;
   let startedRole;
   try {

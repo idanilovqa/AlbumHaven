@@ -13,12 +13,13 @@ from time import perf_counter
 from weakref import WeakSet
 
 try:  # Keep schema-independent tooling importable.
-    from psycopg import Connection, OperationalError
+    from psycopg import Connection, Cursor, OperationalError, ServerCursor
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool, PoolTimeout
 except ImportError:  # pragma: no cover
     Connection = None
     ConnectionPool = None
+    Cursor = ServerCursor = None
     OperationalError = RuntimeError
     PoolTimeout = TimeoutError
     dict_row = None
@@ -97,6 +98,26 @@ _MAX_SIZE = 4
 # starts cold and keeps that connection only after one succeeded, so an unreachable database never
 # leaves a reconnect loop behind (shutdown waits on it).
 _WARM_WORKLOADS = frozenset({"browse"})
+# What a borrower can change on the connection object. The pool's own reset only rolls back, so each
+# checkout restores these (none needs a round trip): one caller's autocommit must never turn the next
+# caller's transaction into separate commits.
+_SESSION_DEFAULTS = (
+    ("autocommit", False),
+    ("isolation_level", None),
+    ("read_only", None),
+    ("deferrable", None),
+    ("row_factory", dict_row),
+    ("cursor_factory", Cursor),
+    ("server_cursor_factory", ServerCursor),
+    ("prepare_threshold", 5),
+)
+# State the server keeps for the session (an advisory lock, LISTEN) cannot be restored that way. Its
+# holders lease from this workload, whose connections expire on return: closing one ends whatever its
+# holder left behind, and the pool opens the replacement in the background.
+_SESSION_WORKLOAD = "session"
+# An edit holds its session lease through the media writes, so session leases need the request
+# pool's headroom or a fifth concurrent save would wait for the first.
+_LARGE_WORKLOADS = frozenset({"default", _SESSION_WORKLOAD})
 
 
 def _observe_pool_lease(
@@ -145,9 +166,11 @@ def pooled_connection(
                 conninfo=database_url,
                 connection_class=_state_recording_connection_class(connect_state),
                 min_size=0,
-                max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE,
+                max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload in _LARGE_WORKLOADS else _MAX_SIZE,
                 max_waiting=32,
-                timeout=30, max_idle=120, max_lifetime=600,
+                timeout=30, max_idle=120,
+                max_lifetime=0 if normalized_workload == _SESSION_WORKLOAD else 600,
+                check=_restore_session_defaults,
                 reconnect_timeout=_RECONNECT_GIVE_UP_SECONDS,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,
@@ -176,6 +199,12 @@ def pooled_connection(
         lease_observer=lease_observer,
         keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
     )
+
+
+def _restore_session_defaults(connection) -> None:
+    for name, default in _SESSION_DEFAULTS:
+        if getattr(connection, name) != default:
+            setattr(connection, name, default)
 
 
 def _state_recording_connection_class(connect_state: _ConnectState):
@@ -296,6 +325,11 @@ class _LeasedConnection:
 def leased_connection(database_url: str, *, workload: str = "default") -> _LeasedConnection:
     """A shared-pool connection for repositories written against `psycopg.connect()`."""
     return _LeasedConnection(database_url, workload)
+
+
+def session_connection(database_url: str) -> _LeasedConnection:
+    """A lease for session state such as a session advisory lock; its connection is never reused."""
+    return _LeasedConnection(database_url, _SESSION_WORKLOAD)
 
 
 def prewarm_connection_pool(database_url: str) -> None:

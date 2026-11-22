@@ -777,6 +777,24 @@ const DEFECTS = [
     expected: /^rejected BI-08 event-loop-blocking:wait:Lock\.acquire@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_opinions_crowd_read_reserved:route:GET \/album-opinions\/\{album_ref\}\/crowd$/,
   },
   {
+    // 0.11.45 (PR #113): the Edit Tags intent held its session advisory lock on a shared request lease.
+    id: 'BI-15 session advisory lock taken on a lease the next request borrows',
+    language: 'py',
+    file: 'music_app/services/tag_edit_intents_postgres.py',
+    anchor: '        self._lock_connect = connect or session_connection\n',
+    replacement: '        self._lock_connect = connect or _connect\n',
+    expected: /^rejected BI-15 session-state-on-shared-connection:advisory-lock at music_app\/services\/tag_edit_intents_postgres\.py:\d+ from py:music_app\/services\/tag_edit_intents_postgres\.py#_TagEditIntentLease\._acquire$/,
+  },
+  {
+    // The family of 0.11.45's autocommit leak, in the form the pool cannot restore.
+    id: 'BI-15 session setting changed on a shared lease',
+    language: 'py',
+    file: 'music_app/services/listen_history.py',
+    anchor: '        connection.autocommit = True\n',
+    replacement: '        connection.autocommit = True\n        connection.execute("set statement_timeout = 0")\n',
+    expected: /^rejected BI-15 session-state-on-shared-connection:set at music_app\/services\/listen_history\.py:\d+ from py:music_app\/services\/listen_history\.py#listen_history_connection$/,
+  },
+  {
     id: 'BI-08 waiting for executor futures on the event loop',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',

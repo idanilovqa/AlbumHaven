@@ -4,6 +4,7 @@ import time
 import psycopg
 import pytest
 from psycopg.pq import TransactionStatus
+from psycopg.rows import dict_row, tuple_row
 from psycopg_pool import PoolTimeout
 
 from music_app.services import postgres_connections
@@ -158,11 +159,15 @@ def test_a_browse_pool_whose_connection_fails_stays_cold(monkeypatch):
 class _DriverConnection:
     """What the real pool needs from a psycopg connection."""
 
-    autocommit = False
-
     def __init__(self):
         self.closed = False
         self.pgconn = self
+        self.autocommit = False
+        self.isolation_level = self.read_only = self.deferrable = None
+        self.row_factory = dict_row
+        self.prepare_threshold = 5
+        self.cursor_factory = psycopg.Cursor
+        self.server_cursor_factory = psycopg.ServerCursor
 
     @property
     def transaction_status(self):
@@ -354,3 +359,64 @@ def test_a_full_queue_of_timed_out_waiters_cannot_block_reconnection(driver):
         except psycopg.OperationalError:
             assert time.perf_counter() < recovered_by, "the stale queue kept the pool from reconnecting"
             time.sleep(0.05)
+
+
+@pytest.mark.parametrize(
+    "setting, changed",
+    [
+        ("autocommit", True),
+        ("isolation_level", psycopg.IsolationLevel.SERIALIZABLE),
+        ("read_only", True),
+        ("deferrable", True),
+        ("row_factory", tuple_row),
+        ("prepare_threshold", None),
+        ("cursor_factory", psycopg.ClientCursor),
+        ("server_cursor_factory", psycopg.ClientCursor),
+    ],
+)
+def test_a_borrowers_session_setting_never_reaches_the_next_borrower(driver, setting, changed):
+    # 0.11.45: the Last.fm retry's autocommit stayed on the connection, so later writes lost atomicity.
+    with postgres_connections.pooled_connection(_URL) as first:
+        default = getattr(first, setting)
+        setattr(first, setting, changed)
+
+    with postgres_connections.pooled_connection(_URL) as following:
+        assert following is first
+        assert getattr(following, setting) == default
+
+
+def test_a_waiting_borrower_is_handed_the_connection_with_default_settings(driver):
+    served = []
+
+    def wait_for_it():
+        with postgres_connections.pooled_connection(_URL) as connection:
+            served.append(connection.autocommit)
+
+    with postgres_connections.pooled_connection(_URL) as first:
+        driver.delay = 1  # growth is slower than the first borrower's return
+        waiter = threading.Thread(target=wait_for_it)
+        waiter.start()
+        time.sleep(0.1)
+        first.autocommit = True
+    waiter.join(5)
+
+    assert served == [False]
+
+
+def test_a_session_lease_is_never_reused_and_never_takes_a_request_connection(driver):
+    with postgres_connections.session_connection(_URL) as holder:
+        pass  # a session lock it failed to release ends with the connection
+
+    assert holder.closed
+    with postgres_connections.session_connection(_URL) as following:
+        assert following is not holder
+    assert list(postgres_connections._pools) == [(_URL, "session")]
+    assert postgres_connections._pools[(_URL, "session")].max_size == 8, "room for concurrent saves"
+
+
+def test_the_tag_edit_lock_holds_a_session_lease():
+    from music_app.services.tag_edit_intents_postgres import PostgresTagEditIntentRepository
+
+    repository = PostgresTagEditIntentRepository({"ALBUM_HAVEN_APP_DATABASE_URL": _URL})
+
+    assert repository._lock_connect is postgres_connections.session_connection

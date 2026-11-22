@@ -667,6 +667,14 @@
           },
         },
       });
+      if (this.rebuffering && this.playing && this.current.primed) {
+        // A switched-to song is already filled to its head: the old song running dry is not its wait.
+        this.rebuffering = false;
+        this.port.postMessage({
+          type: 'buffering-end', generation: this.generation, streamId: this.current.streamId,
+          role: 'current', timelineFrame: this.timelineFrame,
+        });
+      }
       return true;
     }
 

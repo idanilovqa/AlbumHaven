@@ -967,6 +967,45 @@ test('an unprimed seek target still waits for the startup cushion after its cuto
   assert.equal(fixture.events('first-frame').length, 1);
 });
 
+function drainedPrimedSeekFixture() {
+  const fixture = primedSeekFixture();
+  for (let quantum = 0; quantum < 3; quantum += 1) renderQuantum(fixture);
+  assert.equal(fixture.events('buffering-start').length, 1, 'the old song ran dry while the switch waited');
+  return fixture;
+}
+
+test('a primed replacement plays at its cutover although the old song ran dry waiting for it', () => {
+  const fixture = drainedPrimedSeekFixture();
+  fixture.send({
+    type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0, primed: true,
+  });
+
+  assert.deepEqual(renderQuantum(fixture).left, Array(QUANTUM_FRAMES).fill(-0.5));
+  assert.deepEqual(fixture.events('buffering-end').map(({ streamId }) => streamId), [42]);
+  const types = fixture.port.events.map(({ type }) => type);
+  assert.ok(types.indexOf('seek-boundary') < types.indexOf('buffering-end'),
+    'the engine knows the new stream before it hears that it stopped buffering');
+});
+
+test('an unprimed seek target still refills after the old audio ran dry', () => {
+  const fixture = drainedPrimedSeekFixture();
+  fixture.send({ type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0 });
+
+  assertRenderedSilence(fixture);
+  assert.equal(fixture.events('buffering-end').length, 0);
+});
+
+test('a silenced player stays silent and reports no resumed audio when a primed replacement cuts over', () => {
+  const fixture = drainedPrimedSeekFixture();
+  fixture.send({ type: 'pause', generation: fixture.generation });
+  fixture.send({
+    type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0, primed: true,
+  });
+
+  for (let quantum = 0; quantum < 3; quantum += 1) assertRenderedSilence(fixture);
+  assert.equal(fixture.events('buffering-end').length, 0);
+});
+
 test('reserved seek retains the outgoing window from seek intent while preparation catches up', () => {
   const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
   enqueue(fixture, {

@@ -1406,3 +1406,67 @@ def move(request):
         assert (hazard["path"], hazard["function"]) == ("music_app/services/layout.py", "_connect")
     # A background worker may hold a connection of its own; the pool's own module is the pool.
     assert not _hazards(tmp_path, "BI-05")
+
+
+def test_session_state_is_rejected_unless_its_function_takes_a_connection_nobody_borrows_next(tmp_path: Path):
+    # 0.11.45 (PR #113): a session advisory lock and a session setting reached shared leases.
+    _write(tmp_path, "music_app/services/postgres_connections.py", """
+def leased_connection(url):
+    pass
+
+def session_connection(url):
+    pass
+""")
+    _write(tmp_path, "music_app/services/locks.py", """
+import psycopg
+from music_app.services.postgres_connections import leased_connection, session_connection
+
+_LISTEN_SQL = "listen library_changes"
+
+class Holder:
+    def __init__(self, connect=None):
+        self._lock_connect = connect or session_connection
+
+    def _connect_for_lock(self, url):
+        return self._lock_connect(url)
+
+    def lock(self, url):
+        with self._connect_for_lock(url) as connection:
+            connection.execute("select pg_try_advisory_lock(1)")
+
+def lock_on_own_connection(url):
+    with psycopg.connect(url) as connection:
+        connection.execute("select pg_advisory_lock(1)")
+
+def lock_on_shared_lease(url):
+    with leased_connection(url) as connection:
+        connection.execute("select pg_advisory_lock(1)")
+
+def set_on_shared_lease(url):
+    with leased_connection(url) as connection:
+        connection.execute("set statement_timeout = 0")
+
+def set_config_on_callers_connection(connection):
+    connection.execute("select set_config('search_path', 'public', false)")
+
+def keep_temporary_table(connection):
+    connection.execute("create temporary table picked (id bigint)")
+
+def transaction_scoped(connection):
+    connection.execute("set local jit = off")
+    connection.execute("set transaction isolation level repeatable read, read only")
+    connection.execute("select pg_advisory_xact_lock(1)")
+    connection.execute("create temporary table picked (id bigint) on commit drop")
+    connection.execute("update albums as a " "set title = excluded.title")
+""")
+
+    hazards = [hazard for hazard in _hazards(tmp_path, "BI-15") if "session-state" in hazard["operation"]]
+
+    assert sorted((hazard["function"], hazard["operation"].split(":")[1]) for hazard in hazards) == [
+        ("_LISTEN_SQL", "listen"),
+        ("keep_temporary_table", "temp-table"),
+        ("lock_on_shared_lease", "advisory-lock"),
+        ("set_config_on_callers_connection", "set-config"),
+        ("set_on_shared_lease", "set"),
+    ]
+    assert all(hazard["reject"] is True for hazard in hazards)

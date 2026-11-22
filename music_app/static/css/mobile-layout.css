@@ -6,8 +6,6 @@
 .appearance-device-controls { flex-wrap: wrap; }
 .appearance-device-controls .appearance-device-help { flex: 1 0 100%; }
 .page-gallery-bar__back { color: inherit; text-decoration: none; }
-/* Settings headers stay pinned like the Gallery header while their outlet scrolls. */
-.settings-host .page-gallery-bar { position: sticky; top: 0; z-index: 4; background: var(--appearance-main-surface, var(--app-surface)); }
 @media (min-width: 901px) { .page-gallery-bar__back--narrow-only { display: none; } }
 .mobile-page-header { flex-shrink: 0; }
 /* Retained pages still need an exit when the window grows beyond phone width. */
@@ -85,7 +83,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .app-bar--library .search-field-button { width: 40px; min-width: 40px; }
   .app-bar--library:not(.is-search-open) .search-field-control > input { visibility: hidden; padding: 0; }
   .app-bar--library:not(.is-search-open) [data-search-clear] { display: none; }
-  .shell-layout .shell-main-surface { grid-row: 3; grid-column: 1; width: auto; min-width: 0; padding: var(--app-page-header-top) var(--app-page-inline) 0; margin: 0; border-radius: 16px 16px 0 0; overflow: hidden; }
+  :is(.shell-layout, .settings-host) .shell-main-surface { grid-row: 3; grid-column: 1; width: auto; min-width: 0; padding: var(--app-page-header-top) var(--app-page-inline) 0; margin: 0; border-radius: 16px 16px 0 0; overflow: hidden; }
   .shell-main-surface > .gallery-top-row { display: none; }
   .gallery-bar { align-items: flex-start; gap: 8px; padding: 0 0 10px; min-height: 40px; margin-bottom: 0; min-width: 0; flex-shrink: 0; }
   .gallery-bar__context { min-width: 0; flex: 1; }
@@ -249,8 +247,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .global-player[data-player-seekbar-presentation] .player-waveform-canvas { position: absolute; inset: 0; width: 100%; height: 24px; }
   .global-player[data-player-seekbar-presentation="regular"] .player-timeline { height: 8px; top: 8px; }
   .settings-host.settings-shell, body.settings-shell { grid-template-columns: minmax(0, 1fr); }
-  .settings-outlet { grid-column: 1; min-width: 0; padding: 12px; overflow: auto; background: var(--appearance-main-surface, var(--bg)); }
-  .settings-outlet .account-main { width: 100%; min-width: 0; padding: 0; }
   .settings-outlet .form-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-shell .settings-nav { display: block; position: fixed; top: var(--app-bar-height); bottom: var(--player-height); left: 0; width: min(320px, 75vw); box-sizing: border-box; padding: 0 12px 16px; z-index: 4500; overflow-y: auto; transform: translateX(-102%); visibility: hidden; transition: transform 200ms ease, visibility 200ms; border-radius: 0 14px 14px 0; }
   .settings-shell .settings-nav.is-settings-navigation-open { transform: none; visibility: visible; }
@@ -494,8 +490,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
   /* All account pages start with the same bar at the top of their main body. */
   .settings-host.settings-shell { grid-template-rows: var(--app-bar-height) minmax(0, 1fr); }
-  .settings-host .settings-outlet { grid-row: 2; padding: 8px 12px 0; margin: 0; }
-  .settings-host :is(.settings-main, .account-main) { width: 100%; min-width: 0; padding: 0 0 24px; }
+  .settings-host .settings-outlet { grid-row: 2; }
+  .settings-host .settings-main { padding-bottom: 24px; }
   .page-gallery-bar { position: sticky; top: 0; border-radius: 0; background: var(--appearance-main-surface, var(--app-surface)); z-index: 4; }
   .settings-host .settings-nav { top: var(--app-bar-height); width: max-content; min-width: min(190px, 75vw); max-width: min(320px, 75vw); overflow-y: auto; }
   .settings-host .settings-nav nav { grid-template-columns: minmax(0, 1fr); }
@@ -769,7 +765,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   }
   /* A fixed player's old desktop shadow obscured an entire row above its edge. */
   :root .global-player { box-shadow: none !important; backdrop-filter: none; }
-  .shell-main-surface, .settings-host .settings-outlet { padding-bottom: 0; }
+  .shell-main-surface { padding-bottom: 0; }
   #albums-scroll, #mobile-page-outlet { margin-bottom: 0; }
 
   :root :is(.shell-layout .shell-navigation-rail, .settings-host .settings-nav, .mobile-settings-drawer.gallery-anchored-menu) {
@@ -789,7 +785,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   }
   /* Only the drawer scrolls. Overflow:hidden retains the underlying scroll offset. */
   body:has(.is-mobile-drawer-open, .is-settings-navigation-open, .mobile-settings-drawer.is-open, .artist-family-panel.is-open)
-    :is(#albums-scroll, #mobile-page-outlet, .mobile-home, .settings-outlet) {
+    :is(#albums-scroll, #mobile-page-outlet, .mobile-home, .settings-main) {
     overflow: hidden !important; touch-action: none; overscroll-behavior: none;
   }
 

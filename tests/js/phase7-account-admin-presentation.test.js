@@ -75,8 +75,8 @@ test('library and direct Settings pages own one shared host and navigation entry
 test('Account identity selector belongs to its account content, not duplicate mobile chrome', () => {
   const source = readProjectFile('tests', 'e2e', 'phase7', 'poms', 'authPages.js');
   const assignment = source.match(/this\.signedInIdentity\s*=\s*([^;]+);/)?.[1];
-  assert.equal(assignment, `page.locator('.account-main [data-gallery-bar-instance="page"] .gallery-bar__summary')`);
-  assert.match(accountTemplate, /<section class="settings-main account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
+  assert.equal(assignment, `page.locator('[data-settings-outlet]:has(> .account-main) > [data-gallery-bar-instance="page"] .gallery-bar__summary')`);
+  assert.match(accountTemplate, /data-settings-outlet>\s*\{\{ page_gallery_bar\('Password', profile\.username[^\n]*\s*<section class="albums-scroll settings-main account-main">/);
   // No first()/nth()/visibility fallback: duplicate identities within the owning
   // account surface must still fail Playwright's strict locator assertions.
   assert.doesNotMatch(assignment, /first\(|nth\(|:visible|filter\(/);

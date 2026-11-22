@@ -27,9 +27,9 @@
     {{ app_bar() }}
     {% set settings_section = 'server' %}
     {% include "partials/admin-settings-nav.html" %}
-    <div class="settings-outlet" data-settings-outlet>
-      <section class="settings-main account-main server-settings-main">
-        {{ page_gallery_bar('Server', 'Settings that apply to everyone', settings_navigation=true) }}
+    <div class="settings-outlet shell-main-surface" data-settings-outlet>
+      {{ page_gallery_bar('Server', 'Settings that apply to everyone', settings_navigation=true) }}
+      <section class="albums-scroll settings-main account-main server-settings-main">
         <form class="server-preview-settings" data-admin-server data-csrf-token="{{ csrf_token }}" aria-labelledby="album-previews-title" novalidate>
           <section class="account-section" aria-labelledby="album-previews-title">
             <h2 id="album-previews-title">Album previews</h2>

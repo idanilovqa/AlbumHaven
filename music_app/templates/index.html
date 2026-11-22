@@ -275,7 +275,7 @@
     {% with allowed_actions = account_menu_allowed_actions, csrf_token = account_menu_csrf_token %}
       {% include "partials/admin-settings-nav.html" %}
     {% endwith %}
-    <div class="settings-outlet" data-settings-outlet></div>
+    <div class="settings-outlet shell-main-surface" data-settings-outlet></div>
   </main>
   <div class="global-player shell-bottom-player" data-shell-slot="bottom_player" data-shell-content-kind="{{ shell_bottom_player.content_kind or 'global_player' }}" data-shell-is-persistent="{{ 'true' if shell_bottom_player.is_persistent else 'false' }}">
     <div class="player-shell">

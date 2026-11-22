@@ -37,8 +37,10 @@ test('desktop Settings content uses the Gallery surface header origin and horizo
 
   assert.match(
     chromeCss,
-    /\.settings-host \.settings-main\s*\{[^}]*padding:\s*6px 24px 60px/s,
+    /\.settings-host \.settings-main\s*\{[^}]*margin-inline:\s*-4px;\s*padding:\s*0 4px 60px/s,
   );
+  // Owner (2026-11-22): the Settings bar sits outside the scroller on the Gallery's surface, so it needs no pinning.
+  assert.doesNotMatch(read('music_app/static/css/mobile-layout.css'), /\.settings-host \.page-gallery-bar\s*\{/);
   assert.match(
     chromeCss,
     /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{[^}]*padding-top:\s*var\(--app-page-header-top\)/s,

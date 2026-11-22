@@ -43,15 +43,6 @@ padding: 14px 20px 20px;
 display: grid;
 gap: 8px;
 }
-.albums-scroll {
-overflow-y: auto;
-flex: 1 1 auto;
-min-height: 0;
-padding-right: 4px;
-padding-bottom: var(--artist-info-reveal-space, 0px);
-overflow-anchor: none;
-overscroll-behavior: contain;
-}
 /* Keep the decorative focus glow inside the gallery's horizontal bounds. */
 .albums-viewport { position: relative; min-width: 0; max-width: 100%; min-height: 100%; overflow-x: clip; overflow-anchor: none; }
 .gallery-focus-glow {

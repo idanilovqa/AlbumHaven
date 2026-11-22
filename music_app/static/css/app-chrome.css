@@ -221,8 +221,7 @@
 .shell-navigation-rail .artist-link.active { background: var(--app-active); }
 .shell-navigation-rail-backdrop { display: none; }
 
-.shell-main-surface,
-.settings-host .settings-outlet {
+.shell-main-surface {
   grid-column: 2;
   grid-row: 2;
   min-width: 0;
@@ -233,17 +232,27 @@
   box-shadow: inset 1px 1px 0 #ffffff03;
 }
 .shell-main-surface { display: flex; flex-direction: column; padding: 24px var(--app-page-inline); }
-.settings-host .settings-outlet { overflow: auto; }
+/* The one scroller below a page's GalleryBar, in the Gallery and in Settings. */
+.albums-scroll {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 4px;
+  padding-bottom: var(--artist-info-reveal-space, 0px);
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+.settings-host .settings-outlet { overflow: hidden; }
 .settings-host .settings-nav { padding: 25px 14px; }
 .settings-host .settings-nav h2 { margin: 0 12px 20px; font-size: 18px; }
 .settings-host .settings-nav-item.is-active { background: var(--app-active); }
-.settings-host .settings-main { min-width: 0; padding: 6px 24px 60px; }
+/* The 4px keep focus rings inside the scroller without moving content off the header's left edge. */
+.settings-host .settings-main { min-width: 0; box-sizing: border-box; margin-inline: -4px; padding: 0 4px 60px; }
 .artists-drawer-button { display: none; }
 
 .shell-navigation-rail,
 .shell-main-surface .albums-scroll,
-.settings-host .settings-nav,
-.settings-host .settings-outlet {
+.settings-host .settings-nav {
   scrollbar-width: thin;
   scrollbar-color: #ffffff24 transparent;
 }
@@ -300,8 +309,7 @@
   .app-bar input[type='search'], .app-bar .button:not(.action-button) { height: 36px; }
   .app-bar .search-field { --search-field-height: 36px; }
   .app-bar .toolbar-right { grid-column: 2; grid-row: 1; padding: 0; }
-  .shell-main-surface,
-  .settings-host .settings-outlet { grid-column: 1 / -1; margin: 0 6px; border-radius: 12px 12px 0 0; }
+  .shell-main-surface { grid-column: 1 / -1; margin: 0 6px; border-radius: 12px 12px 0 0; }
   .shell-main-surface { padding: 18px; }
   .settings-host.settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: 56px auto minmax(0, 1fr); }
   .settings-host .app-bar { grid-template-columns: minmax(0, 1fr); padding: 0 12px; }
@@ -310,7 +318,6 @@
   .settings-host .settings-nav nav { margin-top: 0; gap: 4px; }
   .settings-host .settings-nav-item { white-space: nowrap; padding: 0 9px; gap: 7px; }
   .settings-host .settings-outlet { grid-row: 3; }
-  .settings-host .settings-main { padding: 23px 18px 45px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

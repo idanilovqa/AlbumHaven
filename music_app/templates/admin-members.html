@@ -30,12 +30,12 @@
     {{ app_bar() }}
     {% set settings_section = 'users' %}
     {% include "partials/admin-settings-nav.html" %}
-    <div class="settings-outlet" data-settings-outlet>
+    <div class="settings-outlet shell-main-surface" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
-    <section class="settings-main" data-admin-roster data-csrf-token="{{ csrf_token }}">
-      {% call page_gallery_bar('Users & access', roster.library_name, settings_navigation=true) %}
-        {% if allowed_actions.allows('accounts.create') %}{{ ui_link('Add user', '/admin/accounts/new', variant='primary') }}{% endif %}
-      {% endcall %}
+    {% call page_gallery_bar('Users & access', roster.library_name, settings_navigation=true) %}
+      {% if allowed_actions.allows('accounts.create') %}{{ ui_link('Add user', '/admin/accounts/new', variant='primary') }}{% endif %}
+    {% endcall %}
+    <section class="albums-scroll settings-main" data-admin-roster data-csrf-token="{{ csrf_token }}">
 
       {% if created %}{{ on_page_alert('The account was created and is waiting for its invitation to be accepted.', role='status', class_name='admin-notice') }}{% endif %}
       {{ on_page_alert(role='status', hidden=true, attributes={'data-admin-roster-status': '', 'aria-live': 'polite'}) }}

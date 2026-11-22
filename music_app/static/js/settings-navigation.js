@@ -69,7 +69,7 @@
       if (error) {
         error.querySelector('.on-page-alert__message').textContent = 'This page could not be loaded. Please try again.';
         const content = host.hidden && library
-          ? library.querySelector('#shell-main-surface') : outlet;
+          ? library.querySelector('#shell-main-surface') : outlet.querySelector('.settings-main') || outlet;
         content?.prepend(error);
         if (content) content.scrollTop = 0;
         error.hidden = false;
@@ -214,7 +214,6 @@
         if (library) library.hidden = true;
         document.title = parsed.title;
         updateHistory(displayedUrl.href, posting ? 'replace' : historyMode);
-        outlet.scrollTop = 0;
         mountContent();
         const heading = outlet.querySelector('h1');
         heading?.setAttribute('tabindex', '-1');

@@ -1591,28 +1591,32 @@ function syncGalleryBarNameFit(bar, name) {
       if (currentName) syncGalleryBarNameFit(bar, currentName);
     });
     bar.galleryNameFitObserver.observe(bar);
+    // A button that appears later narrows the labels' line without resizing the bar.
+    const actions = bar.querySelector?.('.gallery-bar__actions');
+    if (actions) bar.galleryNameFitObserver.observe(actions);
   }
   const contextKind = String(bar.dataset.galleryContextKind || '');
   const metadata = bar.querySelector?.('[data-gallery-context-metadata]')?.textContent || '';
   const summary = bar.querySelector?.('[data-gallery-context-summary]')?.textContent || '';
-  const key = `${name.textContent}|${metadata}|${summary}|${window.innerWidth}|${bar.clientWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}|${contextKind}`;
+  const key = `${name.textContent}|${metadata}|${summary}|${window.innerWidth}|${bar.clientWidth}|${bar.querySelector?.('.gallery-bar__actions')?.clientWidth || 0}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}|${contextKind}`;
   if (bar.dataset.galleryNameFitKey === key) return;
   bar.dataset.galleryNameFitKey = key;
   bar.classList.remove('is-name-wrapping');
   bar.classList.remove('is-controls-below');
   if (contextKind === 'artist' || contextKind === 'single-artist') {
     if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-controls-below');
-    const genrePills = Array.from(bar.querySelectorAll?.('.gallery-bar__artist-genre') || []);
-    genrePills.forEach((pill) => { pill.hidden = false; });
-    // Owner (MOBILE-SETTINGS-HEADER 6): on every width a genre that does not fit before the line's end
-    // is dropped whole, with every genre ranked after it; none is ever cut.
+    const fittedLabels = '.gallery-bar__summary .gallery-bar__artist-genre, '
+      + '[data-gallery-context-mobile-summary] :is(.gallery-bar__artist-country, .gallery-bar__artist-genre)';
+    Array.from(bar.querySelectorAll?.(fittedLabels) || []).forEach((pill) => { pill.hidden = false; });
+    // Owner (MOBILE-SETTINGS-HEADER 6, 2026-11-22): on every width a label that does not fit before the
+    // line's end is dropped whole, with every label after it; none is ever cut.
     [
       bar.querySelector?.('.gallery-bar__summary .gallery-bar__artist-genres'),
       bar.querySelector?.('[data-gallery-context-mobile-summary]'),
     ].filter((container) => container?.getClientRects?.().length).forEach((container) => {
       const right = container.getBoundingClientRect().right;
       let overflowed = false;
-      container.querySelectorAll('.gallery-bar__artist-genre').forEach((pill) => {
+      container.querySelectorAll('.gallery-bar__artist-country, .gallery-bar__artist-genre').forEach((pill) => {
         overflowed = overflowed || pill.getBoundingClientRect().right > right + 1;
         pill.hidden = overflowed;
       });

@@ -396,7 +396,12 @@ def test_settings_pages_share_the_gallery_header_geometry_without_desktop_librar
     document = render(template, extra_actions=("system.preview_storage.read",))
     owners = [section for section in document.find_all("section") if "settings-main" in (section.attrs.get("class") or "").split()]
     assert len(owners) == 1, "Every Settings page uses the shared settings-main surface"
-    header = owners[0].one("header", **{"data-gallery-bar-instance": "page"})
+    surface = document.one("div", **{"data-settings-outlet": None})
+    header = surface.one("header", **{"data-gallery-bar-instance": "page"})
+    assert "shell-main-surface" in surface.attrs["class"].split()
+    assert header.parent is surface and owners[0].parent is surface, "The bar is outside the scrolling body"
+    assert surface.children.index(header) < surface.children.index(owners[0])
+    assert "albums-scroll" in owners[0].attrs["class"].split(), "Settings scroll as the Gallery does"
     back = header.one("a", **{"data-settings-parent": None})
     assert "page-gallery-bar__back--narrow-only" in back.attrs["class"].split()
 

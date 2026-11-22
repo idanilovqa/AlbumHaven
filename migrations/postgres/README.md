@@ -442,3 +442,14 @@ the table under an exclusive lock, so apply it in a controlled migration window
 before starting application writers. Problematic Files falls back to the inline
 expressions on databases without these columns, so rollback only drops the index
 and the columns; a running server retries with the inline form once it finds them gone.
+
+Migration `0290_index_user_cover_choices.sql` adds three partial expression
+indexes, so the automatic cover writer can ask which album's user chose a file
+without reading every album: user-chosen album covers, user-chosen cover sources
+and local second artboxes, each by `library.local_path_key`. It writes no row,
+and a prebuilt index of the same name must match its definition and be valid.
+Restoring a dump: when the `library` schema's owner is not its tables' owner, a
+plain `pg_restore` builds these indexes (and those of `0088` and `0187`) before
+it grants schema use, and they fail. Restore `--section=pre-data`, grant usage on
+schema `library` to each owner of its tables, restore
+`--section=data --section=post-data`, then confirm the indexes are valid.

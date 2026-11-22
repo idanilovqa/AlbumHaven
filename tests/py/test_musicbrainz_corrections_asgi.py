@@ -32,10 +32,10 @@ ROUTES = [
     ("/api/musicbrainz/lookups/{request_id}", "DELETE", "catalogue.enrichment.request"),
 ]
 CORRECTION = {"field": "album_artist", "label": "Album artist", "disc_number": 0, "track_number": 0,
-              "current_value": "Christian Vander", "proposed_value": "Magma", "kind": "album_artist_renamed",
+              "current_value": "Fixture Singer", "proposed_value": "Fixture Band", "kind": "album_artist_renamed",
               "mode": "review", "state": "pending"}
-ALBUM = {"album_key": "wurdah", "album_title": "Wurdah Ïtah", "artist_name": "Christian Vander", "year": 1974,
-         "cover_path": "covers/wurdah.jpg", "track_count": 12, "file_types": ["FLAC"], "release_mbid": RELEASE, "queued_at": None,
+ALBUM = {"album_key": "lumor", "album_title": "Lumor Ïvel", "artist_name": "Fixture Singer", "year": 1974,
+         "cover_path": "covers/lumor.jpg", "track_count": 12, "file_types": ["FLAC"], "release_mbid": RELEASE, "queued_at": None,
          "corrections": [dict(CORRECTION)]}
 
 
@@ -67,7 +67,7 @@ class Corrections:
 
     def edits_queue_page(self, *, section, kind, after, limit):
         self.calls.append(("edits_queue_page", {"section": section, "kind": kind, "after": after, "limit": limit}))
-        albums = [{**ALBUM, "album_key": f"album-{number}", "sort_title": "wurdah ïtah",
+        albums = [{**ALBUM, "album_key": f"album-{number}", "sort_title": "lumor ïvel",
                    "rows": [{**CORRECTION, "private": "x"}]} for number in range(3)]
         return [album for album in albums if after is None or (album["sort_title"], album["album_key"]) > after][:limit]
 
@@ -75,7 +75,7 @@ class Corrections:
         self.calls.append((name, {"album_key": album_key, "actor_account_id": actor_account_id}))
         if self.fail:
             raise RuntimeError("database unavailable")
-        return 2 if album_key == "wurdah" else 0
+        return 2 if album_key == "lumor" else 0
 
     def undo_album(self, **kwargs):
         return self._decide("undo_album", **kwargs)
@@ -121,10 +121,10 @@ def test_routes_are_registered_with_the_musicbrainz_owner_capabilities():
 
 @pytest.mark.parametrize("method,path,body", [
     ("GET", "/api/musicbrainz/corrections/albums", None),
-    ("GET", "/api/musicbrainz/corrections?album_key=wurdah", None),
+    ("GET", "/api/musicbrainz/corrections?album_key=lumor", None),
     ("GET", "/api/musicbrainz/corrections/edits?section=applied", None),
     ("GET", "/api/musicbrainz/corrections/edits/case?section=applied", None),
-    ("POST", "/api/musicbrainz/corrections/albums/undo", {"album_key": "wurdah"}),
+    ("POST", "/api/musicbrainz/corrections/albums/undo", {"album_key": "lumor"}),
     ("POST", "/api/musicbrainz/corrections/kinds/edition_suffix/approve", {}),
     ("PUT", "/api/musicbrainz/corrections/settings", {"auto_submit_bulks": True}),
     ("DELETE", "/api/musicbrainz/lookups/9", None),
@@ -146,17 +146,17 @@ def test_album_decisions_name_only_the_album_and_the_actor_comes_from_the_sessio
     corrections = Corrections()
 
     status, payload = request(app(corrections=corrections), "POST", f"/api/musicbrainz/corrections/albums/{action}",
-                              json_body={"album_key": "wurdah"})
+                              json_body={"album_key": "lumor"})
 
     assert (status, payload) == (200, {"decided": 2})
-    assert corrections.calls == [(method, {"album_key": "wurdah", "actor_account_id": 7})]
+    assert corrections.calls == [(method, {"album_key": "lumor", "actor_account_id": 7})]
 
 
 @pytest.mark.parametrize("path,body", [
     ("/api/musicbrainz/corrections/albums/undo", {}),
     ("/api/musicbrainz/corrections/albums/undo", {"album_key": 5}),
-    ("/api/musicbrainz/corrections/albums/undo", {"album_key": "wurdah", "rows": []}),
-    ("/api/musicbrainz/corrections/albums/delete", {"album_key": "wurdah"}),
+    ("/api/musicbrainz/corrections/albums/undo", {"album_key": "lumor", "rows": []}),
+    ("/api/musicbrainz/corrections/albums/delete", {"album_key": "lumor"}),
 ])
 def test_album_decisions_reject_anything_but_one_album_key_and_a_known_action(path, body):
     corrections = Corrections()
@@ -193,7 +193,7 @@ def test_the_edits_queue_lists_kinds_and_pages_albums_without_private_fields():
     corrections = Corrections()
 
     status, kinds = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections/edits?section=review")
-    after = quote(json.dumps(["wurdah ïtah", "album-0"]))
+    after = quote(json.dumps(["lumor ïvel", "album-0"]))
     _status, page = request(app(corrections=corrections), "GET",
                             f"/api/musicbrainz/corrections/edits/case?section=applied&after={after}&limit=1")
 
@@ -201,7 +201,7 @@ def test_the_edits_queue_lists_kinds_and_pages_albums_without_private_fields():
     assert kinds["kinds"] == [{"kind": "case", "albums": 1, "rows": 2}]
     assert kinds["settings"] == {"auto_submit_bulks": True, "next_run_at": NOW.isoformat()}
     assert [album["album_key"] for album in page["albums"]] == ["album-1"]
-    assert json.loads(page["next_after"]) == ["wurdah ïtah", "album-1"]
+    assert json.loads(page["next_after"]) == ["lumor ïvel", "album-1"]
     assert "sort_title" not in page["albums"][0]
     for bad in ("nonsense", '["only one"]', '[1, 2]', '["a", "\\u0000"]'):
         assert request(app(), "GET", f"/api/musicbrainz/corrections/edits/case?after={quote(bad)}")[0] == 400
@@ -232,7 +232,7 @@ def test_auto_submit_bulks_is_saved_by_the_session_actor():
 
 def test_a_failing_store_is_unavailable_not_an_error_page():
     status, payload = request(app(corrections=Corrections(fail=True)), "POST",
-                              "/api/musicbrainz/corrections/albums/undo", json_body={"album_key": "wurdah"})
+                              "/api/musicbrainz/corrections/albums/undo", json_body={"album_key": "lumor"})
 
     assert status == 503 and payload["detail"] == "MusicBrainz corrections are unavailable."
 
@@ -255,35 +255,35 @@ def _pf_request(corrections, *, owner=True):
 def test_one_album_correction_returns_its_stored_rows():
     corrections = Corrections()
 
-    status, payload = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections?album_key=wurdah")
+    status, payload = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections?album_key=lumor")
 
     assert status == 200
-    assert payload["correction"] == {"album_key": "wurdah", "correction_count": 1, "corrections": [CORRECTION]}
-    assert corrections.calls == [("get_correction", {"album_key": "wurdah"})]
+    assert payload["correction"] == {"album_key": "lumor", "correction_count": 1, "corrections": [CORRECTION]}
+    assert corrections.calls == [("get_correction", {"album_key": "lumor"})]
     assert request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections?album_key=none")[0] == 404
 
 
-SECRET = {**ALBUM, "album_key": "secret", "album_title": "The Secret", "artist_name": "The Alan Parsons Project"}
+SAMPLE = {**ALBUM, "album_key": "sample", "album_title": "The Sample", "artist_name": "The Example Project"}
 
 
 def _page():
-    return {"items": [{"key": "wurdah::year::1974", "name": "Wurdah Ïtah", "problem_reasons": ["Missing year"],
+    return {"items": [{"key": "lumor::year::1974", "name": "Lumor Ïvel", "problem_reasons": ["Missing year"],
                        "detail_loaded": False},
                       {"key": "musicbrainz-artist:7", "entity_kind": "artist", "name": "Axxis"}], "count": 2,
-            "initial_detail": {"key": "wurdah::year::1974", "problem_reasons": ["Missing year"]}}
+            "initial_detail": {"key": "lumor::year::1974", "problem_reasons": ["Missing year"]}}
 
 
 def test_listed_albums_gain_the_label_from_stored_counts_only():
-    corrections = Corrections([ALBUM, SECRET])
+    corrections = Corrections([ALBUM, SAMPLE])
     payload = _page()
 
     project_correction_problems_into_problematic_files(_pf_request(corrections), payload)
 
-    assert corrections.calls == [("list_correction_summaries", {"album_keys": ["wurdah", "wurdah"], "offset": 0,
+    assert corrections.calls == [("list_correction_summaries", {"album_keys": ["lumor", "lumor"], "offset": 0,
                                                                  "limit": None})]
     listed = payload["items"][0]
     assert listed["problem_reasons"] == ["Missing year", "Data Correction Needed"]
-    assert listed["musicbrainz_correction"] == {"album_key": "wurdah", "correction_count": 1}
+    assert listed["musicbrainz_correction"] == {"album_key": "lumor", "correction_count": 1}
     assert payload["initial_detail"]["problem_reasons"] == ["Missing year", "Data Correction Needed"]
     assert payload["musicbrainz_correction_album_count"] == 2
 
@@ -303,22 +303,22 @@ def test_correction_only_albums_never_enlarge_the_complete_list():
 
 
 def test_correction_only_albums_come_in_pages():
-    corrections = Corrections([ALBUM, SECRET])
+    corrections = Corrections([ALBUM, SAMPLE])
 
     status, first = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections/albums?offset=0&limit=1")
     _status, second = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections/albums?offset=1&limit=1")
 
     assert status == 200
-    assert [item["key"] for item in first["items"]] == ["musicbrainz-correction:wurdah"]
+    assert [item["key"] for item in first["items"]] == ["musicbrainz-correction:lumor"]
     assert (first["total"], first["next_offset"], second["next_offset"]) == (2, 1, None)
     row = second["items"][0]
     # The response names the cover by an opaque reference, never by its path.
     assert "cover_path" not in row and row.pop("cover_ref")
     assert row == {
-        "key": "musicbrainz-correction:secret", "entity_kind": "musicbrainz_correction", "name": "The Secret",
-        "album_artist": "The Alan Parsons Project", "year": 1974,
+        "key": "musicbrainz-correction:sample", "entity_kind": "musicbrainz_correction", "name": "The Sample",
+        "album_artist": "The Example Project", "year": 1974,
         "problem_reasons": ["Data Correction Needed"],
-        "musicbrainz_correction": {"album_key": "secret", "correction_count": 1},
+        "musicbrainz_correction": {"album_key": "sample", "correction_count": 1},
         "detail_loaded": False,
     }
 
@@ -330,13 +330,13 @@ def test_pages_are_bounded(query):
 
 def test_a_loaded_detail_keeps_its_label_and_correction():
     corrections = Corrections()
-    detail = {"key": "wurdah", "problem_reasons": ["Missing year"]}
+    detail = {"key": "lumor", "problem_reasons": ["Missing year"]}
 
     project_correction_into_problematic_detail(_pf_request(corrections), detail)
 
     assert detail["problem_reasons"] == ["Missing year", "Data Correction Needed"]
     assert detail["musicbrainz_correction"]["corrections"] == [CORRECTION]
-    assert corrections.calls == [("get_correction", {"album_key": "wurdah"})]
+    assert corrections.calls == [("get_correction", {"album_key": "lumor"})]
 
 
 def test_non_owners_and_failures_leave_problematic_files_unchanged():

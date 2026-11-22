@@ -1,5 +1,5 @@
 """Kinds of MusicBrainz data corrections, auto vs review, the guard and track pairing
-(Delivery 2, S4; owner 2026-11-16, "Data Correction flow")."""
+(Delivery 2, S4)."""
 from __future__ import annotations
 
 import pytest
@@ -13,20 +13,20 @@ from music_app.services.musicbrainz_correction_kinds import (
 
 
 @pytest.mark.parametrize("field,current,proposed,kind", [
-    ("title", "South Side Of The Sky", "South Side of the Sky", "case"),
-    ("title", "Banish  From Sanctuary", "Banish From Sanctuary", "spacing"),
-    ("title", "Banish From Sanctuary ", "Banish From Sanctuary", "spacing"),
-    ("title", "Legion Of The Damned  (New Version)", "Legion of the Damned (new version)", "case_spacing"),
-    ("title", "Metamorphosis IV. Solace", "Metamorphosis: IV. Solace", "punctuation"),
-    ("title", "Luz al Final del Tunel", "Luz al final del túnel", "accents"),
-    ("title", "Endless Myster", "Endless Mystery", "small_edit"),
-    ("title", "Siberian Divide (Feat. Cedric Bixler-Zavala)", "Siberian Divide", "edition_suffix"),
-    ("title", "The Mirror", "Only for the Night", "track_title"),
-    ("album", "Blasphemy/Purity", "Blasphemy", "album_title"),
-    ("artist", "PFM", "Premiata Forneria Marconi", "track_artist_renamed"),
-    ("artist", "Jeff Loomis", "Jeff Loomis & Ron Jarzombek", "track_artist_joined"),
-    ("album_artist", "The Dixie Dregs", "The Dregs", "album_artist_renamed"),
-    ("album_artist", "Aksak Maboul", "Marc Hollander & Aksak Maboul", "album_artist_joined"),
+    ("title", "North End Of The Field", "North End of the Field", "case"),
+    ("title", "Depart  From Harbour", "Depart From Harbour", "spacing"),
+    ("title", "Depart From Harbour ", "Depart From Harbour", "spacing"),
+    ("title", "Garden Of The Lanterns  (New Version)", "Garden of the Lanterns (new version)", "case_spacing"),
+    ("title", "Variations IV. Repose", "Variations: IV. Repose", "punctuation"),
+    ("title", "Rosa al Borde del Jardin", "Rosa al borde del jardín", "accents"),
+    ("title", "Distant Harbou", "Distant Harbour", "small_edit"),
+    ("title", "Example Divide (Feat. Fixture Guest-Singer)", "Example Divide", "edition_suffix"),
+    ("title", "The Window", "Only at First Light", "track_title"),
+    ("album", "Lanterns/Rivers", "Lanterns", "album_title"),
+    ("artist", "FXB", "Fixture Example Band", "track_artist_renamed"),
+    ("artist", "Sam Fixture", "Sam Fixture & Alex Example", "track_artist_joined"),
+    ("album_artist", "The Paper Lamps", "The Lamps", "album_artist_renamed"),
+    ("album_artist", "Sample Ensemble", "Robin Example & Sample Ensemble", "album_artist_joined"),
 ])
 def test_each_kind(field, current, proposed, kind):
     assert classify(field, current, proposed) == kind
@@ -51,26 +51,26 @@ ORDER_EXACT = {"match_quality": "order_exact", "pairing": {}}
 
 
 @pytest.mark.parametrize("local,remote", [
-    ("Don't Despair", "Don’t Despair"),
-    ('The "Crazy" Ones', "The “Crazy” Ones"),
+    ("Don't Wander", "Don’t Wander"),
+    ('The "Paper" Ones', "The “Paper” Ones"),
     ("Track - One", "Track – One"),
-    ("Carry On", "Carry On"),
+    ("Sail Out", "Sail Out"),
 ])
 def test_curly_punctuation_and_identical_text_are_not_differences(local, remote):
     assert compare_album(_album([local], [remote], pairing=ORDER_EXACT))["rows"] == []
 
 
 def test_trivial_rows_apply_automatically_on_an_ordinary_album():
-    result = compare_album(_album(["carry on", "Nova Era", "Spread Your Fire"],
-                                  ["Carry On", "Nova Era", "Spread Your Fire"], pairing=ORDER_EXACT))
+    result = compare_album(_album(["sail out", "New Shore", "Raise Your Lamp"],
+                                  ["Sail Out", "New Shore", "Raise Your Lamp"], pairing=ORDER_EXACT))
 
     assert result["review_whole"] is False
     assert [(row["kind"], row["mode"]) for row in result["rows"]] == [("case", "auto")]
 
 
-def test_the_dream_evil_shape_goes_to_review_whole_even_its_trivial_rows():
-    local = ["the chosen ones", "The Mirror", "Children Of The Night", "Book Of Heavy Metal", "Kill Kill Kill"]
-    remote = ["The Chosen Ones", "Only for the Night", "Book of Heavy Metal", "The Sinner", "Kill Kill Kill"]
+def test_a_half_changed_album_goes_to_review_whole_even_its_trivial_rows():
+    local = ["the painted ones", "The Window", "Lanterns Of The River", "Book Of Paper Boats", "Row Row Row"]
+    remote = ["The Painted Ones", "Only at First Light", "Book of Paper Boats", "The Sailor", "Row Row Row"]
 
     result = compare_album(_album(local, remote, pairing=ORDER_EXACT))
 
@@ -106,49 +106,49 @@ def test_a_reordered_album_pairs_tracks_by_the_stored_pairing_not_by_position():
 
 
 def test_without_a_stored_pairing_tracks_pair_by_position_only_where_titles_agree():
-    result = compare_album(_album(["carry on", "The Mirror"], ["Carry On", "Only for the Night"], pairing=None))
+    result = compare_album(_album(["sail out", "The Window"], ["Sail Out", "Only at First Light"], pairing=None))
 
     assert [(row["track_number"], row["kind"]) for row in result["rows"]] == [(1, "case")]
 
 
-# Classical albums (owner 2026-11-17, batch 2 case 7): "Composer first if Music Brainz shows
-# composer first", with the same review rules as any album; no special composer handling.
-DVORAK_CREDIT = [{"name": "Antonín Dvořák", "join_phrase": "; "}, {"name": "Inna Poroshina"}]
+# Classical albums: the composer comes first where MusicBrainz credits the composer first, with
+# the same review rules as any album; no special composer handling.
+COMPOSER_CREDIT = [{"name": "Tomáš Vzorník", "join_phrase": "; "}, {"name": "Pia Example"}]
 
 
 def _classical(local_artist):
-    return {"title": "Piano Works", "artist_name": local_artist, "release_title": "Piano Works",
-            "release_credit": "Antonín Dvořák; Inna Poroshina", "pairing": ORDER_EXACT,
-            "media": [{"position": 1, "tracks": [{"position": 1, "title": "Humoresque",
-                                                  "artist_credit": DVORAK_CREDIT}]}],
-            "tracks": [{"disc_number": 1, "track_number": 1, "title": "Humoresque", "artist": local_artist}]}
+    return {"title": "Keyboard Pieces", "artist_name": local_artist, "release_title": "Keyboard Pieces",
+            "release_credit": "Tomáš Vzorník; Pia Example", "pairing": ORDER_EXACT,
+            "media": [{"position": 1, "tracks": [{"position": 1, "title": "Study",
+                                                  "artist_credit": COMPOSER_CREDIT}]}],
+            "tracks": [{"disc_number": 1, "track_number": 1, "title": "Study", "artist": local_artist}]}
 
 
-@pytest.mark.parametrize("local_artist", ["Inna Poroshina", "Inna Poroshina; Antonín Dvořák"])
+@pytest.mark.parametrize("local_artist", ["Pia Example", "Pia Example; Tomáš Vzorník"])
 def test_a_composer_first_credit_is_proposed_as_musicbrainz_orders_it_and_waits_for_the_owner(local_artist):
     rows = compare_album(_classical(local_artist))["rows"]
     assert {(row["field"], row["proposed_value"], row["kind"], row["mode"]) for row in rows} == {
-        ("album_artist", "Antonín Dvořák; Inna Poroshina", "album_artist_joined", "review"),
-        ("artist", "Antonín Dvořák; Inna Poroshina", "track_artist_joined", "review"),
+        ("album_artist", "Tomáš Vzorník; Pia Example", "album_artist_joined", "review"),
+        ("artist", "Tomáš Vzorník; Pia Example", "track_artist_joined", "review"),
     }
 
 
 def test_a_classical_album_already_credited_as_musicbrainz_does_has_no_correction():
-    assert compare_album(_classical("Antonín Dvořák; Inna Poroshina"))["rows"] == []
+    assert compare_album(_classical("Tomáš Vzorník; Pia Example"))["rows"] == []
 
 
 def test_two_copies_of_one_song_at_one_position_are_one_change():
-    album = _album(["carry on", "Nova Era"], ["Carry On", "Nova Era"], pairing=ORDER_EXACT)
+    album = _album(["sail out", "New Shore"], ["Sail Out", "New Shore"], pairing=ORDER_EXACT)
     album["tracks"].append(dict(album["tracks"][0]))
 
     rows = compare_album(album)["rows"]
 
-    assert [(row["field"], row["track_number"], row["proposed_value"]) for row in rows] == [("title", 1, "Carry On")]
+    assert [(row["field"], row["track_number"], row["proposed_value"]) for row in rows] == [("title", 1, "Sail Out")]
 
 
 def test_copies_of_a_song_do_not_weigh_twice_in_the_guard():
-    album = _album(["The Mirror", "Song 2", "Song 3", "Song 4"],
-                   ["Only for the Night", "Song 2", "Song 3", "Song 4"], pairing=ORDER_EXACT)
+    album = _album(["The Window", "Song 2", "Song 3", "Song 4"],
+                   ["Only at First Light", "Song 2", "Song 3", "Song 4"], pairing=ORDER_EXACT)
     album["tracks"].append(dict(album["tracks"][0]))
 
     assert compare_album(album)["review_whole"] is False, "one of four titles changes, not two of five"

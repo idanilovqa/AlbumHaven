@@ -1,5 +1,4 @@
-"""MusicBrainz data corrections and the Edits Queue (Delivery 2, S4; owner 2026-11-16, "Data
-Correction flow").
+"""MusicBrainz data corrections and the Edits Queue (Delivery 2, S4).
 
 Problematic Files labels an album "Data Correction Needed" when its tags differ from the
 release it certainly is. Trivial changes apply automatically and the Edits Queue lists them as

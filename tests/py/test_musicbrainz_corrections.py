@@ -156,9 +156,9 @@ class _Connection:
 def test_cards_get_display_fields_only_where_the_corrected_value_differs():
     from music_app.services.musicbrainz_correction_display import project_correction_display
 
-    connection = _Connection([{"album_key": "a", "corrected_title": "Hostilities", "corrected_album_artist": None},
+    connection = _Connection([{"album_key": "a", "corrected_title": "Harvesting", "corrected_album_artist": None},
                               {"album_key": "b", "corrected_title": "Same", "corrected_album_artist": "Band"}])
-    payload = {"groups": [{"albums": [{"key": "a", "name": "Hostlities", "album_artist": "Band"},
+    payload = {"groups": [{"albums": [{"key": "a", "name": "Harvsting", "album_artist": "Band"},
                                       {"key": "b", "name": "Same", "album_artist": "band"},
                                       {"key": "c", "name": "Other", "album_artist": "Band"}]}]}
 
@@ -166,7 +166,7 @@ def test_cards_get_display_fields_only_where_the_corrected_value_differs():
                                connect=lambda _url: connection)
 
     a, b, c = payload["groups"][0]["albums"]
-    assert (a["name"], a["display_title"]) == ("Hostlities", "Hostilities") and "display_artist" not in a
+    assert (a["name"], a["display_title"]) == ("Harvsting", "Harvesting") and "display_artist" not in a
     assert "display_title" not in b and b["display_artist"] == "Band"
     assert set(c) == {"key", "name", "album_artist"}, "an untouched album carries no extra bytes"
     assert connection.queries == [{"album_keys": ["a", "b", "c"]}], "one read per response"

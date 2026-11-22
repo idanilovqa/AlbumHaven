@@ -10,7 +10,7 @@ const { resolvePlaywrightPython } = require('../../../scripts/playwright-python.
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-// MusicBrainz Delivery 2, S4, at the measured sandbox6 scale (about 10,800 albums and 64,000
+// MusicBrainz Delivery 2, S4, at large-library scale (about 10,800 albums and 64,000
 // stored correction rows). Synthetic only: listed fixture albums and synthetic albums get certain release
 // decisions whose release titles differ from their tags, then the application's own refresh
 // stores each album's correction count. Idempotent for a reused prepared fixture.
@@ -68,7 +68,7 @@ repository = MusicBrainzCorrectionsPostgresRepository(
     connect=lambda url: psycopg.connect(url, row_factory=dict_row))
 repository.refresh()
 with psycopg.connect(database_url, row_factory=dict_row) as connection:
-    # sandbox6 stores about 64,000 rows: give each synthetic album five automatic track-title
+    # About 64,000 stored rows: give each synthetic album five automatic track-title
     # case changes beside its compared album-title row (idempotent; no tracks or files added).
     connection.execute(
         "insert into library.local_album_musicbrainz_correction_rows (library_id, album_key, field, disc_number,"

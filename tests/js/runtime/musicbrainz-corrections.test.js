@@ -8,16 +8,16 @@ const repoRoot = path.join(__dirname, '..', '..', '..');
 const read = (relative) => fs.readFileSync(path.join(repoRoot, relative), 'utf8');
 const ButtonComponent = require(path.join(repoRoot, 'music_app/static/js/button-component.js'));
 
-const CASE_ROW = { field: 'title', label: 'Track 1 title', disc_number: 1, track_number: 1, current_value: 'carry on',
-  proposed_value: 'Carry On', kind: 'case', mode: 'auto', state: 'applied' };
+const CASE_ROW = { field: 'title', label: 'Track 1 title', disc_number: 1, track_number: 1, current_value: 'sail out',
+  proposed_value: 'Sail Out', kind: 'case', mode: 'auto', state: 'applied' };
 const ARTIST_ROW = { field: 'album_artist', label: 'Album artist', disc_number: 0, track_number: 0,
-  current_value: 'Christian Vander', proposed_value: 'Magma', kind: 'album_artist_renamed', mode: 'review', state: 'pending' };
+  current_value: 'Fixture Singer', proposed_value: 'Fixture Band', kind: 'album_artist_renamed', mode: 'review', state: 'pending' };
 
 function correctionItem(overrides = {}) {
   return {
-    key: 'musicbrainz-correction:wurdah', entity_kind: 'musicbrainz_correction', name: 'Wurdah Ïtah',
-    album_artist: 'Christian Vander', year: 1974, problem_reasons: ['Data Correction Needed'],
-    musicbrainz_correction: { album_key: 'wurdah', correction_count: 2, corrections: [CASE_ROW, ARTIST_ROW] },
+    key: 'musicbrainz-correction:lumor', entity_kind: 'musicbrainz_correction', name: 'Lumor Ïvel',
+    album_artist: 'Fixture Singer', year: 1974, problem_reasons: ['Data Correction Needed'],
+    musicbrainz_correction: { album_key: 'lumor', correction_count: 2, corrections: [CASE_ROW, ARTIST_ROW] },
     detail_loaded: false, ...overrides,
   };
 }
@@ -74,13 +74,13 @@ test('a correction shows its label, what was applied and what waits, with no Add
 
   assert.match(html, /alert-label--warning[^>]*>Data Correction Needed</);
   assert.match(text(html), /1 change was applied automatically \(display only; your files are unchanged\)\. 1 change waits for your approval in Settings → Edits Queue\./);
-  assert.match(text(html), /Track 1 title carry on Carry On Applied Album artist Christian Vander Magma Waiting for approval/);
+  assert.match(text(html), /Track 1 title sail out Sail Out Applied Album artist Fixture Singer Fixture Band Waiting for approval/);
   assert.doesNotMatch(html, /Add to queue|Apply changes|data-queue-musicbrainz-correction/);
 });
 
 test('an album sent to review whole says nothing was applied', () => {
   const { context } = loadContext();
-  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', review_whole: true,
+  const item = correctionItem({ musicbrainz_correction: { album_key: 'lumor', review_whole: true,
     corrections: [{ ...CASE_ROW, mode: 'review', state: 'pending' }] } });
 
   assert.match(text(context.buildMusicBrainzCorrectionProblemDetail(item)), /nothing was applied automatically: review the whole album/);
@@ -95,7 +95,7 @@ test('an album with no corrections shows nothing', () => {
 
 test('a listed album shows the correction beneath its own detected problems', () => {
   const { context } = loadContext();
-  const album = { key: 'wurdah', name: 'Wurdah Ïtah', album_artist: 'Christian Vander', tracks: [], problem_reasons: ['Missing year', 'Data Correction Needed'],
+  const album = { key: 'lumor', name: 'Lumor Ïvel', album_artist: 'Fixture Singer', tracks: [], problem_reasons: ['Missing year', 'Data Correction Needed'],
     album_problem_rows: [{ reason: 'Missing year', row_key: 'r' }], musicbrainz_correction: correctionItem().musicbrainz_correction };
   context.state.utility.selectedProblemFilters = [];
   context.getVisibleProblemSuggestions = () => [];
@@ -113,10 +113,10 @@ test('a listed album shows the correction beneath its own detected problems', ()
 const APPLIED = { section: 'applied', kinds: [{ kind: 'case', albums: 1, rows: 1 }], settings: { auto_submit_bulks: false, next_run_at: null } };
 const REVIEW = { section: 'review', kinds: [{ kind: 'edition_suffix', albums: 3, rows: 5 }, { kind: 'album_artist_renamed', albums: 1, rows: 1 },
   { kind: 'whole_album', albums: 1, rows: 6 }], settings: { auto_submit_bulks: false, next_run_at: null } };
-const ALBUM = { album_key: 'wurdah', album_title: 'Wurdah Ïtah', artist_name: 'Christian Vander', year: 1974, cover_ref: null };
+const ALBUM = { album_key: 'lumor', album_title: 'Lumor Ïvel', artist_name: 'Fixture Singer', year: 1974, cover_ref: null };
 const LOOKUPS = { queued: [
-  { request_id: 9, target_kind: 'album', album_key: 'live', album_title: 'Live At Budokan', artist_name: 'Dream Theater', year: 2004, requested_at: '2026-11-16T10:20:00Z' },
-  { request_id: 10, target_kind: 'artist', local_artist_id: 41, artist_name: 'Ktzat Acheret', requested_at: '2026-11-16T10:22:00Z' }],
+  { request_id: 9, target_kind: 'album', album_key: 'live', album_title: 'Live At Fixture Hall', artist_name: 'Fixture Theatre', year: 2004, requested_at: '2026-11-16T10:20:00Z' },
+  { request_id: 10, target_kind: 'artist', local_artist_id: 41, artist_name: 'Fixture Quartet', requested_at: '2026-11-16T10:22:00Z' }],
 queue_starts_at: '2026-11-16T11:20:00Z', batches: [] };
 
 function queueContext(extra = {}) {
@@ -124,9 +124,9 @@ function queueContext(extra = {}) {
     'GET /api/musicbrainz/corrections/edits?section=applied': { status: 200, body: APPLIED },
     'GET /api/musicbrainz/corrections/edits?section=review': { status: 200, body: REVIEW },
     'GET /api/musicbrainz/corrections/edits/case?section=applied&limit=50': { status: 200,
-      body: { albums: [{ ...ALBUM, rows: [CASE_ROW] }], next_after: '["wurdah","wurdah"]' } },
-    'GET /api/musicbrainz/corrections/edits/case?section=applied&after=%5B%22wurdah%22%2C%22wurdah%22%5D&limit=50': { status: 200,
-      body: { albums: [{ ...ALBUM, album_key: 'secret', album_title: 'The Secret', rows: [CASE_ROW] }], next_after: null } },
+      body: { albums: [{ ...ALBUM, rows: [CASE_ROW] }], next_after: '["lumor","lumor"]' } },
+    'GET /api/musicbrainz/corrections/edits/case?section=applied&after=%5B%22lumor%22%2C%22lumor%22%5D&limit=50': { status: 200,
+      body: { albums: [{ ...ALBUM, album_key: 'sample', album_title: 'The Sample', rows: [CASE_ROW] }], next_after: null } },
     'GET /api/musicbrainz/lookups': { status: 200, body: LOOKUPS }, ...extra } });
 }
 
@@ -141,13 +141,13 @@ test('Applied automatically lists kinds; opening one pages its albums with their
 
   context.handleMusicBrainzCorrectionEvent({ target: closest({ 'data-edits-queue-open-kind': 'case' }), preventDefault() {} });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.match(text(detail.innerHTML), /Wurdah Ïtah Christian Vander · 1974 .*carry on Carry On Applied/);
-  assert.match(detail.innerHTML, /data-edits-queue-album-action="undo" data-edits-queue-album="wurdah"/);
+  assert.match(text(detail.innerHTML), /Lumor Ïvel Fixture Singer · 1974 .*sail out Sail Out Applied/);
+  assert.match(detail.innerHTML, /data-edits-queue-album-action="undo" data-edits-queue-album="lumor"/);
 
   context.handleMusicBrainzCorrectionEvent({ target: closest({ 'data-edits-queue-more': 'case' }), preventDefault() {} });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.match(text(detail.innerHTML), /The Secret/);
-  assert.deepEqual(requests.filter(([, url]) => url.includes('/edits/case')).map(([, url]) => new URL(url, 'http://x').searchParams.get('after')), [null, '["wurdah","wurdah"]']);
+  assert.match(text(detail.innerHTML), /The Sample/);
+  assert.deepEqual(requests.filter(([, url]) => url.includes('/edits/case')).map(([, url]) => new URL(url, 'http://x').searchParams.get('after')), [null, '["lumor","lumor"]']);
 });
 
 test('Waiting for approval offers Approve kind except for artist kinds and whole albums', async () => {
@@ -176,13 +176,13 @@ test('undo, approve and skip send the album; approving a kind sends the kind', a
     'POST /api/musicbrainz/corrections/kinds/edition_suffix/approve': { status: 200, body: { decided: 5 } } });
   await context.loadUtilityEditsQueue(true);
 
-  await context.decideEditsQueueAlbum('undo', 'wurdah');
-  await context.decideEditsQueueAlbum('skip', 'secret');
+  await context.decideEditsQueueAlbum('undo', 'lumor');
+  await context.decideEditsQueueAlbum('skip', 'sample');
   await context.approveEditsQueueKind('edition_suffix');
 
   assert.deepEqual(requests.filter(([method]) => method === 'POST').map(([, url, body]) => [url, body]), [
-    ['/api/musicbrainz/corrections/albums/undo', { album_key: 'wurdah' }],
-    ['/api/musicbrainz/corrections/albums/skip', { album_key: 'secret' }],
+    ['/api/musicbrainz/corrections/albums/undo', { album_key: 'lumor' }],
+    ['/api/musicbrainz/corrections/albums/skip', { album_key: 'sample' }],
     ['/api/musicbrainz/corrections/kinds/edition_suffix/approve', {}],
   ]);
 });
@@ -192,8 +192,8 @@ test('the MusicBrainz Look Up tab lists queued look ups with their start time', 
   await context.loadUtilityEditsQueue(true);
   context.handleMusicBrainzCorrectionEvent({ target: closest({ 'data-edits-queue-tab': 'musicbrainz-lookup' }), preventDefault() {} });
 
-  assert.match(text(detail.innerHTML), /Live At Budokan Release · Dream Theater · 2004 — queued .*, starts by itself at /);
-  assert.match(text(detail.innerHTML), /Ktzat Acheret Artist — queued /);
+  assert.match(text(detail.innerHTML), /Live At Fixture Hall Release · Fixture Theatre · 2004 — queued .*, starts by itself at /);
+  assert.match(text(detail.innerHTML), /Fixture Quartet Artist — queued /);
 });
 
 // A click target whose closest() answers the given attributes, inside the Edits Queue.
@@ -260,15 +260,15 @@ test('album details show the applied value beside the tag, and the tag editor ke
   const loaders = read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js');
   const start = loaders.indexOf('function getTrackTagInitialValues(');
   vm.runInContext(`${loaders.slice(start).split(/\r?\n\}\r?\n/)[0]}\n}\nthis.getTrackTagInitialValues = getTrackTagInitialValues;`, context);
-  const album = { name: 'wurdah itah', display_title: 'Wurdah Ïtah', album_artist: 'christian vander', display_artist: 'Christian Vander' };
-  const track = { title: 'malawelekaahm', display_title: 'Malawêlekaahm', artist: 'christian vander', display_artist: 'Christian Vander' };
+  const album = { name: 'lumor ivel', display_title: 'Lumor Ïvel', album_artist: 'fixture singer', display_artist: 'Fixture Singer' };
+  const track = { title: 'tovarelimaan', display_title: 'Tovarêlimaan', artist: 'fixture singer', display_artist: 'Fixture Singer' };
 
-  assert.equal(context.albumDisplayArtist(album), 'Christian Vander');
+  assert.equal(context.albumDisplayArtist(album), 'Fixture Singer');
   const values = context.getTrackTagInitialValues(track, album);
-  assert.equal(values.title, 'malawelekaahm');
-  assert.equal(values.artist, 'christian vander');
-  assert.equal(values.album_artist, 'christian vander');
-  assert.equal(values.album, 'wurdah itah');
+  assert.equal(values.title, 'tovarelimaan');
+  assert.equal(values.artist, 'fixture singer');
+  assert.equal(values.album_artist, 'fixture singer');
+  assert.equal(values.album, 'lumor ivel');
   const table = read('music_app/static/js/runtime/tag-editor-and-optimistic-updates.js');
   assert.match(table, /const displayTitle = String\(track\.display_title \|\| trackRow\?\.title \|\| track\.title \|\| ''\)\.trim\(\);/);
   assert.match(table, /playbackTitle: String\(track\.title \|\| ''\)\.trim\(\),/);
@@ -280,15 +280,15 @@ test('the album details header shows a.k.a. titles dimmed after the title and be
   for (const file of ['music_app/static/js/runtime/markup-format-helpers.js', 'music_app/static/js/runtime/alert-components.js',
     'music_app/static/js/runtime/album-details-components.js']) vm.runInContext(read(file), context);
 
-  const html = context.buildAlbumDetailsHeaderHtml({ artist: 'Christian Vander', album: 'Wurdah Ïtah', year: '1974',
-    alternativeTitles: ['Tristan et Iseult'] });
-  const plain = context.buildAlbumDetailsHeaderHtml({ artist: 'Christian Vander', album: 'Wurdah Ïtah', year: '1974', alternativeTitles: [] });
+  const html = context.buildAlbumDetailsHeaderHtml({ artist: 'Fixture Singer', album: 'Lumor Ïvel', year: '1974',
+    alternativeTitles: ['Other Fixture Title'] });
+  const plain = context.buildAlbumDetailsHeaderHtml({ artist: 'Fixture Singer', album: 'Lumor Ïvel', year: '1974', alternativeTitles: [] });
 
-  assert.match(html, /Wurdah Ïtah <span class="album-details-header__aka">\(a\.k\.a\. Tristan et Iseult\)<\/span> <span aria-hidden="true">•<\/span> 1974/);
+  assert.match(html, /Lumor Ïvel <span class="album-details-header__aka">\(a\.k\.a\. Other Fixture Title\)<\/span> <span aria-hidden="true">•<\/span> 1974/);
   assert.doesNotMatch(plain, /a\.k\.a\./);
 });
 
-test('phones list the Edits Queue only for whoever may review MusicBrainz corrections (owner 2026-11-16)', () => {
+test('phones list the Edits Queue only for whoever may review MusicBrainz corrections', () => {
   const source = read('music_app/static/js/runtime/mobile-navigation.js');
   const start = source.indexOf('const MOBILE_UTILITY_SECTIONS');
   const end = source.indexOf('function mobileUtilitySubsectionAttribute');
@@ -316,23 +316,23 @@ test('albums listed only for a correction show only under the Data Correction Ne
 });
 
 test('an album listed only for a correction loads its stored rows when opened', async () => {
-  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', correction_count: 2 } });
+  const item = correctionItem({ musicbrainz_correction: { album_key: 'lumor', correction_count: 2 } });
   const { context, requests, renders } = loadContext({ items: [item], responses: {
-    'GET /api/musicbrainz/corrections?album_key=wurdah': { status: 200, body: { correction: {
-      album_key: 'wurdah', correction_count: 2, corrections: [CASE_ROW, ARTIST_ROW] } } } } });
+    'GET /api/musicbrainz/corrections?album_key=lumor': { status: 200, body: { correction: {
+      album_key: 'lumor', correction_count: 2, corrections: [CASE_ROW, ARTIST_ROW] } } } } });
 
   assert.match(context.buildMusicBrainzCorrectionProblemDetail(item), /Loading the data correction/);
   await context.loadMusicBrainzCorrectionDetail(item);
 
-  assert.deepEqual(requests, [['GET', '/api/musicbrainz/corrections?album_key=wurdah', undefined]]);
-  assert.match(text(context.buildMusicBrainzCorrectionProblemDetail(item)), /Album artist Christian Vander Magma Waiting for approval/);
+  assert.deepEqual(requests, [['GET', '/api/musicbrainz/corrections?album_key=lumor', undefined]]);
+  assert.match(text(context.buildMusicBrainzCorrectionProblemDetail(item)), /Album artist Fixture Singer Fixture Band Waiting for approval/);
   assert.deepEqual(renders, ['problematic-files']);
 });
 
 test('a correction that cannot load says so', async () => {
-  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', correction_count: 2 } });
+  const item = correctionItem({ musicbrainz_correction: { album_key: 'lumor', correction_count: 2 } });
   const { context } = loadContext({ items: [item], responses: {
-    'GET /api/musicbrainz/corrections?album_key=wurdah': { status: 503, body: {} } } });
+    'GET /api/musicbrainz/corrections?album_key=lumor': { status: 503, body: {} } } });
 
   await context.loadMusicBrainzCorrectionDetail(item);
 

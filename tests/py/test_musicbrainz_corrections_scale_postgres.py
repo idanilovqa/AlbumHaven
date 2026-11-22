@@ -38,7 +38,7 @@ def _add_albums(setup_url, first, last):
             "insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)"
             " select artists.library_id, artists.id, 'scale::' || n, 'album ' || n, 1990, '{}'::jsonb"
             " from generate_series(%(first)s::int, %(last)s::int) n"
-            " cross join (select id, library_id from library.local_artists where artist_key = 'rel-angra') artists",
+            " cross join (select id, library_id from library.local_artists where artist_key = 'rel-amber') artists",
             params)
         connection.execute(
             "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, disc_number,"
@@ -50,7 +50,7 @@ def _add_albums(setup_url, first, last):
             "insert into integration.musicbrainz_releases (mbid, release_group_mbid, title, artist_credit, refreshed_at)"
             " select md5('scale' || n)::uuid, %(group)s,"
             "        case when n <= 3 then 'album ' || n || ' (Deluxe)' else 'Album ' || n end,"
-            "        '[{\"name\": \"Angra\", \"join_phrase\": \"\"}]'::jsonb, %(now)s"
+            "        '[{\"name\": \"Amberline\", \"join_phrase\": \"\"}]'::jsonb, %(now)s"
             " from generate_series(%(first)s::int, %(last)s::int) n", params)
         connection.execute(
             "insert into library.local_album_musicbrainz_releases (library_id, album_key, state, release_group_mbid,"
@@ -89,7 +89,7 @@ class _Rollback(Exception):
 def _refresh_after_one_edit(connection, repository):
     connection.execute("update library.local_tracks set title = 'Sung'"
                        " where album_id = (select id from library.local_albums where album_key = 'scale::7'"
-                       " and library_id = (select library_id from library.local_artists where artist_key = 'rel-angra'))")
+                       " and library_id = (select library_id from library.local_artists where artist_key = 'rel-amber'))")
     assert repository.refresh(observed_at=NOW) == 1
 
 

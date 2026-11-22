@@ -19,7 +19,7 @@ from music_app.services.musicbrainz_lookup_queue_postgres import (
 from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
 from tests.e2e.support import isolatedPostgres
 from tests.py.test_musicbrainz_release_identity_postgres import (
-    ANGRA,
+    AMBER,
     NOW,
     RELEASE,
     FakeResolverClient,
@@ -52,17 +52,17 @@ def _finish_jobs(setup_url, state="succeeded"):
 def test_queued_lookups_wait_an_hour_then_start_together_at_manual_priority(monkeypatch):
     setup_url, lookups, _releases, ids = _lookups(monkeypatch)
 
-    album = lookups.request(target_kind="album", mode="queue", album_key="rel-holy", actor_account_id=None,
+    album = lookups.request(target_kind="album", mode="queue", album_key="rel-harbor", actor_account_id=None,
                             observed_at=NOW)
     artist = lookups.request(target_kind="artist", mode="queue", album_key="rel-none", actor_account_id=None,
                              observed_at=NOW + timedelta(minutes=10))
-    again = lookups.request(target_kind="album", mode="queue", album_key="rel-holy", actor_account_id=None,
+    again = lookups.request(target_kind="album", mode="queue", album_key="rel-harbor", actor_account_id=None,
                             observed_at=NOW + timedelta(minutes=20))
 
     assert album["state"] == artist["state"] == "queued" and again["request_id"] == album["request_id"]
     listed = lookups.list_lookups()
     assert [(row["target_kind"], row["artist_name"], row["album_title"]) for row in listed["queued"]] == [
-        ("album", "Angra", "Holy Land"), ("artist", "Nobody", None)]
+        ("album", "Amberline", "Harbor Field"), ("artist", "Nobody", None)]
     assert listed["queue_starts_at"] == NOW + timedelta(hours=1)
 
     lookups.advance(observed_at=NOW + timedelta(minutes=59))
@@ -70,7 +70,7 @@ def test_queued_lookups_wait_an_hour_then_start_together_at_manual_priority(monk
 
     lookups.advance(observed_at=NOW + timedelta(hours=1))
     jobs = {(row["local_artist_id"], row["job_kind"]): row for row in _jobs(setup_url)}
-    assert set(jobs) == {(ids["angra"], "musicbrainz_album_releases"),
+    assert set(jobs) == {(ids["amber"], "musicbrainz_album_releases"),
                          (ids["unmatched"], "musicbrainz_artist_enrichment")}
     assert {row["priority"] for row in jobs.values()} == {MANUAL_LOOKUP_PRIORITY}
     (batch,) = lookups.list_lookups()["batches"]
@@ -100,12 +100,12 @@ def test_sync_starts_the_queue_at_once_and_raises_an_automatic_job_already_waiti
 
 def test_a_search_starts_alone_and_a_search_for_a_queued_lookup_starts_that_one(monkeypatch):
     setup_url, lookups, _releases, ids = _lookups(monkeypatch)
-    queued = lookups.request(target_kind="album", mode="queue", album_key="rel-cry", actor_account_id=None,
+    queued = lookups.request(target_kind="album", mode="queue", album_key="rel-cedar", actor_account_id=None,
                              observed_at=NOW)
     other = lookups.request(target_kind="artist", mode="queue", local_artist_id=ids["other"],
                             actor_account_id=None, observed_at=NOW)
 
-    searched = lookups.request(target_kind="album", mode="search", album_key="rel-cry", actor_account_id=None,
+    searched = lookups.request(target_kind="album", mode="search", album_key="rel-cedar", actor_account_id=None,
                                observed_at=NOW + timedelta(minutes=1))
 
     assert searched["request_id"] == queued["request_id"] and searched["state"] == "running"
@@ -128,29 +128,29 @@ def test_an_album_lookup_runs_before_the_artist_backlog_and_settles_with_its_rel
             raise AssertionError("the manual album lookup must run first")
 
     chain = MusicBrainzEnrichmentChain(Backlog(), albums, lookups=lookups, now=lambda: NOW)
-    cry = lookups.request(target_kind="album", mode="search", album_key="rel-cry", actor_account_id=None,
+    cedar = lookups.request(target_kind="album", mode="search", album_key="rel-cedar", actor_account_id=None,
                           observed_at=NOW)
-    holy = lookups.request(target_kind="album", mode="search", album_key="rel-holy", actor_account_id=None,
+    harbor = lookups.request(target_kind="album", mode="search", album_key="rel-harbor", actor_account_id=None,
                            observed_at=NOW)
 
     assert chain.process_next(worker_id="w")["state"] == "succeeded"
     lookups.advance(observed_at=NOW)
 
-    (found,) = lookups.get_batch(batch_id=cry["batch_id"])["items"]
+    (found,) = lookups.get_batch(batch_id=cedar["batch_id"])["items"]
     assert (found["outcome"], found["result_mbid"], found["result_entity"], found["problem_label"]) == (
         "matched", RELEASE, "release", None)
-    (missing,) = lookups.get_batch(batch_id=holy["batch_id"])["items"]
+    (missing,) = lookups.get_batch(batch_id=harbor["batch_id"])["items"]
     assert (missing["outcome"], missing["result_mbid"], missing["problem_label"]) == (
         "not_matched", None, RELEASE_NOT_FOUND_LABEL)
     batches = {row["batch_id"]: row for row in lookups.list_lookups()["batches"]}
-    assert batches[cry["batch_id"]]["finished_at"] == NOW
-    assert (batches[cry["batch_id"]]["single_title"], batches[cry["batch_id"]]["single_outcome"]) == (
-        "Angels Cry", "matched")
+    assert batches[cedar["batch_id"]]["finished_at"] == NOW
+    assert (batches[cedar["batch_id"]]["single_title"], batches[cedar["batch_id"]]["single_outcome"]) == (
+        "Amber Cedar", "matched")
 
 
 def test_artist_lookups_settle_with_the_accepted_mbid_or_the_problematic_files_label(monkeypatch):
     setup_url, lookups, _releases, ids = _lookups(monkeypatch)
-    matched = lookups.request(target_kind="artist", mode="search", local_artist_id=ids["angra"],
+    matched = lookups.request(target_kind="artist", mode="search", local_artist_id=ids["amber"],
                               actor_account_id=None, observed_at=NOW)
     missing = lookups.request(target_kind="artist", mode="search", local_artist_id=ids["unmatched"],
                               actor_account_id=None, observed_at=NOW)
@@ -162,24 +162,24 @@ def test_artist_lookups_settle_with_the_accepted_mbid_or_the_problematic_files_l
     _finish_jobs(setup_url)
     lookups.advance(observed_at=NOW + timedelta(minutes=1))
 
-    (angra,) = lookups.get_batch(batch_id=matched["batch_id"])["items"]
-    assert (angra["outcome"], angra["result_mbid"], angra["result_entity"]) == ("matched", ANGRA, "artist")
+    (amber,) = lookups.get_batch(batch_id=matched["batch_id"])["items"]
+    assert (amber["outcome"], amber["result_mbid"], amber["result_entity"]) == ("matched", AMBER, "artist")
     (nobody,) = lookups.get_batch(batch_id=missing["batch_id"])["items"]
     assert (nobody["outcome"], nobody["problem_label"]) == ("not_matched", ARTIST_NOT_FOUND_LABEL)
     assert lookups.dismiss_batch(batch_id=matched["batch_id"], observed_at=NOW) is True
     assert [row["batch_id"] for row in lookups.list_lookups()["batches"]] == [missing["batch_id"]]
     # A finished lookup can be asked for again.
-    assert lookups.request(target_kind="artist", mode="queue", local_artist_id=ids["angra"],
+    assert lookups.request(target_kind="artist", mode="queue", local_artist_id=ids["amber"],
                            actor_account_id=None, observed_at=NOW)["state"] == "queued"
 
 
 def test_the_album_menu_learns_whether_the_album_and_its_artist_have_an_mbid(monkeypatch):
     _setup_url, lookups, _releases, _ids = _lookups(monkeypatch)
 
-    angra = lookups.target_status(album_key="rel-cry")
+    amber = lookups.target_status(album_key="rel-cedar")
     nobody = lookups.target_status(album_key="rel-none")
 
-    assert (angra["artist_name"], angra["artist_has_mbid"], angra["album_has_mbid"]) == ("Angra", True, False)
+    assert (amber["artist_name"], amber["artist_has_mbid"], amber["album_has_mbid"]) == ("Amberline", True, False)
     assert (nobody["artist_has_mbid"], nobody["album_has_mbid"]) == (False, False)
     assert lookups.target_status(album_key="nope") is None
 

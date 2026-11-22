@@ -32,7 +32,7 @@ def _run(monkeypatch, repository, ids, outcome, at=NOW):
     from music_app.services import musicbrainz_release_identity as module
     monkeypatch.setattr(module, "resolve_album_releases", lambda context, client: outcome(context))
     processor = MusicBrainzAlbumReleaseProcessor(repository=repository, client=FakeResolverClient(), now=lambda: at)
-    for artist in ("angra", "other"):
+    for artist in ("amber", "other"):
         repository.enqueue(reason="test", observed_at=at, local_artist_id=ids[artist], force=True)
     while processor.process_next(worker_id="w").get("processed"):
         pass
@@ -53,13 +53,13 @@ def test_only_a_no_title_match_raises_the_flag_and_the_owner_sees_that_album(mon
 
     _run(monkeypatch, repository, ids, _outcome)
 
-    # Angels Cry resolved and Holy Land's tracks differ: neither is "missing from MusicBrainz".
+    # Amber Cedar resolved and Harbor Field's tracks differ: neither is "missing from MusicBrainz".
     assert _flags(setup_url) == [("rel-else", "automatic", "missing_from_musicbrainz")]
     enrichment = MusicBrainzEnrichmentPostgresRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url))
     (row,) = enrichment.list_album_attention()
     assert (row["album_key"], row["album_title"], row["artist_name"]) == ("rel-else", "Elsewhere", "Other")
-    assert enrichment.list_album_attention(album_key="rel-cry") == []
+    assert enrichment.list_album_attention(album_key="rel-cedar") == []
 
 
 def test_the_flag_clears_when_the_album_resolves_and_owner_flags_stay(monkeypatch):

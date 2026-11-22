@@ -1,5 +1,4 @@
-"""PostgreSQL authority for MusicBrainz data corrections (Delivery 2, S4; owner 2026-11-16,
-"Data Correction flow").
+"""PostgreSQL authority for MusicBrainz data corrections (Delivery 2, S4).
 
 Each certainly matched album is compared with its edition (the release decision) in Python
 (musicbrainz_correction_kinds) and every difference is stored as a row with its kind and mode:

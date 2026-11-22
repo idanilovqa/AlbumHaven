@@ -1,6 +1,6 @@
 """MusicBrainz data corrections in Problematic Files and the Edits Queue (Delivery 2, S4).
 
-Owner-only, like every MusicBrainz action (owner 2026-11-16, "Data Correction flow").
+Owner-only, like every MusicBrainz action.
 Problematic Files labels an album "Data Correction Needed" and shows its changes; Settings →
 Edits Queue lists the automatic ones ("Applied automatically", Undo per album) and those
 waiting for approval (per kind, per album, or skip; artist changes per album only). Nothing

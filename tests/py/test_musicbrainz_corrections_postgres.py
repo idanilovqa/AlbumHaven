@@ -16,7 +16,7 @@ from music_app.services.musicbrainz_lookup_queue_postgres import MusicBrainzLook
 from tests.e2e.support import isolatedPostgres
 from tests.py.test_musicbrainz_release_identity_postgres import GROUP, NOW, RELEASE, _seed
 
-BOX = "050e7238-9751-4521-91b6-89c672eac591"
+BOX = "00000000-0000-4000-8000-0000000000c2"
 
 
 def _credit(*names):
@@ -50,18 +50,18 @@ def _corrections(monkeypatch):
     setup_url, _repository, ids, _albums = _seed(monkeypatch)
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute(
-            "insert into integration.musicbrainz_release_groups (mbid, title, refreshed_at) values (%s, 'Angels Cry', %s)",
+            "insert into integration.musicbrainz_release_groups (mbid, title, refreshed_at) values (%s, 'Amber Cedar', %s)",
             (GROUP, NOW))
         # The first track differs by a typographic apostrophe (no difference) and by case (applied
         # automatically); the second track's artist credit waits for the owner.
-        connection.execute("update library.local_tracks set title = 'don''t despair' where track_key = 'rel-cry-1'")
-        _store_release(connection, RELEASE, "Angels Cry", _credit("Angra"),
-                       [_medium(1, ("Don’t Despair", "Angra"), ("Song 2", "Angra", "Andre Matos"))])
-        _decide(connection, "rel-cry")
+        connection.execute("update library.local_tracks set title = 'don''t wander' where track_key = 'rel-cedar-1'")
+        _store_release(connection, RELEASE, "Amber Cedar", _credit("Amberline"),
+                       [_medium(1, ("Don’t Wander", "Amberline"), ("Song 2", "Amberline", "Guest Singer"))])
+        _decide(connection, "rel-cedar")
         # One disc of a box set: local disc 1 is the release's second medium.
-        _store_release(connection, BOX, "Holy Land Box", _credit("Angra"),
-                       [_medium(1, ("Wrong", "Angra")), _medium(2, ("Song 1", "Angra"), ("Song 2", "Angra"))])
-        _decide(connection, "rel-holy", release=BOX, disc_position=2)
+        _store_release(connection, BOX, "Harbor Field Box", _credit("Amberline"),
+                       [_medium(1, ("Wrong", "Amberline")), _medium(2, ("Song 1", "Amberline"), ("Song 2", "Amberline"))])
+        _decide(connection, "rel-harbor", release=BOX, disc_position=2)
         # A release group alone proposes nothing.
         _decide(connection, "rel-else", state="release_group")
     repository = MusicBrainzCorrectionsPostgresRepository(
@@ -79,12 +79,12 @@ def test_refresh_stores_each_difference_with_its_kind_and_mode(monkeypatch):
 
     assert repository.refresh(observed_at=NOW) == 2
 
-    assert _rows(repository, "rel-cry") == [
-        ("title", "don't despair", "Don’t Despair", "case", "auto", "applied"),
-        ("artist", "Angra", "Angra & Andre Matos", "track_artist_joined", "review", "pending")]
-    assert _rows(repository, "rel-holy") == [("album", "Holy Land", "Holy Land Box", "album_title", "review", "pending")]
+    assert _rows(repository, "rel-cedar") == [
+        ("title", "don't wander", "Don’t Wander", "case", "auto", "applied"),
+        ("artist", "Amberline", "Amberline & Guest Singer", "track_artist_joined", "review", "pending")]
+    assert _rows(repository, "rel-harbor") == [("album", "Harbor Field", "Harbor Field Box", "album_title", "review", "pending")]
     summaries = {row["album_key"]: row for row in repository.list_summaries()["items"]}
-    assert (summaries["rel-cry"]["auto_count"], summaries["rel-cry"]["review_count"]) == (1, 1)
+    assert (summaries["rel-cedar"]["auto_count"], summaries["rel-cedar"]["review_count"]) == (1, 1)
     assert repository.refresh(observed_at=NOW) == 0, "nothing changed: nothing is compared again"
 
 
@@ -93,16 +93,16 @@ def test_undo_is_remembered_and_a_refresh_never_reapplies_it(monkeypatch):
     service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
     repository.refresh(observed_at=NOW)
 
-    assert service.undo_album(album_key="rel-cry", actor_account_id=None) == 1
+    assert service.undo_album(album_key="rel-cedar", actor_account_id=None) == 1
     with isolatedPostgres._connect(setup_url) as connection:
         # A tag edit elsewhere on the album makes the refresh compare it again.
-        connection.execute("update library.local_tracks set title = 'song 2' where track_key = 'rel-cry-2'")
+        connection.execute("update library.local_tracks set title = 'song 2' where track_key = 'rel-cedar-2'")
     assert repository.refresh(observed_at=NOW) == 1
 
-    assert _rows(repository, "rel-cry")[0][-1] == "undone"
+    assert _rows(repository, "rel-cedar")[0][-1] == "undone"
     with isolatedPostgres._connect(setup_url) as connection:
-        tracks = connection.execute("select title from library.local_tracks where track_key = 'rel-cry-1'").fetchall()
-    assert [row["title"] for row in tracks] == ["don't despair"], "nothing writes tags"
+        tracks = connection.execute("select title from library.local_tracks where track_key = 'rel-cedar-1'").fetchall()
+    assert [row["title"] for row in tracks] == ["don't wander"], "nothing writes tags"
 
 
 def test_skip_is_remembered_approval_applies_and_artist_kinds_are_never_approved_as_a_kind(monkeypatch):
@@ -113,30 +113,30 @@ def test_skip_is_remembered_approval_applies_and_artist_kinds_are_never_approved
     with pytest.raises(ValueError):
         service.approve_kind(kind="track_artist_joined", actor_account_id=None)
     assert service.approve_kind(kind="album_title", actor_account_id=None) == 1
-    assert service.skip_album(album_key="rel-cry", actor_account_id=None) == 1
+    assert service.skip_album(album_key="rel-cedar", actor_account_id=None) == 1
     repository.refresh(observed_at=NOW)
 
-    assert {row[3]: row[-1] for row in _rows(repository, "rel-cry")} == {"case": "applied", "track_artist_joined": "skipped"}
-    assert _rows(repository, "rel-holy")[0][-1] == "applied"
+    assert {row[3]: row[-1] for row in _rows(repository, "rel-cedar")} == {"case": "applied", "track_artist_joined": "skipped"}
+    assert _rows(repository, "rel-harbor")[0][-1] == "applied"
     assert "track_artist_joined" not in {group["kind"] for group in service.edits_queue(section="review")["kinds"]}
 
 
 def test_the_guard_sends_an_album_to_review_whole_and_ambiguous_pairing_compares_no_tracks(monkeypatch):
     setup_url, repository, _ids = _corrections(monkeypatch)
     with isolatedPostgres._connect(setup_url) as connection:
-        # Dream Evil's shape: half the titles change substantially.
-        connection.execute("update library.local_tracks set title = 'The Mirror' where track_key = 'rel-holy-1'")
-        connection.execute("update library.local_albums set title = 'angels cry' where album_key = 'rel-cry'")
+        # Half the titles change substantially.
+        connection.execute("update library.local_tracks set title = 'The Window' where track_key = 'rel-harbor-1'")
+        connection.execute("update library.local_albums set title = 'amber cedar' where album_key = 'rel-cedar'")
         connection.execute("update library.local_album_musicbrainz_releases set match_quality = 'ambiguous',"
-                           " track_order_differs = true where album_key = 'rel-cry'")
+                           " track_order_differs = true where album_key = 'rel-cedar'")
     service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
     repository.refresh(observed_at=NOW)
 
     summaries = {row["album_key"]: row for row in repository.list_summaries()["items"]}
-    assert summaries["rel-holy"]["review_whole"] is True and summaries["rel-holy"]["auto_count"] == 0
-    assert {row[4] for row in _rows(repository, "rel-holy")} == {"review"}
-    assert summaries["rel-cry"]["review_whole"] is True
-    assert _rows(repository, "rel-cry") == [("album", "angels cry", "Angels Cry", "case", "review", "pending")]
+    assert summaries["rel-harbor"]["review_whole"] is True and summaries["rel-harbor"]["auto_count"] == 0
+    assert {row[4] for row in _rows(repository, "rel-harbor")} == {"review"}
+    assert summaries["rel-cedar"]["review_whole"] is True
+    assert _rows(repository, "rel-cedar") == [("album", "amber cedar", "Amber Cedar", "case", "review", "pending")]
     assert "whole_album" in {group["kind"] for group in service.edits_queue(section="review")["kinds"]}
 
 
@@ -145,22 +145,22 @@ def test_without_substantial_title_changes_the_guard_stays_off_and_trivial_rows_
     repository.refresh(observed_at=NOW)
 
     summaries = {row["album_key"]: row for row in repository.list_summaries()["items"]}
-    assert summaries["rel-cry"]["review_whole"] is False
-    assert _rows(repository, "rel-cry")[0][4:] == ("auto", "applied")
+    assert summaries["rel-cedar"]["review_whole"] is False
+    assert _rows(repository, "rel-cedar")[0][4:] == ("auto", "applied")
 
 
 def test_album_details_show_applied_values_beside_the_unchanged_tags(monkeypatch):
     setup_url, repository, _ids = _corrections(monkeypatch)
     repository.refresh(observed_at=NOW)
-    album = {"name": "Angels Cry", "album_artist": "Angra",
-             "tracks": [{"disc_number": 1, "track_number": 1, "title": "don't despair", "artist": "Angra"},
-                        {"disc_number": 1, "track_number": 2, "title": "Song 2", "artist": "Angra"}]}
+    album = {"name": "Amber Cedar", "album_artist": "Amberline",
+             "tracks": [{"disc_number": 1, "track_number": 1, "title": "don't wander", "artist": "Amberline"},
+                        {"disc_number": 1, "track_number": 2, "title": "Song 2", "artist": "Amberline"}]}
     with isolatedPostgres._connect(setup_url) as connection:
-        album_id = connection.execute("select id from library.local_albums where album_key = 'rel-cry'").fetchone()["id"]
+        album_id = connection.execute("select id from library.local_albums where album_key = 'rel-cedar'").fetchone()["id"]
         apply_correction_display(connection, album, album_id=album_id)
 
     first, second = album["tracks"]
-    assert (first["title"], first["display_title"]) == ("don't despair", "Don’t Despair")
+    assert (first["title"], first["display_title"]) == ("don't wander", "Don’t Wander")
     assert "display_title" not in second and "display_artist" not in second, "waiting changes are not shown"
     assert "display_title" not in album and "display_artist" not in album, "no field when nothing differs"
 
@@ -169,15 +169,15 @@ def test_stored_counts_follow_tag_changes_and_an_album_that_loses_its_match(monk
     setup_url, repository, _ids = _corrections(monkeypatch)
     repository.refresh(observed_at=NOW)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute("update library.local_tracks set title = 'Don''t Despair' where track_key = 'rel-cry-1'")
+        connection.execute("update library.local_tracks set title = 'Don''t Wander' where track_key = 'rel-cedar-1'")
         connection.execute("update library.local_album_musicbrainz_releases set state = 'release_group',"
                            " release_mbid = null, match_quality = null, track_order_differs = false"
-                           " where album_key = 'rel-holy'")
+                           " where album_key = 'rel-harbor'")
 
     repository.refresh(observed_at=NOW)
 
-    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()["items"]} == {"rel-cry": 1}
-    assert _rows(repository, "rel-holy") == []
+    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()["items"]} == {"rel-cedar": 1}
+    assert _rows(repository, "rel-harbor") == []
 
 
 def test_opening_the_problematic_files_list_never_runs_the_comparison(monkeypatch):
@@ -211,7 +211,7 @@ def test_opening_the_problematic_files_list_never_runs_the_comparison(monkeypatc
                             library_relationships=(SimpleNamespace(library_id=1, is_primary_owner=True),))
     request = SimpleNamespace(state=SimpleNamespace(current_actor=actor), app=SimpleNamespace(state=SimpleNamespace(
         musicbrainz_correction_service=MusicBrainzCorrectionService(recording), config={})))
-    payload = {"items": [{"key": "rel-cry", "name": "Angels Cry", "problem_reasons": []},
+    payload = {"items": [{"key": "rel-cedar", "name": "Amber Cedar", "problem_reasons": []},
                          {"key": "rel-none", "name": "Nothing", "problem_reasons": []}], "count": 2}
 
     project_correction_problems_into_problematic_files(request, payload)
@@ -226,7 +226,7 @@ def test_only_a_waiting_lookup_can_be_removed(monkeypatch):
     setup_url, _repository, ids = _corrections(monkeypatch)
     lookups = MusicBrainzLookupQueuePostgresRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url))
-    waiting = lookups.request(target_kind="album", mode="queue", album_key="rel-cry", actor_account_id=None,
+    waiting = lookups.request(target_kind="album", mode="queue", album_key="rel-cedar", actor_account_id=None,
                               observed_at=NOW)
     running = lookups.request(target_kind="artist", mode="search", local_artist_id=ids["other"],
                               actor_account_id=None, observed_at=NOW)
@@ -254,46 +254,46 @@ def test_search_finds_an_applied_correction_and_after_undo_only_the_tag(monkeypa
         connection.execute("insert into library.local_track_files (track_id, private_path, metadata)"
                            " select id, 'C:/Music/' || track_key || '.flac', '{}'::jsonb from library.local_tracks")
         # A small edit (a typo) applies automatically.
-        connection.execute("update library.local_tracks set title = 'Hostlities' where track_key = 'rel-cry-1'")
+        connection.execute("update library.local_tracks set title = 'Harvsting' where track_key = 'rel-cedar-1'")
         connection.execute("update integration.musicbrainz_releases set media = %s where mbid = %s", (json.dumps(
-            [_medium(1, ("Hostilities", "Angra"), ("Song 2", "Angra"))]), RELEASE))
+            [_medium(1, ("Harvesting", "Amberline"), ("Song 2", "Amberline"))]), RELEASE))
     service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
     repository.refresh(observed_at=NOW)
 
     with isolatedPostgres._connect(setup_url) as connection:
         stored = connection.execute("select title, corrected_title from library.local_tracks"
-                                    " where track_key = 'rel-cry-1'").fetchone()
-    assert (stored["title"], stored["corrected_title"]) == ("Hostlities", "Hostilities"), "the tag value stays"
-    assert "rel-cry" in _search(setup_url, "Hostilities") and "rel-cry" in _search(setup_url, "Hostlities")
-    assert changed and "rel-cry" in changed[-1], "search, gallery and Problematic Files caches are invalidated"
+                                    " where track_key = 'rel-cedar-1'").fetchone()
+    assert (stored["title"], stored["corrected_title"]) == ("Harvsting", "Harvesting"), "the tag value stays"
+    assert "rel-cedar" in _search(setup_url, "Harvesting") and "rel-cedar" in _search(setup_url, "Harvsting")
+    assert changed and "rel-cedar" in changed[-1], "search, gallery and Problematic Files caches are invalidated"
 
-    service.undo_album(album_key="rel-cry", actor_account_id=None)
+    service.undo_album(album_key="rel-cedar", actor_account_id=None)
 
     with isolatedPostgres._connect(setup_url) as connection:
         assert connection.execute("select corrected_title from library.local_tracks"
-                                  " where track_key = 'rel-cry-1'").fetchone()["corrected_title"] is None
-    assert "rel-cry" not in _search(setup_url, "Hostilities")
-    assert "rel-cry" in _search(setup_url, "Hostlities")
-    assert "rel-cry" in changed[-1]
+                                  " where track_key = 'rel-cedar-1'").fetchone()["corrected_title"] is None
+    assert "rel-cedar" not in _search(setup_url, "Harvesting")
+    assert "rel-cedar" in _search(setup_url, "Harvsting")
+    assert "rel-cedar" in changed[-1]
 
 
 def test_copies_of_a_song_at_one_position_never_fail_the_refresh_or_a_decision(monkeypatch):
     # One such album used to fail the whole refresh, which then stored nothing.
     setup_url, repository, _ids = _corrections(monkeypatch)
     with isolatedPostgres._connect(setup_url) as connection:
-        for key, title in (("same", "don't despair"), ("other-case", "DON'T DESPAIR")):
+        for key, title in (("same", "don't wander"), ("other-case", "DON'T WANDER")):
             connection.execute(
                 "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, disc_number,"
                 " track_number, metadata) select library_id, album_id, artist_id, %s, %s, 1, 1, '{}'::jsonb"
-                " from library.local_tracks where track_key = 'rel-cry-1'", (f"rel-cry-1-{key}", title))
+                " from library.local_tracks where track_key = 'rel-cedar-1'", (f"rel-cedar-1-{key}", title))
     service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
 
     assert repository.refresh(observed_at=NOW) == 2
     with isolatedPostgres._connect(setup_url) as connection:
         shown = connection.execute("select corrected_title from library.local_tracks"
-                                   " where track_key like 'rel-cry-1%%'", ()).fetchall()
-    assert [row["corrected_title"] for row in shown] == ["Don’t Despair"] * 3
-    assert service.undo_album(album_key="rel-cry", actor_account_id=None) == 2, "one row per distinct tag value"
+                                   " where track_key like 'rel-cedar-1%%'", ()).fetchall()
+    assert [row["corrected_title"] for row in shown] == ["Don’t Wander"] * 3
+    assert service.undo_album(album_key="rel-cedar", actor_account_id=None) == 2, "one row per distinct tag value"
 
 
 def test_a_main_name_row_stored_before_the_credited_name_rule_is_dropped_on_the_next_refresh(monkeypatch):
@@ -302,12 +302,12 @@ def test_a_main_name_row_stored_before_the_credited_name_rule_is_dropped_on_the_
 
     setup_url, repository, _ids = _corrections(monkeypatch)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute("update library.local_artists set name = 'Fixture Duo' where artist_key = 'rel-angra'")
+        connection.execute("update library.local_artists set name = 'Fixture Duo' where artist_key = 'rel-amber'")
         connection.execute("update integration.musicbrainz_releases set artist_credit = %s", (json.dumps(
             [{"name": "Fixture Duo", "artist_name": "Fixture Folk Band", "join_phrase": ""}]),))
     repository.refresh(observed_at=NOW)
     with isolatedPostgres._connect(setup_url) as connection:
-        album_id = connection.execute("select id from library.local_albums where album_key = 'rel-cry'").fetchone()["id"]
+        album_id = connection.execute("select id from library.local_albums where album_key = 'rel-cedar'").fetchone()["id"]
         # As code from before the rule stored it: the same tags and release, so the same signature without the rules.
         before_rule = connection.execute(
             store._SIGNATURES_SQL.replace(f"'rules-{store.COMPARE_RULES_VERSION}', ", ""),
@@ -317,9 +317,9 @@ def test_a_main_name_row_stored_before_the_credited_name_rule_is_dropped_on_the_
             " proposed_value, kind, mode) select library_id, album_key, 'album_artist', 'Fixture Duo', 'Fixture Folk Band',"
             " 'album_artist_renamed', 'review' from library.local_albums where id = %s", (album_id,))
         connection.execute("update library.local_album_musicbrainz_corrections set signature = %s"
-                           " where album_key = 'rel-cry'", (before_rule,))
+                           " where album_key = 'rel-cedar'", (before_rule,))
         connection.execute("insert into library.musicbrainz_correction_refresh_marks (album_id) values (%s)", (album_id,))
 
     repository.refresh(observed_at=NOW)
 
-    assert "album_artist" not in {row[0] for row in _rows(repository, "rel-cry")}
+    assert "album_artist" not in {row[0] for row in _rows(repository, "rel-cedar")}

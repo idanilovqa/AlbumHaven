@@ -1709,6 +1709,42 @@ test('IAR-W25: once a check found the server unreachable, kept data answers with
   assert.deepEqual(artistsOf(await json(slow)), ['slow']);
 });
 
+// Sandbox5 r24c: online, a busy server let the 0.8 s check time out and an album never kept said
+// Offline after 4.8 s. A slow check is not offline: a late answer is waited for, up to noAnswerMs.
+test('IAR-W25: a check with no answer in time is a busy server, not offline: never-kept data waits for it up to the navigation bound', async () => {
+  const unanswered = request => new Promise((_resolve, reject) => {
+    request.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  });
+  let dataDelayMs = 1200;
+  const { handle } = setup({
+    mode: 'web',
+    dataCheckMs: 50,
+    noAnswerMs: 2500,
+    respond: (request) => {
+      if (new URL(request.url).pathname === '/app-copy/account') return unanswered(request);
+      const answer = dataAnswer({ ok: true, artist_groups: [{ artist: 'late', albums: [] }] });
+      return dataDelayMs === null ? new Promise(() => {}) : new Promise(resolve => setTimeout(() => resolve(answer), dataDelayMs));
+    },
+  });
+
+  const late = await handle(resource('/album-details?album_key=busy'));
+  assert.notEqual(late.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(late)), ['late']);
+
+  // A slow check is no proof the server is down: the next request still waits before checking.
+  dataDelayMs = 200;
+  const started = Date.now();
+  const waited = await handle(resource('/album-details?album_key=next'));
+  assert.deepEqual(artistsOf(await json(waited)), ['late']);
+  assert.ok(Date.now() - started >= 200, 'answered by the server, not cut short');
+
+  dataDelayMs = null;
+  const hungAt = Date.now();
+  await assert.rejects(handle(resource('/album-details?album_key=never')), TypeError);
+  const hungMs = Date.now() - hungAt;
+  assert.ok(hungMs >= 2000 && hungMs < 4000, `a server that never answers says Offline within the bound (${hungMs} ms)`);
+});
+
 test('a data request the page cancels is never answered from the copy', async () => {
   const url = '/view-data?surface=albums&artist=Broadcast';
   let online = true;

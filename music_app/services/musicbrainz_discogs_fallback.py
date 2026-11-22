@@ -223,6 +223,15 @@ def _musicbrainz_hints(artist, matched, musicbrainz) -> list[dict[str, object]]:
     return list(hints.values())
 
 
+def job_retry_delay(classification: str, *, attempts: int, max_attempts: int) -> timedelta | None:
+    """When a Discogs job runs again. Discogs' rate limit and outages are transient; None
+    means its retries are used up."""
+    if attempts >= max_attempts:
+        return None
+    reason = classification if classification == "rate_limited" else "provider_unavailable"
+    return retry_delay(reason, attempt_count=attempts)
+
+
 class DiscogsFallbackProcessor:
     """Runs one fallback job: the leased artist MusicBrainz did not find, against Discogs."""
 
@@ -251,10 +260,8 @@ class DiscogsFallbackProcessor:
         outcome = resolve_with_discogs(context, discogs=self._discogs, musicbrainz=self._musicbrainz)
         classification = str(outcome.get("classification") or "provider_unavailable")
         if classification not in {"found", "not_found"}:
-            # Discogs' rate limit and outages are transient: retry with backoff.
-            delay = retry_delay("provider_unavailable" if classification != "rate_limited" else classification,
-                                attempt_count=attempts)
-            exhausted = delay is None or attempts >= self._max_attempts
+            delay = job_retry_delay(classification, attempts=attempts, max_attempts=self._max_attempts)
+            exhausted = delay is None
             self._repository.finish(job_id=job_id, worker_id=worker_id, state="exhausted" if exhausted else "retry_wait",
                                     classification=classification, observed_at=observed_at,
                                     retry_at=None if exhausted else observed_at + delay)

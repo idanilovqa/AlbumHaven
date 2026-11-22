@@ -127,13 +127,18 @@ class DiscogsFallbackPostgresRepository(EnrichmentJobQueue):
                                                for alias in artist.get("aliases") or []][:50]),
                         "observed_at": observed})
                 for album in albums:
-                    connection.execute(_UPSERT_RELEASE, {
-                        "id": int(album["discogs_release_id"]), "master_id": album.get("discogs_master_id"),
-                        "title": _bounded_text(album.get("discogs_title") or album.get("local_title"), 1024) or "[untitled]",
-                        "release_year": _year(album.get("discogs_year")), "barcodes": list(album.get("barcodes") or [])[:20],
-                        "tracks": json.dumps(album.get("tracks") or []), "observed_at": observed})
+                    upsert_discogs_release(connection, album, observed)
                 row = connection.execute(_RECORD, params).fetchone()
         return bool(_row_mapping(row).get("requeued"))
+
+
+def upsert_discogs_release(connection, album: dict[str, object], observed: datetime) -> None:
+    """Store the Discogs release a certain album names."""
+    connection.execute(_UPSERT_RELEASE, {
+        "id": int(album["discogs_release_id"]), "master_id": album.get("discogs_master_id"),
+        "title": _bounded_text(album.get("discogs_title") or album.get("local_title"), 1024) or "[untitled]",
+        "release_year": _year(album.get("discogs_year")), "barcodes": list(album.get("barcodes") or [])[:20],
+        "tracks": json.dumps(album.get("tracks") or []), "observed_at": observed})
 
 
 def _year(value: object) -> str | None:

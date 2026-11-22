@@ -82,6 +82,7 @@ from music_app.services.cover_workflow import (
     complete_local_image_promotion,
     ranked_local_cover_candidates,
     resolve_album_context,
+    resolve_album_copy_roots,
     resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
     validate_local_cover_source,
@@ -687,6 +688,7 @@ async def _serialize_cover_gallery_from_asgi(
             paths_to_load,
         )
         file_cache = {**file_cache, **selected_entries}
+    copy_roots = await run_in_threadpool(resolve_album_copy_roots, config, album_root, track_paths)
     serialized_task_payload = serialize_cover_lookup_task_payload(
         dict(task_payload) if isinstance(task_payload, Mapping)
         else cover_lookup_result(task_id) if task_id
@@ -702,6 +704,7 @@ async def _serialize_cover_gallery_from_asgi(
         is_squareish_cover=_is_squareish_cover,
         task_payload=serialized_task_payload,
         candidate_snapshot=candidate_snapshot,
+        additional_album_roots=copy_roots,
     )
 
 

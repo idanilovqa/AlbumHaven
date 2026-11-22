@@ -137,14 +137,15 @@ def prepare_selection(*, metadata, expected_revision, request, references, confi
                 raise OrderedCoverSelectionConflict("The primary cover changed. Reload before saving again.")
             item = current_cover_reference(cover_path=cover_path, metadata=metadata)
         elif reference["kind"] == "local":
-            from music_app.services.cover_workflow import validate_local_cover_source
+            from music_app.services.cover_workflow import album_source_root_for, validate_local_cover_source
             from music_app.services.generated_preview_storage import is_generated_cover_artifact
             from music_app.services.covers import image_dimensions
             if album_root is None:
                 raise FileNotFoundError("Album sources are unavailable.")
             path = validate_local_cover_source(config, album_root, reference["path"], track_paths=track_paths, configured_root_paths=configured_root_paths)
             extensions = config.get("IMAGE_EXTENSIONS") or {".jpg", ".jpeg", ".png", ".webp"}
-            if path.suffix.lower() not in extensions or is_generated_cover_artifact(path, album_root):
+            source_root = album_source_root_for(config, album_root, path, track_paths=track_paths)
+            if path.suffix.lower() not in extensions or is_generated_cover_artifact(path, source_root):
                 raise ValueError("Select an existing source image, not a generated preview.")
             if min(image_dimensions(path)) <= 0:
                 raise ValueError("The selected source is not a readable image.")

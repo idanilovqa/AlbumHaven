@@ -1517,3 +1517,77 @@ def test_delete_local_cover_and_choose_next_preserves_active_cover_when_non_acti
     assert not non_active_cover.exists()
     assert active_cover.exists()
     assert next_cover == active_cover
+
+
+def test_album_copy_roots_name_every_other_folder_holding_the_album(config, monkeypatch, tmp_path: Path):
+    """Owner 2026-11-21 (Art Zoyd, Phase IV): one album with a copy in two library roots listed only one folder."""
+    first_root = (tmp_path / "ConfiguredA").resolve()
+    second_root = (tmp_path / "ConfiguredB").resolve()
+    first_album = first_root / "Artist" / "Album"
+    second_album = second_root / "Artist" / "Album"
+    disc_album = first_root / "Artist" / "Double"
+    tracks = {
+        first_album / "01.mp3", first_album / "02.mp3",
+        second_album / "01.mp3", second_album / "02.mp3",
+    }
+    disc_tracks = {disc_album / "CD1" / "01.mp3", disc_album / "CD2" / "01.mp3"}
+    for track_path in tracks | disc_tracks:
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    save_library_root_settings(config, {"main_library_roots": [
+        {"id": "main-1", "path": str(first_root), "layout_mode": "artist"},
+        {"id": "main-2", "path": str(second_root), "layout_mode": "artist"},
+    ]})
+    root_loads = []
+    real_get_library_roots = cover_workflow.get_library_roots
+    monkeypatch.setattr(
+        cover_workflow, "get_library_roots",
+        lambda current: root_loads.append(1) or real_get_library_roots(current),
+    )
+
+    assert cover_workflow.resolve_album_copy_roots(
+        config, first_album, {str(path) for path in tracks},
+    ) == [second_album]
+    assert len(root_loads) == 1
+    # Disc folders under the album folder are already listed with it.
+    assert cover_workflow.resolve_album_copy_roots(
+        config, disc_album, {str(path) for path in disc_tracks},
+    ) == []
+
+
+def test_local_cover_source_may_be_any_folder_holding_the_album(config, tmp_path: Path):
+    """A listed file of the album's other copy can be chosen; a file of another album cannot."""
+    first_root = (tmp_path / "ConfiguredA").resolve()
+    second_root = (tmp_path / "ConfiguredB").resolve()
+    first_album = first_root / "Artist" / "Album"
+    second_album = second_root / "Artist" / "Album"
+    other_album = second_root / "Artist" / "Other"
+    tracks = {first_album / "01.mp3", second_album / "01.mp3", other_album / "01.mp3"}
+    for track_path in tracks:
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    _write_cover_jpeg(second_album / "cover.jpg")
+    _write_cover_jpeg(other_album / "cover.jpg")
+    save_library_root_settings(config, {"main_library_roots": [
+        {"id": "main-1", "path": str(first_root), "layout_mode": "artist"},
+        {"id": "main-2", "path": str(second_root), "layout_mode": "artist"},
+    ]})
+    album_tracks = {str(first_album / "01.mp3"), str(second_album / "01.mp3")}
+
+    assert validate_local_cover_source(
+        config, first_album, str(second_album / "cover.jpg"), track_paths=album_tracks,
+    ) == second_album / "cover.jpg"
+    assert cover_workflow.album_source_root_for(
+        config, first_album, second_album / "cover.jpg", track_paths=album_tracks,
+    ) == second_album
+    with pytest.raises(ValueError, match="outside the album folder"):
+        validate_local_cover_source(
+            config, first_album, str(other_album / "cover.jpg"), track_paths=album_tracks,
+        )
+
+
+def _write_cover_jpeg(path: Path) -> None:
+    assert Image is not None
+    buffer = io.BytesIO()
+    Image.new("RGB", (12, 12), (200, 30, 30)).save(buffer, format="JPEG")
+    path.write_bytes(buffer.getvalue())

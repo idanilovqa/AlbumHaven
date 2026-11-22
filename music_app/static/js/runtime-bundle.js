@@ -38899,24 +38899,15 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
   const album = modalState?.album || {};
   const localCount = String(album.cover_ref || '').trim()
     && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
+  // REMOTE holds only the album's saved remote cover, as it does once loaded. Search matches
+  // keep their own POSSIBLE MATCHES section: drawn here they flooded the dialog under LOCAL and
+  // then vanished when the listing answered (owner 2026-11-21, Art Zoyd notification).
   const savedRemoteCount = String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
-  const cachedRemoteCandidates = Array.isArray(modalState?.possibleMatches)
-    ? modalState.possibleMatches.filter((candidate) => (
-      String(candidate?.thumbnail_url || candidate?.url || '').trim()
-    ))
-    : [];
-  const remoteCount = Math.max(
-    Number(modalState?.expectedRemoteCount || 0) || 0,
-    Array.isArray(modalState?.possibleMatches) ? modalState.possibleMatches.length : 0,
-  ) + savedRemoteCount;
-  const section = (title, key, count, cards = '') => count > 0 ? `
+  const section = (title, key, count) => count > 0 ? `
     <section class="cover-lookup-section">
       <h4 class="cover-lookup-section-title">${title} · ${formatCoverLookupImageCount(count)}</h4>
       <div class="cover-lookup-gallery cover-lookup-gallery-loading">
-        ${cards}${buildCoverLookupGalleryLoadingCards(
-          key,
-          count - (key === 'remote' ? cachedRemoteCandidates.length : 0),
-        )}
+        ${buildCoverLookupGalleryLoadingCards(key, count)}
       </div>
     </section>
   ` : '';
@@ -38929,12 +38920,7 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
   `;
   return `<div role="status" aria-label="Loading cover art">
     ${localMarkup}
-    ${section(
-      'REMOTE',
-      'remote',
-      remoteCount,
-      cachedRemoteCandidates.map((candidate) => buildCoverLookupCard(candidate, 'remote')).join(''),
-    )}
+    ${section('REMOTE', 'remote', savedRemoteCount)}
   </div>`;
 }
 
@@ -39086,9 +39072,15 @@ function renderCoverLookupModal() {
           <div class="cover-lookup-search-progress-label">${escapeHtml(task.progress_label || 'Searching...')}</div>
         </div>`
     : '';
-  const possibleMatchesMarkup = possibleMatches.length
+  // While the gallery loads, matches the search already found but this dialog has not received yet
+  // hold their places in POSSIBLE MATCHES, so the section only fills in and never shrinks.
+  const pendingMatchCount = modalState.loading
+    ? Math.max(0, (Number(modalState.expectedRemoteCount || 0) || 0) - possibleMatches.length)
+    : 0;
+  const possibleMatchesMarkup = possibleMatches.length || pendingMatchCount
     ? `
         ${buildCoverLookupPossibleMatchesMarkup(possibleMatches)}
+        ${pendingMatchCount ? `<div class="cover-lookup-gallery cover-lookup-gallery-loading">${buildCoverLookupGalleryLoadingCards('remote', pendingMatchCount)}</div>` : ''}
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
     : '';
@@ -39132,7 +39124,7 @@ function renderCoverLookupModal() {
     </section>` : ''}`}
     <section class="cover-lookup-section cover-lookup-results" data-search-started="${Boolean(task || modalState.candidateGeneration || possibleMatches.length)}">
       <div class="cover-lookup-section-heading">
-        <h4 class="cover-lookup-section-title">${possibleMatches.length || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length)}` : 'ADD COVER ART'}</h4>
+        <h4 class="cover-lookup-section-title">${possibleMatches.length || pendingMatchCount || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length + pendingMatchCount)}` : 'ADD COVER ART'}</h4>
       </div>
       ${possibleMatchesMarkup}
       ${progressMarkup}

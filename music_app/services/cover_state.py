@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
 from music_app.services.covers import image_dimensions
@@ -156,11 +156,20 @@ def iter_local_cover_candidates(
     image_dimensions,
     is_squareish_cover,
     active_cover_path: Path | None,
+    additional_album_roots: Sequence[Path] = (),
 ) -> list[dict[str, object]]:
     candidates: list[dict[str, object]] = []
-    for path in _iter_local_image_paths(album_root, image_extensions):
+    # A copy's files are named from its folder, so two cover.jpg cards can be told apart.
+    listed_paths = [
+        (path, path.relative_to(album_root))
+        for path in _iter_local_image_paths(album_root, image_extensions)
+    ] + [
+        (path, Path(copy_root.name) / path.relative_to(copy_root))
+        for copy_root in additional_album_roots
+        for path in _iter_local_image_paths(copy_root, image_extensions)
+    ]
+    for path, relative_path in listed_paths:
         width, height = image_dimensions(path)
-        relative_path = path.relative_to(album_root)
         candidates.append(
             {
                 "path": str(path),
@@ -272,6 +281,7 @@ def serialize_cover_gallery_payload(
     is_squareish_cover,
     task_payload: dict[str, object] | None = None,
     candidate_snapshot: Mapping[str, object] | None = None,
+    additional_album_roots: Sequence[Path] = (),
 ) -> dict[str, object]:
     album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
@@ -285,6 +295,7 @@ def serialize_cover_gallery_payload(
         image_dimensions=image_dimensions,
         is_squareish_cover=is_squareish_cover,
         active_cover_path=None if active_remote_cover else active_cover_path,
+        additional_album_roots=additional_album_roots,
     )
     selected_source_path = None if active_remote_cover else selected_local_cover_source(
         local_candidates, active_cover_path, active_cover_revision,

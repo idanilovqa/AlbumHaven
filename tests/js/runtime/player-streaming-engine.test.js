@@ -6446,8 +6446,8 @@ test('asked during a switch, the real engine answers the song still sounding and
   harness.nodes[0].port.dispatch({
     type: 'first-frame', generation: open.generation, streamId: open.streamId, renderedFrame: 0, contextTime: 1,
   });
-  // It has audio buffered to sound on with through the switch.
-  harness.engine.diagnostics.bufferedFrames.current = 4_800;
+  // Comfortably buffered, so it sounds on through the switch. Not the engine's threshold.
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
   const switching = harness.api.start(pressed);
   void Promise.resolve(switching).catch(() => {});
   await harness.settle();

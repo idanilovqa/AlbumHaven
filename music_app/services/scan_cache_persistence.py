@@ -69,6 +69,7 @@ from music_app.services.relation_projection_postgres import (
     replace_artist_search_projection_in_transaction,
 )
 from music_app.services.postgres_connections import leased_connection as _leased_connection
+from music_app.services.postgres_connections import session_connection as _session_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -278,6 +279,7 @@ class PostgresScanCacheAdapter:
         self._config = config
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
+        self._session_connect = connect or _session_connection
         self._build_albums = build_albums
 
     def _root_identity_matches(self, stored: object, root_identity: object) -> bool:
@@ -309,7 +311,9 @@ class PostgresScanCacheAdapter:
         its own connection until released (or until that process exits), so a
         second instance sees it as held and skips its own repair scan.
         """
-        connection = self._connect_to_database()
+        if not self._database_url:
+            raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres scan_cache persistence.")
+        connection = self._session_connect(self._database_url)
         try:
             if hasattr(connection, "autocommit"):
                 connection.autocommit = True

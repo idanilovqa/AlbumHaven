@@ -12,7 +12,7 @@ import time
 
 from psycopg.types.json import Jsonb
 
-from music_app.services.postgres_connections import pooled_connection
+from music_app.services.postgres_connections import pooled_connection, session_connection
 
 
 _LIBRARY = """select libraries.id from library.libraries as libraries
@@ -77,6 +77,7 @@ class LocalCoverInventoryRepository:
     def __init__(self, config, *, connect=None):
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         self._connect = connect
+        self._session_connect = connect or session_connection
 
     def _connection(self):
         if not self._database_url:
@@ -87,8 +88,10 @@ class LocalCoverInventoryRepository:
 
     @contextmanager
     def work_slot(self):
-        # One filesystem reader across all servers sharing this database.
-        with self._connection() as connection:
+        # One filesystem reader across all servers sharing this database, held as a session lock.
+        if not self._database_url:
+            raise RuntimeError("Postgres is required for local cover inventory.")
+        with self._session_connect(self._database_url) as connection:
             acquired = bool(connection.execute(
                 "select pg_try_advisory_lock(hashtextextended('albumhaven-local-cover-inventory', 0)) as acquired"
             ).fetchone()["acquired"])

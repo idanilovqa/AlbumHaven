@@ -8425,7 +8425,7 @@ def _title_form(value: object) -> str:
 
 
 def _alternative_album_titles(local_title: object, titles: Iterable[object]) -> list[str]:
-    """Other names of the album (owner 2026-11-15, I: "Title (a.k.a. Other title)"): the
+    """Other names of the album (shown as "Title (a.k.a. Other title)"): the
     matched release's and release group's titles that are not the local title spelled
     differently, nor the local title with or without an edition suffix ("… (Live)")."""
     local = _title_form(local_title)
@@ -8441,9 +8441,9 @@ _SERIES_TYPE_LABELS = {"Release group series": "Album series", "Release series":
 
 
 def _series_projection(row: Mapping[str, object]) -> dict[str, object]:
-    """A MusicBrainz series for display. Its kind (owner 2026-11-15) is "series" for a real
+    """A MusicBrainz series for display. Its kind is "series" for a real
     album series and "featured_in" for a list, award or collection; the label is "Featured
-    In" for those, else the owner's "Album series" for MusicBrainz's release group and
+    In" for those, else "Album series" for MusicBrainz's release group and
     release series, MusicBrainz's own type otherwise."""
     series_type = row.get("series_type") or None
     kind = "featured_in" if row.get("series_kind") == "featured_in" else "series"
@@ -9174,12 +9174,12 @@ def _split_album_groups_cte_sql(
               limit 1
             ) country on true
           ), candidates as (
-            -- Owner 2026-11-17 ("Same-name split labels", "Country where known"): each identity's
+            -- Each identity's
             -- labels in order of preference. With a known place (the full country name, else the
-            -- area MusicBrainz gives, "For those bands put a location identifier"): the place, then
+            -- area MusicBrainz gives): the place, then
             -- the type ("Person", "Band"), then MusicBrainz's disambiguation, then both country
             -- and disambiguation. Without one: the type, then the disambiguation. Last, the
-            -- MBID's start ("ID start, as built"). Everyone starts at their first choice;
+            -- MBID's start. Everyone starts at their first choice;
             -- only labels that collide within the name step down, round by round.
             select artist_id, artist_mbid, 1 as choice,
                    array_remove(case when country is not null
@@ -10705,7 +10705,7 @@ def _search_preview_sql(
         if use_utf8_prefilter
         else ""
     )
-    # Applied MusicBrainz data corrections (S4, owner 2026-11-16: "Search corrected too") are
+    # Applied MusicBrainz data corrections (S4) are
     # matched beside the tags in the same single scan, each through the same prefilter on its
     # own partial trigram index (the planner can combine them with a BitmapOr).
     corrected_title_prefilter_sql, corrected_artist_prefilter_sql = (

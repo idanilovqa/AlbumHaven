@@ -1,5 +1,5 @@
 """The owner marks a MusicBrainz series as Series or Featured In from the Series tree
-(Delivery 2, S6; owner 2026-11-17, 5B). "Hidden" is never offered."""
+(Delivery 2, S6, 5B). "Hidden" is never offered."""
 from __future__ import annotations
 
 import pytest

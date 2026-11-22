@@ -5825,7 +5825,7 @@ def _moved_file_save(app, monkeypatch, tmp_path):
 
 
 def test_tag_save_writes_files_still_in_the_album_and_skips_one_that_moved(app, asgi_app, monkeypatch, tmp_path):
-    # Owner 2026-11-18: "the files that could be written should be written ... Not the whole batch".
+    # The files that can be written are written; one that moved never blocks the rest.
     routes, stays, moved, stale = _moved_file_save(app, monkeypatch, tmp_path)
     handled = []
 

@@ -789,7 +789,7 @@ def _bump_builder(monkeypatch, *, servable_previous):
 def test_builder_bump_keeps_serving_the_previous_gallery_until_the_new_one_is_published(
     gallery_inventory, monkeypatch,
 ):
-    """Owner 2026-11-21, "Keep old gallery until ready": a builder bump never answers 503 while
+    """A builder bump never answers 503 while
     the new builder's first snapshot is prepared; the scope swaps when it is published."""
     fixture = gallery_inventory
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)

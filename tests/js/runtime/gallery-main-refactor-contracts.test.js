@@ -670,7 +670,7 @@ test('current GalleryBar owner puts the album count on the name line and the pil
 test('GalleryBar shows no genre pill or text for an artist with no genre and never leaks metadata into family contexts', () => {
   const context = loadRuntime();
   const buildGalleryBarHtml = requireContract(context, 'buildGalleryBarHtml');
-  // Owner 2026-11-16: "if genre is none or unavailable don't show label 'genre unavailable'".
+  // No genre, or the placeholder for none, shows no pill.
   for (const genres of [['Genre unavailable'], [], null, ['', '  ']]) {
     const noGenre = buildGalleryBarHtml({
       contextKind: 'single-artist', artist: 'Unknown Artist', albumCount: 1,

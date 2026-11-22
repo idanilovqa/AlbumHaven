@@ -1,5 +1,5 @@
-// MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4; owner 2026-11-16,
-// "Data Correction flow"). Problematic Files shows an album's "Data Correction Needed" label and
+// MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4).
+// Problematic Files shows an album's "Data Correction Needed" label and
 // its changes. Trivial ones apply to the display automatically ("Applied automatically", Undo per
 // album); the rest wait for approval. Display only: nothing here writes tags (Bulk Correction needs PR 65).
 const MUSICBRAINZ_DATA_CORRECTION_LABEL = 'Data Correction Needed';
@@ -82,7 +82,7 @@ function canReviewMusicBrainzCorrections() {
   return window.AlbumHavenCapabilities?.allows?.('library.metadata_matches.review') === true;
 }
 
-// Owner 2026-11-16, "Data Correction flow": the kinds, how they are named, and which are
+// The kinds, how they are named, and which are
 // approved per album only (artist changes, and albums sent to review whole).
 const MUSICBRAINZ_CORRECTION_KINDS = Object.freeze({
   case: 'Case only', spacing: 'Spacing only', case_spacing: 'Case and spacing', punctuation: 'Punctuation and symbols',

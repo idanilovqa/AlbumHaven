@@ -1,5 +1,5 @@
 // MusicBrainz data corrections and the Edits Queue (Delivery 2, S4): approved mockups D1, D2,
-// E1, E2 and I1, with the owner's 2026-11-15 answers ("Add to queue", "Auto submit bulks").
+// E1, E2 and I1.
 const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');

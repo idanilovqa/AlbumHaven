@@ -201,8 +201,7 @@ def test_artist_projection_is_bounded_normalized_and_keeps_all_review_tags_with_
 
 
 def test_an_artist_with_only_an_area_carries_its_name_and_mbid_for_the_split_label():
-    """Owner 2026-11-17 (0257): "For those bands put a location identifier that is available
-    from MusicBrainz" - a city or region area stands in where MusicBrainz names no country."""
+    """0257: a city or region area stands in where MusicBrainz names no country."""
     api = _client_api()
     area_id = "00000000-0000-4000-8000-0000000000c1"
     projected = api.project_artist({"id": ARTIST_ID, "name": "Amarok", "area": {"id": area_id, "name": " Chico ", "type": "City"}})

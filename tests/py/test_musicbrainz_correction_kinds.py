@@ -1,5 +1,5 @@
 """Kinds of MusicBrainz data corrections, auto vs review, the guard and track pairing
-(Delivery 2, S4; owner 2026-11-16, "Data Correction flow")."""
+(Delivery 2, S4)."""
 from __future__ import annotations
 
 import pytest
@@ -111,8 +111,8 @@ def test_without_a_stored_pairing_tracks_pair_by_position_only_where_titles_agre
     assert [(row["track_number"], row["kind"]) for row in result["rows"]] == [(1, "case")]
 
 
-# Classical albums (owner 2026-11-17, batch 2 case 7): "Composer first if Music Brainz shows
-# composer first", with the same review rules as any album; no special composer handling.
+# Classical albums keep MusicBrainz's credit order, composer first where it is, with the same
+# review rules as any album; no special composer handling.
 DVORAK_CREDIT = [{"name": "Antonín Dvořák", "join_phrase": "; "}, {"name": "Inna Poroshina"}]
 
 

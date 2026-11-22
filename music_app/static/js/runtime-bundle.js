@@ -4873,7 +4873,7 @@ function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
     ? artistMusicBrainz
     : {};
   const country = galleryCountryName(projection.country);
-  // No genre shows no pill (owner 2026-11-16): the server's "Genre unavailable" placeholder
+  // No genre shows no pill: the server's "Genre unavailable" placeholder
   // for a matched artist without genres is not a genre.
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())
@@ -5644,7 +5644,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const artist = artistParts.qualifier
     ? `${artistName} <span class="album-details-header__aka">${escapeHtml(artistParts.qualifier)}</span>`
     : artistName;
-  // Owner 2026-11-15 (I): "Title (a.k.a. Other title)", dimmed, after the title and before the year.
+  // "Title (a.k.a. Other title)", dimmed, after the title and before the year.
   const alternatives = Array.isArray(config.alternativeTitles) ? config.alternativeTitles.filter(Boolean) : [];
   const album = `${escapeHtml(config.album || 'Album')}${alternatives.length
     ? ` <span class="album-details-header__aka">(a.k.a. ${escapeHtml(alternatives.join(', '))})</span>` : ''}`;
@@ -38410,8 +38410,8 @@ function handleMusicBrainzLookupEvent(event) {
 
 // BEGIN js/runtime/musicbrainz-corrections.js
 
-// MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4; owner 2026-11-16,
-// "Data Correction flow"). Problematic Files shows an album's "Data Correction Needed" label and
+// MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4).
+// Problematic Files shows an album's "Data Correction Needed" label and
 // its changes. Trivial ones apply to the display automatically ("Applied automatically", Undo per
 // album); the rest wait for approval. Display only: nothing here writes tags (Bulk Correction needs PR 65).
 const MUSICBRAINZ_DATA_CORRECTION_LABEL = 'Data Correction Needed';
@@ -38494,7 +38494,7 @@ function canReviewMusicBrainzCorrections() {
   return window.AlbumHavenCapabilities?.allows?.('library.metadata_matches.review') === true;
 }
 
-// Owner 2026-11-16, "Data Correction flow": the kinds, how they are named, and which are
+// The kinds, how they are named, and which are
 // approved per album only (artist changes, and albums sent to review whole).
 const MUSICBRAINZ_CORRECTION_KINDS = Object.freeze({
   case: 'Case only', spacing: 'Spacing only', case_spacing: 'Case and spacing', punctuation: 'Punctuation and symbols',

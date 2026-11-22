@@ -66,7 +66,7 @@ function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
     ? artistMusicBrainz
     : {};
   const country = galleryCountryName(projection.country);
-  // No genre shows no pill (owner 2026-11-16): the server's "Genre unavailable" placeholder
+  // No genre shows no pill: the server's "Genre unavailable" placeholder
   // for a matched artist without genres is not a genre.
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())

@@ -1,4 +1,3 @@
-// Owner bug report 2026-11-16: "if genre is none or unavailable don't show label 'genre unavailable'".
 // A genre pill shows only for a real genre, in the gallery header and on gallery cards.
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');

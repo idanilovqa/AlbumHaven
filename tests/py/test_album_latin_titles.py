@@ -51,7 +51,7 @@ def test_an_album_title_of_ideographs_is_read_by_the_albums_evidence(fallbacks):
 
 def test_only_the_japanese_runs_are_read_and_a_run_cutlet_cannot_read_gives_none(fallbacks):
     assert album_title_transliteration("Best of 天門", stored={"evidence": "jpn"}) == "Best of tenmon"
-    # Owner 2026-11-21, "Hide if title has Latin": this title already gives its reading.
+    # This title already gives its reading, so it shows no romanized form.
     assert album_title_transliteration("Tenmon Best (天門)", stored={"evidence": "jpn"}) is None
     assert album_title_transliteration("Gianizm (ジャイアニズム叱)", stored={"evidence": "jpn"}) is None
 

@@ -1,7 +1,6 @@
 """Tracklist sub-sections (MusicBrainz Delivery 2, S8): one test per rule, with negatives.
 
-Owner case: Dissection, "Storm of the Light's Bane / Where Dead Angels Lie", one local disc of
-13 tracks; tracks 9-13 sit under the Discogs heading "Where Dead Angels Lie". Providers are
+One local disc of 13 tracks, of which tracks 9-13 sit under a Discogs heading. Providers are
 replayed from a hand-built fixture; nothing calls MusicBrainz or Discogs.
 """
 from __future__ import annotations

@@ -110,7 +110,7 @@ test('3A: the folded sidebar stacks the Series button directly below the Artist 
   await expect(page.locator('#series-tree-navigation-button svg rect')).toHaveCount(3);
 });
 
-// Owner 2026-11-17: 4B (two groups under collapsible headings, no "All…" rows) and 5B (the
+// 4B (two groups under collapsible headings, no "All…" rows) and 5B (the
 // tree's right-click menu marks a series).
 const TREE = [
   { mbid: '520f6fcd-251d-46cd-83a9-0bc725d42333', name: 'Colossus project', count: 10, kind: 'series', owner_kind: null },

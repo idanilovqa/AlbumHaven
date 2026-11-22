@@ -1244,8 +1244,8 @@ def test_a_split_name_s_context_carries_relative_folders_and_stores_recordings_a
 
 def test_a_split_label_change_marks_the_gallery_out_of_date_and_an_unchanged_recheck_does_not(
         monkeypatch: pytest.MonkeyPatch):
-    """0258, owner 2026-11-21 ("Fix first, then test"): the tree files a split name's proven albums
-    under labelled entries ("Amarok (Poland)"), so deciding an album, or a change to what its label
+    """0258: the tree files a split name's proven albums
+    under labelled entries ("Name (Country)"), so deciding an album, or a change to what its label
     is made of, must mark the gallery out of date; a re-check that changes nothing must not."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     library_id, artist_id = _seed_present_artist(setup_url, "amarok")

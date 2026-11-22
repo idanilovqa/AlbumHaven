@@ -1,8 +1,7 @@
 """A MusicBrainz series' general information, from Wikipedia only (Delivery 2, S6).
 
-Owner 2026-11-17: "Unless there's a Wikipedia link from which there could be shown a general
-info about this series/list, nothing should be shown. Because number of albums and all of
-that is seen in our gallery." The link comes from the series' MusicBrainz URL relationships:
+A series without a Wikipedia article shows no information: the gallery already shows its
+albums and their number. The link comes from the series' MusicBrainz URL relationships:
 a Wikipedia link, else its Wikidata item's English article, else another Wikipedia article
 of that item. The article's introduction is read from the Wikipedia REST summary in the
 enrichment worker's idle time (step ``musicbrainz_series_wikipedia``), a few series per pass

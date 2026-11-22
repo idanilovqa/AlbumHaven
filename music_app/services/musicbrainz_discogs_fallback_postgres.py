@@ -29,8 +29,7 @@ class DiscogsFallbackPostgresRepository(EnrichmentJobQueue):
 
     def enqueue(self, *, reason: str, observed_at: datetime, local_artist_id: int | None = None) -> int:
         """Artists MusicBrainz did not find, with albums, that Discogs has not answered for in
-        the last 30 days (owner 2026-11-09: "For all the artists in this not found list just
-        do discogs fallback")."""
+        the last 30 days: every such artist gets the Discogs fallback."""
         params = {"reason": _bounded_text(reason, 128, required=True), "observed_at": _aware_utc(observed_at),
                   "job_kind": JOB_KIND,
                   "local_artist_id": _positive_id(local_artist_id) if local_artist_id is not None else None}

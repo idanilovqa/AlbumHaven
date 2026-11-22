@@ -1,4 +1,4 @@
-"""Latin forms of track titles (MusicBrainz Delivery 2, S7; owner 2026-11-17, 1A and 1E), one
+"""Latin forms of track titles (MusicBrainz Delivery 2, S7), one
 test per rule with its negative case. MusicBrainz answers are replayed from responses recorded
 once from the local mirror (``delivery-2-transliteration-mirror.json``): 天門's "秒速5センチメートル",
 which links an English transliteration and an English translation. The fallback libraries are
@@ -94,7 +94,7 @@ def test_latin_cyrillic_digits_and_punctuation_need_none(title):
     assert not needs_transliteration(title)
 
 
-# A title that already reads in Latin (owner 2026-11-21, GIANIZM: "Hide if title has Latin") ---
+# A title that already reads in Latin shows no romanized form -----------------------------
 
 @pytest.mark.parametrize("title", [
     "Gianizm San (ジャイアニズム惨, Disaster)",
@@ -149,7 +149,7 @@ def test_a_release_linking_no_transliteration_has_none():
 
 
 def test_a_release_without_a_musicbrainz_language_gives_none():
-    """Owner 2026-11-17 ("Use MB language"): the recorded release with its language removed."""
+    """The recorded release with its language removed."""
     key = f"/release/{CASES['release_with_transliteration']}?inc=release-rels&fmt=json"
     release = {**_FIXTURE["responses"][key], "text-representation": {"script": "Jpan"}}
     client = MusicBrainzClient(base_url="http://127.0.0.1:5050/ws/2", user_agent="Test",
@@ -314,7 +314,7 @@ def test_an_answer_still_not_in_latin_script_is_never_shown(fallbacks, monkeypat
     assert track_transliterations(_tracks(["Hello 世界"]), stored=unchanged) == {}
 
 
-# Search keys: a Latin form and a query fold alike (owner 2026-11-17, "exact pronunciation") --
+# Search keys: a Latin form and a query fold alike -------------------
 
 @pytest.mark.parametrize("query", ["tian men", "Tian Men", "tianmen", "TIĀN-MÉN", "Ｔｉａｎ ｍｅｎ"])
 def test_a_plain_query_folds_to_the_tone_marked_forms_key(query):

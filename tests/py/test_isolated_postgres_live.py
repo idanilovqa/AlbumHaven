@@ -6684,7 +6684,7 @@ def test_live_the_narrow_split_groups_hold_exactly_the_0192_views_proven_albums(
 
 
 def test_live_split_labels_name_the_full_country_from_its_code_and_keep_a_code_with_no_name(watcher_repair_inventory):
-    """Owner 2026-11-17: "Amarok (ES)" shows as "Amarok (Spain)"; display only, no data change."""
+    """A country code shows as the country's name; display only, no data change."""
     fixture = watcher_repair_inventory
     albums = _seed_same_name_split(fixture)
     _relabel_split(fixture, {_SPLIT_POLAND: ("PL", None, "Group", None), _SPLIT_SPAIN: ("ES", None, "Group", None)})
@@ -6703,7 +6703,7 @@ def test_live_split_labels_name_the_full_country_from_its_code_and_keep_a_code_w
 def test_live_split_labels_in_one_country_name_the_type_and_the_disambiguation_only_for_one_type(
     watcher_repair_inventory,
 ):
-    """Owner 2026-11-17: "Alice Cooper (Person)" and "Alice Cooper (Band)" when the type differs;
+    """A same-name person and band are labelled by type when it differs;
     MusicBrainz's disambiguation only when the type is the same too."""
     fixture = watcher_repair_inventory
     albums = _seed_same_name_split(fixture)
@@ -6720,7 +6720,7 @@ def test_live_split_labels_in_one_country_name_the_type_and_the_disambiguation_o
 
 
 def test_live_split_labels_show_a_country_where_known_and_step_down_only_where_labels_collide(watcher_repair_inventory):
-    """Owner 2026-11-17 "Country where known": the identity with a country keeps it; the one
+    """The identity with a country keeps it; the one
     without falls back to its type, then its disambiguation, stepping down only on a collision."""
     fixture = watcher_repair_inventory
     albums = _seed_same_name_split(fixture)
@@ -6743,8 +6743,8 @@ def test_live_split_labels_show_a_country_where_known_and_step_down_only_where_l
 
 
 def test_live_split_labels_show_the_musicbrainz_area_where_no_country_is_known(watcher_repair_inventory):
-    """0257, owner 2026-11-17: "For those bands put a location identifier that is available from
-    MusicBrainz": the country name, else the area MusicBrainz gives ("Chico"), then the type."""
+    """0257: a same-name band is labelled by the country name, else the area MusicBrainz gives,
+    then the type."""
     fixture = watcher_repair_inventory
     albums = _seed_same_name_split(fixture)
     library_id = albums["Hunt"]["library_id"]

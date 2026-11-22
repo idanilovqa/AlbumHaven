@@ -1,7 +1,6 @@
-"""Track order and matched edition (owner 2026-11-16): one test per rule, with negatives.
+"""Track order and matched edition: one test per rule, with negatives.
 
-Owner case: Dream Evil, "The Book Of Heavy Metal": local track 11 "The Mirror" was paired by
-position with the release's "Only for the Night". Hand-built in that shape: the same tracks
+A track was paired by position with another song of its release. Hand-built in that shape: the same tracks
 with two swapped, every duration distinct. Nothing calls MusicBrainz.
 """
 from __future__ import annotations

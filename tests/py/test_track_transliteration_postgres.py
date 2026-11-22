@@ -100,7 +100,7 @@ def test_a_release_musicbrainz_links_none_to_stores_none_and_shows_no_musicbrain
         assert (stored["media"], stored["evidence"]) == ([], "jpn")
 
 
-# Owner 2026-11-17: "Use MB language" and "exact pronunciation, but plain queries find them" -------
+# The release's language, and plain queries that find the exact pronunciation ----------------------
 
 def test_a_release_answered_before_its_language_was_stored_is_asked_once_more(monkeypatch):
     setup_url, repository, _albums = _seed(monkeypatch)

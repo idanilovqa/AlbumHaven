@@ -1,4 +1,4 @@
-// MusicBrainz Delivery 2, item 3 (approved b3-3; owner 2026-11-17 "Same-name split labels"):
+// MusicBrainz Delivery 2, item 3 (b3-3):
 // the artist tree draws each same-name identity the server labels as "Name (Qualifier)" with the
 // qualifier dimmed. The labels themselves come from the browse SQL (tested on PostgreSQL in
 // tests/py/test_isolated_postgres_live.py); these cases render the trees those rules produce.

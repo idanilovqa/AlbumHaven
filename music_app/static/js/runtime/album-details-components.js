@@ -66,7 +66,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const artist = artistParts.qualifier
     ? `${artistName} <span class="album-details-header__aka">${escapeHtml(artistParts.qualifier)}</span>`
     : artistName;
-  // Owner 2026-11-15 (I): "Title (a.k.a. Other title)", dimmed, after the title and before the year.
+  // "Title (a.k.a. Other title)", dimmed, after the title and before the year.
   const alternatives = Array.isArray(config.alternativeTitles) ? config.alternativeTitles.filter(Boolean) : [];
   const album = `${escapeHtml(config.album || 'Album')}${alternatives.length
     ? ` <span class="album-details-header__aka">(a.k.a. ${escapeHtml(alternatives.join(', '))})</span>` : ''}`;

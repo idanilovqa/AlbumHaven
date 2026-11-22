@@ -1,9 +1,8 @@
 """Latin forms of track titles in other scripts (MusicBrainz Delivery 2, S7).
 
-Owner 2026-11-17 (1A): in the album details tracklist a title written in a script other than
-Latin always shows its Latin form after it, "桜花抄 • Oukashou"; a Latin title shows nothing.
-1E: "Cyrillic stays as it is", so a Cyrillic title never does either. Nor does a title that
-already reads in Latin (owner 2026-11-21, "Hide if title has Latin"): "Gianizm Ten (ジャイアニズム天)".
+In the album details tracklist a title written in a script other than Latin always shows its
+Latin form after it, "夜明け • Yoake"; a Latin title shows nothing. A Cyrillic title stays as it
+is. Nor does a title that already reads in Latin show one: "Yoake (夜明け)".
 
 The Latin form comes from MusicBrainz first: the Latin pseudo-release its "transl-tracklisting"
 relationship links to the album's matched release, fetched once per release by the album

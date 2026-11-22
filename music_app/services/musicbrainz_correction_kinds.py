@@ -1,10 +1,10 @@
 """What kind of change each MusicBrainz data correction is, and which apply without a click
-(MusicBrainz Delivery 2, S4; owner 2026-11-16, "Data Correction flow").
+(MusicBrainz Delivery 2, S4).
 
 Pure functions: an album's tags and its certain release go in, classified difference rows come
-out. The classifier follows the read-only breakdown of sandbox6 (mbd2-s4-correction-kinds),
+out. The classifier takes the
 first kind that fits, top to bottom. Curly against straight quotes, apostrophes and dashes are
-not differences at all (owner: "Keep ignoring").
+not differences at all.
 """
 from __future__ import annotations
 

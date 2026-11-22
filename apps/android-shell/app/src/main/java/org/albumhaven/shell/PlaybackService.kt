@@ -324,7 +324,7 @@ class PlaybackService : MediaLibraryService() {
         val clientId = restoredClientId ?: UUID.randomUUID().toString()
         lateinit var created: NativePlaybackController
         created = NativePlaybackController(
-            transports = OkHttpPcmTransportFactory(client, shellSession),
+            transports = OkHttpPcmTransportFactory(client, shellSession, clientId),
             claimApi = HttpPlaybackClaimApi(client, shellSession),
             listenApi = HttpListenEffectApi(client, shellSession),
             sinks = ::AudioTrackPcmSink,

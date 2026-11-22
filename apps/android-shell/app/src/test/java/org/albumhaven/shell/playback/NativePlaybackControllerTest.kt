@@ -106,6 +106,7 @@ class ControllerHarness(
     /** Every [StartTiming] line the controller reported, in order. */
     val timings = mutableListOf<String>()
     var listener: PcmTransportListener? = null
+    val handoverAnswers = mutableListOf<String>()
     var connects = 0
     var closes = 0
 
@@ -125,7 +126,8 @@ class ControllerHarness(
             if (refuseConnect) socketListener.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
             else if (openOnConnect) socketListener.onOpen()
             object : PcmTransport {
-                override fun send(text: String) = server.receive(text)
+                override fun send(text: String) =
+                    if (text.contains("handover-answer")) handoverAnswers.add(text) else server.receive(text)
                 override fun close() {
                     closes += 1
                 }
@@ -249,6 +251,27 @@ class NativePlaybackControllerTest {
 
     // Owner, 2026-11-17 (playback.claim.takeover): Play while another device plays moves its song
     // here; the claim replaces the other device's and reports where this device's song is.
+    // Owner, 2026-11-22: Play here on another device asks this one, which stops and says what sounds.
+    @Test
+    fun askedByPlayHereElsewhereItStopsAndAnswersTheSoundingItemAndItsPlaceWithoutGivingTheClaimBack() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+
+        checkNotNull(harness.listener).onText("""{"type":"handover","requestId":"request-1"}""")
+        harness.step()
+
+        val answer = org.json.JSONObject(harness.handoverAnswers.single())
+        assertEquals("request-1", answer.getString("requestId"))
+        assertEquals(long.pcm.playbackRef, answer.getJSONObject("track").getString("playbackRef"))
+        assertEquals(30_000L, answer.getJSONObject("position").getLong("durationMs"))
+        assertEquals(false, answer.getJSONObject("track").has("path"))
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals("no give-back follows the token it handed on", listOf("acquire:null"), harness.claims.calls)
+        assertEquals(listOf("owned", "lost"), harness.ownership())
+    }
+
     @Test
     fun aTakeoverQueueClaimsOnceAsATakeoverAndReportsWhereTheSongIs() {
         val harness = ControllerHarness(first)

@@ -219,10 +219,11 @@ class PlaybackNetworkTest {
         Thread.sleep(200)
 
         val listener = RecordingListener()
-        val socket = OkHttpPcmTransportFactory(client, session()).connect(listener)
+        val socket = OkHttpPcmTransportFactory(client, session(), TEST_CLIENT_ID).connect(listener)
         assertEquals("open", listener.next())
         val upgrade = server.takeRequest(5, TimeUnit.SECONDS)!!
         assertEquals("/playback/pcm", upgrade.url.encodedPath)
+        assertEquals("the socket names the client Play here elsewhere asks", TEST_CLIENT_ID, upgrade.url.queryParameter("client_id"))
         assertTrue(upgrade.connectionIndex in warmed)
         socket.close()
         assertEquals(1000, listener.next())

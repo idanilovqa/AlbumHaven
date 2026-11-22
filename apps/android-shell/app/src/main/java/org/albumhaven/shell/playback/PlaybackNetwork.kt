@@ -177,8 +177,12 @@ class OkHttpConnectionWarmer(
 private const val PING_SECONDS = 25L
 
 /** `/playback/pcm` over OkHttp, authenticated like the page that selected the origin. */
-class OkHttpPcmTransportFactory(client: OkHttpClient, private val session: ShellSession) :
-    PcmTransportFactory {
+class OkHttpPcmTransportFactory(
+    client: OkHttpClient,
+    private val session: ShellSession,
+    /** Whom the socket plays for, so Play here on another device can ask it; empty asks nobody. */
+    private val clientId: String = "",
+) : PcmTransportFactory {
     // A paused socket carries no audio; proxies such as Cloudflare close a WebSocket idle for about
     // 100 seconds, which would cost a resume a reconnect and a refetch. Pings keep it open.
     private val client = client.newBuilder().pingInterval(PING_SECONDS, TimeUnit.SECONDS).build()
@@ -186,7 +190,7 @@ class OkHttpPcmTransportFactory(client: OkHttpClient, private val session: Shell
     override fun connect(listener: PcmTransportListener): PcmTransport {
         // OkHttp upgrades an http(s) URL itself.
         val request = session.authorize(Request.Builder(), withCsrf = false)
-            .url("${session.origin()}/playback/pcm")
+            .url("${session.origin()}/playback/pcm" + if (clientId.isEmpty()) "" else "?client_id=$clientId")
             .build()
         val socket = client.newWebSocket(request, Adapter(listener))
         return object : PcmTransport {

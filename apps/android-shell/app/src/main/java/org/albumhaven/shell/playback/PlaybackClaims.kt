@@ -86,6 +86,9 @@ class PlaybackClaimOwner(
 
     /** A token whose give-back the server never answered: its lease may still run there, so the next acquire renews it. */
     private var unansweredRelease: String? = null
+
+    /** The token given back last: Play here on another device can still ask the phone that just paused. */
+    private var releasedToken: String? = null
     private val waiters = mutableListOf<(ClaimOutcome) -> Unit>()
 
     // Set by [close]; a grant answered after it is given back by its own request.
@@ -121,6 +124,7 @@ class PlaybackClaimOwner(
     /** As [acquire]; with [takeOver] the claim replaces another client's live one (owner, 2026-11-17). */
     fun acquire(claimTrack: ClaimTrack, takeOver: Boolean, onResult: (ClaimOutcome) -> Unit) {
         track = claimTrack
+        releasedToken = null
         if (token != null) {
             onResult(ClaimOutcome.GRANTED)
             return
@@ -152,6 +156,20 @@ class PlaybackClaimOwner(
             }
             post(Runnable { acquired(requestEpoch, sentMs, response, offered) })
         }
+    }
+
+    /**
+     * Play here on another device asked this one (owner, 2026-11-22): the token to answer with, after
+     * which this client no longer owns playback and gives nothing back, so no save of it lands later.
+     * If nobody took over, its next acquire offers that token again. Null when it holds none.
+     */
+    fun handOver(): String? {
+        val held = token
+        if (held == null) return releasedToken
+        drop()
+        unansweredRelease = held
+        events(ClaimEvent.Lost)
+        return held
     }
 
     /** The next heartbeat mirrors [claimTrack]. */
@@ -197,6 +215,7 @@ class PlaybackClaimOwner(
     /** Gives the claim back now; an expired claim needs no answer. The owner calls it once listen writes drain. */
     fun release() {
         val held = token
+        if (held != null) releasedToken = held
         val wasActive = held != null || acquiring
         drop()
         if (held != null) {

@@ -57,6 +57,22 @@ class PlaybackClaimOwnerTest {
         assertEquals(ClaimPosition(71_000, 300_000), api.positions.last())
     }
 
+    // Owner, 2026-11-22: the phone that just paused still answers Play here on another device.
+    @Test
+    fun handOverNamesTheHeldTokenOrTheOneJustGivenBack() {
+        owner.acquire(track) {}
+        drain()
+        val held = owner.heldToken
+        owner.release()
+        drain()
+        assertEquals("just paused", held, owner.handOver())
+
+        owner.acquire(track) {}
+        drain()
+        val playing = owner.heldToken
+        assertEquals("playing", playing, owner.handOver())
+    }
+
     @Test
     fun anUnansweredTakeoverIsSentAgainAsOneAndAnAnswerSettlesIt() {
         api.acquireResponse = { ClaimResponse.Unreachable }

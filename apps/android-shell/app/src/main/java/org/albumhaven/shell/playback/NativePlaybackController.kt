@@ -1117,11 +1117,50 @@ class NativePlaybackController(
         transport = transports.connect(object : PcmTransportListener {
             override fun onOpen() = post { if (epoch == transportEpoch) transportOpened() }
             // Controls reach a stopped engine too, so it can close a stream the server confirms late.
-            override fun onText(text: String) = post { if (epoch == transportEpoch) engine?.onServerText(text) }
+            override fun onText(text: String) =
+                post { if (epoch == transportEpoch && !answerHandover(text)) engine?.onServerText(text) }
             override fun onBinary(bytes: ByteArray) =
                 post { if (epoch == transportEpoch && loaded) engine?.onBinary(bytes) }
             override fun onClosed(code: Int) = post { if (epoch == transportEpoch) transportClosed(code) }
         })
+    }
+
+    /**
+     * Play here on another device asks this one over the socket (owner, 2026-11-22): it stops, then
+     * answers the item it sounds and where. A skip silences the outgoing item at once and a gapless
+     * move changes the item at its boundary, so the queue's current item is the one that sounds.
+     * True when [text] was the handover's and not the stream's.
+     */
+    private fun answerHandover(text: String): Boolean {
+        if (!text.contains("\"handover")) return false
+        val message = runCatching { JSONObject(text) }.getOrNull() ?: return false
+        when (message.optString("type")) {
+            "handover-done" -> return true
+            "handover" -> Unit
+            else -> return false
+        }
+        val item = queue.getOrNull(index) ?: return true
+        val heardMs = positionMs()
+        val token = claims.handOver() ?: return true
+        val position = if (item.durationMs > 0) {
+            JSONObject().put("ms", heardMs.coerceIn(0, item.durationMs)).put("durationMs", item.durationMs)
+        } else {
+            JSONObject.NULL
+        }
+        val track = JSONObject()
+            .put("playbackRef", item.playbackRef)
+            .put("title", item.title)
+            .put("artist", item.artist)
+            .put("album", item.album)
+            .put("artworkUrl", item.artworkUrl ?: JSONObject.NULL)
+        val answer = JSONObject()
+            .put("type", "handover-answer")
+            .put("requestId", message.optString("requestId"))
+            .put("claimToken", token)
+            .put("track", track)
+            .put("position", position)
+        transport?.send(answer.toString())
+        return true
     }
 
     private fun transportOpened() {

@@ -535,6 +535,18 @@ def _close_asgi_request_loop_after_each_test():
 
 
 @pytest.fixture(autouse=True)
+def _a_refused_start_fails_its_test(monkeypatch: pytest.MonkeyPatch):
+    """The startup gate still refuses. In process it fails that test, with the reason, where
+    the real exit would end the whole pytest run; subprocess tests cover the real exit."""
+    import music_app
+
+    def refused(_logger, refusal):
+        raise AssertionError(f"The app refused to start in process: {refusal}")
+
+    monkeypatch.setattr(music_app, "_exit_refusing", refused)
+
+
+@pytest.fixture(autouse=True)
 def _reset_transient_log_history_between_tests():
     from music_app.services import log_history
 

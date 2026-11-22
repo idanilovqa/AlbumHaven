@@ -442,3 +442,37 @@ the table under an exclusive lock, so apply it in a controlled migration window
 before starting application writers. Problematic Files falls back to the inline
 expressions on databases without these columns, so rollback only drops the index
 and the columns; a running server retries with the inline form once it finds them gone.
+
+## Serving after 0268: duplicate results
+
+Stop every writer, apply the migrations, run
+`python scripts/prepare_duplicate_results.py` with the app's environment, and
+start the app once it exits 0 (1 means not ready). Run it from its own terminal,
+not inside the app's service or scheduled task, whose restart would stop it.
+
+At startup, before any writer, watcher, worker or prewarm starts and before the
+port is bound, the app checks the results with read-only queries. It refuses to
+start when:
+
+- `0268` is missing (the line names the migration);
+- the fill step is running, through its last pass (the line names the command);
+- the library has albums and its results are not ready (the line names the
+  command);
+- the library has albums and `ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED` switches
+  the results off (the line names the setting);
+- the database does not answer within 120 seconds, retried every 5 seconds with
+  a warning each time, or cannot be checked (the line names the database).
+
+A refused start logs one line to standard error,
+`STARTUP REFUSED (exit code 78): Album Haven will not start: <reason>`, with no
+traceback, and the process exits with code 78 without running shutdown
+handlers. uvicorn uses code 3 for every other failed start. A service manager
+or scheduler sees a process that ended with 78 (0x4E in Windows Task Scheduler's
+last run result) and never listened on its port, so a health probe finds the
+connection refused. With a development reloader, the child process exits and
+the reloader itself keeps running.
+
+Restarting a refusing app is safe during a fill: it takes none of the fill's
+locks, writes nothing to the database, and refuses again until the fill is
+ready. An empty library serves; a browse-only instance cannot fill, so it
+refuses on a later restart once its library has albums without results.

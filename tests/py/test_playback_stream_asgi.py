@@ -2938,9 +2938,10 @@ def test_lifespan_shutdown_closes_live_socket_with_1001_and_leaves_zero_decoders
     decoder_factory,
     monkeypatch,
 ):
-    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+    from tests.py.runtime_testing import stub_migrated_empty_library, stub_targeted_reconciliation_repository
 
     stub_targeted_reconciliation_repository(monkeypatch)
+    stub_migrated_empty_library(monkeypatch)
 
     async def scenario() -> None:
         manager = websocket_session(playback_app, "/playback/pcm")

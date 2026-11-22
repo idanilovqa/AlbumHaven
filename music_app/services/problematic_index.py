@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from threading import Lock
 from typing import Any
 
@@ -34,11 +34,22 @@ BUILDER_VERSION = "1"
 # Bump when a stored duplicate result changes for the same library data; a different
 # version backfills only library.album_duplicate_results.
 DUPLICATE_RESULTS_VERSION = "1"
+# What fills the duplicate results, and the migration that creates them: named by the
+# startup refusal.
+PREPARE_COMMAND = "python scripts/prepare_duplicate_results.py"
+DUPLICATE_RESULTS_MIGRATION = "0268_create_album_duplicate_results.sql"
+# A refused start's exit code; uvicorn's own 3 covers every other failed start.
+REFUSED_TO_START_EXIT_CODE = 78
+# How long a starting app waits for its database, so a reboot in the wrong order recovers.
+DATABASE_WAIT_SECONDS = 120
+_DATABASE_RETRY_SECONDS = 5
+_CONNECT_TIMEOUT_SECONDS = 15  # as the shared pool's
 # More marked albums than this are evaluated in the background, not by a read.
 INLINE_ALBUM_LIMIT = 50
 # Albums evaluated per transaction by the backfill.
 BACKFILL_BATCH = 500
 _LOCK_NAMESPACE = 188  # pg advisory lock (namespace, library id)
+_STEP_LOCK_NAMESPACE = 268  # held for the deploy step's whole run; the startup gate only looks
 # On unless set to 0; the Python test suite turns it off so a background backfill
 # never races another test's database reset (index tests turn it back on).
 ENABLED_KEY = "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED"
@@ -158,6 +169,14 @@ _UPSERT_SQL = """
       sort_key = excluded.sort_key, search_text = excluded.search_text,
       duplicate_identities = excluded.duplicate_identities, item = excluded.item
 """
+
+
+class PreparationError(RuntimeError):
+    """Why the deploy step could not make the index ready; safe to show the operator."""
+
+
+class NotReadyToServeError(PreparationError):
+    """Why the app refuses to start serving."""
 
 
 def _browse():
@@ -351,10 +370,14 @@ def _unlock(connection: Any, library_id: int) -> None:
     connection.execute("select pg_advisory_unlock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
 
 
+def _enabled(config: Mapping[str, object]) -> bool:
+    enabled = str(config.get(ENABLED_KEY, os.environ.get(ENABLED_KEY, "1")))
+    return enabled.strip().casefold() not in {"0", "false", "no"}
+
+
 def _available(repository: Any) -> bool:
-    enabled = str(repository._config.get(ENABLED_KEY, os.environ.get(ENABLED_KEY, "1")))
     return (
-        enabled.strip().casefold() not in {"0", "false", "no"}
+        _enabled(repository._config)
         and repository._use_shared_connection_pool
         and repository._database_url not in _UNAVAILABLE_DATABASES
     )
@@ -435,7 +458,8 @@ def _drain(repository: Any, connection: Any, library_id: int, marks: list[object
     )
 
 
-def _backfill(repository: Any, connection: Any, library_id: int) -> None:
+def _backfill(repository: Any, connection: Any, library_id: int,
+              report: Callable[[str, int, int], None] | None = None) -> None:
     """Fill the index from the whole library, then clear the marks it covered."""
     connection.execute(
         """insert into library.problematic_index_state (library_id, builder_version, status)
@@ -458,14 +482,16 @@ def _backfill(repository: Any, connection: Any, library_id: int) -> None:
         _PROGRESS[repository._database_url] = {"done": 0, "total": len(album_ids)}
         index_rows: list[dict[str, object]] = []
         for start in range(0, max(len(album_ids), 1), BACKFILL_BATCH):
-            # The duplicate results backfill after this pass (see below).
+            # This pass rebuilds items only; the duplicate results have their own version.
             rows, _duplicate_rows, _replaced = _index_rows(
                 repository, connection, library_id, album_ids[start:start + BACKFILL_BATCH],
                 include_loose=start == 0, duplicates=False,
             )
             index_rows.extend(rows)
-            _PROGRESS[repository._database_url] = {
-                "done": min(start + BACKFILL_BATCH, len(album_ids)), "total": len(album_ids)}
+            done = min(start + BACKFILL_BATCH, len(album_ids))
+            _PROGRESS[repository._database_url] = {"done": done, "total": len(album_ids)}
+            if report:
+                report("Problematic Files index", done, len(album_ids))
         connection.execute("delete from library.problematic_index_items where library_id = %s", (library_id,))
         connection.cursor().executemany(_UPSERT_SQL, list({row["item_key"]: row for row in index_rows}.values()))
         connection.execute(
@@ -473,18 +499,15 @@ def _backfill(repository: Any, connection: Any, library_id: int) -> None:
                where library_id = %s and builder_version = %s""",
             (library_id, BUILDER_VERSION),
         )
-    connection.execute(
-        """delete from library.problematic_index_dirty_albums
-           where library_id = %s and pg_visible_in_snapshot(marked_xid, %s::pg_snapshot)""",
-        (library_id, snapshot),
-    )
-    # Those marks also named albums whose stored duplicate results they would have
-    # refreshed: rebuild the results as well (only after a builder-version change).
-    connection.execute(
-        "update library.album_duplicate_results_state set status = 'building' where library_id = %s",
-        (library_id,),
-    )
-    _DUPLICATES_READY.discard(repository._database_url)
+    # A mark also says a stored duplicate result may be out of date. Ready results stay
+    # readable through this pass and keep their marks for the evaluation that follows it;
+    # otherwise their own backfill follows and covers what this pass saw.
+    if _duplicate_results_state(connection, library_id) != "ready":
+        connection.execute(
+            """delete from library.problematic_index_dirty_albums
+               where library_id = %s and pg_visible_in_snapshot(marked_xid, %s::pg_snapshot)""",
+            (library_id, snapshot),
+        )
 
 
 def _duplicate_results_state(connection: Any, library_id: int) -> str | None:
@@ -497,7 +520,8 @@ def _duplicate_results_state(connection: Any, library_id: int) -> str | None:
     return str(_value(row, "status"))
 
 
-def _backfill_duplicate_results(repository: Any, connection: Any, library_id: int) -> None:
+def _backfill_duplicate_results(repository: Any, connection: Any, library_id: int,
+                                report: Callable[[str, int, int], None] | None = None) -> None:
     """Store every album's duplicate result (one-time pass, with its own progress).
 
     The journal marks stay: the Problematic Files items still need them, and draining
@@ -526,6 +550,8 @@ def _backfill_duplicate_results(repository: Any, connection: Any, library_id: in
         for start in range(0, len(album_keys), BACKFILL_BATCH):
             batch = album_keys[start:start + BACKFILL_BATCH]
             rows.extend(_duplicate_result_rows(repository, connection, library_id, {key: albums[key] for key in batch}))
+            if report:
+                report("Duplicate results", start + len(batch), len(album_keys))
         connection.execute("delete from library.album_duplicate_results where library_id = %s", (library_id,))
         if rows:
             connection.cursor().executemany(_DUPLICATE_RESULT_SQL, rows)
@@ -540,6 +566,190 @@ def _backfill_duplicate_results(repository: Any, connection: Any, library_id: in
     }))
 
 
+def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebuild_duplicates: bool = False,
+                      report: Callable[[str, int, int], None] | None = None) -> None:
+    """Backfill what is not ready, then evaluate every marked album. The caller holds the lock."""
+    if rebuild_duplicates:
+        # Before anything slow: an app restarted during a rebuild must not find "ready".
+        connection.execute(
+            """update library.album_duplicate_results_state set status = 'building', updated_at = now()
+               where library_id = %s""",
+            (library_id,),
+        )
+    if _state(connection, library_id) != "ready":
+        try:
+            _backfill(repository, connection, library_id, report)
+        finally:
+            _PROGRESS.pop(repository._database_url, None)
+    _READY.add(repository._database_url)
+    if _duplicate_results_state(connection, library_id) != "ready":
+        _backfill_duplicate_results(repository, connection, library_id, report)
+    _DUPLICATES_READY.add(repository._database_url)
+    evaluated = 0
+    while marks := connection.execute(
+        """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
+           where library_id = %s order by album_id limit %s""",
+        (library_id, BACKFILL_BATCH),
+    ).fetchall():
+        _drain(repository, connection, library_id, marks)
+        evaluated += len(marks)
+        if report:
+            report("Changed albums", evaluated, evaluated)
+
+
+def prepare_for_serving(repository: Any, *, rebuild_duplicates: bool = False,
+                        report: Callable[[str, int, int], None] | None = None) -> None:
+    """The deploy step (scripts/prepare_duplicate_results.py): what maintenance does, in the
+    foreground, raising instead of retrying later. A ready backfill is not redone."""
+    with _worker_connection(repository) as connection:
+        library_id = _library_id(connection)
+        if library_id is None:
+            raise PreparationError("No Local Library exists in this database.")
+        if not _locked(connection, library_id):
+            raise PreparationError("Another process is evaluating the index: stop every writer first.")
+        # Maintenance holds the lock above too; this one says a deploy step runs, so an app
+        # restarted meanwhile waits outside. Closing the connection releases it.
+        connection.execute("select pg_advisory_lock(%s, %s::integer)", (_STEP_LOCK_NAMESPACE, library_id))
+        try:
+            _bring_up_to_date(repository, connection, library_id,
+                              rebuild_duplicates=rebuild_duplicates, report=report)
+        finally:
+            _unlock(connection, library_id)
+
+
+def serving_readiness(repository: Any) -> dict[str, object]:
+    """Read-only, for the deploy check: both states and the albums still to evaluate."""
+    with _worker_connection(repository) as connection:
+        library_id = _library_id(connection)
+        if library_id is None:
+            raise PreparationError("No Local Library exists in this database.")
+        marks = connection.execute(
+            "select count(*) as marks from library.problematic_index_dirty_albums where library_id = %s",
+            (library_id,),
+        ).fetchone()
+        return {
+            "problematic_index": _state(connection, library_id),
+            "duplicate_results": _duplicate_results_state(connection, library_id),
+            "changed_albums_waiting": int(_value(marks, "marks")),
+        }
+
+
+def _serving_state(database_url: str, connect_timeout: int) -> tuple[bool, bool, bool, bool]:
+    """Read-only: whether 0268 exists, its results are ready, the library has albums, and
+    the deploy step is running.
+
+    Plain selects, so it neither waits for the fill's locks nor takes one the fill needs.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(
+        database_url, row_factory=dict_row, autocommit=True, connect_timeout=connect_timeout,
+    ) as connection:
+        connection.execute("set default_transaction_read_only = on")
+        connection.execute("set lock_timeout = '5s'")
+        tables = connection.execute(
+            """select to_regclass('library.album_duplicate_results') is not null
+                  and to_regclass('library.album_duplicate_results_state') is not null as present""",
+        ).fetchone()
+        if not _value(tables, "present"):
+            return False, False, False, False
+        library_id = _library_id(connection)
+        if library_id is None:
+            return True, False, False, False
+        ready = _duplicate_results_state(connection, library_id) == "ready"
+        albums = connection.execute(
+            "select exists(select 1 from library.local_albums where library_id = %s) as present", (library_id,),
+        ).fetchone()
+        step = connection.execute(
+            """select exists(
+                 select 1 from pg_locks
+                 where locktype = 'advisory' and granted and objsubid = 2
+                   and database = (select oid from pg_database where datname = current_database())
+                   and classid = %s::oid and objid = %s::oid) as running""",
+            (_STEP_LOCK_NAMESPACE, library_id),
+        ).fetchone()
+        return True, ready, bool(_value(albums, "present")), bool(_value(step, "running"))
+
+
+def _database_name(database_url: str) -> str:
+    """The database for a log line: never its user or password."""
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        parts = conninfo_to_dict(database_url)
+    except psycopg.Error:
+        return "the configured database"
+    host, port = parts.get("host", "localhost"), parts.get("port", 5432)
+    return f"database {parts.get('dbname', '(default)')} on {host}:{port}"
+
+
+def _wait_for_serving_state(database_url: str) -> tuple[bool, bool, bool, bool]:
+    """The state, once the database answers; refuses after ``DATABASE_WAIT_SECONDS``."""
+    import psycopg
+
+    deadline = time.monotonic() + DATABASE_WAIT_SECONDS
+    while True:
+        timeout = min(_CONNECT_TIMEOUT_SECONDS, max(2, int(deadline - time.monotonic())))
+        try:
+            return _serving_state(database_url, timeout)
+        except psycopg.OperationalError as error:
+            # A driver's message can quote the connection string: name the failure only.
+            failure = error.sqlstate or type(error).__name__
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise NotReadyToServeError(
+                    f"Album Haven will not start: {_database_name(database_url)} did not answer within "
+                    f"{DATABASE_WAIT_SECONDS} s ({failure}). Start that database, then Album Haven."
+                ) from None
+            _LOGGER.warning(
+                "Waiting for %s before starting (%s); refusing in %d s.",
+                _database_name(database_url), failure, left,
+            )
+            time.sleep(min(_DATABASE_RETRY_SECONDS, left))
+        except psycopg.Error as error:
+            raise NotReadyToServeError(
+                f"Album Haven will not start: {_database_name(database_url)} could not be checked "
+                f"({error.sqlstate or type(error).__name__})."
+            ) from None
+
+
+def refuse_to_serve_until_ready(config: Mapping[str, object]) -> None:
+    """The startup gate (owner, 2026-11-22), for every mode that serves gallery or search
+    cards: a library with albums is served only from ready duplicate results that cards
+    read, since its duplicated cards would otherwise show wrong counts. It only reads; the
+    deploy step fills. An unreachable database is waited for, never assumed ready.
+
+    An empty library has nothing to fill, so it serves and maintenance marks it ready.
+    """
+    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    if not database_url:
+        return
+    migrated, ready, has_albums, step_running = _wait_for_serving_state(database_url)
+    if not migrated:
+        raise NotReadyToServeError(
+            f"Album Haven will not start: this database lacks migration {DUPLICATE_RESULTS_MIGRATION}. "
+            f"Apply it, then run: {PREPARE_COMMAND}"
+        )
+    if step_running:
+        raise NotReadyToServeError(
+            f"Album Haven will not start: {PREPARE_COMMAND} is running. Start once it exits 0."
+        )
+    if not has_albums:
+        return
+    if not _enabled(config):
+        raise NotReadyToServeError(
+            f"Album Haven will not start: {ENABLED_KEY} switches off the duplicate results this "
+            "library's cards need. Remove that setting."
+        )
+    if not ready:
+        raise NotReadyToServeError(
+            "Album Haven will not start: this library's duplicate results are not ready. "
+            f"With every writer stopped, run: {PREPARE_COMMAND}"
+        )
+
+
 def _maintain(repository: Any) -> None:
     """Backfill when no ready index exists, then evaluate every marked album."""
     with _QUEUED_LOCK:
@@ -552,21 +762,7 @@ def _maintain(repository: Any) -> None:
             if library_id is None or not _locked(connection, library_id):
                 return
             try:
-                if _state(connection, library_id) != "ready":
-                    try:
-                        _backfill(repository, connection, library_id)
-                    finally:
-                        _PROGRESS.pop(repository._database_url, None)
-                _READY.add(repository._database_url)
-                if _duplicate_results_state(connection, library_id) != "ready":
-                    _backfill_duplicate_results(repository, connection, library_id)
-                _DUPLICATES_READY.add(repository._database_url)
-                while marks := connection.execute(
-                    """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
-                       where library_id = %s order by album_id limit %s""",
-                    (library_id, BACKFILL_BATCH),
-                ).fetchall():
-                    _drain(repository, connection, library_id, marks)
+                _bring_up_to_date(repository, connection, library_id)
                 first = connection.execute(
                     """select item_key from library.problematic_index_items where library_id = %s
                        order by sort_name, sort_artist, sort_year, sort_key limit 1""",
@@ -592,7 +788,8 @@ def _maintain(repository: Any) -> None:
 def duplicate_results_readable(repository: Any) -> bool:
     """Whether cards may read stored duplicate results now, after evaluating the last save's
     marks unless a running pass holds them. Readiness comes first, and a read never waits.
-    False until both backfills are done; /status shows that work as pending."""
+    The results' own version decides it: they stay readable while the Problematic Files
+    items rebuild. False until their backfill is done; /status shows that work as pending."""
     if not _available(repository):
         return False
     database_url = repository._database_url
@@ -609,7 +806,8 @@ def duplicate_results_readable(repository: Any) -> bool:
             queue_maintenance(repository)
             return False
         _DUPLICATES_READY.add(database_url)
-    return refresh(repository)
+    refresh(repository)
+    return True
 
 
 def indexing_progress(repository: Any) -> dict[str, int] | None:
@@ -620,15 +818,6 @@ def indexing_progress(repository: Any) -> dict[str, int] | None:
     if not _available(repository):
         return None
     return dict(_PROGRESS.get(repository._database_url) or {"done": 0, "total": 0})
-
-
-def maintain_now(repository: Any) -> bool:
-    """One maintenance pass in this thread (fixture preparation); whether the index is ready."""
-    if not _available(repository):
-        return False
-    _maintain(repository)
-    with _QUEUED_LOCK:
-        return repository._database_url in _READY
 
 
 def in_progress(repository: Any) -> bool:

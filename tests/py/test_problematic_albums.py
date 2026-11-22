@@ -1074,7 +1074,7 @@ def test_live_duplicate_results_backfill_runs_once_across_restarts(watcher_repai
     # A restarted process has seen nothing.
     for seen in ("_READY", "_DUPLICATES_READY", "_WARMED"):
         monkeypatch.setattr(problematic_index, seen, set())
-    assert problematic_index.maintain_now(repository)
+    problematic_index._maintain(repository)
     assert problematic_index.duplicate_results_readable(repository)
     assert reruns == []
 
@@ -1096,12 +1096,12 @@ def test_live_index_evaluators_leave_the_real_pool_transactional_and_unlocked(wa
     repository = browse.PostgresLibraryBrowseRepository({
         "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
     })
-    for evaluate in (problematic_index.refresh, problematic_index.maintain_now):
+    for evaluate in (problematic_index.refresh, problematic_index._maintain):
         with leased_connection(database_url) as connection:
             connection.execute(
                 "select library.mark_problematic_album_dirty(library_id, id) from library.local_albums",
             ).fetchall()
-        assert evaluate(repository)
+        evaluate(repository)
         with leased_connection(database_url) as connection:
             assert connection.autocommit is False
             left = connection.execute(
@@ -1113,6 +1113,136 @@ def test_live_index_evaluators_leave_the_real_pool_transactional_and_unlocked(wa
             ).fetchone()
             assert connection.info.transaction_status == TransactionStatus.INTRANS
             assert dict(left) == {"marks": 0, "locks": 0}
+
+
+def test_live_deploy_step_fills_before_serving_and_reruns_without_redoing_it(watcher_repair_inventory, monkeypatch):
+    """Owner (11-21): "Fill it first". On a database nothing has prepared, the step leaves
+    both states ready with no album waiting; a rerun backfills nothing unless told to."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Deploy/Album/01.flac", artist="Deploy", album="Deploy Album"))
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"],
+    })
+    assert problematic_index.serving_readiness(repository)["duplicate_results"] != "ready"
+
+    progress = []
+    problematic_index.prepare_for_serving(repository, report=lambda *step: progress.append(step))
+    assert ("Duplicate results", 1, 1) in progress
+    assert problematic_index.serving_readiness(repository) == {
+        "problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0,
+    }
+
+    backfilled = []
+    real = problematic_index._backfill_duplicate_results
+    monkeypatch.setattr(problematic_index, "_backfill_duplicate_results",
+                        lambda *args: backfilled.append(1) or real(*args))
+    problematic_index.prepare_for_serving(repository)
+    assert backfilled == []
+    problematic_index.prepare_for_serving(repository, rebuild_duplicates=True)
+    assert backfilled == [1]
+
+
+@pytest.mark.parametrize("change", ["former stray copy", "former identity twin"])
+def test_live_builder_bump_keeps_duplicate_results_readable_and_evaluates_their_marks(
+    watcher_repair_inventory, monkeypatch, change,
+):
+    """The results have their own version: a Problematic Files builder bump never makes them
+    unreadable or rebuilds them. An album changed before it still gets evaluated, and so does
+    its former twin, which the changed album's identities no longer reach: only the stored
+    linked_album_ids do."""
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+
+    fixture = watcher_repair_inventory
+    identity_twin = change == "former identity twin"
+    owner = fixture.entry("Bump/Owner/01.flac", artist="Bump", album="Same Release" if identity_twin else "Own Release")
+    other = fixture.entry("Bump/Other/01.flac", artist="Bump", album="Same Réléase" if identity_twin else "Stray Release")
+    for entry in (owner, other):
+        entry.update(album_artist="Bump", year=2001)
+    fixture.seed(owner, other)
+
+    def sql(statement, params=None):
+        with psycopg.connect(fixture.runtime_url) as connection:
+            cursor = connection.execute(statement, params)
+            return cursor.fetchall() if cursor.description else []
+
+    album_of = {
+        path: (album_id, key)
+        for path, album_id, key in sql(
+            """select files.private_path, albums.id, albums.album_key
+               from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id
+               join library.local_albums albums on albums.id = tracks.album_id""",
+        )
+    }
+    (owner_id, owner_key), (other_id, _other_key) = album_of[owner["path"]], album_of[other["path"]]
+
+    def set_stray_link(link):
+        sql(
+            """update library.local_albums
+               set metadata = case when %(link)s::jsonb is null then metadata - 'stray_duplicate_of'
+                 else metadata || jsonb_build_object('stray_duplicate_of', %(link)s::jsonb) end
+               where id = %(album_id)s""",
+            {"link": Jsonb(link) if link else None, "album_id": other_id},
+        )
+
+    if identity_twin:
+        sql("update library.local_albums set metadata = metadata - 'stray_duplicate_of'")
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    _ready_problematic_index(database_url)
+    problematic_index.wait_for_background_work()
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+
+    def owner_marked():
+        card = {"key": owner_key, "year": 2001, "tracks": []}
+        repository._attach_duplicate_sources([card], indexed=True)
+        return bool(card.get("has_duplicate_files"))
+
+    if not identity_twin:
+        set_stray_link({"album_id": owner_id, "album_key": owner_key})
+    assert owner_marked() is True
+    assert sql("select linked_album_ids from library.album_duplicate_results where album_id = %s", (owner_id,)) == [
+        ([other_id],),
+    ]
+
+    # A change nobody has evaluated yet, then the builder bump.
+    if identity_twin:
+        sql(
+            """update library.local_track_files
+               set metadata = jsonb_set(metadata, '{scan_cache,file_entry,album}', %s)
+               where private_path = %s""",
+            (Jsonb("Other Release"), other["path"]),
+        )
+    else:
+        set_stray_link(None)
+    assert sql("select album_id from library.problematic_index_dirty_albums where album_id <> 0") == [(other_id,)]
+    library_id = sql("select library_id from library.local_albums where id = %s", (owner_id,))[0][0]
+    assert owner_id not in {
+        row[0] for row in sql(problematic_index._SCOPE_SQL, {
+            "library_id": library_id, "album_ids": [other_id], "old_identities": [],
+        })
+    }, "Only linked_album_ids can reach the former twin."
+    monkeypatch.setattr(problematic_index, "BUILDER_VERSION", "next")
+    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: None)
+    monkeypatch.setattr(problematic_index, "_backfill_duplicate_results",
+                        lambda *_args: pytest.fail("a builder bump must not rebuild the results"))
+    assert problematic_index.duplicate_results_readable(repository), "A builder bump hid the stored results."
+    assert owner_marked() is True, "The last complete rows serve until the pass evaluates the change."
+
+    problematic_index._maintain(repository)
+
+    assert sql("select builder_version, status from library.problematic_index_state") == [("next", "ready")]
+    assert sql("select status from library.album_duplicate_results_state") == [("ready",)]
+    assert sql("select album_id from library.problematic_index_dirty_albums where album_id <> 0") == []
+    assert owner_marked() is False, "The former twin was evaluated."
 
 
 def test_live_problematic_index_reads_pages_and_search_without_the_whole_library_pass(monkeypatch):

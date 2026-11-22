@@ -320,6 +320,9 @@ def main() -> None:
     if str(ROOT) not in sys.path:
         sys.path.insert(0,str(ROOT))
     prepare()
+    from scripts import prepare_duplicate_results
+    if prepare_duplicate_results.main([]):
+        raise RuntimeError('The demo library is not ready to serve.')
     from music_app import create_asgi_app
     import uvicorn
     uvicorn.run(create_asgi_app(),host='0.0.0.0',port=int(os.environ.get('PORT','10000')),

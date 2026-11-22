@@ -5,7 +5,7 @@ from contextlib import contextmanager, nullcontext
 from typing import Any
 from uuid import UUID
 
-from music_app.services.postgres_connections import pooled_connection
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 try:  # pragma: no cover - optional outside the Postgres runtime.
     import psycopg
@@ -44,12 +44,12 @@ class PostgresGeneratedPreviewStorageRepository:
     ) -> None:
         self._database_url = str(config.get(_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
-        # The Server page and every library page poll this read; the relocation worker keeps its own
-        # connections because it holds a session advisory lock for a whole move.
-        self._read_connect = connect or pooled_connection
+        # The move's advisory lock is a session lock held for the whole move: it needs a connection
+        # of its own, which must never go back to the shared pool while it holds the lock.
+        self._lock_connect = connect or _lock_session_connect
 
     def load(self) -> dict[str, object]:
-        with self._connect_to_database(self._read_connect) as connection:
+        with self._connect_to_database() as connection:
             row = _first_row(connection.execute(_load_sql()))
         if row is None:
             raise RuntimeError("Generated preview storage singleton is missing.")
@@ -133,7 +133,7 @@ class PostgresGeneratedPreviewStorageRepository:
 
     @contextmanager
     def operation_lock(self):
-        with self._connect_to_database() as connection:
+        with self._lock_connect(self._required_database_url()) as connection:
             row = _first_row(
                 connection.execute(
                     "select pg_try_advisory_lock(%(lock_key)s) as acquired;",
@@ -297,10 +297,13 @@ class PostgresGeneratedPreviewStorageRepository:
             raise PreviewStorageConflict(conflict_message)
         return _row_mapping(row)
 
-    def _connect_to_database(self, connect: Callable[[str], Any] | None = None):
+    def _connect_to_database(self):
+        return self._connect(self._required_database_url())
+
+    def _required_database_url(self) -> str:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for preview storage.")
-        return (connect or self._connect)(self._database_url)
+        return self._database_url
 
 
 def serialize_preview_storage(
@@ -315,6 +318,10 @@ def serialize_preview_storage(
 
 
 def _connect(database_url: str):
+    return _leased_connection(database_url)
+
+
+def _lock_session_connect(database_url: str):
     if psycopg is None:
         raise RuntimeError("psycopg is required for generated preview storage.")
     return psycopg.connect(database_url, row_factory=dict_row, connect_timeout=2)

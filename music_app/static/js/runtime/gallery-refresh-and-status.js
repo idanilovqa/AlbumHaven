@@ -16,6 +16,10 @@ function isPagedRootGallery(view = state.view) {
     && surface === 'albums');
 }
 
+function isRootGalleryPageRequestLoading() {
+  return Boolean(rootGalleryPageRequest);
+}
+
 function cancelRootGalleryPageRequest() {
   rootGalleryPageRequest?.controller.abort();
   rootGalleryPageRequest = null;
@@ -119,9 +123,18 @@ function buildRootGalleryPageUrl(view) {
 // the artist whose label the scrolled viewport has passed is the one on screen.
 function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop = 0) {
   const albumKey = String(scrollAnchor?.albumKey || '');
-  let viewportIndex = albumKey
-    ? groups.findIndex(group => (group.albums || []).some(album => String(album.key || '') === albumKey))
+  const holdsAnchorAlbum = group => (group.albums || []).some(album => String(album.key || '') === albumKey);
+  // A jointly credited album sits under several artists: the captured card's own section says which
+  // one is on screen. The first group holding it can be far above, and a window anchored there would
+  // end before the artist on screen (FTC-TAGS-011/012).
+  const anchorSection = typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.sectionByRenderedKey?.get?.(String(scrollAnchor?.sectionOccurrenceKey || ''));
+  const anchorSectionArtist = String(anchorSection?.group?.artist || '').trim();
+  let viewportIndex = albumKey && anchorSectionArtist
+    ? groups.findIndex(group => String(group.artist || '').trim() === anchorSectionArtist && holdsAnchorAlbum(group))
     : -1;
+  if (viewportIndex < 0 && albumKey) viewportIndex = groups.findIndex(holdsAnchorAlbum);
   if (viewportIndex < 0 && scrollTop > 0) {
     const visibleArtist = findGalleryMainContextSection(scrollTop)?.artist;
     viewportIndex = visibleArtist ? groups.findIndex(group => galleryMainGroupArtist(group) === visibleArtist) : -1;

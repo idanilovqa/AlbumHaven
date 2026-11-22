@@ -269,7 +269,8 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
     await stepLogger.step('MBD1-10, MBD1-21: the filter and the Artist row arrive with the first page', async () => {
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
-      // Listen before Settings opens: opening it may already request the first page.
+      // Settings opens on Problematic Files and requests the first page itself; listen before it
+      // opens, or that response can arrive first and the tab click (rightly) sends no other.
       const boundedPage = utilityProblematicFilesActions.waitForBoundedPageEvidence(
         'MBID: Unconfirmed match',
         UNCONFIRMED,

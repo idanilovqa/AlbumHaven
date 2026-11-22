@@ -946,7 +946,9 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     assert retry_calls == ["started"]
 
 
-def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch):
+def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
+    monkeypatch, unreachable_postgres_pool,
+):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
         lambda _runtime: None,

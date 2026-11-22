@@ -2462,6 +2462,8 @@ function pushBrowserViewState(view, stateSnapshot = view) {
     async function navigate(value, { historyMode = 'push' } = {}) {
       const url = resolveUrl(value);
       if (!url) return false;
+      // The tab already shown, with no other tab loading: nothing to load (owner, 11-18).
+      if (url.href === currentUrl && !pending) return true;
       const ownSequence = ++sequence;
       pending?.abort();
       pending = new AbortController();
@@ -20592,6 +20594,10 @@ function isPagedRootGallery(view = state.view) {
     && surface === 'albums');
 }
 
+function isRootGalleryPageRequestLoading() {
+  return Boolean(rootGalleryPageRequest);
+}
+
 function cancelRootGalleryPageRequest() {
   rootGalleryPageRequest?.controller.abort();
   rootGalleryPageRequest = null;
@@ -20695,9 +20701,18 @@ function buildRootGalleryPageUrl(view) {
 // the artist whose label the scrolled viewport has passed is the one on screen.
 function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop = 0) {
   const albumKey = String(scrollAnchor?.albumKey || '');
-  let viewportIndex = albumKey
-    ? groups.findIndex(group => (group.albums || []).some(album => String(album.key || '') === albumKey))
+  const holdsAnchorAlbum = group => (group.albums || []).some(album => String(album.key || '') === albumKey);
+  // A jointly credited album sits under several artists: the captured card's own section says which
+  // one is on screen. The first group holding it can be far above, and a window anchored there would
+  // end before the artist on screen (FTC-TAGS-011/012).
+  const anchorSection = typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.sectionByRenderedKey?.get?.(String(scrollAnchor?.sectionOccurrenceKey || ''));
+  const anchorSectionArtist = String(anchorSection?.group?.artist || '').trim();
+  let viewportIndex = albumKey && anchorSectionArtist
+    ? groups.findIndex(group => String(group.artist || '').trim() === anchorSectionArtist && holdsAnchorAlbum(group))
     : -1;
+  if (viewportIndex < 0 && albumKey) viewportIndex = groups.findIndex(holdsAnchorAlbum);
   if (viewportIndex < 0 && scrollTop > 0) {
     const visibleArtist = findGalleryMainContextSection(scrollTop)?.artist;
     viewportIndex = visibleArtist ? groups.findIndex(group => galleryMainGroupArtist(group) === visibleArtist) : -1;
@@ -54485,14 +54500,12 @@ function handleGalleryBootstrapClick(event) {
       ? getReusableRootBrowseView(nextView)
       : null;
     if (reusableRootBrowseView) {
-      applyViewPayload(reusableRootBrowseView, { trackSidebarReveal: false });
-      pushBrowserViewState(nextView);
-      renderSidebar();
-      renderRelated();
-      renderLibraryLoader(state.status);
-      scheduleBrowserAnimationFrame(() => {
-        renderArtistGroups({ preserveScroll: true });
-      });
+      const showsCurrentRootGallery = Boolean(readCurrentRememberedRootGallery(reusableRootBrowseView));
+      showRememberedRootGallery(reusableRootBrowseView, nextView);
+      if (showsCurrentRootGallery) {
+        resumeCoverLoads();
+        return;
+      }
       Promise.resolve(fetchAndRender(buildApiUrl(
         nextView,
         isLibraryHome ? {} : { omitSidebar: true },
@@ -55640,13 +55653,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   if (String(normalizedQuery || '').trim()) {
     state.ui.pendingSearchClearOnBlur = false;
   }
-  const refreshEmptySearch = Boolean(
-    options.immediate
-    && !String(normalizedQuery || '').trim()
-    && !String(committedQuery || '').trim()
-    && !String(resolveEffectiveSearchSelectedArtist(state.view) || '').trim()
-  );
-  if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery && !refreshEmptySearch
+  if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery
     && !retriesFailedSearch
     && !(typeof hasActiveMobilePage === 'function' && hasActiveMobilePage())) {
     clearPendingGallerySearchCommit();
@@ -55658,7 +55665,6 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   const commitSearch = () => {
     state.ui.pendingSearchCommitTimer = 0;
     commitGallerySearchQuery(normalizedQuery, {
-      refreshEmptySearch,
       recordRecentSearch: options.recordRecentSearch === true,
       scanPageAbandonHandled: options.scanPageAbandonHandled === true,
     });
@@ -55811,7 +55817,6 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     const effectiveSelectedArtist = resolveEffectiveSearchSelectedArtist(state.view);
     if (
       !String(state.view.query || '').trim()
-      && options.refreshEmptySearch !== true
       && effectiveSelectedArtist === String(state.view.selected_artist || '').trim()
     ) {
       if (state.busy && /(?:[?&])q=[^&]+/.test(String(state.ui.activeViewRequestUrl || ''))) {
@@ -55851,7 +55856,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       && !String(window.location?.search || '')
     ) ? 'canonical_root' : 'interactive';
   }
-  if (!String(normalizedQuery || '').trim() && (String(state.view.query || '').trim() || options.refreshEmptySearch === true)) {
+  if (!String(normalizedQuery || '').trim() && String(state.view.query || '').trim()) {
     const next = withActiveGallerySources(buildClearedSearchView(), state.gallery.mainState);
     const reusableRootBrowseView = readReusableRootBrowseViewForClearedSearch(next);
     const retainsSelectedArtist = Boolean(String(next?.selected_artist || '').trim());
@@ -55869,8 +55874,20 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     const canRestoreCachedClear = Boolean(clearScopeMatches && (
       !retainsSelectedArtist || mountedSelectedGalleryComplete
     ));
+    const currentRootGallery = !retainsSelectedArtist && clearScopeMatches
+      ? readCurrentRememberedRootGallery(reusableRootBrowseView)
+      : null;
+    if (currentRootGallery) {
+      state.ui.pendingSearchClearOnBlur = false;
+      showRememberedRootGallery(currentRootGallery);
+      releaseAlbumDetailPrewarmSearchSuspension(
+        Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
+      );
+      releasePendingSearchWaveformPeakLoadSuspension();
+      return;
+    }
     if (
-      canRestoreCachedClear && options.refreshEmptySearch !== true
+      canRestoreCachedClear
       && tryRestoreClearedSearchView(next, { reusableRootBrowseView })
     ) {
       state.ui.pendingSearchClearOnBlur = false;
@@ -56205,6 +56222,19 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       : []
     ).some((album) => String(album?.name || '').toLocaleLowerCase().includes(normalizedQuery))
   );
+  // Clicking the artist already shown, who has no family to resolve, reuses the mounted gallery:
+  // it is what the fetch would return (owner, 11-18: navigation never reloads the view on screen).
+  const isMountedSoloSelectedArtist = Boolean(
+    !query
+    && currentSelectedArtist === normalizedArtist
+    && currentPrimaryGroups.length === 1
+    && !currentFamilyGroups.length
+    && !currentRelatedArtists.length
+    && !Boolean(state.view?.initial_view_partial)
+    && String(state.view?.payload_tier || '').trim().toLowerCase() !== 'sidebar'
+    && !Boolean(state.view?.primary_filter_active)
+    && !(Array.isArray(state.view?.related_filter_artists) && state.view.related_filter_artists.length)
+  );
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -56222,7 +56252,7 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
         )
       )
     )
-    : hasAuthoritativeMountedFamilyContext;
+    : hasAuthoritativeMountedFamilyContext || isMountedSoloSelectedArtist;
   if (matchedSelectedArtistGroupIndex >= 0) {
     const optimisticMatchedSelectedArtistGroup = deepCloneJson(matchedSelectedArtistGroup);
     const selectedAlbumKeys = new Set(
@@ -56534,6 +56564,36 @@ function isMountedSelectedGalleryComplete(selectedArtist, reusableRootBrowseView
     && mountedAlbumCount === expectedAlbumCount;
 }
 
+// A remembered full gallery that no library change has outdated, so showing it needs no request.
+// While another gallery request is loading, the normal refresh supersedes it instead, so that
+// request's late answer can never replace the gallery shown from memory.
+function readCurrentRememberedRootGallery(rootView) {
+  if (!rootView || state.ui.activeViewRequestController
+    || (typeof isRootGalleryPageRequestLoading === 'function' && isRootGalleryPageRequestLoading())
+    || rootView.initial_view_partial
+    || String(rootView.payload_tier || '').trim().toLowerCase() === 'sidebar') {
+    return null;
+  }
+  const rootRevision = Number(rootView.inventory_mutation_revision);
+  return Number.isSafeInteger(rootRevision)
+    && rootRevision === Number(state.status?.inventory_mutation_revision)
+    ? rootView
+    : null;
+}
+
+function showRememberedRootGallery(rootView, historyView = rootView) {
+  state.gallery.sidebarArtistsOverride = null;
+  state.gallery.sidebarShowAllArtistsOverride = null;
+  applyViewPayload(rootView, { trackSidebarReveal: false });
+  pushBrowserViewState(historyView);
+  renderSidebar();
+  renderRelated();
+  renderLibraryLoader(state.status);
+  scheduleBrowserAnimationFrame(() => {
+    renderArtistGroups({ preserveScroll: true });
+  });
+}
+
 function tryRestoreClearedSearchView(nextView, options = {}) {
   const preserveHomeBrowseContext = Boolean(
     String(nextView?.surface?.active || '').trim().toLowerCase() === 'home'
@@ -56738,7 +56798,14 @@ function handleGalleryBootstrapSearchBlur(event) {
   const applyEmptySearch = state.ui.pendingSearchClearOnBlur
     && !String(input.value || '').trim() && Boolean(String(state.view?.query || '').trim());
   state.ui.pendingSearchClearOnBlur = false;
-  if (applyEmptySearch) {
+  // Desktop: clicking empty space outside an emptied search box applies the clear. Focus
+  // moving to a control (the search button, an artist, a card) leaves that control's own
+  // action in charge. Phones keep their own empty-search flow; dismissing the keyboard blurs.
+  if (
+    applyEmptySearch
+    && !event?.relatedTarget
+    && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
+  ) {
     commitGallerySearchQuery('', { preserveSelectedGallery: true });
     return;
   }
@@ -56770,7 +56837,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// A history step onto the address of the view already shown (a duplicate history entry) keeps
+// that view: reloading it is navigation that changes nothing (owner, 11-18).
+function historyStepShowsCurrentView(href) {
+  if (state.ui?.activeViewRequestController || state.ui?.pendingViewRequest) return false;
+  if (state.view?.initial_view_partial) return false;
+  if (String(state.view?.payload_tier || '').trim().toLowerCase() === 'sidebar') return false;
+  return buildUrl(parseBrowserUrlState(href)) === buildUrl(state.view || {});
+}
+
 function handleGalleryBootstrapPopState(options = {}) {
+  if (!options.parentViewUrl && !options.galleryAnchorArtist && historyStepShowsCurrentView(getBrowserLocationHref())) return;
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist

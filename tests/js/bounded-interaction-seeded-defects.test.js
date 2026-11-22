@@ -21,6 +21,16 @@ function inject(overrides, file, anchor, replacement) {
 
 const DEFECTS = [
   {
+    // Owner, 11-18 (PR #107): navigation that reloads the view already on screen. A request whose own
+    // function records the view in history navigates, and navigation needs the already-shown proof.
+    id: 'navigation: a status poll that records its view in history becomes navigation without an already-shown contract',
+    language: 'js',
+    file: 'music_app/static/js/runtime/gallery-refresh-and-status.js',
+    anchor: 'async function pollStatus() {\n',
+    replacement: 'async function pollStatus() {\n  pushBrowserViewState(state.view);\n',
+    expected: /^js:runtime\/gallery-refresh-and-status\.js#pollStatus: navigation entrypoint js:music_app\/static\/js\/runtime\/gallery-refresh-and-status\.js#pollStatus:request:fetch needs a request-capture contract with alreadyShown: /,
+  },
+  {
     id: 'BI-H01 direct row scan inside a registered scroll handler',
     language: 'js',
     file: 'music_app/static/js/runtime/problematic-files-virtual-list.js',
@@ -446,6 +456,25 @@ const DEFECTS = [
     expected: /^unregistered entrypoint py:music_app\/routes\/api_read_asgi_routes\.py#_seeded_rebuild_gallery:background:executor$/,
   },
   {
+    // Owner, 11-18 (PR #107): every page render read layout settings through a new connection, 112-590 ms each.
+    id: 'BI-15 page render whose layout repository opens its own Postgres connection instead of leasing the pool',
+    language: 'py',
+    file: 'music_app/services/client_layout_preferences.py',
+    anchor: 'from music_app.services.postgres_connections import pooled_connection as _connect\n',
+    replacement: '\n\ndef _connect(database_url: str):\n    return _seeded_psycopg.connect(database_url)\n',
+    prelude: 'import psycopg as _seeded_psycopg\n',
+    expected: /^rejected BI-15 database-connect-per-request:psycopg\.connect at music_app\/services\/client_layout_preferences\.py:\d+ from py:music_app\/[^ ]+:route:GET \/ via .*_connect$/,
+  },
+  {
+    // Owner, 11-18 (PR #107): the preview storage state, polled every 60 s (every 2 s during a move), opened a connection per tick.
+    id: 'BI-15 polled preview storage read that opens its own Postgres connection per tick',
+    language: 'py',
+    file: 'music_app/services/generated_preview_storage_postgres.py',
+    anchor: 'def _connect(database_url: str):\n    return _leased_connection(database_url)\n',
+    replacement: 'def _connect(database_url: str):\n    return _lock_session_connect(database_url)\n',
+    expected: /^rejected BI-15 database-connect-per-request:psycopg\.connect at music_app\/services\/generated_preview_storage_postgres\.py:\d+ from py:music_app\/routes\/admin_asgi\.py#get_preview_storage:route:GET \/admin\/server\/preview-storage via /,
+  },
+  {
     id: 'BI-04 background reconciler that rebuilds every relation view without a batching contract',
     language: 'py',
     file: 'music_app/services/cover_lookup_tasks.py',
@@ -818,6 +847,133 @@ test('the guard rejects a test identity that is only a substring of the real tes
   assert.deepEqual(errors, [
     'js:runtime/track-modal-and-gallery.js#attachUtilityModalEvents: test identity "BI Utility search keystroke stores the query" is not defined in tests/js/runtime/utility-search-input-bounded.test.js',
   ]);
+});
+
+// The repeated-request rule. Each case measures the registered Album Details
+// request-capture contract with a seeded interaction: opening an album wires a
+// click listener that GETs its details. A leaked listener (one more per open)
+// makes the repeated open send the same GET twice.
+const ALBUM_DETAILS_CONTRACT = 'js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails';
+
+function seededAlbumOpens({ leakListener = false, extraOnRepeat = null }) {
+  const { createRequestCapture, jsonResponse } = require('./helpers/request-capture');
+  return {
+    setup: () => ({ capture: createRequestCapture(() => jsonResponse({ ok: true })), listeners: [] }),
+    async act({ capture, listeners }, pass) {
+      const before = capture.requests.length;
+      if (leakListener || !listeners.length) listeners.push(() => capture.fetch('/album-details?album_key=alpha'));
+      await Promise.all(listeners.map(listener => listener()));
+      if (pass === 2 && extraOnRepeat) await capture.fetch(extraOnRepeat);
+      return { requests: capture.urls().slice(before) };
+    },
+  };
+}
+
+test('the repeated-request rule rejects a leaked listener that sends a duplicate GET on the repeat', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await measureInteractionContract(ALBUM_DETAILS_CONTRACT, seededAlbumOpens({}));
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, seededAlbumOpens({ leakListener: true })),
+    (error) => {
+      assert.deepEqual(error.message.split('\n'), [
+        `${ALBUM_DETAILS_CONTRACT}: the repeated interaction fanned out from 1 to 2 requests`,
+        `${ALBUM_DETAILS_CONTRACT}: the repeated interaction sent GET /album-details?album_key=alpha 2 times, the first pass 1`,
+      ]);
+      return true;
+    },
+  );
+});
+
+test('the repeated-request rule rejects a repeat that duplicates a GET without sending more requests', () => {
+  const { repeatedRequestViolations } = require('./helpers/request-capture');
+  const alpha = '/album-details?album_key=alpha';
+  const beta = '/album-details?album_key=beta';
+  assert.deepEqual(repeatedRequestViolations('seeded', [alpha, beta], [alpha, alpha]), [
+    `seeded: the repeated interaction sent GET ${alpha} 2 times, the first pass 1`,
+  ]);
+  // A first pass that repeats a GET by design (a pending retry) may repeat it as often again,
+  // and identical writes are not duplicate GETs.
+  assert.deepEqual(repeatedRequestViolations('seeded', [alpha, alpha], [alpha, alpha]), []);
+  const post = { url: '/playback/session/scrobble', method: 'POST' };
+  assert.deepEqual(repeatedRequestViolations('seeded', [post, alpha], [post, post]), []);
+});
+
+test('the repeated-request rule rejects a repeat that fans out into distinct requests', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, seededAlbumOpens({ extraOnRepeat: '/album-details?album_key=beta' })),
+    { message: `${ALBUM_DETAILS_CONTRACT}: the repeated interaction fanned out from 1 to 2 requests` },
+  );
+});
+
+// The already-shown rule. The registered gallery-link contract navigates; seeded handlers stand in
+// for the real one. PR #107's defect: Back to the gallery from a freshly loaded root gallery reloaded
+// it, because the loaded view reports all_artists_active: false although it is the library Home.
+const GALLERY_LINK_CONTRACT = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick';
+
+function seededGalleryLinks({ reloadsShownHome }) {
+  const { createRequestCapture, jsonResponse } = require('./helpers/request-capture');
+  const backToGallery = (capture, view) => {
+    const alreadyAtHome = reloadsShownHome ? view.all_artists_active !== false : view.surface === 'albums';
+    if (!alreadyAtHome) return capture.fetch('/view-data?surface=albums&all_artists=1');
+    return null;
+  };
+  return {
+    async alreadyShown() {
+      const capture = createRequestCapture(() => jsonResponse({}));
+      await backToGallery(capture, { surface: 'albums', all_artists_active: false });
+      return { requests: capture.urls() };
+    },
+    setup: () => ({ capture: createRequestCapture(() => jsonResponse({})) }),
+    async act({ capture }) {
+      const before = capture.requests.length;
+      await backToGallery(capture, { surface: 'home', all_artists_active: false });
+      return { requests: capture.urls().slice(before) };
+    },
+  };
+}
+
+test('the already-shown rule rejects navigation that reloads the view on screen (PR #107 Back to gallery)', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await measureInteractionContract(GALLERY_LINK_CONTRACT, seededGalleryLinks({ reloadsShownHome: false }));
+  await assert.rejects(
+    () => measureInteractionContract(GALLERY_LINK_CONTRACT, seededGalleryLinks({ reloadsShownHome: true })),
+    { message: `${GALLERY_LINK_CONTRACT}: navigating to the view already shown sent 1 request(s): /view-data?surface=albums&all_artists=1` },
+  );
+});
+
+test('a navigation contract cannot be proved without navigating to the view already shown', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  const { alreadyShown, ...withoutAlreadyShown } = seededGalleryLinks({ reloadsShownHome: false });
+  assert.equal(typeof alreadyShown, 'function');
+  await assert.rejects(
+    () => measureInteractionContract(GALLERY_LINK_CONTRACT, withoutAlreadyShown),
+    { message: `${GALLERY_LINK_CONTRACT}: a navigation contract must navigate from a fresh page toward the view already shown (alreadyShown)` },
+  );
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, { ...seededAlbumOpens({}), alreadyShown: async () => ({ requests: [] }) }),
+    { message: `${ALBUM_DETAILS_CONTRACT}: alreadyShown is only for entries registered with alreadyShown` },
+  );
+});
+
+test('a request-capture contract cannot be proved without repeating its interaction', async () => {
+  const { measureScalePair } = require('./helpers/bounded-interaction-counter');
+  const { loadRegistry } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const entry = loadRegistry().interactions.find(item => item.id === ALBUM_DETAILS_CONTRACT);
+  await assert.rejects(() => measureScalePair({
+    id: entry.id, small: entry.cardinalities.small, large: entry.cardinalities.production,
+    run: async () => ({ requests: 1 }), budgets: entry.budgets, growth: entry.growth,
+  }), /a request-capture contract is measured by measureInteractionContract, which repeats the interaction/);
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, { setup: () => ({}), act: async () => ({ metrics: { requests: 0 } }) }),
+    /pass 1 did not return the requests it sent/,
+  );
+  // Returning fewer requests than were counted cannot shrink the measured interaction.
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, { setup: () => ({}), act: async () => ({ requests: [], metrics: { requests: 2 } }) }),
+    /pass 1 counted 2 requests but returned 0/,
+  );
 });
 
 test('the guard reports every seeded historical defect in real application sources', { timeout: 300_000 }, async () => {

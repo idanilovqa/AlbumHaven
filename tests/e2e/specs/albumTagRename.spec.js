@@ -1,4 +1,5 @@
 import { expect, test } from '../support/baseFixtures.js';
+import { GalleryPage } from '../poms/galleryPage.js';
 import {
   readGeneratedMp3AlbumTags,
   readGeneratedMp3TagSnapshots,
@@ -67,6 +68,7 @@ const POST_EDIT_DEGRADATION_BUDGET = defineTimingBudget({
 test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
+  page,
   stepLogger,
   tagEditorActions,
   trackModalActions,
@@ -250,6 +252,21 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
     expect(mergedSummary.trackRows).toBe(1);
     await staleMergeSession.trackModalActions.close();
 
+    // Owner 2026-11-22: "In one tab I opened Ремиксы, merged two albums. In another tab I checked - still two album
+    // cards were shown." A second tab of the same browser profile shows both albums in a searched artist, as theirs did.
+    const otherTab = await page.context().newPage();
+    const otherGallery = new GalleryPage(otherTab, test.info());
+    const otherCards = (album) => otherGallery.albumCard.cardByAlbumName(album);
+    await otherTab.goto(`${ARTIST_VIEW_URL}&q=${encodeURIComponent(FIXTURE_ARTIST)}`);
+    for (const album of [FAILURE_FIXTURE_ALBUM, LINEAGE_SPLIT_ALBUM_B]) {
+      await expect(otherCards(album)).toHaveCount(1, { timeout: 30000 });
+    }
+    const otherNavigations = [];
+    otherTab.on('framenavigated', (frame) => {
+      if (frame === otherTab.mainFrame()) otherNavigations.push(frame.url());
+    });
+    await page.bringToFront();
+
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
       album: LINEAGE_SPLIT_ALBUM_B,
@@ -266,6 +283,16 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
     await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FAILURE_FIXTURE_ALBUM);
     await galleryActions.waitForAlbumHidden(LINEAGE_SPLIT_ALBUM_A);
     await galleryActions.waitForAlbumHidden(LINEAGE_SPLIT_ALBUM_B);
+
+    await otherTab.bringToFront();
+    await expect(otherCards(LINEAGE_SPLIT_ALBUM_B), 'the second tab still shows two cards for the merged album')
+      .toHaveCount(0, { timeout: 15000 });
+    await expect(otherCards(FAILURE_FIXTURE_ALBUM)).toHaveCount(1);
+    await expect(otherCards(FAILURE_FIXTURE_ALBUM)).toBeVisible();
+    await expect(otherCards(FAILURE_FIXTURE_ALBUM), 'the one card holds both albums').toContainText('2 tracks');
+    expect(otherNavigations, 'the second tab never reloaded').toEqual([]);
+    await otherTab.close();
+    await page.bringToFront();
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
       album: FAILURE_FIXTURE_ALBUM,

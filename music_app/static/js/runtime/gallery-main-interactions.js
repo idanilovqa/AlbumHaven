@@ -694,12 +694,15 @@ function findGalleryMainContextSection(threshold) {
   const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
     ? virtualGrid.sections
     : [];
+  // A pinch lays the same sections out for another column count; settled tops then name artists far away.
+  const pinching = Boolean(sections.length && virtualGrid._pinchPreview);
+  const sectionTop = section => (pinching ? virtualGrid.pinchContextTop?.(section) : null) ?? Number(section?.top || 0);
   let low = 0;
   let high = sections.length - 1;
   let index = -1;
   while (low <= high) {
     const middle = (low + high) >> 1;
-    if (Number(sections[middle]?.top || 0) <= threshold) {
+    if (sectionTop(sections[middle]) <= threshold) {
       index = middle;
       low = middle + 1;
     } else {
@@ -720,7 +723,7 @@ function findGalleryMainContextSection(threshold) {
       rendered: Boolean(label),
       labelBottom: label
         ? label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop
-        : Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
+        : sectionTop(section) + Number(virtualGrid?.sectionHeaderHeight || 0),
     };
   };
   // Rendered labels that the viewport has passed although their modelled top is still below it.

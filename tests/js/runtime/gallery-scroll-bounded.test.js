@@ -214,3 +214,30 @@ test('gallery info hover follows groups replaced, appended, or swapped after ind
     '/artist-images/next.jpg',
   ]);
 });
+
+// Owner 2026-11-22: "no band change should happen if their album/separator is not crossing visibly
+// to being behind the gallery bar".
+for (const [change, pinchedHeight] of [['grows', 450], ['shrinks', 200]]) {
+  test(`a pinch that ${change} the gallery changes the band only when a label passes behind the bar`, () => {
+    const { context, scrollTo, barParts } = loadGallery(40);
+    const pinchedTop = section => (section.top / SECTION_HEIGHT) * pinchedHeight;
+    Object.assign(context.virtualGrid, {
+      _pinchPreview: {},
+      pinchContextTop: pinchedTop,
+      pinchContextLabelBottom: section => pinchedTop(section) + LABEL_BOTTOM,
+    });
+    // Only the labels on screen are mounted, where the pinch draws them.
+    const scroll = context.document.getElementById('albums-scroll');
+    scroll.querySelector = (selector) => {
+      const index = Number(selector.match(/Artist (\d+)/)?.[1]);
+      const bottom = index * pinchedHeight + LABEL_BOTTOM - scroll.scrollTop;
+      return bottom < 0 || bottom > 800 ? null : { getBoundingClientRect: () => ({ top: bottom - 20, bottom }) };
+    };
+
+    const crossing = 20 * pinchedHeight + LABEL_BOTTOM;
+    for (const [offset, artist] of [[-30, 19], [-1, 19], [0, 20], [90, 20], [-1, 19]]) {
+      scrollTo(crossing + offset);
+      assert.equal(barParts['[data-gallery-context-name]'].textContent, `Artist ${String(artist).padStart(5, '0')}`);
+    }
+  });
+}

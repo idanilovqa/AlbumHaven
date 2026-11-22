@@ -36,6 +36,47 @@ export class MobileGalleryPinchPage extends MobileTouchFeedbackPage {
     });
   }
 
+  // Owner 2026-11-22: the band changes only when a label visibly passes behind the gallery bar.
+  async bandOwnership() {
+    // parity-check: allow-read-only-measurement-evaluate -- compare the painted band with the painted artist labels.
+    return this.galleryScroll.evaluate(scroll => {
+      const top = scroll.getBoundingClientRect().top;
+      const labels = [...scroll.querySelectorAll('[data-scroll-artist]')]
+        .map(section => ({ artist: section.dataset.scrollArtist.trim(), bottom: section.querySelector('.artist-name')?.getBoundingClientRect().bottom }))
+        .filter(label => Number.isFinite(label.bottom)).sort((a, b) => a.bottom - b.bottom);
+      const below = labels.find(label => label.bottom > top);
+      // With no passed label still mounted, the artist of the cards under the bar is the one that passed.
+      const card = [...scroll.querySelectorAll('.album-card')].find((item) => {
+        const box = item.getBoundingClientRect();
+        return box.bottom > top && (!below || box.top < below.bottom);
+      });
+      return {
+        band: document.querySelector('[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]')?.dataset.artist ?? null,
+        passed: labels.filter(label => label.bottom <= top).at(-1)?.artist
+          ?? card?.closest('[data-scroll-artist]')?.dataset.scrollArtist.trim() ?? null,
+        stillVisible: labels.filter(label => label.bottom > top).map(label => label.artist),
+      };
+    });
+  }
+
+  async expectBandChangesOnlyBehindBar() {
+    await expect.poll(async () => {
+      const { band, passed, stillVisible } = await this.bandOwnership();
+      return passed === null ? !stillVisible.includes(band) : band === passed;
+    }, { message: 'the band names an artist whose label has not passed behind the bar' }).toBe(true);
+  }
+
+  // A swipe keeps gliding: a finger position read mid-glide is not where the pinch starts.
+  async waitForScrollToRest() {
+    let previous = null;
+    await expect.poll(async () => {
+      const { scrollTop } = await this.geometry();
+      const resting = scrollTop === previous;
+      previous = scrollTop;
+      return resting;
+    }, { intervals: [250] }).toBe(true);
+  }
+
   async beginPinch({ center, span = 110 } = {}) {
     const box = await this.galleryScroll.boundingBox();
     if (!box) throw new Error('Pinch requires a visible gallery.');

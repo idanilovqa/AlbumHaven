@@ -982,14 +982,20 @@ class VirtualArtistGrid {
   // layout that places the cards; settled positions belong to the old column count and would name artists
   // far below the anchored cover once the content grows.
   pinchContextLabelBottom(section) {
+    if (!section || section.kind === 'label') return null;
+    const top = this.pinchContextTop(section);
+    if (top === null) return null;
+    return top + (this._pinchPreview.headerHeights.get(this.getRenderedSectionKey(section)) ?? this.sectionHeaderHeight);
+  }
+
+  pinchContextTop(section) {
     const preview = this._pinchPreview;
     const model = preview?.contextLayout;
-    if (!model || !section || section.kind === 'label') return null;
+    if (!model || !section) return null;
     const key = this.getRenderedSectionKey(section);
     const first = model.a.section(key), second = model.b.section(key);
     if (!first || !second) return null;
-    const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
-    return Number(preview.contentOffset || 0) + first.top + (second.top - first.top) * model.progress + headerHeight;
+    return Number(preview.contentOffset || 0) + first.top + (second.top - first.top) * model.progress;
   }
 
   finishPinchPreview(_columns, { cancelled = false } = {}) {

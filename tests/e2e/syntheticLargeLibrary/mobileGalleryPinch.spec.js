@@ -39,6 +39,8 @@ test.describe('mobile continuous gallery pinch on the production-calibration lib
         await phone.swipeGallery();
         await expect.poll(async () => (await phone.geometry()).scrollTop).toBeGreaterThan(beforeScroll);
       }
+      await phone.waitForScrollToRest();
+      await phone.expectBandChangesOnlyBehindBar();
       const before = await phone.geometry();
       expect(before.scrollTop).toBeGreaterThan(before.viewport.height);
       const anchor = phone.midpointCard(before);
@@ -52,6 +54,7 @@ test.describe('mobile continuous gallery pinch on the production-calibration lib
             const card = (await phone.geometry()).cards.find(item => item.key === anchor.key && item.occurrence === anchor.occurrence);
             return card?.artbox.top + card?.artbox.height * anchor.fractionY;
           }).toBeCloseTo(anchor.center.y, 0);
+          await phone.expectBandChangesOnlyBehindBar();
           const sample = await phone.geometry();
           phone.expectBounds(sample);
           expect(sample.mounted).toBeLessThan(artists.length);
@@ -68,6 +71,7 @@ test.describe('mobile continuous gallery pinch on the production-calibration lib
         const card = (await phone.geometry()).cards.find(item => item.key === anchor.key && item.occurrence === anchor.occurrence);
         return card?.artbox.top + card?.artbox.height * anchor.fractionY;
       }).toBeCloseTo(anchor.center.y, 0);
+      await phone.expectBandChangesOnlyBehindBar();
       await testInfo.attach(`${view}-deep-pinch`, { body: JSON.stringify({ anchor, before, samples }), contentType: 'application/json' });
       const after = await phone.geometry();
       for (let index = 0; index < 12; index++) {

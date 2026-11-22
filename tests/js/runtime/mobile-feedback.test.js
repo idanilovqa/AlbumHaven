@@ -597,14 +597,18 @@ test('gallery popstate from a search to an artist page loads the library tree af
   assert.equal(requests[1][1], false, 'a history move writes no history');
   assert.equal(requests[1][2].retainMountedSelectedViewState.selected_artist, 'The Flower Kings');
 
-  // Between two library pages the tree is already the library's; a page the owner left again loads no tree.
-  for (const [view, applied] of [[{ query: '', selected_artist: 'Yes' }, true], [state.view, false]]) {
+  // From a library page the tree is already the library's; a page superseded before it applied loads no tree.
+  const scenarios = [
+    { shown: { query: '', selected_artist: 'Yes' }, applied: true },
+    { shown: { query: 'flower kings', selected_artist: 'The Flower Kings' }, applied: false },
+  ];
+  for (const { shown, applied } of scenarios) {
     requests.length = 0;
-    state.view = { ...view, query: view === state.view ? 'flower kings' : view.query };
-    context.fetchAndRender = async (url) => { requests.push([url]); return applied; };
+    state.view = shown;
+    context.fetchAndRender = async (url) => { requests.push(url); return applied; };
     context.handleGalleryBootstrapPopState();
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(requests.length, 1);
+    assert.deepEqual(requests, ['https://example.test/?surface=albums&artist=The+Flower+Kings']);
   }
 });
 

@@ -55018,17 +55018,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
         && clearScopeMatches
       );
       if (retainMountedSelectedArtist) {
-        fetchAndRender(buildApiUrl({
-          ...next,
-          selected_artist: '',
-        }, {
-          payloadTier: 'sidebar',
-        }), true, {
-          preserveScroll: true,
-          retainMountedGalleryIfEquivalent: true,
-          retainMountedSelectedViewState: next,
-          skipPendingViewTransition: true,
-        });
+        fetchLibraryArtistTree(next, true);
       } else {
         fetchAndRender(buildApiUrl(next), true);
         // That gallery request carries no tree, so the search's filtered list would stay.
@@ -55885,10 +55875,21 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// The library's whole Artists tree for a view without a search, keeping the mounted gallery of that view. An artist
+// page's own request carries no tree: the library's tree comes with the library view, a search's with the search.
+function fetchLibraryArtistTree(view, push) {
+  return fetchAndRender(buildApiUrl({ ...view, selected_artist: '' }, { payloadTier: 'sidebar' }), push, {
+    preserveScroll: true,
+    retainMountedGalleryIfEquivalent: true,
+    retainMountedSelectedViewState: view,
+    skipPendingViewTransition: true,
+  });
+}
+
 function handleGalleryBootstrapPopState(options = {}) {
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
-  // The history entry, not what was last typed, owns the search field (owner 2026-11-21: Back after clearing a search
-  // brought its URL back with an empty field). A typed search still waiting to commit would override the entry.
+  // The history entry owns the search field: unsubmitted text, or a typed search still waiting to commit, would
+  // otherwise stay over the entry's page (and an emptied field would clear the restored search when it blurs).
   const destination = parseBrowserUrlState(parentViewUrl);
   clearPendingGallerySearchCommit();
   updateGallerySearchDraftQuery(destination.query);
@@ -55896,9 +55897,8 @@ function handleGalleryBootstrapPopState(options = {}) {
   const requestUrl = options.galleryAnchorArtist
     ? buildApiUrl(destination, { galleryAnchorArtist: options.galleryAnchorArtist })
     : parentViewUrl;
-  // An artist page's view carries no Artists tree: the library's tree comes with the library view, a search's with
-  // the search. Leaving a search for an artist page would keep the search's tree, so the library's tree is loaded
-  // after the page, as clearing a search does.
+  // Leaving a search for an artist page would keep the search's tree (owner 2026-11-21): the library's tree is
+  // loaded after the page, as clearing a search does.
   const destinationArtist = String(destination.selected_artist || '').trim();
   const leavesSearchTree = Boolean(String(state.view?.query || '').trim())
     && !String(destination.query || '').trim() && Boolean(destinationArtist);
@@ -55907,12 +55907,7 @@ function handleGalleryBootstrapPopState(options = {}) {
   void Promise.resolve(request).then((applied) => {
     if (!applied || String(state.view?.query || '').trim()
       || String(state.view?.selected_artist || '').trim() !== destinationArtist) return;
-    fetchAndRender(buildApiUrl({ ...state.view, selected_artist: '' }, { payloadTier: 'sidebar' }), false, {
-      preserveScroll: true,
-      retainMountedGalleryIfEquivalent: true,
-      retainMountedSelectedViewState: { ...state.view },
-      skipPendingViewTransition: true,
-    });
+    fetchLibraryArtistTree({ ...state.view }, false);
   }, () => {});
 }
 

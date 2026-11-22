@@ -135,11 +135,11 @@ class LocalCoverScanCheck:
                     changed.add(path)
             if previous:
                 changed.update(path for path in scanned if path not in previous)
-            if changed and not worker.invalidate_or_retry(sorted(changed)):
-                return {}
-            if removed and not worker.invalidate_or_retry(removed, context_changed=True):
-                return {}
-            if self._times_unknown:
+            marked = not changed or worker.invalidate_or_retry(sorted(changed))
+            if removed:
+                # Always attempted: the next scan's previous cache no longer holds a removed track.
+                marked = worker.invalidate_or_retry(removed, context_changed=True) and marked
+            if not marked or self._times_unknown:
                 return {}
         return {root_id: self._started_at for root_id in readable_root_ids}
 
@@ -154,6 +154,7 @@ class _WorkQueue:
         self._opened = {}
         self._changed = {}
         self._taken = None
+        self._taken_was_opened = False
 
     def add(self, keys, *, foreground=False, delay=0.0):
         due = time.monotonic() + delay
@@ -184,7 +185,12 @@ class _WorkQueue:
             if key is not None:
                 del pending[key]
             self._taken = key
+            self._taken_was_opened = pending is self._opened
             return key
+
+    def put_back(self, key, *, delay=0.0):
+        """The key just taken is not done: it waits its delay where it was."""
+        self.add([key], foreground=self._taken_was_opened, delay=delay)
 
     def known(self):
         """Every key queued or being worked."""
@@ -278,14 +284,25 @@ class LocalCoverInventoryRepository:
             connection.commit()
 
     def next_context(self, key):
-        """Claim one queued context, if it still has to be resolved."""
+        """Claim one queued context, if it still has to be resolved.
+
+        A deferred one is not claimed: ``retry_in`` then says in how many seconds its row is due."""
         with self._connection() as connection:
             row = connection.execute(
-                f"""update library.local_cover_inventory_contexts
-                    set retry_after = now() + interval '{_RETRY_SECONDS} seconds'
-                    where library_id = ({_LIBRARY}) and context_key = %(key)s and root_path is null
-                    and (retry_after is null or retry_after <= now())
-                    returning context_key, track_paths, foreground_requested, revision""",
+                f"""with pending as (
+                      select library_id, context_key, track_paths, foreground_requested, revision, retry_after
+                      from library.local_cover_inventory_contexts
+                      where library_id = ({_LIBRARY}) and context_key = %(key)s and root_path is null for update
+                    ), claimed as (
+                      update library.local_cover_inventory_contexts as context
+                      set retry_after = now() + interval '{_RETRY_SECONDS} seconds' from pending
+                      where context.library_id = pending.library_id and context.context_key = pending.context_key
+                        and (pending.retry_after is null or pending.retry_after <= now())
+                      returning context.context_key)
+                    select pending.context_key, pending.track_paths, pending.foreground_requested, pending.revision,
+                      case when claimed.context_key is null
+                        then extract(epoch from pending.retry_after - now())::float8 end as retry_in
+                    from pending left join claimed on claimed.context_key = pending.context_key""",
                 {"key": key},
             ).fetchone()
             connection.commit()
@@ -409,14 +426,26 @@ class LocalCoverInventoryRepository:
         return [row["root_path"] for row in listings]
 
     def next_pending(self, root):
-        """Claim one queued listing, if it still has to be read."""
+        """Claim one queued listing, if it still has to be read.
+
+        A deferred one is not claimed: ``retry_in`` then says in how many seconds its row is due."""
         with self._connection() as connection:
             row = connection.execute(
-                f"""update library.local_cover_inventories
-                    set retry_after = now() + interval '5 minutes'
-                    where library_id = ({_LIBRARY}) and root_path = %(root)s and indexed_revision < revision
-                    and (retry_after is null or retry_after <= now())
-                    returning root_path, revision, foreground_requested""",
+                f"""with pending as (
+                      select library_id, root_path, revision, foreground_requested, retry_after
+                      from library.local_cover_inventories
+                      where library_id = ({_LIBRARY}) and root_path = %(root)s and indexed_revision < revision
+                      for update
+                    ), claimed as (
+                      update library.local_cover_inventories as inventory
+                      set retry_after = now() + interval '5 minutes' from pending
+                      where inventory.library_id = pending.library_id and inventory.root_path = pending.root_path
+                        and (pending.retry_after is null or pending.retry_after <= now())
+                      returning inventory.root_path)
+                    select pending.root_path, pending.revision, pending.foreground_requested,
+                      case when claimed.root_path is null
+                        then extract(epoch from pending.retry_after - now())::float8 end as retry_in
+                    from pending left join claimed on claimed.root_path = pending.root_path""",
                 {"root": root},
             ).fetchone()
             connection.commit()
@@ -658,6 +687,9 @@ class LocalCoverInventoryWorker:
                     self._retry_scheduled_invalidation()
                     key = self._contexts.take(background=background)
                     context = self.repository.next_context(key) if key else None
+                    if context and context.get("retry_in") is not None:
+                        self._contexts.put_back(key, delay=context["retry_in"])
+                        context = None
                     if context:
                         from music_app.services.cover_workflow import resolve_album_root_from_track_paths
                         cancelled = lambda: self._cancel_requested(context["foreground_requested"])
@@ -673,22 +705,25 @@ class LocalCoverInventoryWorker:
                                 self._listings.add([root_key(album_root)], foreground=context["foreground_requested"])
                             elif local_inventory_tracks_exist(context["track_paths"]):
                                 self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=_UNRESOLVED_FOLDER_RETRY_SECONDS, error=None)
-                                self._contexts.add([key], delay=_UNRESOLVED_FOLDER_RETRY_SECONDS)
+                                self._contexts.put_back(key, delay=_UNRESOLVED_FOLDER_RETRY_SECONDS)
                             else:
                                 self.repository.defer_context(context["context_key"], context["revision"])
-                                self._contexts.add([key], delay=_RETRY_SECONDS)
+                                self._contexts.put_back(key, delay=_RETRY_SECONDS)
                             self._mark_finished(("context", context["context_key"]))
                         except InterruptedError:
                             self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=0)
-                            self._contexts.add([key], foreground=context["foreground_requested"])
+                            self._contexts.put_back(key)
                         except (OSError, ValueError):
                             self.repository.defer_context(context["context_key"], context["revision"])
-                            self._contexts.add([key], delay=_RETRY_SECONDS)
+                            self._contexts.put_back(key, delay=_RETRY_SECONDS)
                     key = None
                     if self._stop.is_set():
                         return
                     root = self._listings.take(background=background)
                     pending = self.repository.next_pending(root) if root else None
+                    if pending and pending.get("retry_in") is not None:
+                        self._listings.put_back(root, delay=pending["retry_in"])
+                        pending = None
                     if pending:
                         cancelled = lambda: self._cancel_requested(pending["foreground_requested"])
                         try:
@@ -699,16 +734,16 @@ class LocalCoverInventoryWorker:
                             self._mark_finished(("root", root_key(pending["root_path"])))
                         except InterruptedError:
                             self.repository.defer(pending["root_path"], pending["revision"], delay_seconds=0)
-                            self._listings.add([root], foreground=pending["foreground_requested"])
+                            self._listings.put_back(root)
                         except OSError:
                             self.repository.defer(pending["root_path"], pending["revision"])
-                            self._listings.add([root], delay=_RETRY_SECONDS)
+                            self._listings.put_back(root, delay=_RETRY_SECONDS)
                             self._mark_finished(("root", root_key(pending["root_path"])))
             except Exception:
                 # A database failure loses no work this process was given.
                 if key:
-                    self._contexts.add([key], delay=_RETRY_SECONDS)
+                    self._contexts.put_back(key, delay=_RETRY_SECONDS)
                 if root:
-                    self._listings.add([root], delay=_RETRY_SECONDS)
+                    self._listings.put_back(root, delay=_RETRY_SECONDS)
                 self._logger.exception("Local cover inventory refresh failed.")
                 self._stop.wait(5.0)

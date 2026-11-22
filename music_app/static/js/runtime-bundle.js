@@ -19073,7 +19073,8 @@ async function updateWaveformAppearance(forceReload = false) {
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
-  const path = String(state.player.current?.path || '');
+  // While a switch waits for its audio, the player shows the pressed song, never the old waveform.
+  const path = String(state.player.selectedTrack?.path || state.player.current?.path || '');
   const isWaveform = state.player.loopActive || state.player.appearance.seekbarMode === 'waveform';
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
@@ -45813,7 +45814,8 @@ function updatePlayerUi() {
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
-  const displayTrack = mirroredTrack || state.player.current;
+  // A pressed song is shown from the press, through every redraw until its audio starts.
+  const displayTrack = mirroredTrack || state.player.selectedTrack || state.player.current;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
   els.player?.classList?.toggle('is-empty', !hasTrack);
@@ -45968,6 +45970,7 @@ function renderSelectedTrackState(track) {
   if (track && typeof getPlayerElements === 'function') {
     renderGlobalPlayerMetadata(getPlayerElements(), track);
   }
+  if (typeof updateWaveformAppearance === 'function') void updateWaveformAppearance();
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }

@@ -1,8 +1,9 @@
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
-// The server builds one waveform at a time, so player peaks keep waiting out another build
-// at this pace for as long as their playback generation lasts.
+// The server builds one waveform at a time, so peaks keep waiting out another build at this
+// pace: the player's for as long as their playback generation lasts, a saved loop's for as
+// long as a caller still shows that loop.
 const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
@@ -92,16 +93,17 @@ function getCachedSavedLoopWaveformPeaks(loopId) {
   return savedLoopWaveformPeakCache.get(String(loopId || '').trim())?.peaks || null;
 }
 
-async function loadSavedLoopWaveformPeaks(loopId) {
+async function loadSavedLoopWaveformPeaks(loopId, isWanted = null) {
   const identity = String(loopId || '').trim();
   if (!identity || identity.length > 256) return null;
   if (savedLoopWaveformPeakCache.has(identity)) {
     const cached = savedLoopWaveformPeakCache.get(identity);
+    if (isWanted && !cached.peaks) cached.waiters.push(isWanted);
     return cached.promise;
   }
 
   const controller = new AbortController();
-  const entry = { controller, promise: null, peaks: null };
+  const entry = { controller, promise: null, peaks: null, waiters: isWanted ? [isWanted] : [] };
   entry.promise = (async () => {
     let retained = false;
     try {
@@ -113,9 +115,12 @@ async function loadSavedLoopWaveformPeaks(loopId) {
         const response = await fetch(`/playback/waveform?${query}`, {
           signal: controller.signal,
         });
-        if (response.status === 429 && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length) {
+        if (response.status === 429
+            && (attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length
+              || entry.waiters.some((wanted) => wanted()))) {
           await new Promise((resolve) => {
-            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]);
+            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
+              ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
           });
           if (controller.signal.aborted) return null;
           continue;

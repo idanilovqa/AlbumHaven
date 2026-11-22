@@ -122,6 +122,9 @@ test('bounded interaction: a retry pass keeps one retry timer and refreshes the 
     const counter = createInteractionCounter();
     const live = new Set();
     let nextTimer = 0;
+    // The timer's callback starts the pass without returning it; the pass ends with the view refresh.
+    let passEnded;
+    const ended = new Promise((resolve) => { passEnded = resolve; });
     const context = {
       console, JSON, Promise, Date,
       CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
@@ -131,7 +134,7 @@ test('bounded interaction: a retry pass keeps one retry timer and refreshes the 
       setTimeout: (fn) => { nextTimer += 1; live.add(nextTimer); live[nextTimer] = fn; return nextTimer; },
       clearTimeout: (id) => { live.delete(id); },
       showToast() {},
-      refreshCurrentViewAfterBackgroundCompletion: async () => { counter.count('renderCommits'); },
+      refreshCurrentViewAfterBackgroundCompletion: async () => { counter.count('renderCommits'); passEnded(); },
       // Every waiting save is confirmed by the server: each is settled in this one pass.
       fetch: async () => { counter.count('requests'); return { ok: true, status: 200, json: async () => ({ ok: true, found: true, status: 'completed' }) }; },
     };
@@ -145,7 +148,9 @@ test('bounded interaction: a retry pass keeps one retry timer and refreshes the 
     const [armed] = live;
     const measured = await counter.measure(async () => {
       live.delete(armed);
-      await live[armed]();
+      live[armed]();
+      await ended;
+      await new Promise((resolve) => setImmediate(resolve)); // the pass's last schedule() runs after the refresh starts
       counter.count('timers', live.size);
     });
     assert.deepEqual(api.list(), [], 'every confirmed save left the queue');

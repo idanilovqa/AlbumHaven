@@ -107,6 +107,9 @@ def leave_setup_database_migrated():
     isolatedPostgres.apply_all_migrations(setup_url)
 
 
+pytestmark = pytest.mark.usefixtures("leave_setup_database_migrated")
+
+
 def test_delivery_1_migration_is_next_and_lexically_ordered():
     names = sorted(path.name for path in MIGRATIONS_ROOT.glob("*.sql") if path.is_file())
 

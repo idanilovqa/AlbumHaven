@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from tests.e2e.support import isolatedPostgres
+from tests.py.test_musicbrainz_artist_migration_postgres import leave_setup_database_migrated  # noqa: F401
 from tests.py.test_track_transliteration_postgres import JAPANESE, _search, _seed
+
+pytestmark = pytest.mark.usefixtures("leave_setup_database_migrated")
 
 
 def _credit(setup_url, albums, *names):

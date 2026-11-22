@@ -10844,7 +10844,9 @@ def _search_preview_sql(
                  like lower(%(query_like)s) escape '')
           -- And by the name the album's release credits, where that isn't the main one, written as
           -- 0275 indexes it: only the matching releases' albums are read.
-          union
+          -- "union all": a "union" here would want the albums sorted, not found by their trigram index.
+          -- Every reader of this CTE drops duplicates.
+          union all
           select albums.library_id, albums.id
           from integration.musicbrainz_releases releases
           join library.local_album_musicbrainz_releases decision

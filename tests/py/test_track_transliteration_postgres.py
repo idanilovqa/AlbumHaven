@@ -6,10 +6,15 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from music_app.services.musicbrainz_release_identity_postgres import MusicBrainzReleaseIdentityPostgresRepository
 from music_app.services.track_transliteration import apply_track_transliterations
 from tests.e2e.support import isolatedPostgres
+from tests.py.test_musicbrainz_artist_migration_postgres import leave_setup_database_migrated  # noqa: F401
 from tests.py.test_musicbrainz_series_postgres import NOW, _database
+
+pytestmark = pytest.mark.usefixtures("leave_setup_database_migrated")
 
 GROUP = "00000000-0000-4000-8000-000000000252"
 JAPANESE = "b242128c-42fb-418d-afee-9f3980740fd2"

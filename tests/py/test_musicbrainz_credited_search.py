@@ -23,8 +23,9 @@ def test_search_finds_an_album_by_its_releases_credited_name_through_the_index()
     assert f"{NAME} like lower(%(query_like)s) escape ''" in arm.replace("releases.artist_credit", "artist_credit")
     assert CREDITED_ELSEWHERE in arm.replace("releases.artist_credit", "artist_credit")
     assert "decision.state = 'release'" in arm
-    # Through the matching releases to their albums: a union, never an OR that reads every album.
-    assert " union select albums.library_id, albums.id" in arm
+    # Through the matching releases to their albums: "union all", never an OR that reads every album
+    # or a "union" that sorts them. Every reader of the CTE drops duplicates.
+    assert " union all select albums.library_id, albums.id" in arm
     assert "jsonb_array_elements" not in arm
 
 

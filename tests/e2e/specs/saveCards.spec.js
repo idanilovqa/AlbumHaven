@@ -68,7 +68,7 @@ async function holdSave() {
 }
 
 // A fast click: the confirmation is clicked as soon as it can be, never after the decision.
-async function clickSave({ page, galleryActions, tagEditorActions }, album, edit, { copyIndex } = {}) {
+async function clickSave({ page, galleryActions, tagEditorActions }, album, edit, { copyIndex, holdOnceOpen } = {}) {
   await galleryActions.openAlbumTagEditorFromContextMenu(album);
   if (copyIndex === undefined) {
     await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
@@ -78,6 +78,8 @@ async function clickSave({ page, galleryActions, tagEditorActions }, album, edit
     await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
     await tagEditorActions.selectTracksByFilenames(albumFilenames(copyIndex));
   }
+  // Only now: album details read the table these holds lock, so a hold taken earlier keeps the editor shut.
+  if (holdOnceOpen) decisionGate = await holdOnceOpen();
   await edit(tagEditorActions);
   const frames = new SaveCardFrames(page);
   await frames.start();
@@ -174,8 +176,9 @@ test.describe('Cards change at Save', () => {
   }) => {
     await openLibrary({ managedAppLifecycle, galleryActions, appBarActions }, [TWIN, OTHER]);
     await holdSave();
-    decisionGate = await holdFoldDecision();
-    const frames = await clickSave({ page, galleryActions, tagEditorActions }, OTHER, renameTo(COPY));
+    const frames = await clickSave({ page, galleryActions, tagEditorActions }, OTHER, renameTo(COPY), {
+      holdOnceOpen: holdFoldDecision,
+    });
     await expectFromTheClick(frames, [TWIN, COPY]);
     const decidedAt = (await frames.read()).at(-1).at;
     await decisionGate.release();
@@ -194,11 +197,12 @@ test.describe('Cards change at Save', () => {
       ['Third Release', 'Twin Rélease', holdFoldDecisionThenOutdateIt, true],
     ]) {
       await holdSave();
-      decisionGate = await holdDecision();
       const before = await galleryActions.galleryPage.albumCard.cards.locator(
         galleryActions.galleryPage.albumCard.titleButtonSelector,
       ).allTextContents();
-      const frames = await clickSave({ page, galleryActions, tagEditorActions }, album, renameTo(renamed));
+      const frames = await clickSave({ page, galleryActions, tagEditorActions }, album, renameTo(renamed), {
+        holdOnceOpen: holdDecision,
+      });
       // The copy keeps its card: nothing can say yet that it folds.
       await expectFromTheClick(frames, before.map(name => name.trim()).map(name => (name === album ? renamed : name)));
       if (outdated) {

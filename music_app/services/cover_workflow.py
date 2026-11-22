@@ -21,14 +21,15 @@ from music_app.services.generated_preview_storage import (
 )
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
+from music_app.services.utils import DISC_PART_FOLDER_WORDS
 
 
 _ALBUM_DISC_MARKER_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(?P<number>\d{1,2})(?![A-Za-z0-9])",
+    rf"(?<![^\W_])(?:{DISC_PART_FOLDER_WORDS})\.?\s*[-_.]?\s*(?P<number>\d{{1,2}})(?![^\W_])",
     re.IGNORECASE,
 )
 _ALBUM_RELEASE_PART_FOLDER_RE = re.compile(
-    r"^(?:(?:cd|disc|disk|lp)\s*[-_.]?\s*"
+    rf"^(?:(?:{DISC_PART_FOLDER_WORDS}|lp)\.?\s*[-_.]?\s*"
     r"(?:\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)"
     r"|bonus\s+(?:disc|tracks?))(?:\s*[-_.]\s*.*)?$",
     re.IGNORECASE,

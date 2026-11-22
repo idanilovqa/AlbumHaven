@@ -1845,8 +1845,8 @@ def test_link_duplicate_album_sources_keeps_separatorless_path_kinds_distinct(mo
         name="Album",
         album_artist="Artist",
         tracks=[
-            Track(path=Path("01.flac"), title="One", album_artist="Artist", album="Album", year=2001),
-            Track(path=Path("C:02.flac"), title="Two", album_artist="Artist", album="Album", year=2001),
+            Track(path=Path("01.flac"), title="One", track_number=1, album_artist="Artist", album="Album", year=2001),
+            Track(path=Path("C:02.flac"), title="Two", track_number=1, album_artist="Artist", album="Album", year=2001),
         ],
     )
     resolved = []
@@ -1867,11 +1867,11 @@ def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_id
     from music_app.services import library
 
     shared_path = tmp_path / "Copy B" / "CD1" / "01.mp3"
-    old = Track(path=shared_path, title="Old", album_artist="Wrong artist", album="Album", year=2001,
+    old = Track(path=shared_path, title="Old", track_number=1, album_artist="Wrong artist", album="Album", year=2001,
                 library_root_id="old-root")
-    replacement = Track(path=shared_path, title="Replacement", album_artist="Artist", album="Album", year=2001,
+    replacement = Track(path=shared_path, title="Replacement", track_number=1, album_artist="Artist", album="Album", year=2001,
                         library_root_id="replacement-root")
-    companion = Track(path=tmp_path / "Copy A" / "01.mp3", title="Companion",
+    companion = Track(path=tmp_path / "Copy A" / "01.mp3", title="Companion", track_number=1,
                       album_artist="Artist", album="Album", year=2001, library_root_id="companion-root")
     mixed = [
         Track(path=tmp_path / "Mixed" / f"{index}.mp3", title=str(index),

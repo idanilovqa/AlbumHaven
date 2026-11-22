@@ -11,6 +11,10 @@ def artist_collation_key(value: object) -> tuple[str, str]:
         text = text[1:].lstrip()
     return text, folded
 
+# Folder words that name one disc or part of a release ("CD 2", "Part 2", "Часть 2").
+DISC_PART_FOLDER_WORDS = r"cd|disc|disk|disque|part|pt|parte|partie|teil|часть|диск"
+# A folder named only by one of those words and its number ("CD3", "Часть 1").
+DISC_PART_FOLDER_NAME_RE = re.compile(rf"(?:{DISC_PART_FOLDER_WORDS})\.?\s*[-_.]?\s*\d{{1,2}}", re.IGNORECASE)
 _QUESTIONABLE_MARKERS = {"??", "�"}
 _SUSPICIOUS_MOJIBAKE_SEQUENCES = (
     "Ð", "Ñ", "Ã", "Â", "ÄÄ", "ÄÅ", "ÄÆ", "ÄÇ", "ÄÈ", "ÄÉ", "ÄÊ", "ÄË", "ÄÌ", "ÄÍ", "ÄÎ", "ÄÏ", "ÄÒ", "ÄÓ",

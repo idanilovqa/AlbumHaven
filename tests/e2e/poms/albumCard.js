@@ -227,6 +227,11 @@ export class AlbumCard extends BasePage {
     });
   }
 
+  duplicateFilesBadgeByIdentity(artistName, albumName, year) {
+    return this.cardByIdentity(artistName, albumName, year)
+      .getByRole('button', { name: 'Duplicate files', exact: true });
+  }
+
   coverImageByAlbumName(albumName) {
     return this.page.locator('#artist-groups .album-card:visible').filter({
       has: this.page.locator(this.titleButtonSelector).filter({ hasText: exactNormalizedText(albumName) }),

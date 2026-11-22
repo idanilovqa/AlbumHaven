@@ -722,31 +722,31 @@ class PostgresLibraryBrowseRepository:
         self,
         *,
         query_params: Mapping[str, object] | None = None,
-        rebuild_missing_snapshot: bool = False,
     ) -> dict[str, object]:
-        """Loose Tracks alone: no gallery is built or sent (owner PERF-1)."""
+        """Loose Tracks alone: no gallery is built or sent (owner PERF-1). Read from the case 64 store."""
         params = query_params or {}
         view_state = _root_sidebar_view_state(query_params)
         selected_artist = str(params.get("artist") or "").strip()
         query = str(params.get("q") or "")
         from music_app.services import loose_track_store
 
-        del rebuild_missing_snapshot  # case 64: a read never builds; loose_track_store.prepare does
         browse_only = bool(self._config.get("SHARED_LIBRARY_BROWSE_ONLY"))
-        # A few waiting marks are drained here, on the writer only; more wait for the background drain.
-        if not browse_only:
-            with self._owned_connection_context() as connection:
-                state = loose_track_store.load_state(connection)
-                waiting = loose_track_store.waiting_marks(
-                    connection, at_most=loose_track_store.INLINE_DRAIN_LIMIT + 1,
-                ) if loose_track_store.is_ready(state) else 0
-                if 0 < waiting <= loose_track_store.INLINE_DRAIN_LIMIT:
-                    loose_track_store.drain(self._inventory_repository, connection)
-                    connection.commit()
-            if waiting > loose_track_store.INLINE_DRAIN_LIMIT:
-                self.queue_utility_projection_prewarm("loose-tracks")  # the drain, never a build
+        waiting = 0
+        # One browse lease: the state, the waiting-mark count and, on the writer, an inline drain of at most
+        # INLINE_DRAIN_LIMIT marked tracks (each by key). More wait for the background drain.
         with self._browse_connection_context() as connection:
             state = loose_track_store.load_state(connection)
+            if loose_track_store.is_ready(state) and not browse_only:
+                waiting = loose_track_store.waiting_marks(
+                    connection, at_most=loose_track_store.INLINE_DRAIN_LIMIT + 1,
+                )
+                if 0 < waiting <= loose_track_store.INLINE_DRAIN_LIMIT:
+                    loose_track_store.drain(
+                        self._inventory_repository, connection, limit=loose_track_store.INLINE_DRAIN_LIMIT,
+                    )
+                    connection.commit()
+                elif waiting:
+                    self.queue_utility_projection_prewarm("loose-tracks")  # the background drain, never a build
             relation_alias_maps = None
             if not loose_track_store.is_ready(state):
                 # Preparing, or a failed build with its own retry: never built or queued by a read.

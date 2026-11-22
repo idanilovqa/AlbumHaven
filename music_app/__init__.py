@@ -630,6 +630,11 @@ def create_asgi_app():
         else:
             _app.state.cover_preview_backfill.start()
         _app.state.local_cover_inventory.start()
+        # Case 64: the Loose Tracks store's start-up owner (a build only when start-up preparation needs it).
+        from music_app.services.loose_track_store import LooseTrackStoreOwner
+
+        _app.state.loose_track_store_owner = LooseTrackStoreOwner(runtime.config, logger=runtime.logger)
+        _app.state.loose_track_store_owner.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -659,6 +664,11 @@ def create_asgi_app():
                 ("local cover inventory", _app.state.local_cover_inventory.stop),
                 # Joining the search threads stays off the event loop.
                 ("missing album searches", lambda: asyncio.to_thread(_app.state.missing_album_searches.stop)),
+                (
+                    "loose track store owner",
+                    lambda: asyncio.to_thread(getattr(_app.state, "loose_track_store_owner", None).stop)
+                    if getattr(_app.state, "loose_track_store_owner", None) is not None else None,
+                ),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop

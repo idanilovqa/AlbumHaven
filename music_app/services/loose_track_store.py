@@ -112,15 +112,18 @@ def _write_rows(connection: Any, rows: Mapping[int, Mapping[str, object]]) -> No
             select {_LIBRARY_SQL}, (item ->> 'track_id')::bigint, item -> 'track', now()
             from jsonb_array_elements(%(rows)s::jsonb) as rows(item)
             on conflict (library_id, track_id) do update set track = excluded.track, updated_at = now()""",
-        {"rows": json.dumps([{"track_id": track_id, "track": track} for track_id, track in rows.items()])},
+        # Written in track_id order, so concurrent drains lock rows in one order.
+        {"rows": json.dumps([{"track_id": track_id, "track": rows[track_id]} for track_id in sorted(rows)])},
     )
 
 
 def drain(inventory: Any, connection: Any, *, limit: int = DRAIN_BATCH) -> int:
     """Rebuild the rows of up to ``limit`` marked tracks; return how many marks were cleared."""
+    # Claimed in this transaction; a concurrent drain skips them and takes others.
     marks = [dict(row) for row in connection.execute(
         f"""select track_id, marked_xid::text as marked_xid from library.non_album_track_marks
-            where library_id = {_LIBRARY_SQL} order by track_id limit %(limit)s""",
+            where library_id = {_LIBRARY_SQL} order by track_id limit %(limit)s
+            for update skip locked""",
         {"limit": int(limit)},
     ).fetchall()]
     if not marks:
@@ -130,9 +133,13 @@ def drain(inventory: Any, connection: Any, *, limit: int = DRAIN_BATCH) -> int:
     _write_rows(connection, rows)
     gone = sorted(set(track_ids) - set(rows))
     if gone:
+        # Locked in track_id order, as rows are written, so two drains never wait on each other in a cycle.
         connection.execute(
-            f"""delete from library.non_album_track_rows
-                where library_id = {_LIBRARY_SQL} and track_id = any(%(track_ids)s::bigint[])""",
+            f"""delete from library.non_album_track_rows track_rows
+                using (select library_id, track_id from library.non_album_track_rows
+                       where library_id = {_LIBRARY_SQL} and track_id = any(%(track_ids)s::bigint[])
+                       order by track_id for update) locked
+                where track_rows.library_id = locked.library_id and track_rows.track_id = locked.track_id""",
             {"track_ids": gone},
         )
     # Only the marks read here: a track marked again meanwhile keeps its newer mark.
@@ -208,6 +215,71 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int:
             _set_state(connection, "failed", error=str(error)[:500], retry_seconds=FAILED_BUILD_RETRY_SECONDS)
             connection.commit()
         raise
+
+
+class LooseTrackStoreOwner:
+    """The start-up owner: prepares the store once in the background, then re-runs ``prepare`` when a failed
+    build's retry time has come. It waits on a timer, never on a read."""
+
+    def __init__(self, config: Mapping[str, object], *, repository_factory=None, logger=None, poll_seconds: float = 60.0):
+        self._config = config
+        self._repository_factory = repository_factory
+        self._logger = logger or _LOGGER
+        self._poll_seconds = poll_seconds
+        self._stop = None
+        self._thread = None
+
+    def _repository(self):
+        if self._repository_factory is not None:
+            return self._repository_factory()
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+        return PostgresLibraryBrowseRepository(self._config)
+
+    def _seconds_until_retry(self, repository) -> float | None:
+        """How long until a failed build may be retried; None when the store is not failed."""
+        from datetime import datetime, timezone
+
+        with repository._owned_connection_context() as connection:
+            state = load_state(connection)
+        if not state or state.get("status") != "failed":
+            return None
+        retry_after = state.get("retry_after")
+        return 0.0 if retry_after is None else max(0.0, (retry_after - datetime.now(timezone.utc)).total_seconds())
+
+    def run_once(self) -> float | None:
+        """One owner pass: prepare, then say how long to wait before the next retry (None: no retry due)."""
+        repository = self._repository()
+        try:
+            prepare(repository._inventory_repository, repository._owned_connection_context)
+        except Exception:
+            self._logger.exception("Loose Tracks store preparation failed; its retry waits for its backoff.")
+        return self._seconds_until_retry(repository)
+
+    def _run(self) -> None:
+        wait = self.run_once()
+        while not self._stop.is_set():
+            self._stop.wait(self._poll_seconds if wait is None else max(wait, 0.0))
+            if self._stop.is_set():
+                return
+            wait = self._seconds_until_retry(self._repository())
+            if wait == 0.0:
+                wait = self.run_once()
+
+    def start(self) -> None:
+        import threading
+
+        if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") or self._thread is not None:
+            return
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="albumhaven-loose-track-store", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 30.0) -> None:
+        if self._thread is None:
+            return
+        self._stop.set()
+        self._thread.join(timeout)
 
 
 def prepare(inventory: Any, connect: Any) -> None:

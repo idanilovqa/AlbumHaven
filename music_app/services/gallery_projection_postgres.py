@@ -357,16 +357,34 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
 def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None, view_state=None):
     """Publish each common scope from its own coherent source snapshot.
 
+    When every scope is already published from current relations, this returns
+    before it loads the library's alias maps.
+
     While a relation rebuild is pending, the scopes first publish with the last
     published families, so watcher-found artists show at once (ungrouped until
     their relations exist); the rebuilt relations then change the source
     generation and the scopes publish again.
     """
     from music_app.services import library_browse_postgres as browse
-    from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
+    from music_app.services.relation_projection_postgres import (
+        _raise_if_projection_cancelled, relation_projection_metadata_stale_reason,
+    )
     repository = browse.PostgresLibraryBrowseRepository(config, connect=connect)
     scopes = ([view_state] if view_state is not None else
               [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})])
+
+    def published_and_current():
+        with repository._connect_to_database() as connection:
+            context = gallery_projection_context(connection)
+            if not context or not all(_ready_header(connection, context, state) for state in scopes):
+                return False
+            # A ready header implies a complete relation structure, so the small
+            # metadata object alone says whether a relation rebuild is still due.
+            row = _first(connection.execute("""
+                select metadata #> '{scan_cache,relation_projection}' as relation_projection
+                from library.libraries where id = %(library_id)s
+            """, {"library_id": context["library_id"]})) or {}
+            return not relation_projection_metadata_stale_reason(row.get("relation_projection"))
 
     def publish_scopes():
         built = 0
@@ -391,6 +409,9 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
             built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect))
         return built
 
+    _raise_if_projection_cancelled(cancel_requested)
+    if published_and_current():
+        return {"built": 0}
     built = 0
     if repository._load_relation_alias_maps().get("projection_stale_reason"):
         from music_app.services.relation_projection_postgres import ensure_relation_projection_ready

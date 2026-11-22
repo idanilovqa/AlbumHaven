@@ -11,7 +11,7 @@ from music_app.services.generated_preview_storage import (
     is_managed_preview_path,
 )
 from music_app.services.library import album_to_dict
-from music_app.services.library_album_index import library_album_index
+from music_app.services.library_album_index import library_album_index, merge_file_cache_entries
 from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
 
 
@@ -387,7 +387,8 @@ def apply_cover_selection_for_tracks(
     persist_cache_update: bool = True,
     manual_selection: bool = False,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
-    updated_file_cache = dict(library_state.get("file_cache", {}) or {})
+    file_cache = library_state.get("file_cache") or {}
+    updated_entries: dict[str, dict[str, object]] = {}
     cover_value = str(cover_path) if cover_path else None
     revision_value = str(cover_revision or "").strip() or None
     remote_url_value = str(remote_cover_url or "").strip() or None
@@ -402,10 +403,8 @@ def apply_cover_selection_for_tracks(
     if manual_selection:
         width, height = image_dimensions(cover_path) if cover_path else (None, None)
         selection_authority.update(local_cover_width=width or None, local_cover_height=height or None)
-    changed_paths: set[str] = set()
-
     for track_path in track_paths:
-        entry = updated_file_cache.get(track_path)
+        entry = file_cache.get(track_path)
         if not isinstance(entry, dict):
             continue
         if (
@@ -432,22 +431,14 @@ def apply_cover_selection_for_tracks(
         next_entry["remote_cover_album_url"] = remote_album_url_value
         next_entry["remote_cover_width"] = int(remote_cover_width or 0) or None
         next_entry["remote_cover_height"] = int(remote_cover_height or 0) or None
-        updated_file_cache[track_path] = next_entry
-        changed_paths.add(track_path)
+        updated_entries[track_path] = next_entry
 
-    if not changed_paths:
+    if not updated_entries:
         return find_updated_albums(track_paths), find_problematic_album(track_paths)
 
-    library_state["file_cache"] = updated_file_cache
-    for album in list(library_state.get("albums", []) or []):
+    merge_file_cache_entries(library_state, updated_entries)
+    for album in library_album_index(library_state).albums_with_any_track(updated_entries):
         album_tracks = list(getattr(album, "tracks", []) or [])
-        album_paths = {
-            str(getattr(track, "path", "") or "")
-            for track in album_tracks
-            if str(getattr(track, "path", "") or "")
-        }
-        if not album_paths & changed_paths:
-            continue
         for key, value in selection_authority.items():
             setattr(album, key, value)
         _set_cover_fields(
@@ -463,7 +454,7 @@ def apply_cover_selection_for_tracks(
             remote_cover_height=remote_cover_height,
         )
         for track in album_tracks:
-            if str(getattr(track, "path", "") or "") not in changed_paths:
+            if str(getattr(track, "path", "") or "") not in updated_entries:
                 continue
             if manual_selection:
                 track.local_cover_width = selection_authority["local_cover_width"]
@@ -480,19 +471,10 @@ def apply_cover_selection_for_tracks(
                 remote_cover_width=remote_cover_width,
                 remote_cover_height=remote_cover_height,
             )
-    from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
-    from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
-    invalidate_problematic_albums_payload_cache(library_state)
-    invalidate_utility_rules_payload_cache(library_state)
+    drop_in_memory_cover_payloads(library_state)
 
     if persist_cache_update:
-        schedule_cache_updates_save(
-            {
-                path_str: updated_file_cache[path_str]
-                for path_str in changed_paths
-                if isinstance(updated_file_cache.get(path_str), dict)
-            },
-        )
+        schedule_cache_updates_save(updated_entries)
     return find_updated_albums(track_paths), find_problematic_album(track_paths)
 
 
@@ -520,14 +502,13 @@ def apply_authoritative_local_cover_fallback(
             "Authoritative cover fallback could not find every selected track entry."
         )
     matching_albums: list[tuple[object, list[object]]] = []
-    for album in list(library_state.get("albums", []) or []):
+    for album in library_album_index(library_state).albums_with_any_track(normalized_paths):
         matching_tracks = [
             track
             for track in list(getattr(album, "tracks", []) or [])
             if str(getattr(track, "path", "") or "") in normalized_paths
         ]
-        if matching_tracks:
-            matching_albums.append((album, matching_tracks))
+        matching_albums.append((album, matching_tracks))
     if len(matching_albums) != 1:
         raise RuntimeError(
             "Authoritative cover fallback must patch exactly one matching album."
@@ -536,9 +517,9 @@ def apply_authoritative_local_cover_fallback(
     cover_value = str(cover_path)
     revision_value = str(cover_revision or "").strip()
     width, height = image_dimensions(cover_path)
-    updated_file_cache = dict(current_file_cache)
+    updated_entries: dict[str, dict[str, object]] = {}
     for track_path in normalized_paths:
-        entry = dict(updated_file_cache[track_path])
+        entry = dict(current_file_cache[track_path])
         _set_local_cover_fields_on_mapping(
             entry,
             cover_value=cover_value,
@@ -546,8 +527,8 @@ def apply_authoritative_local_cover_fallback(
             local_cover_width=width or None,
             local_cover_height=height or None,
         )
-        updated_file_cache[track_path] = entry
-    library_state["file_cache"] = updated_file_cache
+        updated_entries[track_path] = entry
+    merge_file_cache_entries(library_state, updated_entries)
 
     for album, matching_tracks in matching_albums:
         album.cover_selection_origin = "user"
@@ -593,11 +574,17 @@ def apply_authoritative_local_cover_fallback(
                 raise RuntimeError(
                     "Authoritative cover fallback could not patch a matching track."
                 )
-    from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
-    from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
+    drop_in_memory_cover_payloads(library_state)
 
-    invalidate_problematic_albums_payload_cache(library_state)
-    invalidate_utility_rules_payload_cache(library_state)
+
+def drop_in_memory_cover_payloads(library_state: dict[str, object]) -> None:
+    """Drop this state's payloads that show covers. The Postgres projections
+    follow the commit (`persist_cover_selection_for_tracks_for_config`)."""
+    from music_app.services.problematic_albums import drop_problematic_albums_payload_cache
+    from music_app.services.utility_rules import drop_utility_rules_payload_cache
+
+    drop_problematic_albums_payload_cache(library_state)
+    drop_utility_rules_payload_cache(library_state)
 
 
 def _set_local_cover_fields_on_mapping(

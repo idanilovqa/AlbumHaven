@@ -50,7 +50,8 @@ def _require_library_state(library_state: dict[str, object] | None) -> dict[str,
     return library_state
 
 
-def invalidate_problematic_albums_payload_cache(library_state: dict[str, object] | None = None) -> None:
+def drop_problematic_albums_payload_cache(library_state: dict[str, object] | None = None) -> None:
+    """Drop the in-memory payload only."""
     st = _require_library_state(library_state)
     with _PROBLEMATIC_ALBUMS_CACHE_LOCK:
         st.pop(_PROBLEMATIC_ALBUMS_CACHE_KEY, None)
@@ -58,6 +59,10 @@ def invalidate_problematic_albums_payload_cache(library_state: dict[str, object]
         st[_PROBLEMATIC_ALBUMS_CACHE_REVISION_KEY] = int(
             st.get(_PROBLEMATIC_ALBUMS_CACHE_REVISION_KEY) or 0
         ) + 1
+
+
+def invalidate_problematic_albums_payload_cache(library_state: dict[str, object] | None = None) -> None:
+    drop_problematic_albums_payload_cache(library_state)
     from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
 
     invalidate_postgres_utility_projection_cache()

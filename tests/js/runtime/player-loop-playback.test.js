@@ -4146,6 +4146,52 @@ test('a gapless move to the next song tells the claim at once, not at the next r
   assert.equal(published, 1);
 });
 
+// A renewal names the selected song while a switch is pending, so a switch that Pause ends must end
+// the selection too: after Resume every renewal would claim a song that never played.
+test('a Pause during a switch ends the pending selection', async () => {
+  const old = { src: '/track?path=old.flac', path: 'old.flac', title: 'Old', artist: 'A' };
+  const next = { src: '/track?path=next.flac', path: 'next.flac', title: 'Next', artist: 'A' };
+  let finishStart;
+  let paused = false;
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 200, paused, ended: false, src: old.src }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    pauseStreamingPlayback: () => { paused = true; },
+    closeListenSegment: () => {},
+    markListenSessionPaused: () => {},
+    maybeScrobbleListenSession: async () => false,
+    persistPausedListenSession: async () => {},
+    releasePlaybackOwnership: async () => true,
+  });
+  context.state.player.current = old;
+  const switching = context.playTrackFromPayload(next);
+  await new Promise((resolve) => setImmediate(resolve));
+  const pause = context.pausePlayerPlaybackForHandoff();
+  finishStart({ generation: 2, streamId: 2, track: next });
+  await switching;
+  await pause;
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
+test('a Resume during a switch from a paused song ends the pending selection', async () => {
+  const old = { src: '/track?path=old.flac', path: 'old.flac', title: 'Old', artist: 'A' };
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 200, paused: true, ended: false, mode: 'paused', src: old.src }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise(() => {}),
+    pauseStreamingPlayback: () => {},
+    resumeStreamingPlayback: async () => false,
+  });
+  context.state.player.current = old;
+  void context.playTrackFromPayload({ src: '/track?path=next.flac', path: 'next.flac', title: 'Next', artist: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
 test('a pending start in the middle of a song shows that place, not 0:00', async () => {
   const time = new FakeElement();
   const { context } = loadHelper({

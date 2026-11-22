@@ -190,6 +190,13 @@
         this.seekReset(message);
         return;
       }
+      if (message.type === 'silence') {
+        // Whatever the generation: zeros from the next quantum on. Every position rendered before this
+        // was posted before the answer, so the page then knows the last frame it sent out.
+        this.playing = false;
+        this.port.postMessage({ type: 'silenced' });
+        return;
+      }
       if (!this.configured || message.generation !== this.generation) return;
       if (message.type === 'enqueue') this.enqueue(message);
       else if (message.type === 'eos') this.markEos(message);

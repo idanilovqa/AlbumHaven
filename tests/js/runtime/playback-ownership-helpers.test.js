@@ -1624,6 +1624,21 @@ test('a tab that just paused answers its paused place with the claim it gave bac
   assert.equal(order.includes('answer'), true);
 });
 
+test('a tab that cannot prove its output silent pauses and does not answer', async () => {
+  const { context, order, answers } = handoverHolder();
+  context.silenceStreamingPlaybackForHandover = async () => null;
+  await context.answerPlaybackHandover('request-7');
+  assert.deepEqual(order, ['cancel', 'stop']);
+  assert.deepEqual(answers, [], 'nobody may start on a guess of silence');
+});
+
+test('a tab played again before its output drained does not answer', async () => {
+  const { context, answers } = handoverHolder();
+  context.silenceStreamingPlaybackForHandover = async () => async () => false;
+  await context.answerPlaybackHandover('request-8');
+  assert.deepEqual(answers, []);
+});
+
 test('a tab that holds and gave back no claim answers nothing', async () => {
   const { context, answers } = handoverHolder({ claim: null });
   await context.answerPlaybackHandover('request-4');

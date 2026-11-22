@@ -146,6 +146,19 @@ function renderQuantum(fixture) {
   return { left: [...left], right: [...right] };
 }
 
+test('silence stops the next quantum whatever the generation and is answered after the last position', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 1024 });
+  enqueue(fixture, { streamId: 1, role: 'current', sequence: 0, left: new Array(512).fill(0.25) });
+  fixture.send({ type: 'play', generation: 7 });
+  renderQuantum(fixture);
+  renderQuantum(fixture);
+  fixture.send({ type: 'silence' });
+  const last = fixture.port.events.at(-1);
+  assert.equal(last.type, 'silenced');
+  assert.equal(fixture.events('position').at(-1).timelineFrame, 256);
+  assert.ok(renderQuantum(fixture).left.every((sample) => sample === 0));
+});
+
 function assertRenderedStereo(fixture, expectedLeft, expectedRight = expectedLeft.map((value) => -value)) {
   const rendered = renderQuantum(fixture);
   assert.deepEqual(rendered.left, expectedLeft);

@@ -568,30 +568,43 @@ function canStartPlaybackInThisTab(track, options = {}) {
  * Play here elsewhere asked this tab (owner, 2026-11-22): it stops, then answers the song that sounded
  * and where, with its claim's token. No path crosses the socket.
  */
+function playbackToHandOver(starting) {
+  const sounding = typeof getSoundingStreamingPlayback === 'function' && getSoundingStreamingPlayback();
+  if (sounding) return sounding;
+  // With no stream yet, a stopped player is at its place and a first start at the place it starts from.
+  if (!state.player.current) return starting;
+  const snapshot = getPlayerPlaybackSnapshot();
+  return { track: state.player.current, seconds: snapshot.currentTime, durationSeconds: snapshot.duration };
+}
+
 async function answerPlaybackHandover(requestId) {
   const ownership = getPlaybackOwnershipState();
   // A start's first claim may still be on its way.
   if (!ownership.activeClaim && !ownership.releasedClaim) await ownership.pendingOperation;
   const claim = ownership.activeClaim || ownership.releasedClaim;
   if (!claim?.claimToken) return;
-  const snapshot = getPlayerPlaybackSnapshot();
-  // With no stream yet, a stopped player is at its place and a first start at the place it starts from.
-  const sounding = (typeof getSoundingStreamingPlayback === 'function' && getSoundingStreamingPlayback())
-    || (state.player.current
-      ? { track: state.player.current, seconds: snapshot.currentTime, durationSeconds: snapshot.duration }
-      : { track: state.player.selectedTrack, seconds: state.player.selectedStartSeconds,
-        durationSeconds: state.player.selectedTrack?.durationSeconds });
-  const { track } = sounding;
-  if (!track?.path) return;
-  const known = [claim, ownership.previousClaim].find((held) => held?.path === track.path) || null;
+  // A first start has no stream yet: read it before the press is cancelled.
+  const starting = { track: state.player.selectedTrack, seconds: state.player.selectedStartSeconds,
+    durationSeconds: state.player.selectedTrack?.durationSeconds };
+  if (!playbackToHandOver(starting).track?.path) return;
   if (typeof cancelPendingPlayerSelection === 'function') cancelPendingPlayerSelection();
+  const drained = typeof silenceStreamingPlaybackForHandover === 'function'
+    ? await silenceStreamingPlaybackForHandover()
+    : async () => true;
+  // Read only now: what was rendered until the silence is what was heard.
+  const sounding = playbackToHandOver(starting);
+  const { track } = sounding;
+  const known = [claim, ownership.previousClaim].find((held) => held?.path === track.path) || null;
   // As a claim taken over: no save and no release follows it with the token it hands on.
   losePlaybackOwnership('ownership-handover', false);
   ownership.handedOverClaim = claim;
   ownership.blockedReason = 'playing_in_another_tab';
   ownership.mirroredTrack = normalizePlaybackOwnershipTrack(track);
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
-  const prepared = await playbackOwnershipTrack(track, known);
+  // Without proof of silence there is no answer.
+  if (!drained) return;
+  const [silent, prepared] = await Promise.all([drained(), playbackOwnershipTrack(track, known)]);
+  if (!silent) return;
   const durationMs = Math.round((Number(sounding.durationSeconds) || 0) * 1000);
   const ms = Math.max(0, Math.round((Number(sounding.seconds) || 0) * 1000));
   sendStreamingHandoverAnswer({

@@ -7,6 +7,10 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
+const STREAMING_SILENCE_ACK_MS = 1000;
+// For a browser that does not report its output latency; the context asks for large playback buffers.
+const STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS = 0.2;
+const STREAMING_OUTPUT_DRAIN_MARGIN_MS = 20;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
@@ -588,6 +592,39 @@ function getSoundingStreamingPlayback() {
 }
 
 // An answer that cannot be sent leaves the asker its saved place; it never fails playback.
+// Play here elsewhere may start only after this tab is silent (owner, round 10: "two tabs play shortly
+// at the same time"). Resolves once nothing more is rendered, to a function that resolves once what was
+// rendered has left the output, true if it is still silent then. Null when the audio thread never said so.
+async function silenceStreamingPlaybackForHandover() {
+  const engine = streamingEngineState();
+  // A start or resume on its way may not sound after this.
+  engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
+  const { context, node } = engine;
+  if (!node || context?.state !== 'running') return async () => engine.snapshot.paused !== false;
+  if (!engine.pendingSilence) {
+    const pending = {};
+    pending.promise = new Promise((resolve) => {
+      const timer = setTimeout(() => pending.settle(false), STREAMING_SILENCE_ACK_MS);
+      pending.settle = (silent) => {
+        clearTimeout(timer);
+        engine.pendingSilence = null;
+        resolve(silent);
+      };
+    });
+    engine.pendingSilence = pending;
+    node.port.postMessage({ type: 'silence' });
+  }
+  if (!await engine.pendingSilence.promise) return null;
+  return async () => {
+    const latencySeconds = (Number(context.baseLatency) || 0)
+      + (Number(context.outputLatency) || STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS);
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.ceil(latencySeconds * 1000) + STREAMING_OUTPUT_DRAIN_MARGIN_MS);
+    });
+    return engine.snapshot.paused !== false;
+  };
+}
+
 function sendStreamingHandoverAnswer(message) {
   const { socket } = streamingEngineState();
   if (socket?.readyState !== WebSocket.OPEN) return false;
@@ -1562,6 +1599,10 @@ function handleStreamingPcm(buffer) {
 
 function handleStreamingWorkletMessage(message) {
   const engine = streamingEngineState();
+  if (message?.type === 'silenced') {
+    engine.pendingSilence?.settle(true);
+    return;
+  }
   if (!message || message.generation !== engine.generation) {
     engine.diagnostics.staleMessages += 1;
     return;

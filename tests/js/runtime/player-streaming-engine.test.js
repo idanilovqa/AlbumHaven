@@ -107,6 +107,9 @@ function createEngineHarness(options = {}) {
     postMessage(message, transfer = []) {
       this.messages.push({ message, transfer });
       this.processor?.port.onmessage({ data: message });
+      if (message.type === 'silence' && !this.processor) {
+        queueMicrotask(() => this.dispatch({ type: 'silenced' }));
+      }
       if (message.type === 'stop' && options.stopPostMessage) {
         options.stopPostMessage(message);
       }
@@ -6468,6 +6471,61 @@ test('asked during a switch, the real engine answers the song still sounding and
   assert.ok(answer.position.ms >= 87000 && answer.position.ms <= 89000, `at its place: ${answer.position.ms}`);
   assert.equal(socket.readyState, 1);
   assert.equal(harness.api.snapshot().paused, true);
+});
+
+// Owner, round 10 (2026-11-22): "there's an overlap in sound and two tabs play shortly at the same time".
+test('a tab asked by Play here answers only when its output is silent, at the last frame it sent out', async (t) => {
+  const timers = [];
+  const harness = createEngineHarness({
+    realProcessor: true,
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    setTimeout: (callback, delay) => timers.push({ callback, delay }),
+    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+  });
+  t.after(() => harness.api.stop());
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const track = makeTrack();
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: { claimToken: 'holder-claim', leaseDeadline: Infinity, path: track.path,
+      referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'holder-ref' } },
+  };
+  harness.context.state.player.current = track;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  await harness.api.start(track);
+  Object.assign(harness.contexts[0], { baseLatency: 0.02, outputLatency: 0.3 });
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  for (const sequence of [0, 1]) {
+    receivePcmAndAssertEnqueue(harness, {
+      generation: open.generation, streamId: open.streamId, sequence,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+  }
+  const node = harness.nodes[0];
+  node.render();
+  node.deliverEvents();
+  // Rendered before the question arrived, not yet told to the page.
+  for (let quantum = 0; quantum < 99; quantum += 1) assert.equal(node.render()[0][0], 0.25);
+  timers.length = 0;
+
+  const answered = harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+  const answer = () => harness.sockets[0].sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(node.render()[0].every((sample) => sample === 0), 'nothing more is rendered');
+  assert.equal(answer(), undefined, 'no answer before the audio thread says it is silent');
+  node.deliverEvents();
+  await harness.settle();
+  assert.equal(answer(), undefined, 'no answer while rendered audio is still in the output buffer');
+  assert.equal(harness.api.snapshot().paused, true);
+  const drain = timers.filter(({ cleared, delay }) => !cleared && delay >= 320 && delay < 1000);
+  assert.equal(drain.length, 1, 'it waits out the base and output latency');
+  drain[0].callback();
+  await answered;
+
+  assert.equal(answer().position.ms, Math.round((100 * 128) / 48), 'nothing repeated, nothing skipped');
 });
 
 test('music playback asks for large output buffers', async () => {

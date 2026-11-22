@@ -433,7 +433,8 @@ test('bounded interaction: mobile navigation installs its listeners once at any 
     small: 20,
     large: 14000,
     run: initialize,
-    budgets: { listeners: 8, observers: 0, animationFrames: 0, itemsVisited: 0 },
+    // The one observer is the page's search-field ResizeObserver, created once by the first start.
+    budgets: { listeners: 8, observers: 1, animationFrames: 0, itemsVisited: 0 },
     growth: { metric: 'listeners', largeMinusSmallMax: 0 },
   });
 });

@@ -4471,7 +4471,7 @@
       },
       "budgets": {
         "listeners": 8,
-        "observers": 0,
+        "observers": 1,
         "animationFrames": 0,
         "itemsVisited": 0
       },

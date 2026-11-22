@@ -135,13 +135,13 @@ def test_github_actions_keeps_its_own_server(guarded_driver, monkeypatch):
     assert guarded_driver.connect("postgresql://album_haven_app@localhost/album_haven_ci_x") == "connected"
 
 
-def test_the_pytest_session_installs_the_guard_on_the_real_driver():
+def test_the_pytest_session_guards_the_real_driver_only_outside_github_actions():
     import psycopg
 
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        pytest.skip("the runner's own disposable server is the test server")
+    # On GitHub Actions the runner's own disposable server is the test server, so nothing is guarded.
+    expected = os.environ.get("GITHUB_ACTIONS") != "true"
     for connect in (psycopg.connect, psycopg.Connection.connect, psycopg.AsyncConnection.connect):
-        assert getattr(connect, "refuses_installed_server", False), connect
+        assert getattr(connect, "refuses_installed_server", False) is expected, connect
 
 
 @pytest.mark.parametrize("script", ["load-fixture-profile.py", "functional-fixture-checkpoint.py"])

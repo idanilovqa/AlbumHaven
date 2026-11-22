@@ -447,8 +447,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Shards run on their own runners and databases; tests/py/pytest_shards.py
+  # assigns every test file to exactly one of them by measured time.
   test_python:
-    name: Python Tests
+    name: "Python Tests: ${{ matrix.shard }}/${{ strategy.job-total }}"
     needs:
       - review_scope
       - review_prerequisites
@@ -456,7 +458,11 @@ jobs:
       - codex_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -556,9 +562,11 @@ jobs:
       - name: Validate Python test inventory
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-collection=${{ runner.temp }}\pytest-collection.txt
 
-      # Each bounded-interaction contract records which test measured which id.
+      # Each bounded-interaction contract records which test measured which id;
+      # the Cloud Verification Gate checks the evidence of every shard together.
       - name: Run Python tests
         env:
+          ALBUM_HAVEN_PYTEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           BOUNDED_INTERACTION_EVIDENCE: ${{ runner.temp }}\bounded-interactions-evidence.jsonl
         run: |
           $env:PGPASSWORD = $null
@@ -567,12 +575,6 @@ jobs:
       - name: Validate Python skip policy
         if: ${{ !cancelled() }}
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-junit=${{ runner.temp }}\pytest-results.xml --allowed-skips=tests/ci/pytest-allowed-skips.json
-
-      # Every Python bounded-interaction contract must have measured its own
-      # registered entry in the run above.
-      - name: Verify bounded interaction Python contract evidence
-        if: ${{ !cancelled() }}
-        run: node scripts/run-bounded-interactions.cjs --python-evidence "${{ runner.temp }}\bounded-interactions-evidence.jsonl"
 
       - name: Teardown pristine PostgreSQL for persistent Python contracts
         if: ${{ always() }}
@@ -614,11 +616,12 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-python-windows-${{ github.run_attempt }}
+          name: foundation-versions-python-windows-${{ matrix.shard }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}\foundation-version-manifest-python-windows.json
             ${{ runner.temp }}\pytest-collection.txt
             ${{ runner.temp }}\pytest-results.xml
+            ${{ runner.temp }}\bounded-interactions-evidence.jsonl
           if-no-files-found: error
           retention-days: 14
 
@@ -2477,6 +2480,34 @@ jobs:
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
           persist-credentials: false
+
+      - name: Set up Node.js for Python contract evidence
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.test_python.result == 'success' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Download Python contract evidence
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.test_python.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: foundation-versions-python-windows-*-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/python-shards
+
+      # Every Python bounded-interaction contract must have measured its own
+      # registered entry in one of the Python shards.
+      - name: Verify bounded interaction Python contract evidence
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.test_python.result == 'success' }}
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/bounded-interactions-evidence.jsonl"
+          for file in "$RUNNER_TEMP"/python-shards/*/bounded-interactions-evidence.jsonl; do
+            if [ -f "$file" ]; then cat "$file"; echo; fi
+          done > "$evidence"
+          npm ci
+          node scripts/run-bounded-interactions.cjs --python-evidence "$evidence"
 
       - name: Validate trusted cloud conclusion
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}

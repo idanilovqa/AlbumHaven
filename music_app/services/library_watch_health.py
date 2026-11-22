@@ -12,13 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from music_app.services.library_watch import LibraryEvent, LibraryEventKind
-
-try:  # pragma: no cover - optional in lightweight test environments.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 
 WATCH_HEALTH_MESSAGE = "Some library changes may have been missed."
@@ -509,9 +503,7 @@ def _normalized_cutoff(
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for library watcher health.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 __all__ = (

@@ -23,6 +23,9 @@ const HIGH_FREQUENCY_EVENTS = new Set([
 // playback progress, and an ongoing text selection or drag. Their handlers are
 // hot paths without rejecting per-event work outright.
 const REPEATING_EVENTS = new Set([...HIGH_FREQUENCY_EVENTS, 'message', 'timeupdate', 'selectionchange', 'drag', 'pointerrawupdate']);
+// Browser history steps. With `history.pushState`, they mark an entrypoint as
+// navigation: going to the view already on screen must send no request.
+const NAVIGATION_EVENTS = new Set(['popstate', 'hashchange']);
 const TIMER_CALLS = new Set(['setInterval', 'setTimeout', 'requestAnimationFrame']);
 const DEFERRED_CALLBACK_CALLS = new Set(['setTimeout', 'requestAnimationFrame', 'queueMicrotask', 'requestIdleCallback']);
 const OBSERVERS = new Set(['MutationObserver', 'ResizeObserver', 'IntersectionObserver', 'PerformanceObserver']);
@@ -1283,6 +1286,56 @@ function isHotEntrypoint(found, file, handlers, index) {
   return false;
 }
 
+// Whether a function's own body (not its nested functions) calls
+// `history.pushState` or `window.history.pushState`.
+function pushesHistory(fnNode) {
+  let found = false;
+  walkAst(fnNode.body || fnNode, (node) => {
+    if (found) return false;
+    if (node !== fnNode && isFunction(node)) return false;
+    found = node.type === 'CallExpression' && node.callee.type === 'MemberExpression'
+      && calleeName(node) === 'pushState'
+      && (node.callee.object.name === 'history' || memberProperty(node.callee.object) === 'history');
+    return undefined;
+  });
+  return found;
+}
+
+// Whether a request's own function records a view in browser history: it
+// calls `history.pushState` itself or through a helper it calls directly
+// (`pushBrowserViewState`). Deeper pushes belong to whatever re-renders after
+// the request, not to a navigation this function owns.
+function requestPushesHistory(scope, file, index) {
+  if (pushesHistory(scope)) return true;
+  const context = { file, className: ownerOf(file, scope).className };
+  return calledFunctions(scope, context, index).some(helper => pushesHistory(helper.node));
+}
+
+// A request whose options name a literal method other than GET changes
+// something; it does not load a view. A computed method may be a GET.
+function sendsWrite(call) {
+  const options = call?.type === 'CallExpression' ? call.arguments[1] : null;
+  const method = options?.type === 'ObjectExpression'
+    && options.properties.find(property => property.type === 'Property' && propertyName(property.key) === 'method');
+  return Boolean(method) && method.value.type === 'Literal' && String(method.value.value).toUpperCase() !== 'GET';
+}
+
+// A navigation entrypoint is a Back/Forward step (popstate, hashchange) that
+// reaches a request, or a GET request whose own function records the view it
+// loads in browser history. Performed toward the view already on screen it
+// must send nothing, which its request-capture contract proves from a freshly
+// loaded page. A request helper (`fetchAndRender(url)`) loads whatever view
+// its caller names, so its callers own that decision, not the helper.
+function isNavigation(found, file, handlers, index, requestScopes, helperScopes) {
+  if (found.kind === 'request') {
+    if (sendsWrite(found.node)) return false;
+    const scope = ownerOf(file, found.node).scope;
+    return Boolean(scope) && !helperScopes.has(scope) && requestPushesHistory(scope, file, index);
+  }
+  if (found.kind !== 'event' || !NAVIGATION_EVENTS.has(found.trigger)) return false;
+  return handlers.some(handler => [...reachableFunctions(handler, index)].some(node => requestScopes.has(node)));
+}
+
 // The function that runs when the entrypoint fires: a listener, timer, or
 // observer callback, or the function that owns a request.
 function entrypointHandler(found, file) {
@@ -1767,8 +1820,14 @@ function analyzeFiles(files) {
   const entrypoints = [];
   const hazards = [];
   const hotKeys = new Set();
-  for (const file of files) {
-    for (const found of fileEntrypoints(file, index, helpers, timers)) {
+  const navigationKeys = new Set();
+  const entrypointsByFile = files.map(file => [file, fileEntrypoints(file, index, helpers, timers)]);
+  const requestScopes = new Set(entrypointsByFile.flatMap(([file, items]) => items
+    .filter(item => item.kind === 'request').map(item => ownerOf(file, item.node).scope).filter(Boolean)));
+  const helperScopes = new Set([...index.functions.values()].flat()
+    .filter(def => helpers.get(def.name) != null).map(def => def.node));
+  for (const [file, items] of entrypointsByFile) {
+    for (const found of items) {
       if (found.unresolvedTrigger) {
         // Not an entrypoint discovery can name: rejected until made resolvable.
         const operation = 'unresolved-trigger';
@@ -1785,6 +1844,7 @@ function analyzeFiles(files) {
       const handlers = callback ? resolveCallable(callback, contextAt(callbackFile, callback), index) : [];
       const hot = isHotEntrypoint(found, file, handlers, index);
       if (hot) hotKeys.add(found.key);
+      if (isNavigation(found, file, handlers, index, requestScopes, helperScopes)) navigationKeys.add(found.key);
       const highFrequency = found.kind === 'event' && HIGH_FREQUENCY_EVENTS.has(found.trigger);
       // A hot entrypoint whose callback itself does not resolve runs unknown code.
       if (hot && callback && !handlers.length) {
@@ -1816,7 +1876,8 @@ function analyzeFiles(files) {
   }));
   const uniqueHazards = new Map();
   for (const hazard of sortEntries(keyed)) if (!uniqueHazards.has(hazard.key)) uniqueHazards.set(hazard.key, hazard);
-  const inventory = dedupeEntrypoints(entrypoints).map(item => ({ ...item, hot: hotKeys.has(item.key) }));
+  const inventory = dedupeEntrypoints(entrypoints)
+    .map(item => ({ ...item, hot: hotKeys.has(item.key), ...(navigationKeys.has(item.key) ? { navigation: true } : {}) }));
   return { entrypoints: inventory, hazards: [...uniqueHazards.values()] };
 }
 

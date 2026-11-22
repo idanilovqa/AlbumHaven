@@ -8,19 +8,54 @@ from __future__ import annotations
 import atexit
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from threading import Lock
+from threading import Lock, get_ident
 from time import perf_counter
 
 try:  # Keep schema-independent tooling importable.
+    from psycopg import Connection, OperationalError
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool, PoolTimeout
 except ImportError:  # pragma: no cover
+    Connection = None
     ConnectionPool = None
+    OperationalError = RuntimeError
     PoolTimeout = TimeoutError
     dict_row = None
 
 _pools = {}
 _lock = Lock()
+# The pool connects in the background and retries a failed attempt until a checkout times out (30 s),
+# so against an unreachable database every request would stall for the whole timeout. Once the
+# pool's own connection attempt has failed, checkouts fail at once with that error, as
+# `psycopg.connect` did; one request per interval still goes through to find out whether the
+# database is back (freeze-guard backlog case 30). That probe, and a pool's first checkout before it
+# has ever connected, wait a short while only: a slower connection still joins the pool when it
+# completes and clears the failure.
+_UNREACHABLE_PROBE_INTERVAL_SECONDS = 5.0
+_PROBE_CHECKOUT_TIMEOUT_SECONDS = 5.0
+_connect_states: dict[object, "_ConnectState"] = {}
+
+
+class _ConnectState:
+    """Whether the pool has connected, and its last failed attempt, cleared by its next success."""
+
+    def __init__(self):
+        self.connected = False
+        self.error = None
+        self.failed_at = 0.0
+# Leases each thread holds right now, by thread id. A lease taken while the thread already holds one
+# comes from a pool one level deeper, so nested repository calls never wait on a connection their own
+# request is holding: waits only ever go deeper, so pool exhaustion cannot deadlock. A lease released
+# on another thread (a shared connection handed between workers) still unwinds its own thread's count.
+_held: dict[int, int] = {}
+# The default workload carries every request-path repository; the others keep their small pools.
+_DEFAULT_WORKLOAD_MAX_SIZE = 8
+_MAX_SIZE = 4
+# Gallery and search reads keep one connection open: a fresh backend spends 0.4-2.7 s planning the
+# search query, so a search after an idle spell would otherwise pay that again (owner, 11-19). The pool
+# starts cold and keeps that connection only after one succeeded, so an unreachable database never
+# leaves a reconnect loop behind (shutdown waits on it).
+_WARM_WORKLOADS = frozenset({"browse"})
 
 
 def _observe_pool_lease(
@@ -59,13 +94,18 @@ def pooled_connection(
         raise RuntimeError("Postgres pool workload is required.")
     if ConnectionPool is None:
         raise RuntimeError("psycopg pool support is required; install the application requirements.")
-    pool_key = (database_url, normalized_workload)
+    depth = _held.get(get_ident(), 0)
+    pool_key = (database_url, normalized_workload) if depth == 0 else (database_url, normalized_workload, depth)
     with _lock:
         pool = _pools.get(pool_key)
         if pool is None:
+            connect_state = _connect_states[pool_key] = _ConnectState()
             pool = ConnectionPool(
                 conninfo=database_url,
-                min_size=0, max_size=4, max_waiting=32,
+                connection_class=_state_recording_connection_class(connect_state),
+                min_size=0,
+                max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE,
+                max_waiting=32,
                 timeout=30, max_idle=120, max_lifetime=600,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,
@@ -73,10 +113,10 @@ def pooled_connection(
             _pools[pool_key] = pool
     checkout_started = perf_counter()
     try:
-        checkout = (
-            pool.connection(timeout=max(0.001, float(checkout_timeout_seconds)))
-            if checkout_timeout_seconds is not None
-            else pool.connection()
+        checkout = _checkout(
+            pool,
+            _connect_states.get(pool_key),
+            max(0.001, float(checkout_timeout_seconds)) if checkout_timeout_seconds is not None else None,
         )
     except PoolTimeout:
         _observe_pool_lease(
@@ -92,7 +132,41 @@ def pooled_connection(
         pool=pool,
         workload=normalized_workload,
         lease_observer=lease_observer,
+        keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
     )
+
+
+def _state_recording_connection_class(connect_state: _ConnectState):
+    if Connection is None:  # pragma: no cover
+        return None
+
+    class _StateRecordingConnection(Connection):
+        @classmethod
+        def connect(cls, *args, **kwargs):
+            try:
+                connection = super().connect(*args, **kwargs)
+            except OperationalError as error:
+                connect_state.error, connect_state.failed_at = error, perf_counter()
+                raise
+            connect_state.connected, connect_state.error = True, None
+            return connection
+
+    return _StateRecordingConnection
+
+
+def _checkout(pool, connect_state: _ConnectState | None, timeout_seconds: float | None):
+    if not hasattr(pool, "connection_class"):  # a pool that does not connect through the recording class
+        connect_state = None
+    probing = False
+    if connect_state is not None and connect_state.error is not None:
+        now = perf_counter()
+        if now - connect_state.failed_at < _UNREACHABLE_PROBE_INTERVAL_SECONDS:
+            raise OperationalError(f"Postgres is unreachable: {connect_state.error}") from connect_state.error
+        connect_state.failed_at = now  # this request probes; the others keep failing at once
+        probing = True
+    if probing or (connect_state is not None and not connect_state.connected):
+        timeout_seconds = min(timeout_seconds or _PROBE_CHECKOUT_TIMEOUT_SECONDS, _PROBE_CHECKOUT_TIMEOUT_SECONDS)
+    return pool.connection(timeout=timeout_seconds) if timeout_seconds is not None else pool.connection()
 
 
 @contextmanager
@@ -102,6 +176,7 @@ def _lease_connection(
     pool,
     workload: str,
     lease_observer: Callable[[Mapping[str, object]], None] | None,
+    keep_warm: bool = False,
 ):
     wait_started = perf_counter()
     acquired = False
@@ -110,6 +185,10 @@ def _lease_connection(
         with checkout as connection:
             acquired_at = perf_counter()
             acquired = True
+            holder = get_ident()
+            _held[holder] = _held.get(holder, 0) + 1
+            if keep_warm and pool.min_size == 0:
+                pool.resize(1, pool.max_size)
             _observe_pool_lease(
                 lease_observer,
                 "acquired",
@@ -130,6 +209,10 @@ def _lease_connection(
         raise
     finally:
         if acquired:
+            if _held[holder] > 1:
+                _held[holder] -= 1
+            else:
+                del _held[holder]
             _observe_pool_lease(
                 lease_observer,
                 "released",
@@ -137,6 +220,51 @@ def _lease_connection(
                 elapsed_ms=(perf_counter() - acquired_at) * 1000,
                 pool=pool,
             )
+
+
+class _LeasedConnection:
+    """A pool lease used like a `psycopg.connect()` connection.
+
+    `with` commits on success and rolls back on error, then returns the
+    connection to the pool; `close()` rolls back what was not committed and
+    returns it. Everything else is the leased connection itself."""
+
+    def __init__(self, database_url: str, workload: str):
+        self._lease = pooled_connection(database_url, workload=workload)
+        self._connection = self._lease.__enter__()
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        # Settings such as `autocommit` belong to the leased connection, not to this wrapper.
+        if name in ("_lease", "_connection"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._connection, name, value)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self._release(exc_type, exc, traceback)
+
+    def close(self) -> None:
+        try:
+            if self._lease is not None:
+                self._connection.rollback()
+        finally:
+            self._release(None, None, None)
+
+    def _release(self, exc_type, exc, traceback) -> None:
+        lease, self._lease = self._lease, None
+        if lease is not None:
+            lease.__exit__(exc_type, exc, traceback)
+
+
+def leased_connection(database_url: str, *, workload: str = "default") -> _LeasedConnection:
+    """A shared-pool connection for repositories written against `psycopg.connect()`."""
+    return _LeasedConnection(database_url, workload)
 
 
 def prewarm_connection_pool(database_url: str) -> None:

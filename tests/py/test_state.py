@@ -4522,7 +4522,7 @@ def test_run_cover_jobs_preserves_user_controlled_linked_cover_fields_when_write
     )
     monkeypatch.setattr(
         cover_refresh_execution,
-        "persist_cover_selection_in_shared_transaction",
+        "run_cover_mutation_for_config",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("A blocked automatic write must not persist cover changes")
         ),

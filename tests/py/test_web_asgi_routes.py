@@ -1616,10 +1616,10 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
 
     assert track_status == 200
     assert track_body == b"track-bytes"
-    assert track_headers.get("cache-control") == "no-cache"
+    assert track_headers.get("cache-control") == "private, no-store"
     assert track_headers.get("content-disposition") == 'inline; filename="song.mp3"'
     assert revalidated_track_status == 304
-    assert revalidated_track_headers.get("cache-control") == "no-cache"
+    assert revalidated_track_headers.get("cache-control") == "private, no-store"
     assert revalidated_track_body == b""
     assert rejected_track_status == 404
     _assert_flask_like_private_media_not_found(_rejected_track_headers, _rejected_track_body)
@@ -1637,20 +1637,20 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
     assert revalidated_cover_mtime_body == b""
     assert loop_status == 200
     assert loop_body == b"loop-bytes"
-    assert loop_headers.get("cache-control") == "no-cache"
+    assert loop_headers.get("cache-control") == "private, no-store"
     assert loop_headers.get("content-disposition") == 'inline; filename="loop-1.mp3"'
     assert revalidated_loop_status == 304
-    assert revalidated_loop_headers.get("cache-control") == "no-cache"
+    assert revalidated_loop_headers.get("cache-control") == "private, no-store"
     assert revalidated_loop_headers.get("content-disposition") == 'inline; filename="loop-1.mp3"'
     assert revalidated_loop_body == b""
     assert rejected_loop_status == 404
     _assert_flask_like_private_media_not_found(rejected_loop_headers, rejected_loop_body)
     assert preview_status == 200
     assert preview_body == b"preview-bytes"
-    assert preview_headers.get("cache-control") == "no-cache"
+    assert preview_headers.get("cache-control") == "private, no-store"
     assert preview_headers.get("content-disposition") == 'inline; filename="loop-1_pplus1.mp3"'
     assert revalidated_preview_status == 304
-    assert revalidated_preview_headers.get("cache-control") == "no-cache"
+    assert revalidated_preview_headers.get("cache-control") == "private, no-store"
     assert revalidated_preview_headers.get("content-disposition") == 'inline; filename="loop-1_pplus1.mp3"'
     assert revalidated_preview_body == b""
     assert missing_preview_status == 404
@@ -1712,7 +1712,7 @@ def test_asgi_saved_loop_media_uses_owned_stored_legacy_artifact(
 
     assert status == 200
     assert body == b"canonical-loop-bytes"
-    assert headers.get("cache-control") == "no-cache"
+    assert headers.get("cache-control") == "private, no-store"
 
 
 def test_asgi_cover_uses_dedicated_capacity_instead_of_the_shared_request_worker(

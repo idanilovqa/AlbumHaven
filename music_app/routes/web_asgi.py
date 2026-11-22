@@ -921,15 +921,6 @@ async def _json_payload(request: Request) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _file_response(path: Path, *, max_age: int | None = None, no_cache: bool = False) -> FileResponse:
-    response = FileResponse(path, filename=path.name, content_disposition_type="inline")
-    if max_age is not None:
-        response.headers["Cache-Control"] = f"public, max-age={max_age}"
-    elif no_cache:
-        response.headers["Cache-Control"] = "no-cache"
-    return response
-
-
 def _etag_matches(if_none_match: str, etag: str) -> bool:
     for candidate in if_none_match.split(","):
         candidate = candidate.strip()
@@ -970,7 +961,6 @@ def _conditional_file_response(
     path: Path,
     *,
     max_age: int | None = None,
-    no_cache: bool = False,
     stat_result=None,
     content: bytes | None = None,
 ) -> Response:
@@ -986,8 +976,9 @@ def _conditional_file_response(
         file_response.headers["Cache-Control"] = f"private, max-age={max_age}" + (
             ", immutable" if max_age >= _IMMUTABLE_COVER_MAX_AGE else ""
         )
-    elif no_cache:
-        file_response.headers["Cache-Control"] = "no-cache"
+    else:
+        # Audio: its file name, and for a track its address, name the library.
+        file_response.headers["Cache-Control"] = "private, no-store"
 
     if_none_match = request.headers.get("if-none-match")
     etag = file_response.headers.get("etag")
@@ -1329,7 +1320,7 @@ def track(request: Request, path: str = "") -> FileResponse:
     resolved = resolve_configured_media_path(_app_config(request), path)
     if resolved is None:
         return _not_found()
-    return _conditional_file_response(request, resolved, no_cache=True)
+    return _conditional_file_response(request, resolved)
 
 
 @router.get("/loops/media/{loop_id}")
@@ -1337,7 +1328,7 @@ async def saved_loop_media(request: Request, loop_id: str) -> FileResponse:
     resolved = await run_in_threadpool(resolve_loop_media_path, _app_config(request), loop_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved)
 
 
 @router.get("/loops/pitch-preview/{preview_id}")
@@ -1345,7 +1336,7 @@ async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileRes
     resolved = await run_in_threadpool(resolve_loop_preview_path, _app_config(request), preview_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved)
 
 
 def _cached_cover_variant_response(

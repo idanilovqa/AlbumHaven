@@ -8215,15 +8215,22 @@ function heardFor(node, quanta) {
   return [...levels];
 }
 
-function receiveSong(harness, open, level, frames, sequence = 0, role = open.role === 'current' ? 0 : 1) {
+function receiveSong(
+  harness, open, level, frames, sequence = 0, role = open.role === 'current' ? 0 : 1, expectations = {},
+) {
   for (let sent = 0; sent < frames; sent += ONE_SECOND) {
-    harness.sockets.at(-1).receive(createPcmMessage({
+    receivePcmAndAssertEnqueue(harness, {
       role,
       generation: open.generation,
       streamId: open.streamId,
       sequence: sequence + sent / ONE_SECOND,
       samples: new Array(Math.min(ONE_SECOND, frames - sent) * 2).fill(level),
-    }));
+    }, {
+      socket: harness.sockets.at(-1),
+      // A cut-over stream keeps its wire role and plays as the current one.
+      role: harness.engine.roles.current?.streamId === open.streamId ? 'current' : 'continuity',
+      ...expectations,
+    });
   }
 }
 
@@ -8251,9 +8258,9 @@ async function pressTrack(harness, name) {
   return outcome;
 }
 
-async function answerOpen(harness, open, level, frames = 2 * ONE_SECOND) {
+async function answerOpen(harness, open, level, frames = 2 * ONE_SECOND, expectations = {}) {
   acceptMetadata(harness, open);
-  receiveSong(harness, open, level, frames, 0, 1);
+  receiveSong(harness, open, level, frames, 0, 1, expectations);
   await harness.settle();
 }
 
@@ -8547,7 +8554,9 @@ for (const waiting of ['open', 'retargeted open', 'refresh', 'cut-over']) {
     assert.deepEqual(heardFor(node, 20), [0], 'the handover silences the old song on purpose');
 
     if (waiting === 'refresh') answerAuthority(harness, probe);
-    else if (waiting !== 'cut-over') await answerOpen(harness, pending.open, PRESSED_SONG);
+    else if (waiting !== 'cut-over') {
+      await answerOpen(harness, pending.open, PRESSED_SONG, 2 * ONE_SECOND, { expectedEnqueue: false });
+    }
     await harness.settle();
     assert.deepEqual(heardFor(node, 20), [0], 'a late answer never sounds the pressed song');
     assert.equal(harness.api.snapshot().paused, true);

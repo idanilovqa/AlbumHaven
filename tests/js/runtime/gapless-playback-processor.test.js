@@ -941,7 +941,7 @@ function primedSeekFixture() {
   });
   enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(QUANTUM_FRAMES * 3).fill(0.25) });
   play(fixture);
-  renderQuantum(fixture);
+  assertRenderedNonSilentStereo(fixture);
   fixture.send({ type: 'reserve-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0 });
   enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: Array(QUANTUM_FRAMES).fill(-0.5) });
   return fixture;

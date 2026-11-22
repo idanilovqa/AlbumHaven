@@ -12762,8 +12762,9 @@ def test_duplicate_candidate_lookup_uses_python_identity_before_postgres_18(monk
     ) == [1, 2]
 
 
-def test_duplicate_candidate_lookup_uses_python_identity_before_helper_migration(monkeypatch):
+def test_duplicate_candidate_lookup_fails_closed_before_helper_migration(monkeypatch):
     import music_app.services.library_browse_postgres as browse
+    from music_app.services.problematic_projection_postgres import ProblematicProjectionStorageError
 
     repository = browse.PostgresLibraryBrowseRepository({
         "ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-pre-migration-test",
@@ -12771,7 +12772,9 @@ def test_duplicate_candidate_lookup_uses_python_identity_before_helper_migration
     monkeypatch.setattr(
         browse,
         "_duplicate_inventory_fingerprint",
-        lambda _connection: {"fingerprint": (1,), "observed_at": 1},
+        lambda _connection: (_ for _ in ()).throw(
+            AssertionError("missing helpers must not inspect the global duplicate inventory")
+        ),
     )
 
     class Connection:
@@ -12781,23 +12784,14 @@ def test_duplicate_candidate_lookup_uses_python_identity_before_helper_migration
             normalized = " ".join(sql.split()).lower()
             if "to_regprocedure" in normalized:
                 return type("Cursor", (), {"fetchone": lambda _self: {"available": False}})()
-            if "library.duplicate_identity_text" in normalized:
-                raise AssertionError("pre-migration databases must not use duplicate identity helpers")
-            return self
+            raise AssertionError("missing helpers must not query the global duplicate inventory")
 
-        def fetchall(self):
-            return [
-                {"album_id": 1, "album_key": "one", "album_artist": "Artist",
-                 "album": "One", "year": 2001},
-                {"album_id": 2, "album_key": "two", "album_artist": "Artist",
-                 "album": "Two", "year": 2002},
-            ]
-
-    assert browse._load_duplicate_candidate_album_ids(
-        Connection(),
-        ["one", "two"],
-        repository=repository,
-    ) == [1, 2]
+    with pytest.raises(ProblematicProjectionStorageError, match="problematic duplicate lookup unavailable"):
+        browse._load_duplicate_candidate_album_ids(
+            Connection(),
+            ["one", "two"],
+            repository=repository,
+        )
 
 
 def test_requested_duplicate_identity_sql_uses_exact_indexed_domain_identity():
@@ -12809,8 +12803,8 @@ def test_requested_duplicate_identity_sql_uses_exact_indexed_domain_identity():
 
     assert "requested_albums as materialized" in sql
     assert "requested_identities as materialized" in sql
-    assert "library.duplicate_identity_text(files.scan_file_album_artist)" in sql
-    assert "library.duplicate_identity_text(files.scan_file_album)" in sql
+    assert "library.problematic_duplicate_identity_text(files.scan_file_album_artist)" in sql
+    assert "library.problematic_duplicate_identity_text(files.scan_file_album)" in sql
     assert "from requested_identities" in sql
     assert (
         "library.duplicate_identity_year(files.scan_file_year) "

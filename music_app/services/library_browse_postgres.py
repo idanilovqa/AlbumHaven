@@ -5026,8 +5026,52 @@ def _load_duplicate_candidate_album_ids_for_keys(
     })
 
 
+def _duplicate_numeric_parent_sql(physical_parent: str) -> str:
+    # Candidate scope only; canonical numeric classification stays in library.py.
+    name = f"regexp_replace({physical_parent}, '^.*/', '')"
+    whitespace = " || ".join(f"chr({code})" for code in (9, 10, 11, 12, 13, 28, 29, 30, 31)) + " || ' '"
+    return f"""case when octet_length({name}) > char_length({name})
+        or btrim({name}, {whitespace}) ~ '^[0-9]+$'
+        then regexp_replace({physical_parent}, '/[^/]*$', '') end"""
+
+
+def _duplicate_address_context_rows_sql(address_relation: str) -> str:
+    # Compact context only; full selected owners retain canonical first-path order.
+    physical_parent = _physical_parent_sql("files.private_path")
+    numeric_parent = _duplicate_numeric_parent_sql("files.scan_physical_parent")
+    return f"""
+        select distinct addresses.library_id, files.id as file_id, files.album_id
+        from {address_relation} addresses
+        join lateral (
+            select matched.id, tracks.album_id
+            from (
+                select id, track_id, library_root_id
+                from library.local_track_files
+                where scan_cache_stale is false
+                  and md5(library.problematic_physical_album_container(private_path)) = md5(addresses.folder)
+                  and library.problematic_physical_album_container(private_path) = addresses.folder
+                union
+                select files.id, files.track_id, files.library_root_id
+                from library.library_roots parent_roots
+                join library.local_track_files files on files.library_root_id = parent_roots.id
+                where parent_roots.library_id = addresses.library_id and parent_roots.is_active is true
+                  and addresses.parent is not null and files.scan_cache_stale is false
+                  and {physical_parent} >= addresses.parent || '/'
+                  and {physical_parent} < addresses.parent || '0'
+                  and {numeric_parent} = addresses.parent
+            ) matched
+            join library.local_tracks tracks
+              on tracks.id = matched.track_id and tracks.library_id = addresses.library_id
+            join library.library_roots roots
+              on roots.id = matched.library_root_id and roots.library_id = addresses.library_id
+             and roots.is_active is true
+            offset 0
+        ) files on true
+    """
+
+
 def _duplicate_candidate_album_ids_for_keys_sql(*, canonical_library: bool = False) -> str:
-    physical_container = _physical_album_container_sql("files.private_path")
+    physical_container = "library.problematic_physical_album_container(files.private_path)"
     library_scope = "select library_id from ops.resolve_problematic_projection_library()" if canonical_library else """
           select libraries.id as library_id
           from app.bootstrap_owners owners
@@ -5047,35 +5091,43 @@ def _duplicate_candidate_album_ids_for_keys_sql(*, canonical_library: bool = Fal
           join library.local_albums albums
             on albums.library_id = target_library.library_id
           where albums.album_key = any(%(album_keys)s::text[])
-        ), requested_identities as materialized (
-          select distinct
-            requested_albums.library_id,
-            library.problematic_duplicate_identity_text(files.scan_file_album_artist)
-              as album_artist_identity,
-            library.problematic_duplicate_identity_text(files.scan_file_album)
-              as album_identity,
-            library.duplicate_identity_year(files.scan_file_year)
-              as album_year
+        ), requested_addresses as materialized (
+          select distinct requested_albums.library_id,
+            library.problematic_physical_album_container(files.private_path) as folder,
+            {_duplicate_numeric_parent_sql("files.scan_physical_parent")} as parent
           from requested_albums
           join library.local_tracks tracks
             on tracks.library_id = requested_albums.library_id
            and tracks.album_id = requested_albums.album_id
-          join library.local_track_files files
-            on files.track_id = tracks.id
+          join library.local_track_files files on files.track_id = tracks.id
+          join library.library_roots roots
+            on roots.id = files.library_root_id and roots.library_id = requested_albums.library_id
+           and roots.is_active is true
           where files.scan_cache_stale is false
-            and files.scan_file_entry_is_object is true
+        ), requested_context as materialized (
+          {_duplicate_address_context_rows_sql("requested_addresses")}
+        ), requested_identities as materialized (
+          select distinct requested_context.library_id,
+            library.problematic_duplicate_identity_text(files.scan_file_album_artist)
+              as album_artist_identity,
+            library.problematic_duplicate_identity_text(files.scan_file_album)
+              as album_identity,
+            library.duplicate_identity_year(files.scan_file_year) as album_year
+          from requested_context
+          join library.local_track_files files on files.id = requested_context.file_id
+          where files.scan_file_entry_is_object is true
             and library.problematic_duplicate_identity_text(files.scan_file_album_artist) <> ''
             and library.problematic_duplicate_identity_text(files.scan_file_album) <> ''
-            and library.duplicate_identity_year(files.scan_file_year)
-              between 1000 and 9999
+            and library.duplicate_identity_year(files.scan_file_year) between 1000 and 9999
         ), candidate_containers as materialized (
           select distinct
             requested_identities.album_artist_identity,
             requested_identities.album_identity,
             requested_identities.album_year,
-            tracks.album_id,
+            requested_identities.library_id, tracks.album_id,
             files.library_root_id,
-            {physical_container} as folder
+            {physical_container} as folder,
+            {_duplicate_numeric_parent_sql("files.scan_physical_parent")} as parent
           from requested_identities
           join library.local_track_files files
             on md5(library.problematic_duplicate_identity_text(files.scan_file_album_artist))
@@ -5102,15 +5154,18 @@ def _duplicate_candidate_album_ids_for_keys_sql(*, canonical_library: bool = Fal
           from candidate_containers
           group by album_artist_identity, album_identity, album_year
           having count(distinct (library_root_id, folder)) > 1
-        ), candidate_album_ids as (
-          select requested_albums.album_id
-          from requested_albums
-          union
-          select distinct candidate_containers.album_id
+        ), candidate_addresses as materialized (
+          select distinct candidate_containers.library_id, folder, parent
           from candidate_containers
           join duplicate_identities using (
             album_artist_identity, album_identity, album_year
           )
+        ), candidate_context as materialized (
+          {_duplicate_address_context_rows_sql("candidate_addresses")}
+        ), candidate_album_ids as (
+          select requested_albums.album_id from requested_albums
+          union
+          select candidate_context.album_id from candidate_context
         )
         select candidate_album_ids.album_id
         from candidate_album_ids

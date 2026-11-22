@@ -1,5 +1,5 @@
-"""Discogs, asked about a matched band's album that MusicBrainz lacks (Delivery 2; owner
-2026-11-21: "not found on MusicBrainz/Discogs" means found in neither).
+"""Discogs, asked about a matched band's album that MusicBrainz lacks (Delivery 2): an album counts
+as not found only when neither provider has it.
 
 The artist fallback asks only for artists MusicBrainz did not find, so this asks album by
 album: the local artist name, then MusicBrainz's name, by the fallback's own rule for a

@@ -11,7 +11,7 @@ async function mountFields(page) {
       :root { --appearance-primary-button: #2563eb; --appearance-ink: #f3f6fa; --appearance-warning: #f59e0b; }
       body { margin: 40px; background: #111827; }
     </style></head><body>
-      <label>Album Name<input id="warned" class="ui-field-warning-glow" value="Absolutoin"></label>
+      <label>Album Name<input id="warned" class="ui-field-warning-glow" value="Resolvanec"></label>
       <label>Year<input id="plain" value="2003"></label>
       <button class="button ui-button ui-button--quiet ui-button--medium" id="hollow">No</button>
       <button class="button ui-button ui-button--tonal ui-button--medium" id="tonal">Continue</button>

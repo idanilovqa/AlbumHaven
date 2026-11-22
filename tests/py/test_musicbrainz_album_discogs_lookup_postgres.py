@@ -36,12 +36,12 @@ def seeded(monkeypatch):
             " where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'").fetchone()["id"]
         connection.execute(
             "insert into integration.musicbrainz_artists (mbid, canonical_name, sort_name, artist_kind, refreshed_at)"
-            " values (%s, 'Muse', 'Muse', 'Group', %s)", (BAND, NOW))
+            " values (%s, 'Vela', 'Vela', 'Group', %s)", (BAND, NOW))
         for key, state in (("matched", "matched"), ("unknown", "not_found"), ("other", "matched")):
             artists[key] = connection.execute(
                 "insert into library.local_artists (library_id, artist_key, name, metadata)"
                 " values (%s, %s, %s, '{}'::jsonb) returning id",
-                (library_id, f"dl-{key}", f"Muse {key}")).fetchone()["id"]
+                (library_id, f"dl-{key}", f"Vela {key}")).fetchone()["id"]
             connection.execute(
                 "insert into library.local_artist_musicbrainz_matches (library_id, local_artist_id, state,"
                 " artist_mbid, decision_source, confidence, evidence_summary, matcher_version, first_observed_at,"
@@ -91,7 +91,7 @@ def test_only_this_artists_albums_musicbrainz_lacks_are_asked(seeded):
     _url, repository, artists, albums = seeded
     _job, due = _queue_and_load(repository, artists["matched"])
     assert [album["id"] for album in due] == [albums["lacking"]]
-    assert due[0]["canonical_name"] == "Muse"
+    assert due[0]["canonical_name"] == "Vela"
     assert due[0]["tracks"][0]["title"] == "Opening"
 
 

@@ -1,5 +1,5 @@
-"""A matched band's album that MusicBrainz lacks, asked on Discogs (owner 2026-11-21: "not
-found" means found in neither; an album still waiting for a lookup doesn't count)."""
+"""A matched band's album that MusicBrainz lacks, asked on Discogs: not found means
+found in neither, and an album still waiting for a lookup doesn't count."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -16,7 +16,7 @@ NOW = datetime(2026, 11, 22, 8, 0, tzinfo=timezone.utc)
 TRACKS = [("Opening", 200), ("Middle", 250), ("Closing", 300)]
 
 
-def _album(album_id=7, *, local_name="PFM", canonical_name="Premiata Forneria Marconi"):
+def _album(album_id=7, *, local_name="LSC", canonical_name="Long Signal Collective"):
     return {"id": album_id, "title": "Kingdom", "year": 2010, "signature": f"signature-{album_id}",
             "local_name": local_name, "canonical_name": canonical_name,
             "tracks": [{"title": title, "duration_seconds": seconds, "disc_number": 1, "track_number": number}
@@ -92,16 +92,16 @@ def test_the_same_title_with_other_tracks_on_discogs_is_not_that_album():
 
 def test_the_musicbrainz_name_is_tried_before_saying_not_found():
     repository = _Repository([_album()])
-    discogs = _discogs(known_artist="Premiata Forneria Marconi")
+    discogs = _discogs(known_artist="Long Signal Collective")
     _run(repository, discogs)
     assert repository.recorded == [(7, "signature-7", 600)]
     searched = [params["artist"] for path, params in discogs.calls if path == "/database/search"]
-    assert searched == ["PFM", "Premiata Forneria Marconi"]
+    assert searched == ["LSC", "Long Signal Collective"]
 
 
 def test_one_name_is_never_searched_twice():
     discogs = _discogs(hits=0)
-    _run(_Repository([_album(local_name="Muse", canonical_name="muse")]), discogs)
+    _run(_Repository([_album(local_name="Vela", canonical_name="vela")]), discogs)
     assert len(discogs.calls) == 1
 
 

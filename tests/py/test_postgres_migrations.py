@@ -468,7 +468,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
     # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-93:] == [
+    assert migration_names[-94:] == [
         "0044_create_tag_edit_intents.sql",
         "0045_add_non_album_candidate_index.sql",
         "0046_add_local_auth_lifecycle.sql",
@@ -562,6 +562,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0256_add_album_latin_titles.sql",
         "0257_add_musicbrainz_artist_area.sql",
         "0258_invalidate_gallery_on_split_labels.sql",
+        "0259_create_album_artist_suggestions.sql",
     ]
 
 

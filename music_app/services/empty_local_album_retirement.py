@@ -34,6 +34,8 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
         "library.local_album_musicbrainz_correction_rows",
         # Album Latin titles (S7, 0256), remade from the title by the background refresh.
         "library.local_album_latin_titles",
+        # What Problematic Files proposes for an undecided album (0259), remade by a re-check.
+        "library.local_album_artist_suggestions",
     }
 )
 # Tables whose foreign key to library.local_albums may hold a user decision;

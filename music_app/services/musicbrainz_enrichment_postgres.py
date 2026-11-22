@@ -617,6 +617,7 @@ class MusicBrainzEnrichmentPostgresRepository:
                 # A candidate outcome means no album was certain: earlier automatic
                 # album identities no longer hold.
                 connection.execute(_replace_album_identities_sql(), {**params, "album_identities": "[]"})
+                connection.execute(_clear_album_suggestions_sql(), {**params, "unchecked_album_ids": []})
                 connection.execute(_mark_matcher_version_sql(), params)
                 connection.execute(_sync_problem_sql(), _problem_params(
                     local_artist_id=local_artist_id, observed_at=observed_at,
@@ -636,9 +637,12 @@ class MusicBrainzEnrichmentPostgresRepository:
         album_evidence: list[dict[str, object]] | None = None,
         album_identities: list[dict[str, object]] | None = None,
         identity_artists: list[dict[str, object]] | None = None,
+        album_suggestions: list[dict[str, object]] | None = None,
+        album_suggestions_unchecked: list[object] | None = None,
     ) -> dict[str, object]:
         """``album_identities`` are the albums a MusicBrainz artist certainly holds;
-        ``identity_artists`` names those artists (a split's)."""
+        ``identity_artists`` names those artists (a split's). ``album_suggestions`` are only
+        proposed for albums left undecided; ``album_suggestions_unchecked`` albums keep theirs."""
         projection = _artist_projection(artist)
         aliases = projection["aliases"] if projection else []
         tags = projection["tags"] if projection else []
@@ -671,6 +675,13 @@ class MusicBrainzEnrichmentPostgresRepository:
                             for item in identity_artists or []])})
                     connection.execute(_replace_album_identities_sql(), {
                         **params, "album_identities": _album_identities(album_identities)})
+                    connection.execute(_clear_album_suggestions_sql(), {
+                        **params, "unchecked_album_ids": [
+                            _positive_id(album_id) for album_id in album_suggestions_unchecked or []]})
+                    suggested = _album_suggestions(album_suggestions)
+                    if suggested:
+                        connection.execute(_insert_album_suggestions_sql(), {
+                            **params, "album_suggestions": json.dumps(suggested)})
                 connection.execute(_sync_problem_sql(), _problem_params(
                     local_artist_id=params["local_artist_id"], observed_at=params["observed_at"],
                 ))
@@ -1507,6 +1518,24 @@ def _album_identities(identities: object) -> str:
     return json.dumps(rows)
 
 
+def _album_suggestions(suggestions: object) -> list[dict[str, object]]:
+    """The artists proposed for each undecided album, one row each."""
+    rows = []
+    for item in suggestions if isinstance(suggestions, list) else []:
+        album_id = _integer(item.get("local_album_id"))
+        favoured = _optional_mbid(item.get("favoured_mbid"))
+        for artist in item.get("artists") or []:
+            mbid = _optional_mbid(artist.get("artist_mbid"))
+            if album_id and mbid:
+                rows.append({
+                    "local_album_id": album_id, "artist_mbid": mbid,
+                    "found_count": _integer(artist.get("found")), "sampled_count": _integer(artist.get("sampled")),
+                    "folder_album": _bounded_text(artist.get("folder_album"), 1024) or None,
+                    "favoured": mbid == favoured,
+                })
+    return rows
+
+
 _UNDECIDED_ALBUM_METHODS = frozenset({"recordings", "release", "folder"})
 
 
@@ -1727,6 +1756,44 @@ def _replace_album_identities_sql() -> str:
           and (library.local_album_artist_identities.artist_mbid, library.local_album_artist_identities.evidence,
                library.local_album_artist_identities.tag_differs, library.local_album_artist_identities.matcher_version)
               is distinct from (excluded.artist_mbid, excluded.evidence, excluded.tag_differs, excluded.matcher_version);
+    """
+
+
+def _clear_album_suggestions_sql() -> str:
+    """A re-check's suggestions replace the artist's, apart from albums it could not check."""
+    return _active_library_cte() + """
+        delete from library.local_album_artist_suggestions suggestions
+        using active_library, library.local_albums albums
+        where albums.library_id = active_library.library_id
+          and albums.artist_id = %(local_artist_id)s
+          and suggestions.library_id = albums.library_id
+          and suggestions.album_key = albums.album_key
+          and not (albums.id = any(%(unchecked_album_ids)s::bigint[]));
+    """
+
+
+def _insert_album_suggestions_sql() -> str:
+    """Only for the artist's albums still without an identity: one decided since, the owner's
+    choice included, gets no suggestion. Writes no identity."""
+    return _active_library_cte() + """
+        insert into library.local_album_artist_suggestions (
+          library_id, album_key, artist_mbid, found_count, sampled_count, folder_album, favoured,
+          matcher_version, observed_at
+        )
+        select albums.library_id, albums.album_key, remote.mbid, rows.found_count, rows.sampled_count,
+               rows.folder_album, rows.favoured, %(matcher_version)s, %(observed_at)s
+        from jsonb_to_recordset(%(album_suggestions)s::jsonb) as rows(
+          local_album_id bigint, artist_mbid uuid, found_count integer, sampled_count integer,
+          folder_album text, favoured boolean)
+        cross join active_library
+        join library.local_albums albums
+          on albums.id = rows.local_album_id and albums.library_id = active_library.library_id
+         and albums.artist_id = %(local_artist_id)s
+        join integration.musicbrainz_artists remote on remote.mbid = rows.artist_mbid
+        where not exists (
+          select 1 from library.local_album_artist_identities identities
+          where identities.library_id = albums.library_id and identities.album_key = albums.album_key)
+        on conflict (library_id, album_key, artist_mbid) do nothing;
     """
 
 

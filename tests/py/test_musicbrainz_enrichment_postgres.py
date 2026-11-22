@@ -64,6 +64,9 @@ class FakeConnection:
         if "insert into library.metadata_enrichment_problems" in sql:
             self.problem_syncs.append(params)
             return FakeCursor()
+        if "delete from library.local_album_artist_suggestions" in sql:
+            # A re-check also clears the album suggestions (0259); covered by their own tests.
+            return FakeCursor()
         if "set matcher_version" in sql:
             self.matcher_marks.append(params)
             return FakeCursor()

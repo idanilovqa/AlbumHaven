@@ -273,6 +273,8 @@ class MusicBrainzArtistEnrichmentProcessor:
                 observed_at=observed_at,
                 album_identities=outcome.get("album_identities"),
                 identity_artists=outcome.get("artists"),
+                album_suggestions=outcome.get("album_suggestions"),
+                album_suggestions_unchecked=outcome.get("album_suggestions_unchecked"),
             )
         elif classification in _CANDIDATE_MATCH_STATES or (
             classification == "permanent_mismatch" and outcome.get("candidates")

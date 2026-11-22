@@ -490,7 +490,6 @@ def test_index_bootstrap_defers_selected_artist_gallery_until_runtime_hydration(
     from music_app.routes import web_asgi
 
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
-    monkeypatch.setattr(web_asgi, "get_primary_music_root", lambda _config: "C:/Music")
     monkeypatch.setattr(
         web_asgi,
         "_build_postgres_selected_artist_startup_view",

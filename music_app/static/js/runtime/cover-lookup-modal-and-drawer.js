@@ -1721,10 +1721,27 @@ function captureCoverLookupDrawerScrollAnchor(body) {
   return taskId && taskRect ? { taskId, offset: Number(taskRect.top || 0) - Number(bodyRect.top || 0) } : null;
 }
 
+function findCoverLookupDrawerTaskOpener(body, taskId) {
+  return Array.from(body.querySelectorAll?.('[data-open-cover-lookup-task]') || [])
+    .find((element) => String(element.getAttribute?.('data-open-cover-lookup-task') || '') === taskId);
+}
+
+function captureCoverLookupDrawerFocusedTaskId(body) {
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  if (!active || !body?.contains?.(active)) return '';
+  return String(active.getAttribute?.('data-open-cover-lookup-task') || '');
+}
+
+// Rendering detaches or rebuilds the focused opener, which drops focus to the page. Give it back to that
+// task only: never over another element's focus, never to another task, and without scrolling to it.
+function restoreCoverLookupDrawerTaskFocus(body, taskId) {
+  if (!taskId || (document.activeElement && document.activeElement !== document.body)) return;
+  findCoverLookupDrawerTaskOpener(body, taskId)?.focus?.({ preventScroll: true });
+}
+
 function restoreCoverLookupDrawerScrollAnchor(body, anchor) {
   if (!body || !anchor?.taskId) return false;
-  const task = Array.from(body.querySelectorAll?.('[data-open-cover-lookup-task]') || [])
-    .find((element) => String(element.getAttribute?.('data-open-cover-lookup-task') || '') === anchor.taskId);
+  const task = findCoverLookupDrawerTaskOpener(body, anchor.taskId);
   const bodyRect = body.getBoundingClientRect?.();
   const taskRect = task?.getBoundingClientRect?.();
   if (!bodyRect || !taskRect) return false;
@@ -2155,6 +2172,7 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
   }).join('');
   const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
   const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+  const focusedTaskId = captureCoverLookupDrawerFocusedTaskId(body);
   replaceCoverLookupDrawerMarkup(body, `
     <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
     ${taskMarkup}
@@ -2169,6 +2187,7 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
   if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
     body.scrollTop = Math.max(0, restoreScrollTop);
   }
+  restoreCoverLookupDrawerTaskFocus(body, focusedTaskId);
   return visibleTasks;
 }
 

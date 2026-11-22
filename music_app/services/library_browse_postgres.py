@@ -7595,14 +7595,21 @@ def _canonicalize_artist_rows(
             if next_payload.pop("found_by_search", None) is False:
                 unfound_credit_ids.add(id(next_payload))
             canonical_rows.append(next_payload)
-    # A split release is recognized by all its credits; only those the search matched are then results.
+    # A split release is recognized by all its credits; only those the search matched are then results. One
+    # matched only through its joint credit keeps the artists that credit folds into: the album is never lost.
+    credited_rows = _suppress_split_release_composite_owner_rows(
+        canonical_rows,
+        alias_to_canonical=alias_to_canonical,
+    )
+    if not unfound_credit_ids:
+        return credited_rows
+    found_albums = {
+        _row_mapping(row).get("album_id") for row in credited_rows if id(row) not in unfound_credit_ids
+    }
     return [
         row
-        for row in _suppress_split_release_composite_owner_rows(
-            canonical_rows,
-            alias_to_canonical=alias_to_canonical,
-        )
-        if id(row) not in unfound_credit_ids
+        for row in credited_rows
+        if id(row) not in unfound_credit_ids or _row_mapping(row).get("album_id") not in found_albums
     ]
 
 
@@ -11243,7 +11250,16 @@ def _search_preview_sql(
             join library.local_album_featured_artists
               on library.local_album_featured_artists.library_id = album_title_matches.library_id
              and library.local_album_featured_artists.album_id = album_title_matches.album_id
-             and library.local_album_featured_artists.featured_kind = 'featured_member'
+            join library.local_albums
+              on library.local_albums.id = album_title_matches.album_id
+            -- A shared release's title finds its performers (FTC-ARTIST-FAMILY-015); a compilation's title
+            -- finds only its members, never everyone who has a track on it.
+            where library.local_album_featured_artists.featured_kind = 'featured_member'
+               or (
+                 library.local_albums.metadata ->> 'is_compilation' is distinct from 'true'
+                 and lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', '')))
+                   not in ('various artists', 'various')
+               )
           ) as found
           group by found.album_id
         ),

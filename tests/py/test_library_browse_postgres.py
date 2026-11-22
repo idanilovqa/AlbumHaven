@@ -4653,6 +4653,10 @@ def test_exact_artist_fallback_sql_constrains_identity_before_album_expansion():
     ("Alpha / Bravo", [("Alpha / Bravo", "owner", True), ("Alpha", "featured_track_artist", True),
                        ("Bravo", "featured_track_artist", False)],
      {"Alpha"}),
+    # A split found only through its joint credit still shows, under the artists that credit folds into.
+    ("Alpha / Bravo", [("Alpha / Bravo", "owner", True), ("Alpha", "featured_track_artist", False),
+                       ("Bravo", "featured_track_artist", False)],
+     {"Alpha", "Bravo"}),
 ])
 def test_a_search_finds_an_artist_only_through_what_is_theirs(album_artist, credits, expected):
     # Owner 2026-11-22: "fix the bug in the search that allows them to be found, when they are not matching on
@@ -4680,6 +4684,10 @@ def test_the_search_query_records_which_artist_each_match_belongs_to():
     assert "from display_artist_matches" in found
     assert "select eligible_matched_track_album_ids.album_id, eligible_matched_track_album_ids.artist_id" in found
     assert "from album_title_matches" in found and "featured_kind = 'featured_member'" in found
+    # FTC-ARTIST-FAMILY-015: "keep an album-title search visible under its selected featured performer". A shared
+    # release's title finds its performers; a compilation's title does not find everyone on it.
+    title_match = found.split("from album_title_matches", 1)[1]
+    assert "'is_compilation'" in title_match and "'various artists'" in title_match
     assert "'found_by_search'" in sql
     assert "library.local_tracks.artist_id" in sql.split("track_title_matches as materialized (", 1)[1].split(")", 1)[0]
 

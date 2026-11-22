@@ -8,8 +8,9 @@ from __future__ import annotations
 import atexit
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from threading import Lock, get_ident
+from threading import Condition, Lock, get_ident
 from time import perf_counter
+from weakref import WeakSet
 
 try:  # Keep schema-independent tooling importable.
     from psycopg import Connection, OperationalError
@@ -24,25 +25,65 @@ except ImportError:  # pragma: no cover
 
 _pools = {}
 _lock = Lock()
-# The pool connects in the background and retries a failed attempt until a checkout times out (30 s),
-# so against an unreachable database every request would stall for the whole timeout. Once the
-# pool's own connection attempt has failed, checkouts fail at once with that error, as
-# `psycopg.connect` did; one request per interval still goes through to find out whether the
-# database is back (freeze-guard backlog case 30). That probe, and a pool's first checkout before it
-# has ever connected, wait a short while only: a slower connection still joins the pool when it
-# completes and clears the failure.
-_UNREACHABLE_PROBE_INTERVAL_SECONDS = 5.0
-_PROBE_CHECKOUT_TIMEOUT_SECONDS = 5.0
+# The pool connects in the background and retries a failed attempt, so against an unreachable
+# database a checkout would wait out its whole timeout (freeze-guard backlog case 30). Only a pool
+# with no live connection is unreachable: it fails checkouts at once with its own connection error.
+# A pool that has a connection, idle or leased, serves or queues as usual whatever growth attempts
+# do. The pool gives up a failed attempt after a few seconds rather than backing off for minutes,
+# and every refused checkout asks it to connect again (a no-op while it is already trying). A
+# failure nobody has met for that long says nothing about now: the next checkout waits for a fresh
+# attempt, so the first request after a quiet outage is served.
+_RECONNECT_GIVE_UP_SECONDS = 5.0
 _connect_states: dict[object, "_ConnectState"] = {}
 
 
 class _ConnectState:
-    """Whether the pool has connected, and its last failed attempt, cleared by its next success."""
+    """A pool's live connections and, while it has none, why it could not open one."""
 
     def __init__(self):
-        self.connected = False
-        self.error = None
-        self.failed_at = 0.0
+        self._changed = Condition()
+        self._connections = WeakSet()
+        self._error = None
+        self._error_seen_at = 0.0
+
+    def _has_live_connection(self) -> bool:
+        return any(not connection.closed for connection in self._connections)
+
+    def connected(self, connection) -> None:
+        with self._changed:
+            self._connections.add(connection)
+            self._error = None
+            self._changed.notify_all()
+
+    def failed(self, error: Exception) -> None:
+        with self._changed:
+            if not self._has_live_connection():
+                if self._error is None:  # the pool's own retries do not count as meeting it
+                    self._error_seen_at = perf_counter()
+                self._error = error
+                self._changed.notify_all()
+
+    def require_connection(self, pool, timeout_seconds: float) -> None:
+        """Return once the pool has a live connection; raise if it cannot open one."""
+        with self._changed:
+            if self._has_live_connection():
+                return
+            now = perf_counter()
+            if now - self._error_seen_at > _RECONNECT_GIVE_UP_SECONDS:
+                self._error = None
+            self._error_seen_at = now
+            error = self._error
+        # Not through the pool's queue: timed-out waiters stay in it, and a full queue stops growth.
+        pool.check()
+        with self._changed:
+            if error is None:
+                if not self._changed.wait_for(lambda: self._error or self._has_live_connection(), timeout_seconds):
+                    raise PoolTimeout(f"couldn't get a connection after {timeout_seconds:.2f} sec")
+                error = self._error
+        if error is not None:
+            raise OperationalError(f"Postgres is unreachable: {error}") from error
+
+
 # Leases each thread holds right now, by thread id. A lease taken while the thread already holds one
 # comes from a pool one level deeper, so nested repository calls never wait on a connection their own
 # request is holding: waits only ever go deeper, so pool exhaustion cannot deadlock. A lease released
@@ -107,17 +148,15 @@ def pooled_connection(
                 max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE,
                 max_waiting=32,
                 timeout=30, max_idle=120, max_lifetime=600,
+                reconnect_timeout=_RECONNECT_GIVE_UP_SECONDS,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,
             )
             _pools[pool_key] = pool
     checkout_started = perf_counter()
+    timeout_seconds = max(0.001, float(checkout_timeout_seconds)) if checkout_timeout_seconds is not None else None
     try:
-        checkout = _checkout(
-            pool,
-            _connect_states.get(pool_key),
-            max(0.001, float(checkout_timeout_seconds)) if checkout_timeout_seconds is not None else None,
-        )
+        checkout = pool.connection(timeout=timeout_seconds) if timeout_seconds is not None else pool.connection()
     except PoolTimeout:
         _observe_pool_lease(
             lease_observer,
@@ -130,6 +169,9 @@ def pooled_connection(
     return _lease_connection(
         checkout,
         pool=pool,
+        # Only a pool that connects through the recording class can report its connections.
+        connect_state=_connect_states.get(pool_key) if hasattr(pool, "connection_class") else None,
+        timeout_seconds=timeout_seconds,
         workload=normalized_workload,
         lease_observer=lease_observer,
         keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
@@ -145,28 +187,13 @@ def _state_recording_connection_class(connect_state: _ConnectState):
         def connect(cls, *args, **kwargs):
             try:
                 connection = super().connect(*args, **kwargs)
-            except OperationalError as error:
-                connect_state.error, connect_state.failed_at = error, perf_counter()
+            except Exception as error:
+                connect_state.failed(error)
                 raise
-            connect_state.connected, connect_state.error = True, None
+            connect_state.connected(connection)
             return connection
 
     return _StateRecordingConnection
-
-
-def _checkout(pool, connect_state: _ConnectState | None, timeout_seconds: float | None):
-    if not hasattr(pool, "connection_class"):  # a pool that does not connect through the recording class
-        connect_state = None
-    probing = False
-    if connect_state is not None and connect_state.error is not None:
-        now = perf_counter()
-        if now - connect_state.failed_at < _UNREACHABLE_PROBE_INTERVAL_SECONDS:
-            raise OperationalError(f"Postgres is unreachable: {connect_state.error}") from connect_state.error
-        connect_state.failed_at = now  # this request probes; the others keep failing at once
-        probing = True
-    if probing or (connect_state is not None and not connect_state.connected):
-        timeout_seconds = min(timeout_seconds or _PROBE_CHECKOUT_TIMEOUT_SECONDS, _PROBE_CHECKOUT_TIMEOUT_SECONDS)
-    return pool.connection(timeout=timeout_seconds) if timeout_seconds is not None else pool.connection()
 
 
 @contextmanager
@@ -174,6 +201,8 @@ def _lease_connection(
     checkout,
     *,
     pool,
+    connect_state: _ConnectState | None,
+    timeout_seconds: float | None,
     workload: str,
     lease_observer: Callable[[Mapping[str, object]], None] | None,
     keep_warm: bool = False,
@@ -182,6 +211,8 @@ def _lease_connection(
     acquired = False
     acquired_at = 0.0
     try:
+        if connect_state is not None:
+            connect_state.require_connection(pool, timeout_seconds or pool.timeout)
         with checkout as connection:
             acquired_at = perf_counter()
             acquired = True

@@ -26,7 +26,7 @@ if source is None:
 owner.mkdir()
 for index, album in enumerate(json.loads(sys.argv[3])):
     for number in [1, 2]:
-        destination = owner / f"Folder {index:02d}" / f"{number:02d}.mp3"
+        destination = owner / f"Folder {index:02d}" / f"{index:02d}-{number:02d}.mp3"
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         tags = ID3(destination)
@@ -58,6 +58,10 @@ function ownedRoot(fixture) {
   return resolved;
 }
 
+export function albumFilenames(albumIndex) {
+  return [1, 2].map(number => `${String(albumIndex).padStart(2, '0')}-${String(number).padStart(2, '0')}.mp3`);
+}
+
 async function setFileMode(fixture, mode) {
   const root = ownedRoot(fixture);
   const files = (await fs.readdir(root, { recursive: true })).filter(name => name.endsWith('.mp3'));
@@ -75,5 +79,6 @@ export async function makeFixtureFilesWritable(fixture) {
 
 export async function removeSaveCardsFixture(fixture) {
   await makeFixtureFilesWritable(fixture);
-  await fs.rm(ownedRoot(fixture), { recursive: true });
+  // The running app may still be closing a file it has just written.
+  await fs.rm(ownedRoot(fixture), { recursive: true, maxRetries: 10, retryDelay: 200 });
 }

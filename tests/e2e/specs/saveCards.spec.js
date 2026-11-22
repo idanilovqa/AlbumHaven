@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { expect, test } from '../support/baseFixtures.js';
 import { SaveCardFrames } from '../poms/saveCardFrames.js';
 import {
-  createSaveCardsFixture, makeFixtureFilesReadOnly, makeFixtureFilesWritable, removeSaveCardsFixture,
+  albumFilenames, createSaveCardsFixture, makeFixtureFilesReadOnly, makeFixtureFilesWritable,
+  removeSaveCardsFixture,
 } from '../helpers/saveCardsFixture.js';
 import {
   holdFoldDecision, holdFoldDecisionThenOutdateIt, holdSaveBeforeMediaWrite, holdStructuralSavePersistence,
@@ -46,20 +47,19 @@ async function openArtist(galleryActions) {
   await galleryActions.waitForGalleryReady();
 }
 
-test.afterEach(async ({ managedAppLifecycle, galleryActions, appBarActions }) => {
+test.afterEach(async ({ galleryActions, appBarActions }) => {
   await decisionGate?.dispose();
   decisionGate = null;
   await saveGate?.dispose();
   saveGate = null;
   await persistenceGate?.dispose();
   persistenceGate = null;
-  await managedAppLifecycle.stop();
   try {
     if (ownedFixture) await removeSaveCardsFixture(ownedFixture);
   } finally {
     ownedFixture = null;
-    await managedAppLifecycle.restart();
   }
+  // No restart: the functional app's cover-cache seeder refuses to start over a folded pair of albums.
   await rescan({ galleryActions, appBarActions });
 });
 
@@ -68,10 +68,16 @@ async function holdSave() {
 }
 
 // A fast click: the confirmation is clicked as soon as it can be, never after the decision.
-async function clickSave({ page, galleryActions, tagEditorActions }, album, edit) {
+async function clickSave({ page, galleryActions, tagEditorActions }, album, edit, { copyIndex } = {}) {
   await galleryActions.openAlbumTagEditorFromContextMenu(album);
-  await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
-  await tagEditorActions.selectAllTracks();
+  if (copyIndex === undefined) {
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+    await tagEditorActions.selectAllTracks();
+  } else {
+    // A folded card lists both copies; the edit is one copy's files.
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 4 });
+    await tagEditorActions.selectTracksByFilenames(albumFilenames(copyIndex));
+  }
   await edit(tagEditorActions);
   const frames = new SaveCardFrames(page);
   await frames.start();
@@ -79,6 +85,16 @@ async function clickSave({ page, galleryActions, tagEditorActions }, album, edit
   await tagEditor.applyButton.click();
   await tagEditor.confirmButton.click();
   return frames;
+}
+
+// A Full Rescan marks more albums than a request evaluates inline, so a scanned pair's marker follows
+// the index's background pass: a precondition here, not what any of these cases is about.
+async function waitForSeededPair(galleryActions) {
+  const { albumCard } = galleryActions.galleryPage;
+  await expect.poll(async () => {
+    await openArtist(galleryActions);
+    return albumCard.duplicateMarkerByAlbumName(TWIN).count();
+  }, { timeout: 60000, intervals: [1000, 2000, 5000] }).toBe(1);
 }
 
 const renameTo = album => actions => actions.setAlbumName(album);
@@ -146,9 +162,10 @@ test.describe('Cards change at Save', () => {
     page, managedAppLifecycle, galleryActions, appBarActions, tagEditorActions,
   }) => {
     await openLibrary({ managedAppLifecycle, galleryActions, appBarActions }, [TWIN, COPY]);
+    await waitForSeededPair(galleryActions);
     await expect(galleryActions.galleryPage.albumCard.cards).toHaveCount(1);
     await holdSave();
-    const frames = await clickSave({ page, galleryActions, tagEditorActions }, TWIN, renameTo(NEW));
+    const frames = await clickSave({ page, galleryActions, tagEditorActions }, TWIN, renameTo(NEW), { copyIndex: 0 });
     await expectKeptThroughCompletion(frames, page, [NEW, COPY]);
   });
 
@@ -207,6 +224,7 @@ test.describe('Cards change at Save', () => {
     ).albumCount;
     const movedArtist = `${ownedFixture.artist} moved`;
     const treeEntry = page.getByRole('navigation').getByText(movedArtist, { exact: true });
+    await waitForSeededPair(galleryActions);
     await expect(albumCard.cards).toHaveCount(1);
     await expect(albumCard.duplicateMarkerByAlbumName(TWIN)).toBeVisible();
     const countBefore = await readCount();
@@ -214,7 +232,7 @@ test.describe('Cards change at Save', () => {
     await holdSave();
     const frames = await clickSave({ page, galleryActions, tagEditorActions }, TWIN, async (actions) => {
       await actions.setAlbumArtist(movedArtist);
-    });
+    }, { copyIndex: 0 });
     await expectFromTheClick(frames, [COPY]);
     await expect(treeEntry).toBeVisible();
 

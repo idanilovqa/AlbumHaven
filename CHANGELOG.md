@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.46 - 2026-11-22
+
+- One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.
+
 ## 0.11.45 - 2026-11-22
 
 - Every request and background check now borrows a database connection from a shared pool instead of opening a new one, and the freeze guard rejects any new code that opens its own. If the database is unreachable, requests fail at once instead of waiting 30 seconds.

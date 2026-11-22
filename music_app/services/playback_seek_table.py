@@ -69,14 +69,15 @@ def mp3_seek_table(stream_map: Mp3StreamMap, window: Mp3ByteWindow) -> SeekTable
     """The table of an MP3 stream sent from ``window``: every stride-th frame from its first."""
     offsets = stream_map.frame_offsets
     first = next(index for index, offset in enumerate(offsets) if offset == window.start_byte)
-    frames = range(first, len(offsets), _stride(len(offsets) - first))
+    last = bisect.bisect_left(offsets, window.end_byte, first)  # a CUE segment's window ends inside the file
+    frames = range(first, last, _stride(last - first))
     spf = stream_map.samples_per_frame
     return SeekTable(
         prefix_bytes=0,
         preroll_frames=MP3_PREROLL_FRAMES * spf,
         offsets=tuple(offsets[frame] - window.start_byte for frame in frames)
         + (window.end_byte - window.start_byte,),
-        samples=tuple((frame - first) * spf for frame in frames) + ((len(offsets) - first) * spf,),
+        samples=tuple((frame - first) * spf for frame in frames) + ((last - first) * spf,),
     )
 
 

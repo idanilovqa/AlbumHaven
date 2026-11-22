@@ -6850,6 +6850,8 @@ test('a successor prepared ahead is kept at the local audible boundary', async (
   const eos = { authoritativeTotalFrames: 10_000 };
   continuity.encoded = { wire, eos };
 
+  harness.context.keepStreamingWire({ ...wire, track: { ...makeTrack('cue'), cueSegmentRef: 'cue:two' } }, eos, 'current');
+  assert.deepEqual(kept, [], 'a CUE track is never kept: the cache key cannot see a corrected start');
   harness.context.keepStreamingWire(wire, eos, 'continuity');
   assert.deepEqual(kept, [], 'a song only fetched ahead is not kept');
 

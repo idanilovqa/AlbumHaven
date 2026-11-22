@@ -159,7 +159,9 @@ def _read_stream(command: PcmOpenCommand, *, quality: str = "original") -> tuple
     return asyncio.run(scenario())
 
 
-def _open_command(path: Path, start_frame: int, sample_rate: int) -> PcmOpenCommand:
+def _open_command(
+    path: Path, start_frame: int, sample_rate: int, end_frame: int | None = None,
+) -> PcmOpenCommand:
     return PcmOpenCommand(
         generation=1,
         stream_id=1,
@@ -168,7 +170,66 @@ def _open_command(path: Path, start_frame: int, sample_rate: int) -> PcmOpenComm
         start_frame=start_frame,
         sample_rate=sample_rate,
         provisional_duration_seconds=6,
+        end_frame=end_frame,
     )
+
+
+SEGMENTS = ((0, 88_201), (44_101, 97_338), (200_000, 254_000))
+
+
+@pytest.mark.parametrize("variant", ["cbr-320", "vbr", "no-xing"])
+@pytest.mark.parametrize("start, end", SEGMENTS)
+def test_cue_segment_of_an_mp3_streams_compressed_to_its_exact_end(
+    tools, decode_with_client, tmp_path, variant, start, end
+):
+    ffmpeg, _node = tools
+    rate, encoding = MP3_VARIANTS[variant]
+    source = tmp_path / f"{variant}.mp3"
+    _generate(ffmpeg, source, rate, *encoding)
+    reference = _reference(ffmpeg, source)
+    stream, payload = _read_stream(_open_command(source, start, rate, end))
+    assert stream.codec == "mp3"
+    assert stream.total_frames == end - start
+    assert len(payload) < source.stat().st_size * ((end - start) / len(reference) + 0.2), "not the rest of the image"
+    assert stream.seek_table.offsets[-1] == len(payload)
+    decoded = decode_with_client("mp3", payload, tmp_path)
+    kept = decoded[stream.skip_frames:stream.skip_frames + stream.total_frames]
+    _assert_exact(kept, reference[start:end], f"{variant} {start}-{end}")
+
+
+@pytest.mark.parametrize("start, end", SEGMENTS)
+def test_cue_segment_of_a_flac_streams_lossless_to_its_exact_end(
+    tools, decode_with_client, tmp_path, start, end
+):
+    ffmpeg, _node = tools
+    source = tmp_path / "source.flac"
+    _generate(ffmpeg, source, 44_100, "-ac", "2", "-c:a", "flac")
+    reference = _reference(ffmpeg, source)
+    stream, payload = _read_stream(_open_command(source, start, 44_100, end))
+    assert stream.codec == "flac"
+    assert stream.total_frames == end - start
+    _assert_exact(decode_with_client("flac", payload, tmp_path), reference[start:end], f"flac {start}-{end}")
+
+
+@pytest.mark.parametrize("rate", [44_100, 96_000])
+def test_cue_segment_at_320_is_aligned_and_ends_on_its_sample(tools, decode_with_client, tmp_path, rate):
+    ffmpeg, _node = tools
+    source = tmp_path / "source.flac"
+    _generate(ffmpeg, source, rate, "-ac", "2", "-c:a", "flac")
+    output_rate = min(rate, 48_000)
+    start, end = output_rate + 1, output_rate * 3
+    stream, payload = _read_stream(_open_command(source, start, output_rate, end), quality="320")
+    assert stream.codec == "mp3"
+    assert stream.total_frames == end - start
+    decoded = decode_with_client("mp3", payload, tmp_path)
+    kept = decoded[stream.skip_frames:stream.skip_frames + stream.total_frames]
+    assert len(kept) == end - start
+    assert len(decoded) < stream.skip_frames + (end - start) + 3 * 1152, "encoded on through the image"
+    if rate == output_rate:
+        reference = _reference(ffmpeg, source)[start:end]
+        span = range(1000, 1000 + 2048)
+        energy = sum(reference[index] ** 2 for index in span)
+        assert sum(kept[index] * reference[index] for index in span) / energy > 0.8, "not sample-aligned"
 
 
 @pytest.mark.parametrize("sample_format", ["s16", "s32"])

@@ -37,6 +37,12 @@ _FLAC_MAGIC = b"fLaC"
 _FLAC_STREAMINFO_BYTES = 34
 
 
+def segment_sample_rate(path: Path, native_rate: int, *, codecs: frozenset[str], quality: Quality) -> int:
+    """The rate a CUE segment of this file streams at."""
+    transcodes = quality == "320" and "mp3" in codecs and path.suffix.lower() == ".flac"
+    return fallback_sample_rate(native_rate) if transcodes else native_rate
+
+
 def fallback_sample_rate(native_rate: int) -> int:
     """MP3 stops at 48 kHz, so higher rates fall to the nearest rate of their family."""
     if native_rate <= _MP3_MAX_SAMPLE_RATE:
@@ -228,6 +234,11 @@ async def _start_process(executable: str, *arguments: str) -> asyncio.subprocess
     )
 
 
+def _frames_to_send(command: PcmOpenCommand, file_frames: int) -> int:
+    end = file_frames if command.end_frame is None else min(command.end_frame, file_frames)
+    return end - command.start_frame
+
+
 async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream | None:
     layout = await run_playback_io(read_flac_layout, command.path)
     if layout is None:
@@ -238,11 +249,17 @@ async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream
         output_rate = fallback_sample_rate(native_rate)
         if command.sample_rate != output_rate:
             raise ValueError("sample_rate does not match the 320 kbps stream rate")
-        total_frames = round(native_samples * output_rate / native_rate) - command.start_frame
+        total_frames = _frames_to_send(command, round(native_samples * output_rate / native_rate))
+        # The end counts output samples, so it is cut after the resampler.
+        segment_end = (
+            ("-af", f"aresample={output_rate},atrim=end_sample={total_frames}")
+            if command.end_frame is not None else ()
+        )
         process = await _start_process(
             executable,
             "-ss", f"{command.start_frame / output_rate:.9f}",
             "-i", str(command.path),
+            *segment_end,
             "-vn", "-ac", "2", "-ar", str(output_rate),
             "-c:a", "libmp3lame", "-b:a", "320k",
             "-write_xing", "0", "-id3v2_version", "0",
@@ -257,8 +274,8 @@ async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream
         )
     if command.sample_rate != native_rate:
         raise SampleRateMismatch(native_rate)
-    total_frames = native_samples - command.start_frame
-    if command.start_frame == 0:
+    total_frames = _frames_to_send(command, native_samples)
+    if command.start_frame == 0 and command.end_frame is None:
         stream = _FileByteStream(
             command,
             prefix=header,
@@ -271,10 +288,12 @@ async def _open_flac(command: PcmOpenCommand, quality: Quality) -> EncodedStream
         stream.flac_layout = (command.path, first_audio_byte, end_byte)
         return stream
     # FLAC is lossless, so re-framing from the exact sample keeps every source sample.
+    segment_end = ("-af", f"atrim=end_sample={total_frames}") if command.end_frame is not None else ()
     process = await _start_process(
         executable,
         "-ss", f"{command.start_frame / native_rate:.9f}",
         "-i", str(command.path),
+        *segment_end,
         "-vn", "-map_metadata", "-1", "-c:a", "flac", "-f", "flac",
     )
     return _ProcessByteStream(
@@ -303,7 +322,7 @@ async def open_encoded_stream(
         return None
     if command.sample_rate != stream_map.sample_rate:
         raise SampleRateMismatch(stream_map.sample_rate)
-    window = stream_map.window(command.start_frame)
+    window = stream_map.window(command.start_frame, command.end_frame)
     stream = _FileByteStream(
         command,
         start_byte=window.start_byte,

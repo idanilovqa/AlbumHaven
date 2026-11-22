@@ -26,6 +26,7 @@ from music_app.services.playback_encoded import (
     EncodedStream,
     fallback_sample_rate,
     open_encoded_stream,
+    segment_sample_rate,
 )
 from music_app.services.playback_pcm import (
     PcmDecoderProcess,
@@ -840,16 +841,22 @@ class _PlaybackPcmConnection:
         timeline_origin = 0
         end_frame = None
         if segment is not None:
-            timeline_origin = segment["start_frame"]
-            segment_frames = segment["end_frame"] - timeline_origin
+            native_rate = segment["sample_rate"]
+            segment_rate = segment_sample_rate(
+                resolved_path, native_rate, codecs=frozenset(raw_codecs), quality=quality
+            )
+            if sample_rate != segment_rate:
+                # The player refuses metadata at another rate: as for a whole file, it reopens at the right one.
+                timing.log("rate_mismatch")
+                await self._send_rate_mismatch(generation, stream_id, native_rate)
+                return True
+            timeline_origin = round(segment["start_frame"] * segment_rate / native_rate)
+            end_frame = round(segment["end_frame"] * segment_rate / native_rate)
+            segment_frames = end_frame - timeline_origin
             if start_frame >= segment_frames:
                 return await self._reject_open(CLOSE_INVALID_CONTROL)
             start_frame += timeline_origin
-            end_frame = segment["end_frame"]
-            sample_rate = segment["sample_rate"]
-            duration = segment_frames / segment["sample_rate"]
-            raw_codecs = []
-            quality = "original"
+            duration = segment_frames / segment_rate
         timing.resolved_at = time.monotonic()
 
         generations = {stream.generation for stream in self._streams_by_id.values()}
@@ -895,15 +902,7 @@ class _PlaybackPcmConnection:
                 return False
             timing.log("rate_mismatch" if isinstance(error, SampleRateMismatch) else "decoder_error")
             if isinstance(error, SampleRateMismatch):
-                await self._send_json(
-                    {
-                        "type": "rate-mismatch",
-                        "generation": generation,
-                        "streamId": stream_id,
-                        "sampleRate": error.native_rate,
-                        "fallbackSampleRate": fallback_sample_rate(error.native_rate),
-                    }
-                )
+                await self._send_rate_mismatch(generation, stream_id, error.native_rate)
                 return True
             await self._send_decoder_error(
                 generation=generation,
@@ -958,6 +957,17 @@ class _PlaybackPcmConnection:
         task = asyncio.create_task(send())
         self._pending_credit_tasks.add(task)
         task.add_done_callback(self._pending_credit_tasks.discard)
+
+    async def _send_rate_mismatch(self, generation: int, stream_id: int, native_rate: int) -> None:
+        await self._send_json(
+            {
+                "type": "rate-mismatch",
+                "generation": generation,
+                "streamId": stream_id,
+                "sampleRate": native_rate,
+                "fallbackSampleRate": fallback_sample_rate(native_rate),
+            }
+        )
 
     async def _reject_open(self, code: int) -> bool:
         if self._closed:

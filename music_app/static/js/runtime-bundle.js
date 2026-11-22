@@ -11174,7 +11174,8 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
 // Keeps a whole track once it is heard. A successor prepared ahead waits until it is promoted, so
 // a song fetched and then skipped is never kept as recently played.
 function keepStreamingWire(wire, eos, role) {
-  if (wire.serverless || wire.streamStart !== 0 || !wire.bytes
+  // A CUE track's path and length stay the same when a correction moves it, so its bytes are never kept.
+  if (wire.serverless || wire.streamStart !== 0 || !wire.bytes || wire.track?.cueSegmentRef
       || typeof keepStreamingCachedTrack !== 'function') return;
   if (role !== 'current') {
     wire.keepWhenHeard = eos;

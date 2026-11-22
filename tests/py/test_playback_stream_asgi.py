@@ -1477,9 +1477,10 @@ def test_pcm_socket_opens_cue_segment_with_relative_seek_and_exclusive_end(
                 media_path,
                 playbackRef="opaque-segment",
                 startFrame=22_050,
-                sampleRate=48_000,
+                sampleRate=44_100,
                 durationSeconds=99,
                 codecs=["mp3"],
+                quality="320",
             )
             command.pop("path")
             await socket.send_json(command)
@@ -1502,8 +1503,58 @@ def test_pcm_socket_opens_cue_segment_with_relative_seek_and_exclusive_end(
         assert decoder_command.start_frame == 66_150
         assert decoder_command.end_frame == 132_300
         assert decoder_command.provisional_duration_seconds == 2
-        assert encoded_codecs == [(frozenset(), "original")]
+        assert encoded_codecs == [(frozenset({"mp3"}), "320")], "a CUE track streams compressed, as any track"
         assert reference_calls == ["segment"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("native, requested, quality, expected", [
+    (44_100, 48_000, "original", None),
+    (96_000, 96_000, "320", None),
+    (96_000, 48_000, "320", (48_000, 144_000)),
+])
+def test_cue_segment_uses_the_rate_the_player_can_accept(
+    playback_app, media_path, decoder_factory, monkeypatch, native, requested, quality, expected,
+):
+    source = media_path.with_suffix(".flac")
+    source.write_bytes(b"decoder-boundary-fixture")
+
+    class SegmentReferenceService:
+        def __init__(self, _config):
+            pass
+
+        def resolve_segment(self, _actor, _playback_ref):
+            return {
+                "source_path": source, "start_frame": native, "end_frame": native * 3, "sample_rate": native,
+                "revision_sha256": "a" * 64, "track_id": 41,
+            }
+
+    commands = []
+
+    async def no_encoded_segment(command, *, codecs, quality):
+        commands.append(command)
+        return None
+
+    monkeypatch.setattr(playback_stream_asgi, "PlaybackReferenceService", SegmentReferenceService)
+    monkeypatch.setattr(playback_stream_asgi, "open_encoded_stream", no_encoded_segment)
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            command = open_command(
+                source, playbackRef="opaque-segment", startFrame=0, sampleRate=requested,
+                codecs=["mp3", "flac"], quality=quality,
+            )
+            command.pop("path")
+            await socket.send_json(command)
+            answer = await socket.receive_json()
+            if expected is None:
+                # The player refuses metadata at another rate, so it is told which rate to reopen at.
+                assert (answer["type"], answer["sampleRate"]) == ("rate-mismatch", native)
+                assert commands == []
+            else:
+                assert (answer["type"], answer["sampleRate"], answer["timelineStartFrame"]) == ("metadata", requested, 0)
+                assert (commands[0].start_frame, commands[0].end_frame) == expected
 
     asyncio.run(scenario())
 
@@ -1536,6 +1587,7 @@ def test_pcm_socket_rejects_seek_at_cue_segment_end(
                 media_path,
                 playbackRef="opaque-segment",
                 startFrame=88_200,
+                sampleRate=44_100,
             )
             command.pop("path")
             await socket.send_json(command)

@@ -13,6 +13,8 @@ from music_app.services.mp3_gapless import parse_mp3_frame_header, read_mp3_gapl
 
 # Earlier frames rebuild the bit reservoir and the overlap of the first kept frame.
 _SEEK_PREROLL_FRAMES = 8
+# A decoder's overlap holds the last kept samples until later frames arrive.
+_END_POSTROLL_FRAMES = 2
 _MAX_TRAILING_JUNK_BYTES = 4096
 _TRAILER_MARKERS = (b"TAG", b"APETAGEX", b"LYRICS")
 
@@ -37,16 +39,22 @@ class Mp3StreamMap:
     def total_frames(self) -> int:
         return self.end_sample - self.first_sample
 
-    def window(self, start_frame: int) -> Mp3ByteWindow:
+    def window(self, start_frame: int, end_frame: int | None = None) -> Mp3ByteWindow:
         """Return the bytes to send and the exact decoder samples to keep."""
         kept_start = self.first_sample + min(start_frame, self.total_frames)
         audio_frame = min(kept_start // self.samples_per_frame, len(self.frame_offsets) - 1)
         first_sent_frame = max(0, audio_frame - _SEEK_PREROLL_FRAMES)
+        kept_end, end_byte = self.end_sample, self.end_byte
+        if end_frame is not None:
+            kept_end = self.first_sample + min(end_frame, self.total_frames)
+            unsent_frame = -(-kept_end // self.samples_per_frame) + _END_POSTROLL_FRAMES
+            if unsent_frame < len(self.frame_offsets):
+                end_byte = self.frame_offsets[unsent_frame]
         return Mp3ByteWindow(
             start_byte=self.frame_offsets[first_sent_frame],
-            end_byte=self.end_byte,
+            end_byte=end_byte,
             skip_frames=kept_start - first_sent_frame * self.samples_per_frame,
-            total_frames=self.end_sample - kept_start,
+            total_frames=max(0, kept_end - kept_start),
         )
 
 

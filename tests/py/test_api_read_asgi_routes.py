@@ -857,7 +857,7 @@ def test_asgi_search_highlights_only_loose_track_titles(asgi_app, monkeypatch):
 
     assert "search_highlights" not in _decode_json(catalog)
     assert _decode_json(loose)["search_highlights"] == {
-        "query": "sal", "texts": {"Alas de Sal": [[8, 11]], "Sal demo.mp3": [[0, 3]]},
+        "query": "sal", "texts": {"Alas de Sal": [[8, 11]], "Sal demo.mp3": [[0, 3]], "Salvador": [[0, 3]]},
     }
     assert "search_highlights" not in _decode_json(unsearched)
 

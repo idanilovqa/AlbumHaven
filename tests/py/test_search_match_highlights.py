@@ -88,7 +88,9 @@ def test_collect_search_highlight_texts_reads_only_track_titles():
             {"title": "", "filename": "alas demo.mp3"},
         ],
     }
-    assert sorted(collect_search_highlight_texts(payload)) == ["Alas de Sal", "alas demo.mp3"]
+    # A Loose Track also sends the artist its row shows, so the row can be tinted (owner 2026-11-22);
+    # album, sidebar and collection names still send nothing.
+    assert sorted(collect_search_highlight_texts(payload)) == ["Alas de Sal", "Argovia", "alas demo.mp3"]
 
 def test_highlight_work_is_bounded_by_the_response_texts(monkeypatch):
     from music_app.services import view_search

@@ -476,15 +476,21 @@ def search_match_ranges(query: str, text: str) -> list[list[int]]:
 
 
 def collect_search_highlight_texts(payload: object) -> list[str]:
-    """The track titles (and Loose Track file names) of a search response that may carry highlights."""
+    """The track titles, and a Loose Track's file name and shown artist, of a search response."""
     texts: list[str] = []
+    artists: set[str] = set()  # counted once each, so they cannot crowd titles out of the limit
     pending = [payload]
     while pending and len(texts) < _SEARCH_HIGHLIGHT_TEXT_LIMIT:
         value = pending.pop()
         if isinstance(value, dict):
             for key, item in value.items():
                 if isinstance(item, str):
-                    if key in _SEARCH_HIGHLIGHT_TEXT_KEYS and item.strip():
+                    is_track_artist = key == "artist" and ("path" in value or "filename" in value)
+                    if not item.strip() or (is_track_artist and item in artists):
+                        continue
+                    if is_track_artist:
+                        artists.add(item)
+                    if key in _SEARCH_HIGHLIGHT_TEXT_KEYS or is_track_artist:
                         texts.append(item)
                 elif isinstance(item, (dict, list)):
                     pending.append(item)

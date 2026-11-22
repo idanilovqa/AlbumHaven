@@ -261,6 +261,12 @@ function searchHighlightRanges(value) {
   return ranges?.length ? ranges : null;
 }
 
+// A search tints a track row when its title or the artist the row shows matches (owner 2026-11-22: "The name
+// of the artist should be on the track. And that track should be tinted").
+function searchMatchesTrackRow(title, shownArtist) {
+  return Boolean(searchHighlightRanges(title) || (shownArtist && searchHighlightRanges(shownArtist)));
+}
+
 async function requestSearchHighlights(values) {
   const query = activeSearchHighlightQuery();
   const known = searchHighlightTexts(query);

@@ -642,8 +642,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
-    // A search tints the rows whose title matches, as in Album Details, and marks no letters (owner 2026-11-22).
-    const isSearchMatch = Boolean(typeof searchHighlightRanges === 'function' && searchHighlightRanges(title));
+    // A search tints the rows it matched, as in Album Details, and marks no letters (owner 2026-11-22).
+    const isSearchMatch = typeof searchMatchesTrackRow === 'function' && searchMatchesTrackRow(title, secondaryArtist);
     return {
       path: trackPath,
       mediaRef,

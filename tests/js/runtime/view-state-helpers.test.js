@@ -1521,6 +1521,16 @@ test('scan stage elapsed detail uses independent stage and cover timers', () => 
   assert.equal(scanStageElapsedDetail({}, 'relations'), '');
 });
 
+test('a track row matches a search by its title or by the artist it shows', () => {
+  const context = loadHelpers();
+  const { searchMatchesTrackRow } = context;
+  context.state.view = { query: 'gold' };
+  context.rememberSearchHighlights({ query: 'gold', texts: { 'Bobby Goldsboro': [[6, 10]], 'Golden Rules': [[0, 4]] } });
+  assert.equal(searchMatchesTrackRow('Summer (The First Time)', 'Bobby Goldsboro'), true);
+  assert.equal(searchMatchesTrackRow('Golden Rules', ''), true);
+  assert.equal(searchMatchesTrackRow('Band Played The Boogie', 'CSS'), false);
+});
+
 test('the artist tree never highlights artist names, only track names are highlighted', () => {
   const context = loadHelpers();
   const view = { query: 'sal' };

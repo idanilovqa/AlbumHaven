@@ -2629,7 +2629,7 @@ function refreshAlbumTrackSearchHighlights(list, tracks, album) {
   list.albumTrackSearchHighlightRender = render;
   if (!query) return;
   const rows = Array.isArray(album?.track_rows) ? album.track_rows : [];
-  const texts = [...(tracks || []), ...rows].map((track) => track?.title);
+  const texts = [...(tracks || []), ...rows].flatMap((track) => [track?.title, track?.secondary_artist]);
   void requestSearchHighlights(texts).then((answered) => {
     if (!answered || list.albumTrackSearchHighlightRender !== render || activeSearchHighlightQuery() !== query) return;
     list.querySelectorAll('.album-track-table__row').forEach((row) => {
@@ -2637,7 +2637,8 @@ function refreshAlbumTrackSearchHighlights(list, tracks, album) {
       const titleText = title?.firstChild;
       if (!titleText || titleText.nodeType !== Node.TEXT_NODE) return;
       // Album Details marks the matching track, not the letters in its title (owner 2026-11-21).
-      if (!searchHighlightRanges(titleText.textContent)) return;
+      const shownArtist = title.querySelector('.album-track-table__secondary')?.textContent;
+      if (!searchMatchesTrackRow(titleText.textContent, shownArtist)) return;
       row.classList.add('album-track-table__row--search-match');
       row.dataset.trackSearchMatch = 'true';
     });
@@ -2659,7 +2660,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   );
 
   const albumPreference = album?.album_preference || {};
-  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
+  const rowMatchesSearch = typeof searchMatchesTrackRow === 'function' ? searchMatchesTrackRow : () => false;
   const discRatingByKey = new Map(
     (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
       .map((discRating) => [discRating?.disc_key, discRating?.rating])
@@ -2709,9 +2710,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        // A track whose title the search matched is marked as a whole row; Album Details never marks letters
-        // (owner 2026-11-21: partial text is marked only in Loose Tracks and collections).
-        isSearchMatch: Boolean(highlightRanges(displayTitle)),
+        // A track whose title or shown artist the search matched is marked as a whole row, never its letters.
+        isSearchMatch: rowMatchesSearch(displayTitle, secondaryArtist),
       };
     });
     return {

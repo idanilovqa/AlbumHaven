@@ -2975,12 +2975,13 @@ test('non-album artist folder match is literal and never drops a plural s', () =
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[1]]);
 });
 
-test('Loose Tracks and collections tint matched track rows and never mark a row for its artist (owner 2026-11-22)', () => {
+test('Loose Tracks and collections tint a row whose title or shown artist matches (owner 2026-11-22)', () => {
   const { context } = loadHelper();
   context.buildProblematicAlbumTrackPathIndex = () => new Map();
   context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: true });
   const ranges = new Map([['Alas de Sal', [[8, 11]]], ['Salvador', [[0, 3]]]]);
   context.searchHighlightRanges = (text) => ranges.get(String(text)) || null;
+  context.searchMatchesTrackRow = (...shown) => shown.some((text) => ranges.has(String(text)));
 
   const [titled, byArtist] = context.buildNonAlbumTrackRowsMarkup([
     { path: 'D:/Music/One.flac', title: 'Alas de Sal', artist: 'Argovia' },
@@ -2988,7 +2989,13 @@ test('Loose Tracks and collections tint matched track rows and never mark a row 
   ], 0, new Map());
 
   assert.equal(titled.isSearchMatch, true);
-  assert.equal(byArtist.isSearchMatch, false);
+  // "The name of the artist should be on the track. And that track should be tinted" (search: gold, Bobby Goldsboro)
+  assert.equal(byArtist.isSearchMatch, true);
+  assert.equal(byArtist.secondaryArtist, 'Salvador');
+  const [neither] = context.buildNonAlbumTrackRowsMarkup(
+    [{ path: 'D:/Music/Three.flac', title: 'Spark', artist: 'Argovia' }], 0, new Map(),
+  );
+  assert.equal(neither.isSearchMatch, false);
   assert.equal('titleHighlightRanges' in titled, false);
 });
 

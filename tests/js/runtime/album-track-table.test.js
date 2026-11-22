@@ -847,7 +847,9 @@ test('every track table marks a matching row, never its letters (owner 2026-11-2
   assert.match(highlightPass, /row\.classList\.add\('album-track-table__row--search-match'\)/);
   assert.doesNotMatch(highlightPass, /buildHighlightedTextHtml/);
   const trackList = albumDetails.slice(albumDetails.indexOf('function buildTrackListHtml'));
-  assert.match(trackList, /isSearchMatch: Boolean\(highlightRanges\(displayTitle\)\)/);
+  assert.match(trackList, /isSearchMatch: rowMatchesSearch\(displayTitle, secondaryArtist\)/);
+  assert.match(highlightPass, /track\?\.secondary_artist/, 'the server is asked about the shown artist too');
+  assert.match(highlightPass, /album-track-table__secondary/, 'a row on screen is tinted by its shown artist too');
   assert.doesNotMatch(trackList.slice(0, trackList.indexOf('isSearchMatch')), /titleHighlightRanges/);
   assert.match(read('modal-and-overlay-helpers.js'), /isSearchMatch/, 'Loose Tracks and collections tint the row too');
 });

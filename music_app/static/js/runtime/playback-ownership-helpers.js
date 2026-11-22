@@ -574,10 +574,6 @@ function canStartPlaybackInThisTab(track, options = {}) {
   return claimPlaybackOwnership(track, { takeover: options.takeover === true });
 }
 
-/**
- * Play here elsewhere asked this tab (owner, 2026-11-22): it stops, then answers the song that sounded
- * and where, with its claim's token. No path crosses the socket.
- */
 function playbackToHandOver(starting) {
   const sounding = typeof getSoundingStreamingPlayback === 'function' && getSoundingStreamingPlayback();
   if (sounding) return sounding;
@@ -587,6 +583,10 @@ function playbackToHandOver(starting) {
   return { track: state.player.current, seconds: snapshot.currentTime, durationSeconds: snapshot.duration };
 }
 
+/**
+ * Play here elsewhere asked this tab (owner, 2026-11-22): it stops and, once its output is silent,
+ * answers the song that sounded and where, with its claim's token. No path crosses the socket.
+ */
 async function answerPlaybackHandover(requestId) {
   const ownership = getPlaybackOwnershipState();
   // A start's first claim may still be on its way.
@@ -714,7 +714,6 @@ function takenOverTrack({ path, track, position }) {
     durationSeconds: position ? position.durationMs / 1000 : 0,
   };
 }
-
 
 /**
  * Where [track] is, so another client can continue it there: `{ position }`, or nothing while the

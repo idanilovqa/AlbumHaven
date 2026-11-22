@@ -591,7 +591,6 @@ function getSoundingStreamingPlayback() {
   };
 }
 
-// An answer that cannot be sent leaves the asker its saved place; it never fails playback.
 // Play here elsewhere may start only after this tab is silent (owner, round 10: "two tabs play shortly
 // at the same time"). Resolves once nothing more is rendered, to a function that resolves once what was
 // rendered has left the output, true if it is still silent then. Null when the audio thread never said so.
@@ -625,6 +624,7 @@ async function silenceStreamingPlaybackForHandover() {
   };
 }
 
+// An answer that cannot be sent never fails playback.
 function sendStreamingHandoverAnswer(message) {
   const { socket } = streamingEngineState();
   if (socket?.readyState !== WebSocket.OPEN) return false;

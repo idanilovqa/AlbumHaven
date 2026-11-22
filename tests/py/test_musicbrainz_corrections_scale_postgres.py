@@ -105,6 +105,15 @@ def _deep_page(_connection, repository):
     assert repository.kind_page(section="applied", kind="case", after=("album 8", "scale::8"), limit=5)
 
 
+def _problem_labels(_connection, repository):
+    found = repository.list_summaries(album_keys=["scale::1", "scale::7"])
+    assert len(found["items"]) == 2 and found["total"] >= SMALL
+
+
+def _problem_first_page(_connection, repository):
+    assert repository.list_summaries(limit=5)["items"]
+
+
 def _approve_album(_connection, repository):
     assert repository.decide(decision="approved", from_state="pending", album_key="scale::1", kind=None,
                              actor_account_id=None, observed_at=NOW) == 1
@@ -115,7 +124,8 @@ def _approve_kind(_connection, repository):
                              actor_account_id=None, observed_at=NOW) == 3
 
 
-INTERACTIONS = (_refresh_after_one_edit, _totals, _first_page, _deep_page, _approve_album, _approve_kind)
+INTERACTIONS = (_refresh_after_one_edit, _totals, _first_page, _deep_page, _problem_labels, _problem_first_page,
+                _approve_album, _approve_kind)
 
 
 def test_corrections_read_only_changed_albums_and_one_page_at_production_album_count(monkeypatch):

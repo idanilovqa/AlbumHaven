@@ -35,6 +35,8 @@ from music_app.services.musicbrainz_release_identity_postgres import parse_track
 
 # The review group of albums the guard (or an ambiguous pairing) sends to review whole.
 WHOLE_ALBUM_GROUP = "whole_album"
+# The stored group of every album needing a correction, for Problematic Files.
+NEEDED_SECTION, NEEDED_GROUP = "needed", "album"
 REFRESH_BATCH_MARKS = 200
 DECISIONS = frozenset({"undone", "skipped", "approved"})
 # Part of every signature, so rows stored under older comparison rules are compared again when their
@@ -176,7 +178,8 @@ _STORE_ROWS_SQL = """
       current_value text, proposed_value text, kind text, mode text);
 """
 
-# Problematic Files reads only these: no comparison runs when it opens.
+# Problematic Files reads only these, for the albums it lists or one page of them, and the stored
+# total: no comparison runs when it opens, and the library is never counted or sorted.
 _SUMMARIES_SQL = _active_library_cte() + """
     select stored.album_key, albums.title as album_title, artists.name as artist_name,
            albums.release_year as year, albums.cover_path, stored.release_mbid::text as release_mbid,
@@ -187,15 +190,23 @@ _SUMMARIES_SQL = _active_library_cte() + """
       on albums.library_id = stored.library_id and albums.album_key = stored.album_key
     left join library.local_artists artists on artists.id = albums.artist_id
     where stored.correction_count > 0
-      and (%(album_keys)s::text[] is null or stored.album_key = any(%(album_keys)s::text[]))
-    order by lower(albums.title), stored.album_key
+      and stored.album_key = any(%(album_keys)s::text[]);
+"""
+# A page walks the page index to its offset: no summary read, no sort. (Offset, not a cursor: the
+# approved E2E asserts the request's offset.)
+_SUMMARY_PAGE_SQL = _active_library_cte() + f"""
+    select groups.album_key
+    from library.local_album_musicbrainz_correction_groups groups
+    where groups.library_id = (select library_id from active_library)
+      and groups.section = '{NEEDED_SECTION}' and groups.grouping = '{NEEDED_GROUP}'
+    order by groups.sort_title, groups.album_key
     offset %(offset)s limit %(limit)s;
 """
-_SUMMARY_COUNT_SQL = _active_library_cte() + """
-    select count(*)::integer as total
-    from library.local_album_musicbrainz_corrections stored
-    join active_library on active_library.library_id = stored.library_id
-    where stored.correction_count > 0;
+_SUMMARY_COUNT_SQL = _active_library_cte() + f"""
+    select coalesce(sum(counts.album_count), 0)::integer as total
+    from library.musicbrainz_correction_group_counts counts
+    join active_library on active_library.library_id = counts.library_id
+    where counts.section = '{NEEDED_SECTION}';
 """
 
 # One album's rows with their state, in album then track order.
@@ -235,13 +246,20 @@ _LISTED_SQL = _active_library_cte() + f"""
 """
 # The given albums' stored groups follow their rows and decisions. Only a changed group is
 # written, so only a change adds to the totals.
-_STORE_GROUPS_SQL = _LISTED_SQL + """
+_STORE_GROUPS_SQL = _LISTED_SQL + f"""
     , desired as (
       select listed.library_id, listed.album_key, listed.section, listed.grouping,
              left(lower(coalesce(local.title, '')), 256) as sort_title, count(*)::integer as row_count
       from listed
       join library.local_albums local on local.library_id = listed.library_id and local.album_key = listed.album_key
       group by listed.library_id, listed.album_key, listed.section, listed.grouping, local.title
+      union all
+      select stored.library_id, stored.album_key, '{NEEDED_SECTION}', '{NEEDED_GROUP}',
+             left(lower(coalesce(local.title, '')), 256), stored.correction_count
+      from library.local_album_musicbrainz_corrections stored
+      join active_library on active_library.library_id = stored.library_id
+      join library.local_albums local on local.library_id = stored.library_id and local.album_key = stored.album_key
+      where stored.album_key = any(%(album_keys)s::text[]) and stored.correction_count > 0
     ), removed as (
       delete from library.local_album_musicbrainz_correction_groups groups
       using active_library
@@ -476,13 +494,16 @@ class MusicBrainzCorrectionsPostgresRepository:
                        limit: int | None = None) -> dict[str, object]:
         """The stored albums needing a correction (those of ``album_keys``, or a page in title
         order), with their counts, and how many albums need one in all."""
-        params = {"album_keys": None if album_keys is None else sorted({str(key) for key in album_keys}),
-                  "offset": max(0, int(offset)), "limit": None if limit is None else max(1, int(limit))}
         with self._connect(self._database_url) as connection:
-            rows = [] if params["album_keys"] == [] else [
-                _row_mapping(row) for row in connection.execute(_SUMMARIES_SQL, params).fetchall()]
+            if album_keys is None:
+                keys = [str(_row_mapping(row)["album_key"]) for row in connection.execute(_SUMMARY_PAGE_SQL, {
+                    "offset": max(0, int(offset)), "limit": None if limit is None else max(1, int(limit))}).fetchall()]
+            else:
+                keys = sorted({str(key) for key in album_keys})
+            found = {row["album_key"]: row for row in map(_row_mapping, connection.execute(
+                _SUMMARIES_SQL, {"album_keys": keys}).fetchall())} if keys else {}
             total = int(_row_mapping(connection.execute(_SUMMARY_COUNT_SQL).fetchone()).get("total") or 0)
-        return {"items": rows, "total": total}
+        return {"items": [found[key] for key in keys if key in found], "total": total}
 
     def album_rows(self, *, album_key: str) -> list[dict[str, object]]:
         with self._connect(self._database_url) as connection:

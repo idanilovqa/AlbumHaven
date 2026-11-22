@@ -82,6 +82,10 @@ class _Library:
         keyset = "> (%(after_title)s, %(after_key)s)" in sql
         if paged and keyset:
             return params["limit"]
+        tables = set(_LIBRARY_SIZED.findall(sql))
+        if (paged and "offset %(offset)s" in sql
+                and tables == {"library.local_album_musicbrainz_correction_groups"}):
+            return params["offset"] + params["limit"]  # an index walk, no table of summaries
         if "where groups.section = 'review' and groups.grouping = %(kind)s" in sql:
             return self.in_kind
         return self.albums

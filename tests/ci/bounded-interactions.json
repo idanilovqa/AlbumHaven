@@ -9864,6 +9864,24 @@
       "rollback": "Reverting fix(versions) makes POST /versions/mark build a key map over every published album again (candidate_rows grows with the album count)."
     },
     {
+      "id": "py:routes/api_wave_a_asgi_routes.py#missing_album_rescan_result",
+      "action": "Answer whether a missing album's background search is still running, or its result, from memory",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#missing_album_rescan_result:route:GET /api/library/albums/{album_key:path}/rescan"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/missing_album_rescan.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/api_wave_a_asgi_routes.py#rescan_missing_album",
       "action": "Serve POST /api/library/albums/{album_key:path}/rescan",
       "entrypoints": [

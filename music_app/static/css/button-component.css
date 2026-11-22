@@ -40,6 +40,13 @@ border-color: var(--appearance-line, var(--border));
 background: var(--appearance-neutral-button-background, var(--appearance-control, var(--panel)));
 color: var(--appearance-ink, var(--text));
 }
+/* Half-hollow: the middle choice between a quiet and a primary action. */
+:root .ui-button.ui-button--tonal {
+border-color: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 60%, var(--appearance-line, var(--border)));
+background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 18%, transparent);
+color: var(--appearance-ink, var(--text));
+font-weight: 600;
+}
 :root .ui-button.ui-button--quiet {
 border-color: var(--appearance-line, var(--border));
 background: transparent;
@@ -264,6 +271,26 @@ outline-offset: -3px !important;
 :root :is(input, textarea, select):not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="hidden"]):not(.ui-input-action > input):focus {
 outline: 1px solid var(--muted, var(--appearance-muted, #9ca3af)) !important;
 outline-offset: -1px !important;
-border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
-box-shadow: none !important;
+border-color: var(--ui-field-edge, var(--muted, var(--appearance-muted, #9ca3af))) !important;
+box-shadow: var(--ui-field-shadow, none) !important;
+}
+
+/* A warned field pulses, focused or not. Important declarations win over animations, so the
+   animation moves registered properties that the shadow reads. */
+@property --ui-field-warning-glow-ring { syntax: '<length>'; inherits: false; initial-value: 1px; }
+@property --ui-field-warning-glow-blur { syntax: '<length>'; inherits: false; initial-value: 4px; }
+@property --ui-field-warning-glow-strength { syntax: '<percentage>'; inherits: false; initial-value: 25%; }
+.ui-field-warning-glow {
+--ui-field-edge: var(--appearance-warning, #f59e0b);
+--ui-field-shadow: 0 0 0 var(--ui-field-warning-glow-ring) color-mix(in srgb, var(--ui-field-edge) 75%, transparent),
+0 0 var(--ui-field-warning-glow-blur) var(--ui-field-warning-glow-ring) color-mix(in srgb, var(--ui-field-edge) var(--ui-field-warning-glow-strength), transparent);
+border-color: var(--ui-field-edge) !important;
+box-shadow: var(--ui-field-shadow) !important;
+animation: ui-field-warning-glow 1.6s ease-in-out infinite;
+}
+@keyframes ui-field-warning-glow {
+50% { --ui-field-warning-glow-ring: 3px; --ui-field-warning-glow-blur: 22px; --ui-field-warning-glow-strength: 80%; }
+}
+@media (prefers-reduced-motion: reduce) {
+.ui-field-warning-glow { animation: none; --ui-field-warning-glow-ring: 2px; --ui-field-warning-glow-blur: 12px; --ui-field-warning-glow-strength: 55%; }
 }

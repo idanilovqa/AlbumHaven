@@ -1,7 +1,7 @@
 /* Shared current-web Button primitive for dynamic surfaces. */
 (function (scope) {
   'use strict';
-  const variants = new Set(['primary', 'secondary', 'icon']);
+  const variants = new Set(['primary', 'secondary', 'tonal', 'icon']);
   const sizes = new Set(['medium', 'small']);
   const types = new Set(['button', 'submit', 'reset']);
   const actionButtonShapes = new Set(['default', 'round']);

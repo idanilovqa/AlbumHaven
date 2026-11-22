@@ -257,3 +257,10 @@ test('external service link CSS uses panel text, a non-colour cue and the real s
     assert.doesNotMatch(body, /filter/, `${selector}: the MusicBrainz hexagon is never recoloured`);
   }
 });
+
+test('tonal Button is a catalog variant for the half-hollow choice between quiet and primary', () => {
+  const button = require(componentPath);
+  const html = button.renderButton({ label: 'Continue', variant: 'tonal' });
+  assert.match(html, /class="button ui-button ui-button--tonal ui-button--medium"/);
+  assert.match(html, /<span class="ui-button__content">Continue<\/span>/);
+});

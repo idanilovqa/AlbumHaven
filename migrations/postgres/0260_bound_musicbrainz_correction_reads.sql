@@ -148,15 +148,23 @@ create trigger musicbrainz_correction_release_update
   execute function library.mark_musicbrainz_correction_album();
 
 -- Copies of a song at one track position stored one change twice, which no decision could record.
--- Derived rows: one of each is kept, before the groups are counted.
-delete from library.local_album_musicbrainz_correction_rows correction
-using (
-  select id, row_number() over (
-    partition by library_id, album_key, field, disc_number, track_number, current_value, proposed_value
-    order by id) as copy
-  from library.local_album_musicbrainz_correction_rows
-) numbered
-where numbered.id = correction.id and numbered.copy > 1;
+-- Derived rows: one of each is kept, before the groups are counted, and those albums are compared
+-- again, since their counts and their guard weighed the copy twice.
+with copies as (
+  delete from library.local_album_musicbrainz_correction_rows correction
+  using (
+    select id, row_number() over (
+      partition by library_id, album_key, field, disc_number, track_number, current_value, proposed_value
+      order by id) as copy
+    from library.local_album_musicbrainz_correction_rows
+  ) numbered
+  where numbered.id = correction.id and numbered.copy > 1
+  returning correction.library_id, correction.album_key
+)
+update library.local_album_musicbrainz_corrections stored
+set signature = 'recompute'
+from (select distinct library_id, album_key from copies) copied
+where stored.library_id = copied.library_id and stored.album_key = copied.album_key;
 
 -- The stored groups of what is stored today, once: the same rule as
 -- musicbrainz_corrections_postgres._LISTED_SQL.

@@ -361,8 +361,8 @@ def test_live_targeted_invalidation_publishes_new_album_to_gallery(
     monkeypatch.setattr(
         state,
         "schedule_gallery_projection_refresh",
-        lambda config: scheduled.append(
-            original_schedule(config, connect=isolatedPostgres._connect)
+        lambda config, **options: scheduled.append(
+            original_schedule(config, connect=isolatedPostgres._connect, **options)
         ),
     )
     state.invalidate_targeted_library_projections(

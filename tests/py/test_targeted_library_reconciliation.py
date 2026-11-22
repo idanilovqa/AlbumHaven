@@ -841,7 +841,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     monkeypatch.setattr(
         state,
         "schedule_gallery_projection_refresh",
-        lambda config: invalidated.append("gallery"),
+        lambda config, **_options: invalidated.append("gallery"),
         raising=False,
     )
     monkeypatch.setattr(

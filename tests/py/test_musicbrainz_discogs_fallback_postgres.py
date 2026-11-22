@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from music_app.services.musicbrainz_discogs_fallback import DiscogsFallbackProcessor
 from music_app.services.musicbrainz_discogs_fallback_postgres import DiscogsFallbackPostgresRepository
 from music_app.services.musicbrainz_enrichment_postgres import _JOB_KIND as ARTIST_JOB_KIND
@@ -12,7 +14,10 @@ from tests.py.test_musicbrainz_artist_migration_postgres import (
     _dedicated_database_urls_or_skip,
     _drop_application_schemas,
     apply_delivery_migrations,
+    leave_setup_database_migrated,
 )
+
+pytestmark = pytest.mark.usefixtures("leave_setup_database_migrated")
 
 NOW = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
 HINT = "b5c6e1ad-4f5a-4b1a-9a1e-0123456789ab"

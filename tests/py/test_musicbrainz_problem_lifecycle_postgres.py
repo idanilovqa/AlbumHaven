@@ -13,7 +13,10 @@ from tests.py.test_musicbrainz_artist_migration_postgres import (
     _dedicated_database_urls_or_skip,
     _drop_application_schemas,
     apply_delivery_migrations,
+    leave_setup_database_migrated,
 )
+
+pytestmark = pytest.mark.usefixtures("leave_setup_database_migrated")
 
 
 NOW = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)

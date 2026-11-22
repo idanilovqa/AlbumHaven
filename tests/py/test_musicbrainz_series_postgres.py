@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
 from music_app.services.musicbrainz_release_identity_postgres import MusicBrainzReleaseIdentityPostgresRepository
 from tests.e2e.support import isolatedPostgres
@@ -15,7 +17,10 @@ from tests.py.test_musicbrainz_artist_migration_postgres import (
     _dedicated_database_urls_or_skip,
     _drop_application_schemas,
     apply_delivery_migrations,
+    leave_setup_database_migrated,
 )
+
+pytestmark = pytest.mark.usefixtures("leave_setup_database_migrated")
 
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
 VIEW_STATE = {"visible_library_categories": ["main_library", "hoard", "new_arrivals"]}

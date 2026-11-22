@@ -1481,11 +1481,10 @@ def test_live_library_loose_tracks_come_without_the_gallery(
         "album_artist": "Other",
         "title": "Other Loose",
     }
+    _apply_case64_draft(fixture)
     fixture.seed(album_track, family_loose, other_loose)
 
-    repository = PostgresLibraryBrowseRepository(
-        fixture.config, connect=isolatedPostgres._connect,
-    )
+    repository = _prepare_store(fixture)  # case 64: the store's own owner builds it once
     payload = repository.build_library_loose_tracks_payload()
 
     assert "artist_groups" not in payload
@@ -1501,7 +1500,7 @@ def test_live_library_loose_tracks_come_without_the_gallery(
     monkeypatch.setattr(
         cached_repository,
         "_load_non_album_entries",
-        lambda **_kwargs: pytest.fail("the persisted snapshot must avoid a global rebuild"),
+        lambda **_kwargs: pytest.fail("the stored rows must avoid a global rebuild"),
     )
     assert cached_repository.build_library_loose_tracks_payload(
         query_params={"artist": "Owner", "availability": "1"}
@@ -1518,22 +1517,7 @@ def test_live_library_loose_tracks_come_without_the_gallery(
         "title": "Added Loose",
     }
     fixture.seed(album_track, family_loose, other_loose, added_loose)
-    with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        assert cached_repository._load_non_album_track_snapshot(connection) is None
-
-    stale = PostgresLibraryBrowseRepository(
-        fixture.config, connect=isolatedPostgres._connect,
-    ).build_library_loose_tracks_payload(
-        query_params={"artist": "Owner", "availability": "1"}
-    )
-    assert stale == {
-        "non_album_track_count": 0,
-        "non_album_tracks_deferred": True,
-    }
-
-    PostgresLibraryBrowseRepository(
-        fixture.config, connect=isolatedPostgres._connect,
-    ).build_library_loose_tracks_payload()
+    # Case 64: the added track is marked and the next read drains it inline; nothing is rebuilt.
     refreshed = PostgresLibraryBrowseRepository(
         fixture.config, connect=isolatedPostgres._connect,
     ).build_library_loose_tracks_payload(

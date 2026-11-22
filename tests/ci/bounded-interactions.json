@@ -14160,19 +14160,37 @@
     },
     {
       "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._run",
-      "action": "Run background LocalCoverInventoryWorker._run",
+      "action": "Re-list only the album folders a scan, live root change or watcher event changed",
       "entrypoints": [
         "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryWorker._run:background:thread"
       ],
       "owners": [
-        "music_app/services/local_cover_inventory.py"
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/library_indexing.py",
+        "music_app/services/scan_state.py",
+        "music_app/__init__.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 200
+      },
+      "budgets": {
+        "affected_rows": 10,
+        "filesystem_enumerations": 3
+      },
+      "growth": {
+        "metric": "affected_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_local_cover_inventory_bounded_contracts.py::test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size",
+      "testIdentity": "test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size",
+      "rollback": "Reverting makes every completed scan and live root change invalidate, resolve and hash every album folder again; affected_rows and filesystem_enumerations then grow with the library and the contract fails."
     },
     {
       "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker.schedule_invalidation_retry",

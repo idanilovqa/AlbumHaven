@@ -447,11 +447,14 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
                 coalesce(tracks.track_number, 2147483647), tracks.id
             ) as track_position
           from library.local_tracks tracks
-          join scoped_albums on scoped_albums.id=tracks.album_id
-          where tracks.library_id=%(library_id)s
-            and exists (
-              select 1 from library.local_track_files files
+          -- Through the scoped albums' tracks: a join lets the planner read every track
+          -- and file in the library for the few albums a save touches.
+          where tracks.album_id = any(array(select id from scoped_albums))
+            and tracks.library_id=%(library_id)s
+            and (
+              select true from library.local_track_files files
               where files.track_id=tracks.id and files.scan_cache_stale is false
+              limit 1
             )
         ), album_sizes as materialized (
           select album_id, count(*) as track_count

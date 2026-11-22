@@ -169,23 +169,31 @@ def _set_state(connection: Any, status: str, *, error: str | None = None, retry_
     )
 
 
+def _seconds_until_retry(state: Mapping[str, object] | None) -> float | None:
+    """How long a failed build still waits for its retry (0 once due); None when the store is not failed."""
+    if not state or state.get("status") != "failed":
+        return None
+    from datetime import datetime, timezone
+
+    retry_after = state.get("retry_after")
+    return 0.0 if retry_after is None else max(0.0, (retry_after - datetime.now(timezone.utc)).total_seconds())
+
+
 def needs_build(state: Mapping[str, object] | None) -> bool:
     """Start-up preparation: no store, a builder change, or a failed build whose retry time has come."""
     if not state or state.get("builder_version") != BUILDER_VERSION:
         return True
     if state.get("status") == "building":
         return True  # a build interrupted by a restart
-    if state.get("status") == "failed":
-        from datetime import datetime, timezone
-
-        retry_after = state.get("retry_after")
-        return retry_after is None or retry_after <= datetime.now(timezone.utc)
-    return False
+    return _seconds_until_retry(state) == 0.0
 
 
 def build(inventory: Any, connect: Any, *, progress=None) -> int:
     """Build every row once (start-up, builder change or owner rebuild); return the tracks written."""
+    import time
+
     report = progress or (lambda stage, **values: _LOGGER.info("Loose Tracks store: %s %s", stage, values))
+    started = time.monotonic()
     with connect() as connection:
         _set_state(connection, "building")
         connection.commit()
@@ -207,7 +215,8 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int:
             )
             _set_state(connection, "ready")
             connection.commit()
-        report("ready", tracks=len(rows))
+        # The phase 2 dry run reads this duration to decide whether "preparing" needs a progress line.
+        report("ready", tracks=len(rows), seconds=round(time.monotonic() - started, 1))
         return len(rows)
     except Exception as error:
         _LOGGER.exception("Loose Tracks store build failed; it is retried after its own backoff.")
@@ -219,13 +228,13 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int:
 
 class LooseTrackStoreOwner:
     """The start-up owner: prepares the store once in the background, then re-runs ``prepare`` when a failed
-    build's retry time has come. It waits on a timer, never on a read."""
+    build's retry time has come. That time comes from its own ``prepare``; it waits on a timer, never on a read,
+    and with nothing failed it only waits on its stop event, touching no database."""
 
-    def __init__(self, config: Mapping[str, object], *, repository_factory=None, logger=None, poll_seconds: float = 60.0):
+    def __init__(self, config: Mapping[str, object], *, repository_factory=None, logger=None):
         self._config = config
         self._repository_factory = repository_factory
         self._logger = logger or _LOGGER
-        self._poll_seconds = poll_seconds
         self._stop = None
         self._thread = None
 
@@ -236,35 +245,22 @@ class LooseTrackStoreOwner:
 
         return PostgresLibraryBrowseRepository(self._config)
 
-    def _seconds_until_retry(self, repository) -> float | None:
-        """How long until a failed build may be retried; None when the store is not failed."""
-        from datetime import datetime, timezone
-
-        with repository._owned_connection_context() as connection:
-            state = load_state(connection)
-        if not state or state.get("status") != "failed":
-            return None
-        retry_after = state.get("retry_after")
-        return 0.0 if retry_after is None else max(0.0, (retry_after - datetime.now(timezone.utc)).total_seconds())
-
     def run_once(self) -> float | None:
-        """One owner pass: prepare, then say how long to wait before the next retry (None: no retry due)."""
+        """One owner pass: prepare, and return how long until a failed build's retry (None: nothing failed)."""
         repository = self._repository()
         try:
-            prepare(repository._inventory_repository, repository._owned_connection_context)
+            return prepare(repository._inventory_repository, repository._owned_connection_context)
         except Exception:
             self._logger.exception("Loose Tracks store preparation failed; its retry waits for its backoff.")
-        return self._seconds_until_retry(repository)
+            return float(FAILED_BUILD_RETRY_SECONDS)
 
     def _run(self) -> None:
         wait = self.run_once()
-        while not self._stop.is_set():
-            self._stop.wait(self._poll_seconds if wait is None else max(wait, 0.0))
-            if self._stop.is_set():
+        while wait is not None:
+            if self._stop.wait(wait):
                 return
-            wait = self._seconds_until_retry(self._repository())
-            if wait == 0.0:
-                wait = self.run_once()
+            wait = self.run_once()
+        self._stop.wait()
 
     def start(self) -> None:
         import threading
@@ -282,10 +278,14 @@ class LooseTrackStoreOwner:
         self._thread.join(timeout)
 
 
-def prepare(inventory: Any, connect: Any) -> None:
-    """The background owner: build when start-up preparation needs it, then drain every waiting mark."""
+def prepare(inventory: Any, connect: Any) -> float | None:
+    """The background owner: build when start-up preparation needs it, then drain every waiting mark. Returns
+    how long a failed build still waits for its retry, or None once the store is ready and drained."""
     with connect() as connection:
         state = load_state(connection)
+    wait = _seconds_until_retry(state)
+    if wait:
+        return wait  # a failed build whose retry time has not come
     if needs_build(state):
         build(inventory, connect)
     while True:
@@ -293,4 +293,4 @@ def prepare(inventory: Any, connect: Any) -> None:
             cleared = drain(inventory, connection)
             connection.commit()
         if not cleared:
-            return
+            return None

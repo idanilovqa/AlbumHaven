@@ -412,6 +412,12 @@ def _validate_pending_scan_receipt(connection, context, state, metadata, retaine
 
 # The stray-copy rule, over any scoped_albums and active_tracks: the stored ones at publication,
 # the proposed ones for a save that has not been written (stray_fold_decision).
+# An album without an artist row (a compilation) is in the rule only when its album artist names one:
+# a blank or punctuation-only identity must never equal another, and the tie compares identities with "=".
+STRAY_NAMED_ALBUM_SQL = """(albums.artist_id is not null
+            or (library.duplicate_identity_text(albums.metadata ->> 'album_artist') collate "und-x-icu")
+                 ~ '[[:alnum:]]')"""
+
 STRAY_RULE_CTES = """        ), album_sizes as materialized (
           select album_id, count(*) as track_count
           from active_tracks group by album_id
@@ -508,10 +514,11 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
                      coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name)
                    ) as artist_identity
           from library.local_albums albums
-            join library.local_artists artists on artists.id=albums.artist_id
+            left join library.local_artists artists on artists.id=albums.artist_id
           join title_identities
             on title_identities.title_identity=library.duplicate_identity_text(albums.title)
           where albums.library_id=%(library_id)s
+            and """ + STRAY_NAMED_ALBUM_SQL + """
         ), active_tracks as materialized (
           select tracks.id, tracks.album_id,
             library.duplicate_identity_text(tracks.title) as title_identity,

@@ -17,7 +17,7 @@ from music_app.services import scan_cache_persistence as saves
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.postgres_connections import leased_connection
-from music_app.services.scoped_relation_projection import STRAY_RULE_CTES
+from music_app.services.scoped_relation_projection import STRAY_NAMED_ALBUM_SQL, STRAY_RULE_CTES
 from music_app.services.utils import safe_int
 
 # The page asks when the confirmation opens. Past this it says the fold couldn't be checked.
@@ -99,10 +99,11 @@ _DECISION_SQL = """
               coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name)
             ) as artist_identity
           from library.local_albums albums
-          join library.local_artists artists on artists.id=albums.artist_id
+          left join library.local_artists artists on artists.id=albums.artist_id
           join title_identities
             on title_identities.title_identity=library.duplicate_identity_text(albums.title)
           where albums.library_id=%(library_id)s
+            and """ + STRAY_NAMED_ALBUM_SQL + """
             and not (albums.id = any(%(proposed_album_ids)s::bigint[]))
           union all
           select id, album_key, title, release_year,
@@ -137,7 +138,7 @@ _DECISION_SQL = """
           from tracks_after, unnest(tracks_after.paths) path
           group by tracks_after.album_id
         )
-        select scoped_albums.album_key, members.paths as track_paths, owners.paths as folds_into,
+        select scoped_albums.id, scoped_albums.album_key, members.paths as track_paths, owners.paths as folds_into,
           owner_albums.album_key as folds_into_key,
           coalesce(stored.metadata ? 'stray_duplicate_of', false) as was_folded,
           stored.metadata #>> '{stray_duplicate_of,album_key}' as was_folded_into_key,
@@ -210,6 +211,8 @@ def decide_stray_folds(
         "tracks": Jsonb(_proposed_tracks(edited, updated, album_of_path)),
         "edited_paths": paths,
     }).fetchall()
+    # The albums edited tracks leave. One that still has tracks keeps its card.
+    left = {row["album_id"] for path, row in edited.items() if album_of_path[path] != row["album_id"]}
     return {
         "inventory_mutation_revision": revision,
         "albums": [
@@ -220,8 +223,11 @@ def decide_stray_folds(
                 "folds_into_key": row["folds_into_key"],
                 "was_folded_into_key": row["was_folded_into_key"],
                 "was_folded_into": row["was_folded_into"],
-                # The page holds no card for a folded copy, so one that unfolds brings its own.
-                "card": _unfolded_card(row) if row["was_folded"] and not row["folds_into"] else None,
+                # The page may hold no card for a folded copy, or for the album a move leaves behind (its
+                # card listed one copy of each track), so both bring their own.
+                "card": (
+                    _card(row) if not row["folds_into"] and (row["was_folded"] or row["id"] in left) else None
+                ),
             }
             for row in rows
         ],
@@ -272,7 +278,7 @@ def _tag_value(field: str, value: object) -> object:
     return safe_int(text.split("/", 1)[0]) if field in _NUMBER_FIELDS else text
 
 
-def _unfolded_card(row: Mapping[str, object]) -> dict[str, object]:
+def _card(row: Mapping[str, object]) -> dict[str, object]:
     return {
         "key": row["album_key"],
         "name": row["title"],

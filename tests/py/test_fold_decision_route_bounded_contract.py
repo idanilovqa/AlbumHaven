@@ -35,7 +35,7 @@ class _Library:
             rows = []
         elif "jsonb_to_recordset" in text and params and params.get("album_ids") == [1]:
             rows = [{
-                "album_key": "artist::twin réléase", "track_paths": list(PATHS),
+                "id": 1, "album_key": "artist::twin réléase", "track_paths": list(PATHS),
                 "folds_into": ["/music/Artist/Twin/01.flac"], "folds_into_key": "artist::twin release",
                 "was_folded": False, "was_folded_into_key": None, "was_folded_into": None,
             }]

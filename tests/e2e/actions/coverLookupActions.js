@@ -95,7 +95,7 @@ export async function readDisplayedBlobBytes(element, expected) {
     && element.complete && element.naturalWidth > 0;
   if (!matches()) throw new Error('Displayed browser-owned source changed before observation.');
   // Browser-owned URLs never request the production /cover route.
-  const response = await fetch(expected.currentSrc);
+  const response = await fetch(expected.currentSrc, { mode: 'same-origin' });
   if (!response.ok) throw new Error('Displayed blob bytes could not be read.');
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (!matches()) throw new Error('Displayed browser-owned source changed during observation.');

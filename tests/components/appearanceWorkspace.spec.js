@@ -24,6 +24,8 @@ async function mount(page, method, options = {}) {
     ${options.utilityShell ? '<div id="utility-modal" class="utility-modal" data-active-tab="appearance"><div class="utility-modal-dialog"><header class="utility-modal-header">Appearance</header><div class="utility-modal-body"><aside class="utility-sidebar"><button class="utility-list-item">Album page</button></aside><main id="editor" class="utility-detail"></main></div></div></div>' : '<main id="editor"></main>'}${options.sharedFooter ? '<footer id="utility-modal-footer"></footer>' : ''}<section class="global-player"><button class="player-play">Play</button><span class="player-loop-handle"></span></section>
   </body></html>` }));
   await page.route('**/account/appearance', route => route.fulfill({ json: { ...saved, csrf_token: 'owned-component-token' } }));
+  // Provider marks inside CoverSourceBadge load from /static.
+  await page.route('**/static/images/**', route => route.fulfill({ path: path.join(staticRoot, new URL(route.request().url()).pathname.replace(/^\/static\//, '')) }));
   await page.goto(appearanceUrl);
   const cssFiles = (options.utilityShell || options.appChrome) ? [
     'runtime/base-layout.css', 'runtime/utilities.css', 'runtime/non-album-and-player.css',
@@ -32,10 +34,15 @@ async function mount(page, method, options = {}) {
   if (options.appChrome) cssFiles.splice(cssFiles.indexOf('appearance-backgrounds.css'), 0, 'app-chrome.css');
   for (const file of cssFiles) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
   for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-device-profiles.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
-  // Any editor can switch to the Album page, whose previews reuse the runtime gallery's source glyphs and cover badges.
-  for (const file of ['gallery-main-components.js', 'cover-lookup-modal-and-drawer.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
+  // Any editor can switch to the Album page, whose previews are the runtime's own GalleryCard, AlbumArtbox and CoverSourceBadge.
+  for (const file of ['markup-format-helpers.js', 'album-artbox.js', 'gallery-main-components.js', 'gallery-card-component.js', 'cover-lookup-modal-and-drawer.js']) {
+    await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
+  }
   if (method === 'mountAlbumPage') {
-    for (const file of ['gallery-main.css', 'runtime/track-modal-and-lightbox.css']) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+    // runtime/non-album-and-player.css, which draws the card hover state, comes with the utility shell.
+    for (const file of ['runtime/album-artbox-and-gallery-card.css', 'runtime/cover-lookup-modal.css', 'gallery-main.css']) {
+      await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+    }
   }
   await page.evaluate(async method => {
     const instance = window.AlbumHavenAppearance.instance;
@@ -163,36 +170,93 @@ for (const width of [900, 901, 1024, 1280]) {
   });
 }
 
-test('Album page library source and cover switches redraw their own panel previews', async ({ page }) => {
+const albumPageSwitch = (page, field) => page.locator(`[data-library-source-indicator="${field}"]`);
+const pseudo = (locator, pseudoElement, property) => locator.evaluate((element, [name, prop]) => getComputedStyle(element, name).getPropertyValue(prop), [pseudoElement, property]);
+
+test('Album page: Color cards by library source colors the real sample cards at once, whatever the saved choice', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mount(page, 'mountAlbumPage', { utilityShell: true });
-  const hoard = page.locator('[data-library-source-sample="hoard"]');
-  const hovered = page.locator('[data-library-source-sample-hover] .appearance-source-preview__art');
-  const icons = page.locator('[data-library-source-preview] .appearance-source-preview__icon');
-  const localBadge = page.locator('[data-cover-badge-sample="local"] .track-modal-cover-source-badge');
-  const downloadedBadge = page.locator('[data-cover-badge-sample="downloaded"] .track-modal-cover-source-badge');
-  await expect(icons).toHaveCount(2);
-  await expect(icons.first().locator('svg')).toBeVisible();
-  await expect(downloadedBadge).toBeVisible();
-  await expect(localBadge).toBeVisible();
+  const hoard = page.locator('[data-library-source-scope] .album-card[data-library-sources="hoard"]');
+  const main = page.locator('[data-library-source-scope] .album-card[data-library-sources="main"]');
+  await expect(page.locator('[data-library-source-scope] .album-card')).toHaveCount(3);
+  await expect(hoard).not.toHaveCSS('background-image', /conic-gradient/);
+  await albumPageSwitch(page, 'card_colors').click();
+  await expect(hoard).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
+  await expect(hoard).toHaveCSS('background-image', /conic-gradient/);
+  await expect(main).not.toHaveCSS('background-image', /conic-gradient/);
+  await albumPageSwitch(page, 'card_colors').click();
+  await expect(hoard).not.toHaveCSS('background-image', /conic-gradient/);
+  // The saved account choice on :root never leaks into the draft preview.
+  await page.evaluate(() => document.documentElement.setAttribute('data-library-source-card-colors', 'true'));
+  await expect(hoard).not.toHaveCSS('background-image', /conic-gradient/);
+});
 
-  const neutralBorder = await hoard.evaluate(element => getComputedStyle(element).borderTopColor);
-  await page.locator('[data-library-source-indicator="card_colors"]').click();
-  await expect(hoard).not.toHaveCSS('border-top-color', neutralBorder);
+test('Album page: Color hover outlines by library source switches the hovered sample outline at once', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mountAlbumPage', { utilityShell: true });
+  const cover = page.locator('[data-library-source-scope] .album-card[data-library-sources="new_arrivals"] > .cover');
+  await expect.poll(() => pseudo(cover, '::after', 'background-image')).toMatch(/conic-gradient/);
+  await expect.poll(() => pseudo(cover, '::after', 'opacity')).toBe('1');
+  await albumPageSwitch(page, 'hover_outline_colors').click();
+  await expect.poll(() => pseudo(cover, '::after', 'background-image')).not.toMatch(/conic-gradient/);
+  await albumPageSwitch(page, 'hover_outline_colors').click();
+  await expect.poll(() => pseudo(cover, '::after', 'background-image')).toMatch(/conic-gradient/);
+});
 
-  const coloredOutline = await hovered.evaluate(element => getComputedStyle(element).boxShadow);
-  await page.locator('[data-library-source-indicator="hover_outline_colors"]').click();
-  await expect(hovered).not.toHaveCSS('box-shadow', coloredOutline);
+test('Album page: Show library source icons shows and hides the real source badges; the duplicate warning stays', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mountAlbumPage', { utilityShell: true });
+  const preview = page.locator('[data-library-source-scope]');
+  const hoardBadge = preview.locator('.gallery-card__source-actions--artwork .gallery-source-action--hoard');
+  const arrivalsBadge = preview.locator('.gallery-card__source-actions--artwork .gallery-source-action--new_arrivals');
+  const duplicate = preview.locator('.gallery-source-action--duplicate');
+  for (const badge of [hoardBadge, arrivalsBadge, duplicate]) {
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveCSS('opacity', '1');
+  }
+  await expect(hoardBadge.locator('svg')).toBeVisible();
+  await expect(preview.locator('[data-library-sources="main"] .gallery-source-action')).toHaveCount(0);
+  await albumPageSwitch(page, 'icons').click();
+  await expect(hoardBadge).toBeHidden();
+  await expect(arrivalsBadge).toBeHidden();
+  await expect(duplicate).toBeVisible();
+  await albumPageSwitch(page, 'icons').click();
+  await expect(hoardBadge).toBeVisible();
+});
 
-  await page.locator('[data-library-source-indicator="icons"]').click();
-  await expect(icons.first()).toBeHidden();
-
-  await page.locator('[data-library-source-indicator="local_cover_badges"]').click();
+test('Album page: Display provider badge for local covers toggles the real CoverSourceBadge on the local sample only', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mountAlbumPage', { utilityShell: true });
+  const localBadge = page.locator('[data-cover-badge-sample="local"] .cover-source-badge');
+  const downloadedBadge = page.locator('[data-cover-badge-sample="downloaded"] .cover-source-badge');
+  for (const badge of [localBadge, downloadedBadge]) {
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveCSS('opacity', '1');
+    await expect(badge.locator('img')).toHaveAttribute('src', /deezer/);
+    await expect.poll(() => badge.locator('img').evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
+  }
+  await albumPageSwitch(page, 'local_cover_badges').click();
   await expect(localBadge).toBeHidden();
   await expect(downloadedBadge).toBeVisible();
-  for (const panel of await page.locator('.appearance-album-page__panel').all()) {
-    await expect(panel.locator('.appearance-album-page__preview')).toBeVisible();
+  await albumPageSwitch(page, 'local_cover_badges').click();
+  await expect(localBadge).toBeVisible();
+});
+
+test('Album page: layout cards and Currently playing animation redraw the Album Details preview at once', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mountAlbumPage', { utilityShell: true });
+  const preview = page.locator('[data-album-page-live-preview]');
+  for (const layout of ['stacked_bar', 'editorial_canvas', 'classic_bar']) {
+    await page.locator(`.appearance-album-layout-card[data-album-details-layout="${layout}"]`).click();
+    await expect(preview).toHaveAttribute('data-layout', layout);
   }
+  await expect(preview.locator('.appearance-album-preview__editorial-copy')).toBeHidden();
+  await page.locator('.appearance-album-layout-card[data-album-details-layout="editorial_canvas"]').click();
+  await expect(preview.locator('.appearance-album-preview__editorial-copy')).toBeVisible();
+  const playing = preview.locator('.appearance-album-preview__track.is-playing');
+  await expect.poll(() => pseudo(playing, '::after', 'display')).not.toBe('none');
+  await page.locator('[data-album-playing-row-animation-switch]').click();
+  await expect.poll(() => pseudo(playing, '::after', 'display')).toBe('none');
 });
 
 test('Album page on a phone stacks each group: switches first, the group live preview directly below', async ({ page }) => {
@@ -217,8 +281,8 @@ test('Album page on a phone stacks each group: switches first, the group live pr
     expect(previewBox.width).toBeGreaterThan(controlsBox.width - 2);
     previousBottom = previewBox.y + previewBox.height;
   }
-  await expect(page.locator('[data-library-source-preview] .appearance-source-preview__icon svg').first()).toBeVisible();
-  await expect(page.locator('[data-cover-badge-sample="local"] .track-modal-cover-source-badge')).toBeVisible();
+  await expect(page.locator('[data-library-source-scope] .gallery-source-action--hoard svg').filter({ visible: true })).toHaveCount(1);
+  await expect(page.locator('[data-cover-badge-sample="local"] .cover-source-badge')).toBeVisible();
 });
 
 test('tables resolve their surface locally inside dark panels on a light page', async ({ page }) => {

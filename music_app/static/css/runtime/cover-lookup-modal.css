@@ -663,6 +663,7 @@
   transition: opacity 180ms ease 250ms;
 }
 .track-modal-cover-shell:is(:hover, :focus-within) .cover-source-badge--over,
+[data-component-preview-hover] .cover-source-badge--over,
 .cover-source-badge--over.is-open {
   opacity: 1;
   transition-delay: 0s;

@@ -249,7 +249,7 @@ test('Alerts is a durable aggregate section with three curated families', async 
 
 test('Alerts and Album page expose the approved live-preview contracts', () => {
   const alerts = appearance.alertsMarkup();
-  const album = appearance.albumPageMarkup({ renderSourceGlyph: () => '', renderCoverBadge: () => '' });
+  const album = appearance.albumPageMarkup({ components: { galleryCard: () => '', artbox: () => '', coverSourceBadge: () => '' } });
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
 
   for (const family of ['ember', 'signal', 'quiet']) assert.match(alerts, new RegExp(`data-alert-family="${family}"`));
@@ -283,11 +283,12 @@ test('Alerts and Album page expose the approved live-preview contracts', () => {
 });
 
 test('Album page groups its switches into panels that each carry their own live preview (owner option B, 2026-11-18)', () => {
-  const glyphs = [];
-  const album = appearance.albumPageMarkup({
-    renderSourceGlyph: category => { glyphs.push(category); return `<svg data-test-glyph="${category}"></svg>`; },
-    renderCoverBadge: source => `<span class="track-modal-cover-source-badge is-${source}"></span>`,
-  });
+  const cards = [], badges = [];
+  const album = appearance.albumPageMarkup({ components: {
+    galleryCard: config => { cards.push(config); return `<section class="album-card" data-test-card="${config.sourceCategories.join(' ')}">${config.artboxHtml}</section>`; },
+    artbox: config => `<span class="album-artbox" data-test-artbox="${config.state}">${config.coverHtml}</span>`,
+    coverSourceBadge: source => { badges.push(source); return `<span class="cover-source-badge cover-source-badge--over is-${source}"></span>`; },
+  } });
   const panels = album.split('class="appearance-album-page__panel"').slice(1);
   assert.equal(panels.length, 3, 'Album Details, Library sources and Covers each get one panel');
   for (const panel of panels) {
@@ -299,25 +300,28 @@ test('Album page groups its switches into panels that each carry their own live 
   assert.match(panels[0], /data-album-playing-row-animation-switch/);
   assert.match(panels[0], /data-album-page-live-preview/);
   for (const field of ['card_colors', 'hover_outline_colors', 'icons']) assert.match(panels[1], new RegExp(`data-library-source-indicator="${field}"`));
-  assert.match(panels[1], /data-library-source-preview[^>]*aria-hidden="true"/);
-  for (const source of ['hoard', 'new_arrivals', 'main']) assert.match(panels[1], new RegExp(`data-library-source-sample="${source}"`));
-  assert.equal((panels[1].match(/data-library-source-sample-hover/g) || []).length, 1, 'one sample card shows the hover outline');
-  assert.deepEqual(glyphs, ['hoard', 'new_arrivals'], 'source icons come from the shared gallery glyphs; Main has none');
-  assert.match(panels[2], /data-library-source-indicator="local_cover_badges"/);
-  assert.match(panels[2], /data-cover-badge-preview[^>]*aria-hidden="true"/);
-  assert.match(panels[2], /data-cover-badge-sample="downloaded"[\s\S]*track-modal-cover-source-badge/);
-  assert.match(panels[2], /data-cover-badge-sample="local"[\s\S]*track-modal-cover-source-badge/);
+  assert.match(panels[1], /data-library-source-scope data-component-preview-hover data-album-page-sample inert/, 'the sample cards are inert, hovered and scoped to the draft switches');
+  assert.deepEqual(cards.map(card => card.sourceCategories), [['hoard'], ['new_arrivals'], ['main']], 'one real GalleryCard per library source');
+  assert.deepEqual(cards.map(card => card.hasDuplicateFiles), [true, false, false], 'a duplicate warning shows that the icons switch leaves it visible');
+  for (const card of cards) assert.match(card.artboxHtml, /data-test-artbox="ready"[^>]*><img alt="" src="data:image\/svg\+xml,/, 'every sample has artwork without depending on the library');
+  assert.match(panels[2], /data-cover-badge-preview data-component-preview-hover data-album-page-sample inert/);
+  assert.deepEqual(badges, ['deezer', 'deezer'], 'both covers carry the real CoverSourceBadge');
+  for (const kind of ['downloaded', 'local']) {
+    const sample = panels[2].slice(panels[2].indexOf(`data-cover-badge-sample="${kind}"`));
+    assert.ok(sample.indexOf('cover-source-badge--over') < sample.indexOf('</figure>'), `${kind} cover shows the badge over its art`);
+  }
   assert.doesNotMatch(album, /appearance-album-page__workspace/, 'the single narrow switch column is gone');
 
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
-  for (const selector of ['[data-card-colors="true"]', '[data-hover-outline-colors="true"]', '[data-icons="false"]', '[data-local-cover-badges="false"]']) {
-    assert.ok(css.includes(`.appearance-${selector.includes('local') ? 'cover-badge' : 'source'}-preview${selector}`), `${selector} drives its preview`);
-  }
+  assert.ok(css.includes('.appearance-cover-badge-preview[data-local-cover-badges="false"] [data-cover-badge-sample="local"] .cover-source-badge { display: none; }'));
   const mobileCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/mobile-layout.css'), 'utf8');
   assert.doesNotMatch(mobileCss, /appearance-album-page__preview/, 'phones show each preview under its switches (owner 2026-11-18)');
   assert.match(mobileCss, /\.is-mobile-page :is\([^)]*\.appearance-album-page__panel[^)]*\) \{ grid-template-columns: minmax\(0, 1fr\) !important;/);
   const galleryCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/gallery-main.css'), 'utf8');
-  assert.match(galleryCss, /\.album-card\[data-library-sources\],\s*\.appearance-source-preview \{[^}]*--library-source-hoard/, 'the preview shares the gallery source colors');
+  for (const field of ['card-colors', 'hover-outline-colors']) {
+    assert.ok(galleryCss.includes(`:is(:root[data-library-source-${field}="true"] .album-card:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-${field}="true"] .album-card)`), `${field}: a source scope overrides the saved account choice`);
+  }
+  assert.ok(galleryCss.includes('[data-library-source-scope][data-library-source-icons="false"] .gallery-card__source-actions'));
 });
 
 test('Main elements and Player & Seekbar keep their live previews visible while settings scroll', () => {

@@ -7,14 +7,11 @@ from music_app.services.album_cover_candidate_publisher import (
     sanitize_persisted_candidate_snapshot,
 )
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
-    import psycopg
-    from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
-    psycopg = None
-    dict_row = None
     Jsonb = None
 
 
@@ -62,23 +59,24 @@ class AlbumCoverCandidateSnapshotRepository:
         *,
         track_paths: set[str],
     ) -> int | None:
-        normalized_paths = sorted(
-            {str(path or "").strip() for path in track_paths if str(path or "").strip()}
-        )
-        if not normalized_paths:
-            return None
+        return self.resolve_album_ids_for_track_path_sets([track_paths])[0]
+
+    def resolve_album_ids_for_track_path_sets(
+        self,
+        track_path_sets: list[set[str]],
+    ) -> list[int | None]:
+        """The album holding each set of track paths, over one connection."""
+        normalized_sets = [
+            sorted({str(path or "").strip() for path in track_paths if str(path or "").strip()})
+            for track_paths in track_path_sets
+        ]
+        if not any(normalized_sets):
+            return [None] * len(normalized_sets)
         with self._connect_to_database() as connection:
-            row = _first_row(
-                connection.execute(
-                    _resolve_album_id_for_track_paths_sql(),
-                    {"track_paths": normalized_paths},
-                )
-            )
-        album_id = _row_mapping(row).get("album_id")
-        try:
-            return int(album_id) if album_id is not None else None
-        except (TypeError, ValueError):
-            return None
+            return [
+                _album_id_for_track_paths(connection, normalized_paths) if normalized_paths else None
+                for normalized_paths in normalized_sets
+            ]
 
     def resolve_album_track_context(
         self,
@@ -208,10 +206,22 @@ class _NoopTransaction:
         pass
 
 
+def _album_id_for_track_paths(connection: Any, normalized_paths: list[str]) -> int | None:
+    row = _first_row(
+        connection.execute(
+            _resolve_album_id_for_track_paths_sql(),
+            {"track_paths": normalized_paths},
+        )
+    )
+    album_id = _row_mapping(row).get("album_id")
+    try:
+        return int(album_id) if album_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for cover candidate snapshots.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _transaction(connection: Any) -> Any:

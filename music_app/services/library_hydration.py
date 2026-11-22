@@ -12,6 +12,7 @@ from music_app.services.covers import find_cover_image, image_dimensions
 from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.exception_overrides import apply_exception_override
 from music_app.services.library import build_albums_from_file_cache
+from music_app.services.library_album_index import publish_library_albums
 from music_app.services.metadata import file_metadata_schema_is_current
 from music_app.services.library_roots import (
     get_library_roots,
@@ -189,50 +190,6 @@ def find_cover_for_track_folder(folder: Path, image_extensions: set[str]) -> Pat
     return None
 
 
-def repair_cover_paths_in_cache(
-    file_cache: dict[str, dict[str, object]],
-    image_extensions: set[str],
-    *,
-    missing_only: bool = True,
-    record_file_error: Callable[..., None] | None = None,
-) -> dict[str, dict[str, object]]:
-    changed_entries: dict[str, dict[str, object]] = {}
-    folder_cover_cache: dict[str, Path | None] = {}
-    cover_dimensions_cache: dict[str, tuple[int | None, int | None]] = {}
-    directory_file_cache: dict[str, set[str] | None] = {}
-    for path_str, entry in file_cache.items():
-        if not isinstance(entry, dict):
-            continue
-        track_path = Path(path_str)
-        if not _path_exists_in_cached_directory(
-            track_path,
-            directory_file_cache,
-            record_file_error,
-        ):
-            continue
-        cover_value = str(entry.get("cover_path") or "").strip()
-        cover_path = Path(cover_value) if cover_value else None
-        if missing_only and cover_path is not None and _path_exists_in_cached_directory(
-            cover_path,
-            directory_file_cache,
-            record_file_error,
-        ):
-            continue
-        cover = _cached_cover_for_folder(track_path.parent, image_extensions, folder_cover_cache)
-        repaired_cover = str(cover) if cover else None
-        if entry.get("cover_path") != repaired_cover:
-            entry["cover_path"] = repaired_cover
-            changed_entries[path_str] = dict(entry)
-        if _apply_local_cover_dimensions(
-            entry,
-            cover_dimensions_cache=cover_dimensions_cache,
-            directory_file_cache=directory_file_cache,
-            record_file_error=record_file_error,
-        ):
-            changed_entries[path_str] = dict(entry)
-    return changed_entries
-
-
 def sanitize_hydrated_file_cache(
     file_cache: dict[str, dict[str, object]],
     exception_overrides: dict[str, object],
@@ -280,6 +237,11 @@ def sanitize_hydrated_file_cache(
             directory_file_cache,
             record_file_error,
         ):
+            if cover_value or entry.get("remote_cover_url") or entry.get("cover_selection_origin"):
+                # A recorded cover choice, whatever its origin, outlives its
+                # missing file (a deleted image or an offline share): it stays
+                # as saved, dimensions included, and the placeholder shows.
+                continue
             cover = _cached_cover_for_folder(track_path.parent, image_extensions, folder_cover_cache)
             repaired_cover = str(cover) if cover else None
             if entry.get("cover_path") != repaired_cover:
@@ -295,39 +257,6 @@ def sanitize_hydrated_file_cache(
 
     changed_entries.update(clear_ambiguous_folder_covers(sanitized_file_cache))
     return sanitized_file_cache, changed_entries
-
-
-def refresh_cached_cover_paths_in_library_state(
-    library_state: dict[str, object],
-    config: dict[str, object],
-    *,
-    min_interval_seconds: float = 5.0,
-    now: float,
-    record_file_error: Callable[..., None] | None = None,
-) -> bool:
-    if library_state.get("scan_in_progress") or library_state.get("covers_in_progress"):
-        return False
-    file_cache = library_state.get("file_cache")
-    if not isinstance(file_cache, dict) or not file_cache:
-        return False
-    last_refresh = float(library_state.get("cover_path_refresh_at") or 0.0)
-    if now - last_refresh < max(0.5, float(min_interval_seconds or 5.0)):
-        return False
-    library_state["cover_path_refresh_at"] = now
-    changed_entries = repair_cover_paths_in_cache(
-        file_cache,
-        config["IMAGE_EXTENSIONS"],
-        missing_only=True,
-        record_file_error=record_file_error,
-    )
-    if not changed_entries:
-        return False
-    library_state["albums"] = build_albums_from_file_cache(
-        file_cache,
-        set(library_state.get("separate_release_keys") or set()),
-    )
-    schedule_cache_updates_save_for_config(config, config["CACHE_PATH"], changed_entries)
-    return True
 
 
 def hydrate_library_state_from_disk(
@@ -481,12 +410,12 @@ def hydrate_library_state_from_disk(
     if relations_last_built:
         library_state["relations_last_built"] = relations_last_built
     library_state["separate_release_keys"] = load_separate_release_keys(config)
-    library_state["albums"] = build_albums_from_file_cache(
+    publish_library_albums(library_state, build_albums_from_file_cache(
         sanitized_file_cache,
         set(library_state.get("separate_release_keys") or set()),
-    )
+    ))
     if changed_entries and not saved_sanitized_snapshot:
-        schedule_cache_updates_save_for_config(config, config["CACHE_PATH"], changed_entries)
+        schedule_cache_updates_save_for_config(config, changed_entries)
     if ensure_relations and ensure_relation_views is not None and _relations_missing(library_state):
         ensure_relation_views(library_state, config)
     library_browse_selection = select_runtime_persistence_adapter("library_browse", config)

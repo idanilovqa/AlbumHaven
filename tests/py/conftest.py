@@ -358,6 +358,23 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    from tests.py import pytest_shards
+
+    selection = os.environ.get(pytest_shards.SHARD_ENV, "").strip()
+    if not selection:
+        return
+    try:
+        index, count = pytest_shards.parse_shard(selection)
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from None
+    files = {item: item.path.relative_to(config.rootpath).as_posix() for item in items}
+    owners = pytest_shards.shard_owners(files.values(), pytest_shards.load_weights(), count)
+    deselected = [item for item in items if owners[files[item]] != index]
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = [item for item in items if owners[files[item]] == index]
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
     config = session.config
@@ -504,6 +521,15 @@ def _assert_safe_runtime_config(config_carrier: object) -> None:
         actual = config_carrier.get(key) if isinstance(config_carrier, dict) else getattr(config_carrier, key, None)
         if actual != expected:
             raise AssertionError(f"Pytest runtime safety expected {key}={expected!r}, got {actual!r}.")
+
+
+@pytest.fixture(autouse=True)
+def _close_asgi_request_loop_after_each_test():
+    """A test's ASGI requests share one server-like loop; it ends with the test."""
+    yield
+    asgi_testing = sys.modules.get("tests.py.asgi_testing")
+    if asgi_testing is not None:
+        asgi_testing.close_server_loop()
 
 
 @pytest.fixture(autouse=True)
@@ -661,3 +687,39 @@ def asgi_request():
     from tests.py.asgi_testing import run_asgi_request
 
     return run_asgi_request
+
+
+@pytest.fixture
+def unreachable_postgres_pool(monkeypatch: pytest.MonkeyPatch):
+    """Every pool checkout fails at once, as `psycopg.connect` does against a missing database.
+
+    A real pool fails only once the driver's attempt has failed, which takes seconds against a
+    closed port on Windows and breaks tests that time their own threads in seconds.
+    """
+    import psycopg
+
+    from music_app.services import postgres_connections
+
+    class _UnreachableCheckout:
+        def __enter__(self):
+            raise psycopg.OperationalError("test database is deliberately unreachable")
+
+        def __exit__(self, *_args):
+            return False
+
+    class _UnreachablePool:
+        min_size = 0
+
+        def __init__(self, **options):
+            self.max_size = options.get("max_size")
+
+        def connection(self, timeout=None):
+            return _UnreachableCheckout()
+
+        def close(self):
+            pass
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", _UnreachablePool)
+    yield
+    postgres_connections.close_pools()

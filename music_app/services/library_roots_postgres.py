@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from music_app.services.postgres_connections import leased_connection as _leased_connection
+
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
-    from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover - allows import-time diagnostics without the Postgres driver.
     psycopg = None
-    dict_row = None
     Jsonb = None
 
 
@@ -43,7 +43,7 @@ class PostgresLibraryRootSettingsStore:
     def load_settings(self, *, connection: Any | None = None) -> dict[str, object]:
         from music_app.services.library_roots import (
             empty_library_root_settings,
-            normalize_persisted_library_root_settings,
+            read_persisted_library_root_settings,
         )
 
         if connection is None:
@@ -58,7 +58,7 @@ class PostgresLibraryRootSettingsStore:
         row_mapping = _row_mapping(row)
         if "settings_payload" not in row_mapping:
             raise ValueError("Postgres library root settings row is missing settings_payload.")
-        return normalize_persisted_library_root_settings(row_mapping["settings_payload"])
+        return read_persisted_library_root_settings(row_mapping["settings_payload"])
 
     def save_settings(self, raw_payload: object) -> dict[str, object]:
         from music_app.services.library_roots import normalize_persisted_library_root_settings
@@ -127,9 +127,7 @@ class PostgresLibraryRootSettingsStore:
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for Postgres library roots.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 class _NoopTransaction:

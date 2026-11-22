@@ -156,20 +156,36 @@ def test_problematic_albums_build_does_not_publish_cache_invalidated_during_acti
     assert problematic_albums_module._PROBLEMATIC_ALBUMS_CACHE_KEY not in st
 
 
-def test_find_problematic_album_by_track_paths_returns_matching_item():
-    payload = {
-        "items": [
-            {"key": "problem-1", "tracks": [{"path": "a.mp3"}]},
-            {"key": "problem-2", "tracks": [{"path": "b.mp3"}]},
-        ]
+def test_find_problematic_album_by_track_paths_examines_only_the_albums_holding_those_tracks(config, monkeypatch):
+    # The rule stores hold no ignored repairs or separate releases.
+    monkeypatch.setattr(problematic_albums_module, "load_ignored_repair_keys", lambda _config: set())
+    monkeypatch.setattr(problematic_albums_module, "load_separate_release_keys", lambda _config: set())
+
+    def album(key, name, path):
+        return SimpleNamespace(
+            key=key, name=name, album_artist="Artist", artists=["Artist"], year=None, cover_path=None,
+            tracks=[SimpleNamespace(path=path, title=name)],
+        )
+
+    examined: list[str] = []
+    st = {
+        "albums": [album("problem-1", "One", "a.mp3"), album("problem-2", "Two", "b.mp3")],
+        "file_cache": {}, "relation_views": {},
     }
 
     match = find_problematic_album_by_track_paths(
         {"b.mp3"},
-        build_problematic_albums_payload=lambda: payload,
+        config=config,
+        library_state=st,
+        **_problematic_payload_kwargs(
+            year_problem_reason=lambda year: "Missing year",
+            all_track_year_problems_ignored=lambda album, *_args: examined.append(album.key) or False,
+        ),
     )
 
-    assert match == {"key": "problem-2", "tracks": [{"path": "b.mp3"}]}
+    assert match["key"] == "problem-2"
+    assert match["problem_reasons"][0] == "Missing year"
+    assert examined == ["problem-2"]
 
 
 def test_build_problematic_album_detail_payload_ignores_e2e_fixture_file(config, monkeypatch, tmp_path):

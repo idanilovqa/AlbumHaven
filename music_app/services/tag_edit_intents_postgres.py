@@ -5,13 +5,12 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from typing import Any
 import uuid
 
+from music_app.services.postgres_connections import leased_connection as _leased_connection
+from music_app.services.postgres_connections import session_connection
+
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
-    import psycopg
-    from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
-    psycopg = None
-    dict_row = None
     Jsonb = None
 
 
@@ -31,6 +30,9 @@ class PostgresTagEditIntentRepository:
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
+        # The intent's advisory lock is a session lock held through the media writes: never on a
+        # connection that a request could borrow next.
+        self._lock_connect = connect or session_connection
 
     def intent_lease(self):
         """Own a journal session until the edit's background finalizer releases it."""
@@ -219,11 +221,17 @@ class PostgresTagEditIntentRepository:
         return [_intent_from_row(row) for row in rows]
 
     def _connect_to_database(self) -> Any:
+        return self._connect(self._required_database_url())
+
+    def _required_database_url(self) -> str:
         if not self._database_url:
             raise RuntimeError(
                 "ALBUM_HAVEN_APP_DATABASE_URL is required for tag edit intents."
             )
-        return self._connect(self._database_url)
+        return self._database_url
+
+    def _connect_for_lock(self) -> Any:
+        return self._lock_connect(self._required_database_url())
 
 
 class _FallbackJsonb:
@@ -246,7 +254,7 @@ class _TagEditIntentLease:
         if self._released or self._connection is not None:
             raise RuntimeError("Tag edit lease has already been used.")
         self._intent_id = str(uuid.UUID(intent_id))
-        self._connection = self._stack.enter_context(self._repository._connect_to_database())
+        self._connection = self._stack.enter_context(self._repository._connect_for_lock())
         function = "pg_advisory_lock" if wait else "pg_try_advisory_lock"
         with _transaction(self._connection):
             row = _first_row(self._connection.execute(
@@ -290,9 +298,7 @@ class _TagEditIntentLease:
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for tag edit intents.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _transaction(connection: Any) -> Any:

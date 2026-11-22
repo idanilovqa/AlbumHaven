@@ -306,6 +306,45 @@ test('a transient busy response retries within the same identity until backend c
   assert.equal(peaks.left[0], 0.375);
 });
 
+test('the current track keeps waiting out a long busy build instead of dropping its waveform', async () => {
+  let attempts = 0;
+  const delays = [];
+  const context = loadPeaksRuntime(async () => {
+    attempts += 1;
+    if (attempts <= 12) return { ok: false, status: 429 };
+    return { ok: true, status: 200, json: async () => peakPayload(0.5, 720) };
+  }, {
+    setTimeout(callback, delay) {
+      delays.push(delay);
+      callback();
+      return delays.length;
+    },
+  });
+
+  const peaks = await context.loadWaveformPeaks('C:/Music/long-build-elsewhere.flac', 720, 7);
+
+  assert.equal(peaks?.left[0], 0.5, 'another track\'s slow build must not cost this track its waveform');
+  assert.equal(attempts, 13);
+  assert.deepEqual(delays, [50, 100, 200, 400, 800, 2000, 2000, 2000, 2000, 2000, 2000, 2000]);
+});
+
+test('a busy wait ends as soon as the track changes', async () => {
+  let attempts = 0;
+  const context = loadPeaksRuntime(async () => {
+    attempts += 1;
+    if (attempts === 8) context.state.player.streaming.generation = 8;
+    return { ok: false, status: 429 };
+  }, {
+    setTimeout(callback) {
+      callback();
+      return 1;
+    },
+  });
+
+  assert.equal(await context.loadWaveformPeaks('C:/Music/skipped.flac', 720, 7), null);
+  assert.equal(attempts, 8, 'no further request once the player moved to another track');
+});
+
 test('non-ok, invalid, and rejected requests are evicted so the same identity can retry', async (t) => {
   const failures = [
     { name: 'non-ok response', response: { ok: false } },

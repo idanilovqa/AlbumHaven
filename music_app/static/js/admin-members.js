@@ -230,9 +230,16 @@
     return value;
   };
 
+  // Trigger surfaces close their sibling when another opens, so at most one
+  // member menu is open; layout changes close it without scanning the roster.
+  let placedMenu = null;
+  const positionMemberMenu = (trigger, menu) => {
+    placedMenu = { trigger, menu };
+    positionMenu(trigger, menu);
+  };
   const memberMenuCleanups = [];
   for (const component of document.querySelectorAll('.member-actions[data-account-menu-component]')) {
-    memberMenuCleanups.push(attachAccountMenu(component, { position: positionMenu, focusOnPointer: true }));
+    memberMenuCleanups.push(attachAccountMenu(component, { position: positionMemberMenu, focusOnPointer: true }));
   }
   disposeMemberMenus = () => memberMenuCleanups.forEach(dispose => dispose?.());
   removeDismissalListener = window.AlbumHavenSurfaceDismissal?.bind(window, () => {
@@ -253,12 +260,14 @@
   ownerDocument.addEventListener?.('album-haven:surface-opening', onSurfaceOpening);
   removeSurfaceListener = () => ownerDocument.removeEventListener?.('album-haven:surface-opening', onSurfaceOpening);
   const closeOnLayoutChange = (event) => {
-    for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
-      if (['scroll', 'wheel'].includes(event?.type) && menu.contains(event.target)) continue;
-      const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
-      if (event?.type === 'wheel' && trigger?.contains(event.target)) continue;
-      if (trigger) closeMenu(trigger, menu);
+    if (!placedMenu) return;
+    const { trigger, menu } = placedMenu;
+    if (!menu.hidden) {
+      if (['scroll', 'wheel'].includes(event?.type) && menu.contains(event.target)) return;
+      if (event?.type === 'wheel' && trigger.contains(event.target)) return;
+      closeMenu(trigger, menu);
     }
+    placedMenu = null;
   };
   window.addEventListener?.('wheel', closeOnLayoutChange, { capture: true, passive: true });
   window.addEventListener?.('scroll', closeOnLayoutChange, true);

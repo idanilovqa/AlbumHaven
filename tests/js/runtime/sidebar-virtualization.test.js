@@ -256,3 +256,125 @@ test('window replacement restores keyboard focus to the same artist link', () =>
   context.__restore(sidebarList, focusIdentity);
   assert.equal(focused, true);
 });
+
+// One sidebar scroll that moves the virtual window. `frameOnly` measures just the
+// animation frame the scroll schedules, which renders the new window.
+async function sidebarWindowScroll(cardinality, { frameOnly = false } = {}) {
+  const { countedCollection, createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+  const coreSource = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'core-state-and-helpers.js'),
+    'utf8',
+  );
+  const schedulingSource = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'browser-scheduling-helpers.js'),
+    'utf8',
+  );
+  {
+    const counter = createInteractionCounter();
+    class CountedElement {
+      constructor() {
+        this.dataset = {};
+        this.listeners = new Map();
+        this.scrollTop = 0;
+        this.scrollHeight = cardinality * 47;
+        this.clientHeight = 0;
+        this.hidden = false;
+        this.markup = '';
+      }
+      set innerHTML(value) {
+        counter.count('renderCommits');
+        counter.count('domMutations');
+        counter.count('markupBytes', value.length);
+        this.markup = value;
+      }
+      get innerHTML() { return this.markup; }
+      addEventListener(type, listener) { counter.count('listeners'); this.listeners.set(type, listener); }
+      getBoundingClientRect() { return { top: 0, bottom: 720, width: 240, height: 720 }; }
+      querySelector() { counter.count('domQueries'); return null; }
+      querySelectorAll() { counter.count('domQueries'); return []; }
+    }
+    const sidebarList = new CountedElement();
+    // The structure signature is written to the list on every window change, so its bytes count.
+    sidebarList.dataset = new Proxy({}, {
+      set(target, property, value) {
+        if (property === 'sidebarStructureSignature') counter.count('markupBytes', String(value).length);
+        target[property] = value;
+        return true;
+      },
+    });
+    const sidebar = new CountedElement();
+    sidebar.clientHeight = 720;
+    sidebarList.closest = selector => (selector === '.sidebar' ? sidebar : null);
+    const frames = [];
+    const source = countedCollection(artists(cardinality), counter);
+    const context = {
+      appBootstrap: { getInitialView: () => ({ surface: { active: 'albums' }, artists_sidebar: source }) },
+      document: {
+        getElementById(id) {
+          if (id === 'sidebar-list') return sidebarList;
+          return id === 'navigation-tree-item-template' ? { textContent: template } : null;
+        },
+        querySelector() { counter.count('domQueries'); return null; },
+        activeElement: null,
+      },
+      window: {
+        location: { href: 'http://localhost:5000/', origin: 'http://localhost:5000' },
+        requestAnimationFrame(callback) { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+      },
+      HTMLElement: CountedElement,
+      URL,
+      URLSearchParams,
+      Intl,
+      Map,
+      Set,
+      WeakMap,
+      console,
+    };
+    vm.createContext(context);
+    sources.forEach(item => vm.runInContext(item, context));
+    vm.runInContext(schedulingSource, context);
+    vm.runInContext(`${coreSource}\n;globalThis.__renderSidebar = renderSidebar;`, context);
+    const flushFrames = () => { while (frames.length) frames.shift()(); };
+    context.__renderSidebar();
+    flushFrames();
+    const scroll = sidebar.listeners.get('scroll');
+    assert.equal(typeof scroll, 'function');
+    sidebar.scrollTop = 200 * 47;
+    if (frameOnly) {
+      scroll();
+      assert.equal(frames.length, 1, 'the scroll schedules one render frame');
+    }
+    const work = await counter.measure(() => {
+      if (!frameOnly) scroll();
+      flushFrames();
+    });
+    const indexes = [...sidebarList.markup.matchAll(/data-sidebar-virtual-index="(\d+)"/g)].map(match => Number(match[1]));
+    assert.deepEqual([indexes[0], indexes.length], [160, 160], 'the scroll must mount the window that holds row 200');
+    assert.ok(sidebarList.dataset.sidebarStructureSignature.length <= 32, 'the signature names the list, not its artists');
+    return work;
+  }
+}
+
+test('bounded interaction: sidebar window scroll renders only the new window at 14,000 artists', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  await measureScalePair({
+    id: 'js:runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners',
+    small: 400,
+    large: 14000,
+    run: sidebarWindowScroll,
+    budgets: { itemsVisited: 160, renderCommits: 1, domMutations: 1, markupBytes: 64000, domQueries: 2, animationFrames: 2, listeners: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: sidebar window render frame renders only the new window at 14,000 artists', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  await measureScalePair({
+    id: 'js:runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners#2',
+    small: 400,
+    large: 14000,
+    run: cardinality => sidebarWindowScroll(cardinality, { frameOnly: true }),
+    budgets: { itemsVisited: 160, renderCommits: 1, domMutations: 1, markupBytes: 64000, domQueries: 2, animationFrames: 1, listeners: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

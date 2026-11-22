@@ -1,8 +1,69 @@
 # Changelog
 
-## 0.11.32 - 2026-11-17
+## 0.11.46 - 2026-11-22
 
-- The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays, and once it runs out the player waits silently where it is, however long the outage lasts, and plays on from there when the network returns. A paused player keeps the audio it received when the connection drops too. Seeking while offline plays at once inside the received audio; past it, the head moves to the target and waits there silently, paused if it was paused. A player that had to stop keeps its place: a seek moves it, and Play while still offline no longer resets it to the start. Losing the network no longer stops playback at all: the player keeps its playback claim through the outage, retrying every 2 seconds, and renews it when the network returns, even past the claim's 30-second lease. The server now accepts that renewal until another device has claimed playback, so only another device taking over stops it, and Play after reconnecting or after a long pause no longer shows "Playback unavailable". Pausing offline shows Play at once, keeps the claim's token when its give-back cannot reach the server so the next Play offline goes on instead of locking the player in "Playback unavailable", and no longer shows "Listening history could not be saved" for a save the network never carried (the listen stays open and is saved later). Turning Wi-Fi off no longer leaves the player waiting on a connection that has gone silent without closing: the moment the browser reports it is offline, the player lets that connection go, so a seek past the received audio stays playing in silence at its target and plays on by itself when Wi-Fi returns, and one Play press continues a paused one. The player no longer needs the browser to report going offline, which a laptop with a VPN or virtual network adapter never does: the server sends the web player a small heartbeat four times a second, and a connection that hears nothing at all for 5 seconds, or for under a second while a seek past the received audio waits on it, is gone. How long the server takes to answer no longer counts, so a busy machine (the CPU at 100%) is waited on instead of being taken for a lost connection. A seek past the received audio in an outage shows its place at once with one click, the old audio stops at once, the waveform stays on the seekbar, the head waits silently at the place with the button still on Pause, and the song plays on from there by itself once the network returns. The next connection is tried every 2 seconds at most; one that is only slow to open is given twice as long each time, up to 16 seconds. A start sent on a connection that died without closing goes again on a new one, however many presses follow it, and a start whose playback claim gets no answer plays on while the claim is asked again every 2 seconds, so one press always starts the song; only another device holding playback stops it. A connection lost under a song whose received audio cannot play on (a seek or start still waiting for the server, or a stream with no seek table) no longer stops the player and sends the head back to the start: the head stays where it was, the button stays on Pause, and the song plays on from there once the server answers again, however many attempts fail first, including the minute a Cloudflare tunnel answers with a 530 error page after the network returns. A song chosen while the network or the server is still away starts with one press as soon as the server answers. After a network that froze and came back, playback resumes within about 3 seconds of the server answering again, instead of waiting out a reconnect attempt of up to 16 seconds. A song pressed while the server answered errors (a tunnel coming back) starts within about 2 seconds of the server answering again: refused attempts are retried every second, and the playback claim asks again the moment the connection is back. A seek no longer sometimes stops playback, sends the head back to the start and leaves Play greyed out: the audio player dropped the next piece of the song the seek had just replaced and treated it as an error.
+- Fixed a 0.11.45 regression: one failed attempt to open another database connection could make requests fail even though working connections were free. Requests now fail fast only when no working connection exists, a slow first connection is waited for, and the app reconnects within seconds after Postgres returns.
+- Fixed a second 0.11.45 regression: a database setting made by one task could carry over to the next one, so a later change could be saved only partly if it failed. Every borrowed connection now starts with standard settings, Edit Tags locks use connections nothing else reuses, and the freeze guard rejects session state on shared connections.
+
+## 0.11.45 - 2026-11-22
+
+- Every request and background check now borrows a database connection from a shared pool instead of opening a new one, and the freeze guard rejects any new code that opens its own. If the database is unreachable, requests fail at once instead of waiting 30 seconds.
+- Going back, Home, or a Settings or Discovery tab no longer reloads a view that is already on screen; the guard checks this for every such navigation.
+- After a tag save, the gallery no longer briefly drops the artist on screen when that artist shares an album with an artist further up.
+
+## 0.11.44 - 2026-11-21
+
+- Clearing a search is faster. The X only empties the box; clicking the search button, or clicking outside the box on desktop, applies the clear. The full gallery then appears straight from memory, as Home does, when the library hasn't changed, and a late search answer can no longer replace it. An artist the search selected stays selected.
+
+## 0.11.43 - 2026-11-21
+
+- Test-only: the bounded-interaction freeze guard now performs every request-capture interaction twice and fails when the repeat sends an identical request more often than the first pass, or sends more requests in total. This catches leaked listeners and duplicated fetches that a single pass misses.
+
+## 0.11.42 - 2026-11-19
+
+- Docs-only: contributor guidance now says that rerunning a failing gate to diagnose it or to verify a fix is expected; only rerunning unchanged code for a lucky pass is ruled out.
+
+## 0.11.41 - 2026-11-19
+
+- Test-only: the Python test suite runs as three parallel CI jobs, so its results arrive in about 14 minutes instead of 33, and four tests no longer wait out a 30-second database timeout.
+
+## 0.11.40 - 2026-11-19
+
+- Right after the library's gallery data is rebuilt (for example on the first start after an update), opening an artist's gallery no longer stalls: the first page loads in well under a second instead of up to 20 seconds.
+
+## 0.11.39 - 2026-11-18
+
+- Test-only: the large-library performance check now records how long the first artist page and Home take even when they pass, so before/after comparisons no longer need a failing run.
+
+## 0.11.38 - 2026-11-18
+
+- The app page itself loads faster: the server reads your saved layout preferences over its already-open database connection instead of opening a new one each time. On the hosted test runner the page response dropped from about 110-170 ms to about 55-75 ms on first load, and from about 75-95 ms to about 45-55 ms after browsing.
+
+## 0.11.37 - 2026-11-18
+
+- Large data responses (artist pages, search, gallery pages, Problematic Files) are now sent compressed to browsers that accept it. Selecting an artist on a large library downloads about 40 KB instead of about 1 MB, and search about 22 KB instead of about 275 KB, which makes these steps faster over a network (about 0.3 s faster for an artist page at 20 Mbps). Audio, streaming, partial (Range) and small responses are unchanged.
+
+## 0.11.36 - 2026-11-18
+
+- A new early CI gate, the bounded-interaction freeze guard, fails any change that makes a click, request or background step do work that grows with the whole library: whole-library loops, repeated identical requests, or blocking file and database work on the server's event loop. It measures each registered interaction at a small and a large size and fails when the counts outgrow their budget.
+- Covers are never cleared when a library drive is offline or a chosen cover file is missing. Cover Refresh skips albums on an unreachable drive and reports them as "library root unavailable"; a missing cover file is reported instead of being removed. App startup and the album cover integrity repair keep recorded choices too.
+- Last.fm scrobbles that failed to send are retried with no limit on attempts, with holds kept per account, and are checked 30 minutes later: a scrobble counts as confirmed when its time matches and either its artist or its title does. One Last.fm entry confirms only one listen.
+- After saving tags, the gallery stays where it was: the artists above no longer drop out, and a jump from the artist bar is immediate again.
+- Artist relationships now update when the watcher finds a change while they are being rebuilt; that change could be lost before.
+- Cover fetching, the MusicBrainz review status and other large reads no longer freeze the server for other requests.
+
+## 0.11.35 - 2026-11-18
+
+- The hosted Problematic Files regression gate runs its end-to-end cases again; since 0.11.34 it failed before running them.
+
+## 0.11.34 - 2026-11-18
+
+- Hosted regression gates can run just the named end-to-end cases or measured targets (`gates=focused`), so one failure is reproduced or checked in minutes instead of a full gate run.
+
+## 0.11.33 - 2026-11-18
+
+- The player's waveform no longer goes missing when another waveform is still being built. The server builds one waveform at a time and answers "busy" meanwhile; the player gave up after about 1.5 s and showed no waveform for that track. It now keeps waiting, every 2 s, for as long as the track stays loaded.
+- The next song is no longer silently skipped when the browser's track cache stops answering. The player looked for the next song in the cache before fetching it ahead, and a cache read that never returned left it waiting with nothing fetched, so playback stopped at the end of the current song. Like the start of a song, it now waits at most 0.5 s for the cache and then streams the next song from the server.
 
 ## 0.11.31 - 2026-11-17
 

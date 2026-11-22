@@ -1014,10 +1014,20 @@ def test_live_postgres_structural_recovery_subset_already_in_destination_is_idem
         connection.close()
 
 
-def test_live_postgres_explicit_separate_release_consolidates_same_year_identity():
+def test_live_postgres_explicit_separate_release_consolidates_same_year_identity(monkeypatch):
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:
         pytest.skip("Isolated setup is required for the live identity contract.")
+    from music_app.services import gallery_projection_postgres as gallery
+
+    # The committed edit queues a background gallery refresh. Run here, it
+    # would share this test's one uncommitted connection from another thread.
+    scheduled_refreshes = []
+    monkeypatch.setattr(
+        gallery,
+        "schedule_gallery_projection_refresh",
+        lambda config, **_options: scheduled_refreshes.append(config),
+    )
     isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
@@ -1090,6 +1100,7 @@ def test_live_postgres_explicit_separate_release_consolidates_same_year_identity
             updated_file_entries={path: {**entry, "album": title, "mtime": 2.0} for path, entry in previous.items()},
             changed_field_names={"album"}, commit_guard=lambda _commit: None,
         )
+        assert scheduled_refreshes == [adapter._config]
         rows = connection.execute(
             """select albums.release_year, coalesce(albums.metadata->>'edition',''), count(tracks.id)
                from library.local_albums albums

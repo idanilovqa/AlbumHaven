@@ -85,6 +85,47 @@ def test_contaminated_inherited_cover_is_repaired_but_explicit_user_choice_is_pr
         assert album.cover_selection_repair_previous["cover_path"] == str(unrelated)
 
 
+@pytest.mark.parametrize("unreadable", ["album_root", "disc_folder"])
+def test_contaminated_cover_is_left_unchanged_when_an_album_folder_cannot_be_listed(tmp_path, monkeypatch, unreadable):
+    """A dropped drive or share proves nothing about an album's cover: when
+    any folder the repair must list cannot be read, the album and its
+    tracks keep their cover exactly as it is."""
+    from music_app.services.album_local_cover_integrity import apply_scoped_local_cover
+
+    album_root = tmp_path / "Artist" / "Real Album"
+    random_root = tmp_path / "Random songs"
+    (album_root / "CD1").mkdir(parents=True)
+    random_root.mkdir()
+    Image.new("RGB", (1600, 1600), "red").save(album_root / "cover.png")
+    unrelated = random_root / "cover.png"
+    Image.new("RGB", (200, 200), "blue").save(unrelated)
+    unreadable_folder = album_root if unreadable == "album_root" else album_root / "CD1"
+    real_iterdir = Path.iterdir
+
+    def iterdir(self):
+        if self == unreadable_folder:
+            raise OSError("The network path was not found")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    legitimate = str(album_root / "CD1" / "1.mp3")
+    rejected = str(random_root / "copied-song.mp3")
+    track = SimpleNamespace(path=Path(legitimate), cover_path=unrelated, cover_revision="old-revision",
+        local_cover_width=200, local_cover_height=200)
+    album = SimpleNamespace(tracks=[track], cover_path=unrelated, local_cover_width=200,
+        local_cover_height=200, cover_selection_origin="automatic", cover_revision="old-revision",
+        cover_selection_provenance=None, remote_cover_url=None)
+    cache = {legitimate: {"album": "Real Album", "album_artist": "Artist", "cover_path": str(unrelated)},
+        rejected: {"album": "Real Album", "album_artist": "Artist", "cover_path": str(unrelated)}}
+
+    apply_scoped_local_cover(album, cache, {rejected})
+
+    assert (album.cover_path, album.cover_revision, album.cover_selection_origin) == (unrelated, "old-revision", "automatic")
+    assert (album.local_cover_width, album.local_cover_height) == (200, 200)
+    assert not hasattr(album, "cover_selection_repair_previous")
+    assert (track.cover_path, track.cover_revision, track.local_cover_width) == (unrelated, "old-revision", 200)
+
+
 @pytest.mark.parametrize("origin", ["automatic", "user"])
 @pytest.mark.parametrize("selected", ["local", "unknown", "missing"])
 def test_uncontaminated_album_rebuild_does_not_inspect_cover_files(tmp_path, monkeypatch, origin, selected):
@@ -273,3 +314,63 @@ def test_single_legacy_foreign_cover_without_provenance_is_preserved(tmp_path):
 
     assert clear_ambiguous_folder_covers(cache) == {}
     assert cache[str(track)]["cover_path"] == str(legacy_cover)
+
+
+def test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count(tmp_path, monkeypatch):
+    from music_app.services import covers
+    from music_app.services.library import build_albums_from_file_cache
+    from tests.py.bounded_interactions import OperationCounts
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    tracks_per_album = 160
+    album_root = tmp_path / "Artist" / "Real Album"
+    random_root = tmp_path / "Random songs"
+    (album_root / "CD1").mkdir(parents=True)
+    random_root.mkdir()
+    good = album_root / "cover.png"
+    unrelated = random_root / "cover.png"
+    Image.new("RGB", (1600, 1600), "red").save(good)
+    Image.new("RGB", (200, 200), "blue").save(unrelated)
+    # The stray copy duplicates one of the real album's two tracks.
+    contaminated = {
+        str(path): {
+            "path": str(path), "title": title, "album": "Real Album", "album_artist": "Artist",
+            "cover_path": str(unrelated), "cover_selection_origin": "automatic",
+        }
+        for path, title in (
+            (album_root / "CD1" / "1.mp3", "One"),
+            (album_root / "CD1" / "2.mp3", "Two"),
+            (random_root / "copied-song.mp3", "One"),
+        )
+    }
+
+    def run(album_count: int) -> OperationCounts:
+        file_cache = dict(contaminated)
+        for album_index in range(album_count):
+            folder = tmp_path / "library" / f"Artist {album_index:04d}" / "Album"
+            for track_index in range(tracks_per_album):
+                track_path = str(folder / f"{track_index:03d}.mp3")
+                file_cache[track_path] = {
+                    "path": track_path,
+                    "album": f"Album {album_index}",
+                    "album_artist": f"Artist {album_index}",
+                    "title": f"Track {track_index}",
+                    "track_number": track_index + 1,
+                    "cover_path": str(folder / "cover.jpg"),
+                }
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            albums = build_albums_from_file_cache(file_cache)
+        (repaired,) = [album for album in albums if album.name == "Real Album" and Path(album.cover_path or "").is_relative_to(album_root)]
+        assert Path(repaired.cover_path) == good
+        assert len(albums) >= album_count + 1
+        return counts
+
+    # A helper check, not a registry contract: the workers that build albums
+    # are proved by their own contracts.
+    small, production = run(20), run(1_000)
+    for counts in (small, production):
+        assert counts.filesystem_enumerations <= 2 and counts.open_calls == 0
+        assert counts.stat_calls <= 8 and counts.media_parses <= 1
+    assert small.stat_calls == production.stat_calls
+    assert small.filesystem_enumerations == production.filesystem_enumerations

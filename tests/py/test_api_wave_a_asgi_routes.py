@@ -3564,6 +3564,12 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
     monkeypatch.setattr(asgi_routes, "_apply_repairs_worker", fake_media_worker)
     monkeypatch.setattr(asgi_routes, "_update_cache_entry_after_repairs", fake_update_cache_entry_after_repairs)
     monkeypatch.setattr(asgi_routes, "_build_affected_album_dicts", fail_legacy_album_builder)
+    # The structural validation reads the database; this route test owns the route, not that read.
+    validated: list[set[str]] = []
+    monkeypatch.setattr(
+        asgi_routes, "validate_structural_tag_edit_for_config",
+        lambda _config, **options: validated.append(set(options["changed_paths"])),
+    )
     monkeypatch.setattr(asgi_routes, "load_separate_release_keys", lambda _config: set())
     monkeypatch.setattr(asgi_routes, "append_log_history", lambda *args, **kwargs: None)
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
@@ -3572,6 +3578,12 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
         asgi_routes,
         "_bridge_queue_finalize_save_task",
         capture_completed_save_task,
+    )
+    # A structural edit finalizes through the selected Postgres queue, not the bridge.
+    monkeypatch.setattr(
+        asgi_routes,
+        "_asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder",
+        lambda _request: capture_completed_save_task,
     )
 
     status, _headers, body = _run_asgi_request(
@@ -3599,9 +3611,11 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
     assert media_jobs == [(track_path, {"title": "New Title"})]
     assert saved_overrides == [{track_path: "Non-album rarity"}]
     assert queued_tasks
-    assert queued_tasks[0]["find_albums_by_track_paths"]({track_path}) == []
-    assert queued_tasks[0]["find_problematic_album_by_track_paths"]({track_path}) is None
-    assert "title" in queued_tasks[0]["structural_edit_fields"]
+    # The structural finalizer reads the inventory, so it is handed no legacy album finder at all.
+    assert "find_albums_by_track_paths" not in queued_tasks[0]
+    assert "find_problematic_album_by_track_paths" not in queued_tasks[0]
+    assert "title" in queued_tasks[0]["changed_field_names"]
+    assert validated == [{track_path}]
 
 
 def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completion_requires_refresh_without_legacy_fragments(
@@ -3667,6 +3681,12 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
     monkeypatch.setattr(asgi_routes, "_apply_repairs_worker", fake_media_worker)
     monkeypatch.setattr(asgi_routes, "_update_cache_entry_after_repairs", fake_update_cache_entry_after_repairs)
     monkeypatch.setattr(asgi_routes, "_build_affected_album_dicts", lambda *_args, **_kwargs: [])
+    # The structural validation reads the database; this route test owns the route, not that read.
+    validated: list[set[str]] = []
+    monkeypatch.setattr(
+        asgi_routes, "validate_structural_tag_edit_for_config",
+        lambda _config, **options: validated.append(set(options["changed_paths"])),
+    )
     monkeypatch.setattr(asgi_routes, "_find_albums_by_track_paths", fake_find_albums_by_track_paths)
     monkeypatch.setattr(
         asgi_routes,
@@ -3729,6 +3749,7 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
     assert save_payload["updated_albums"] == []
     assert save_payload["updated_problematic_album"] is None
     assert save_payload["requires_view_refresh"] is True
+    assert validated == [{track_path}]
 
 
 def test_asgi_edit_tags_unsupported_fields_do_not_qualify_for_postgres_fragments(

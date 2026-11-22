@@ -80,6 +80,8 @@ test.describe('mobile continuous gallery pinch on the production-calibration lib
         await expect.poll(async () => (await phone.geometry()).scrollTop).toBeGreaterThan(previous);
         phone.expectBounds(await phone.geometry());
       }
+      // A tap during a glide only stops the glide, and the card it aimed at has moved.
+      await phone.waitForScrollToRest();
       const continued = await phone.geometry();
       expect(continued.visible.some(card => !after.cards.some(previous => previous.key === card.key))).toBe(true);
       expect(continued.mounted).toBeLessThan(artists.length);

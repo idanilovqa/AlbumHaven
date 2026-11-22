@@ -243,12 +243,16 @@ class LocalCoverInventoryRepository:
         self._config = config
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         self._connect = connect
+        # The roots the last lookup read, so a scheduled retry can run without reading them again.
+        self.last_roots = None
 
     def _roots(self):
         """The configured roots as keys, from the snapshot; read before a lease is taken."""
         from music_app.services.library_roots import configured_library_root_paths_snapshot
 
-        return [root_key(root) for root in configured_library_root_paths_snapshot(self._config)]
+        roots = [root_key(root) for root in configured_library_root_paths_snapshot(self._config)]
+        self.last_roots = tuple(roots)
+        return roots
 
     def _usable_root(self, connection, key, row, roots):
         """A stored folder the configured roots still allow; any other makes that one context unresolved."""
@@ -411,6 +415,17 @@ class LocalCoverInventoryRepository:
     def invalidate_paths(
         self, paths, *, context_changed=False, subtree_paths=(), pending_contexts_below=lambda folders: (),
     ):
+        paths, subtree_paths = list(paths), list(subtree_paths)
+        if not paths and not subtree_paths:
+            return [], []
+        return self.invalidate_paths_under(
+            self._roots(), paths, context_changed=context_changed, subtree_paths=subtree_paths,
+            pending_contexts_below=pending_contexts_below,
+        )
+
+    def invalidate_paths_under(
+        self, library_roots, paths, *, context_changed=False, subtree_paths=(), pending_contexts_below=lambda folders: (),
+    ):
         """Mark what is at, above or (for subtrees) below these paths; return the listings and contexts marked.
 
         Every lookup is by key or by a migration 0292 range, hence the explicit "C" collation and the
@@ -419,10 +434,9 @@ class LocalCoverInventoryRepository:
 
         Nothing at or above a configured root is marked: a deleted or moved root, or a drive that is
         gone, is unavailable storage and keeps its stored listings."""
-        paths, subtree_paths = list(paths), list(subtree_paths)
+        paths, subtree_paths, library_roots = list(paths), list(subtree_paths), list(library_roots)
         if not paths and not subtree_paths:
             return [], []
-        library_roots = self._roots()
 
         def inside(folders):
             return {folder for folder in folders if not _at_or_above_a_root(folder, library_roots)}
@@ -732,10 +746,12 @@ class LocalCoverInventoryWorker:
         return True
 
     def schedule_invalidation_retry(self, paths, *, context_changed=False, subtree_paths=()):
+        """Retry later under the roots the failed attempt read; a retry never reads them itself."""
         key = (
             tuple(sorted({root_key(path) for path in paths})),
             bool(context_changed),
             tuple(sorted({root_key(path) for path in subtree_paths})),
+            getattr(self.repository, "last_roots", None),
         )
         if not key[0] and not key[2]:
             return
@@ -761,8 +777,13 @@ class LocalCoverInventoryWorker:
             if key[0] == _FULL_RESCAN:
                 self._queue_changed(self.repository.invalidate_all(key[1], key[2]))
             else:
-                paths, context_changed, subtree_paths = key
-                self._invalidate(paths, context_changed=context_changed, subtree_paths=subtree_paths)
+                paths, context_changed, subtree_paths, roots = key
+                if roots is None:
+                    raise LookupError("The roots this invalidation was scheduled under are unknown; waiting.")
+                self._queue_changed(self.repository.invalidate_paths_under(
+                    roots, paths, context_changed=context_changed, subtree_paths=subtree_paths,
+                    pending_contexts_below=self._unresolved.below,
+                ))
         except Exception:
             attempts = state[1] + 1
             delay = min(

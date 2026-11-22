@@ -14808,19 +14808,36 @@
     },
     {
       "id": "py:services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths",
-      "action": "Run publisher PostgresScanCacheAdapter.load_removed_unpublished_paths",
+      "action": "A superseded scan's republish drops what another writer removed: one statement over the scan's files, a disk check only for a file the library lost",
       "entrypoints": [
         "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths:publisher:name"
       ],
       "owners": [
-        "music_app/services/scan_cache_persistence.py"
+        "music_app/services/scan_cache_persistence.py",
+        "music_app/services/scan_state.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 50,
+        "production": 2000
+      },
+      "budgets": {
+        "sql_statements": 1,
+        "stat_calls": 2,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_scan_republish_bounded_contracts.py::test_a_superseded_scans_republish_checks_only_the_files_the_library_lost",
+      "testIdentity": "test_a_superseded_scans_republish_checks_only_the_files_the_library_lost",
+      "rollback": "Checking the disk for every scanned file, or querying per file or batch, makes stat_calls or sql_statements grow with the scan and the contract fails. Values sent equal the scan's own files, at most 5 attempts per scan (6.5, 2026-11-22)."
     },
     {
       "id": "py:services/scan_cache_persistence.py#_execute_semantic_local_album_reconciliation",

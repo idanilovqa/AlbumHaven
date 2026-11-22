@@ -241,7 +241,7 @@ class NativePlaybackControllerTest {
         // The claim goes once the listen writes for the end are done.
         harness.step()
         assertEquals(listOf("owned", "released"), harness.ownership())
-        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
+        assertEquals(listOf("acquire:null", "acquire:token-1", "release:token-1"), harness.claims.calls)
         assertEquals(1, harness.connects)
         assertTrue(harness.server.texts.none { JSONObject(it).has("path") })
         assertTrue(harness.server.texts.filter { it.contains("\"open\"") }.all { it.contains("playbackRef") })
@@ -457,7 +457,7 @@ class NativePlaybackControllerTest {
             val sequences = session.map { it.second.getLong("sequence") }
             assertEquals(sequences.sorted(), sequences)
         }
-        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
+        assertEquals(listOf("acquire:null", "acquire:token-1", "release:token-1"), harness.claims.calls)
     }
 
     @Test

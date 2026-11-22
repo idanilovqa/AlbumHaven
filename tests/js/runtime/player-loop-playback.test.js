@@ -4107,6 +4107,60 @@ test('a press whose audio is not yet running starts in the press itself, where t
   assert.deepEqual(starts, ['first.flac']);
 });
 
+test('a seek, a loop seek and a first frame each tell the claim where the song is now', async () => {
+  let published = 0;
+  const track = { src: '/track?path=song.flac', path: 'song.flac', title: 'Song', artist: 'A' };
+  const { context } = loadHelper({
+    publishPlaybackPositionSoon: () => { published += 1; },
+    seekStreamingPlayback: () => null,
+    closeListenSegment: () => {},
+    resumeListenSessionPlayback: async () => null,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 5, duration: 200, paused: false, ended: false, src: track.src }),
+  });
+  context.state.player.current = track;
+  context.setPlayerPlaybackHead(90);
+  assert.equal(published, 1, 'seek');
+  context.state.player.loopActive = true;
+  context.setPlayerPlaybackHead(20);
+  assert.equal(published, 2, 'a loop seek, once');
+  context.state.player.loopActive = false;
+  await context.handleStreamingPlaybackFirstFrame({ generation: 7, streamId: 3, trackPath: track.path });
+  assert.equal(published, 3, 'first frame');
+});
+
+test('a gapless move to the next song tells the claim at once, not at the next renewal', async () => {
+  let published = 0;
+  const next = { src: '/track?path=2.flac', path: '2.flac', title: 'Two', artist: 'A' };
+  const { context } = loadHelper({
+    publishPlaybackPositionSoon: () => { published += 1; },
+    peekNextQueuedTrack: () => (published ? null : next),
+    getNextQueuedTrack: () => next,
+    scheduleStreamingContinuity: async () => null,
+    finalizeListenSession: async () => null,
+    resumeListenSessionPlayback: async () => null,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 0, duration: 100, paused: false, ended: false, src: next.src }),
+  });
+  context.state.player.current = { src: '/track?path=1.flac', path: '1.flac', title: 'One', artist: 'A' };
+  await context.handleStreamingPlaybackBoundary({ generation: 1, outgoingStreamId: 1, incomingStreamId: 2,
+    outgoingTrackPath: '1.flac', incomingTrackPath: '2.flac', continuityKind: 'queued-next' });
+  assert.equal(published, 1);
+});
+
+test('a pending start in the middle of a song shows that place, not 0:00', async () => {
+  const time = new FakeElement();
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title: new FakeElement(), time, timeline: new FakeElement() }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 200, paused: false, ended: false, src: '/track?path=old.flac' }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise(() => {}),
+  });
+  context.state.player.current = { src: '/track?path=old.flac', path: 'old.flac', title: 'Old', artist: 'A' };
+  void context.playTrackFromPayload({ src: '/track?path=their.flac', path: 'their.flac', title: 'Theirs', artist: 'B',
+    durationSeconds: 300 }, { startSeconds: 87, takeover: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(time.textContent, '87 / 300');
+});
+
 test('a clicked track shows as playing before streaming starts', async () => {
   let finishStart;
   const shown = [];

@@ -13726,6 +13726,8 @@ const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 // A playing tab renews this often, so the server tells a live holder from a browser that closed
 // without a word (a holder silent for 10 s gives way to a press elsewhere).
 const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
+// A burst of seeks (a held arrow key) tells the claim its last place once.
+const PLAYBACK_POSITION_PUBLISH_MS = 200;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
@@ -13977,6 +13979,18 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
 function isPlaybackClaimRenewable() {
   const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
   return !playback?.paused && !playback?.ended;
+}
+
+// Play here starts where the claim says the song is, so a seek and a song's first frame say so now,
+// not at the next renewal. A claim request on its way carries the older place: this follows it.
+function publishPlaybackPositionSoon() {
+  const ownership = getPlaybackOwnershipState();
+  clearTimeout(ownership.positionTimer);
+  ownership.positionTimer = setTimeout(async () => {
+    ownership.positionTimer = 0;
+    await ownership.pendingOperation;
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
+  }, PLAYBACK_POSITION_PUBLISH_MS);
 }
 
 function startPlaybackOwnershipHeartbeat() {
@@ -45186,14 +45200,14 @@ function updatePlayerUi() {
   els.player?.classList?.toggle('is-empty', !hasTrack);
   const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
   if (emptyMessage) emptyMessage.hidden = hasTrack;
-  // A pressed song waiting for its audio shows its own start and length, as its title and waveform
+  // A pressed song waiting for its audio shows its own start place and length, as its title and waveform
   // do: never the old song's running time under the new title (owner round 9, 2026-11-21: "the
   // majority of player UI does not [...] All these should be syncronoized").
   const pendingTrack = !lockedByAnotherTab && state.player.selectedTrack
     && state.player.selectedTrack.path !== state.player.current?.path ? state.player.selectedTrack : null;
   const duration = pendingTrack ? Math.max(0, Number(pendingTrack.durationSeconds) || 0) : getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
-  const current = pendingTrack ? 0 : state.player.timelineDragging && Number.isFinite(dragPreview)
+  const current = pendingTrack ? Number(state.player.selectedStartSeconds) || 0 : state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
     : Number(playback.currentTime) || 0;
   if (els.timeline) {
@@ -45348,8 +45362,9 @@ function renderSelectedTrackState() {
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }
 
-function showSelectedTrackImmediately(track, shouldAutoplay) {
+function showSelectedTrackImmediately(track, shouldAutoplay, startSeconds) {
   if (!shouldAutoplay) return;
+  state.player.selectedStartSeconds = startSeconds;
   state.player.selectedTrack = track;
   renderSelectedTrackState();
 }
@@ -45410,7 +45425,7 @@ async function playTrackFromPayload(track, options = {}) {
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  showSelectedTrackImmediately(track, shouldAutoplay);
+  showSelectedTrackImmediately(track, shouldAutoplay, startSeconds);
   // The pressed song paints before its stream starts: the start's own work never holds the frame
   // that shows the press (owner: instant even at 100% CPU). Audio that is not yet running (the first
   // press after load) starts in the press itself, where every browser lets the press start sound.
@@ -45509,6 +45524,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
@@ -45652,6 +45668,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
@@ -45880,6 +45897,7 @@ function setLoopPlaybackHead(value) {
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 
@@ -45901,6 +45919,7 @@ function setPlayerPlaybackHead(value, options = {}) {
     void seek.catch(() => {});
   }
   if (shouldResumeSegment) void resumeListenSessionPlayback(state.player.current, next);
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 

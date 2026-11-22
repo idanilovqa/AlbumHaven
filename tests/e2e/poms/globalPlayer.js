@@ -66,6 +66,8 @@ export class GlobalPlayer extends BasePage {
     this.timelineWrap = this.player.locator('.player-timeline-wrap');
     this.waveformCanvas = page.locator(this.waveformCanvasSelector);
     this.time = page.locator('#player-time');
+    // Both in document order (title, time), for reading them in one frame.
+    this.titleAndTime = page.locator('#player-title, #player-time');
     this.elsewhereOverlay = this.player.locator('[data-player-elsewhere]');
     this.blockedStartToast = page.locator('#toast-layer .toast.is-error').filter({ hasText: 'Playback is active in another tab.' });
     this.readinessErrorToasts = page.locator('#toast-layer .toast.is-error.is-visible').filter({

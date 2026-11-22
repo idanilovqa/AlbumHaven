@@ -16,7 +16,7 @@ const PERSON_BAND = 'Control Signal Lead';
 const NATIVE_ARTISTS = ['ДДТ', 'Ария'];
 const HYDRATING = 'Compilation Signal Guest';
 const ZERO_VOTE = 'Zero Vote Artist';
-const SHAMAANI = 'Shamaani Duo';
+const CREDITED_DUO = 'Quillmere Duo';
 const OUTAGE = 'Provider Outage Artist';
 const CONFLICT_ASSIGN = 'Control Signal Partner';
 // Its own artist, so the Problematic Files case never shares rows with the Gallery cases.
@@ -35,7 +35,7 @@ const MBID = {
   hydrating: '0e2e0001-0000-4000-8000-000000000013',
   zeroVote: '0e2e0001-0000-4000-8000-000000000016',
   conflictAssign: '0e2e0001-0000-4000-8000-000000000018',
-  korpiklaani: 'd6b3e0a2-7c1d-4f7c-90bc-73c8bd2ac431',
+  renamedMain: 'd6b3e0a2-7c1d-4f7c-90bc-73c8bd2ac431',
 };
 
 async function openArtist({ galleryActions, searchToolbarActions }, artist, expectedTitle = artist) {
@@ -186,19 +186,19 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       );
     });
 
-    await stepLogger.step('MBD1-40: Shamaani Duo resolves through Hunka lunka to Korpiklaani', async () => {
-      await openArtist({ galleryActions, searchToolbarActions }, SHAMAANI, 'Korpiklaani');
+    await stepLogger.step('MBD1-40: Quillmere Duo resolves through First Embers to Brackenfold Choir', async () => {
+      await openArtist({ galleryActions, searchToolbarActions }, CREDITED_DUO, 'Brackenfold Choir');
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
-          heading: 'Korpiklaani',
+          heading: 'Brackenfold Choir',
           taggedAsLines: [],
-          links: expect.arrayContaining([`https://musicbrainz.org/artist/${MBID.korpiklaani}`]),
+          links: expect.arrayContaining([`https://musicbrainz.org/artist/${MBID.renamedMain}`]),
         }),
       );
       await galleryActions.closeArtistInfoPanel();
-      // Owner 2026-11-21: no artist notes in the Album Details header.
-      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, 'Korpiklaani', 'Hunka lunka');
+      // No artist notes in the Album Details header.
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, 'Brackenfold Choir', 'First Embers');
       expect(tags.filter((tag) => tag.startsWith('Tagged as'))).toEqual([]);
       await trackModalActions.closeIfOpen();
     });

@@ -6545,37 +6545,37 @@ def _find_artist_projections(value):
 
 
 def test_live_album_details_and_artist_header_show_each_album_s_musicbrainz_artist(watcher_repair_inventory):
-    """Owner decision 2026-11-08: each album takes the MusicBrainz artist it certainly matches."""
+    """Each album takes the MusicBrainz artist it certainly matches."""
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     fixture = watcher_repair_inventory
-    fixture.seed(fixture.entry("Owner/Hope/01.flac", album="Hope"), fixture.entry("Owner/Sol/01.flac", album="Sol"))
-    polish, spanish = "75d43a2e-ba60-427c-b2c7-bb666053d2f1", "b42d111d-5932-4c00-8562-8bbf7203f850"
+    fixture.seed(fixture.entry("Owner/North Album/01.flac", album="North Album"), fixture.entry("Owner/South Album/01.flac", album="South Album"))
+    northern, southern = "00000000-0000-4000-8000-000000000a01", "00000000-0000-4000-8000-000000000a02"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         albums = {row["title"]: row for row in connection.execute(
-            "select library_id, album_key, artist_id, title from library.local_albums where title in ('Hope', 'Sol')")}
-        for mbid, disambiguation in ((polish, "Polish progressive rock band"), (spanish, "Spanish fusion band")):
+            "select library_id, album_key, artist_id, title from library.local_albums where title in ('North Album', 'South Album')")}
+        for mbid, disambiguation in ((northern, "northern band"), (southern, "southern band")):
             connection.execute("insert into integration.musicbrainz_artists (mbid, canonical_name, disambiguation, refreshed_at)"
-                               " values (%s, 'Amarok', %s, now())", (mbid, disambiguation))
-        for title, mbid in (("Hope", polish), ("Sol", spanish)):
+                               " values (%s, 'Twin Name', %s, now())", (mbid, disambiguation))
+        for title, mbid in (("North Album", northern), ("South Album", southern)):
             connection.execute(
                 "insert into library.local_album_artist_identities (library_id, album_key, artist_mbid, tag_differs, matcher_version)"
-                " values (%s, %s, %s, %s, 4)", (albums[title]["library_id"], albums[title]["album_key"], mbid, title == "Sol"))
+                " values (%s, %s, %s, %s, 4)", (albums[title]["library_id"], albums[title]["album_key"], mbid, title == "South Album"))
         connection.execute(
             "insert into library.local_artist_musicbrainz_matches (library_id, local_artist_id, state, decision_source,"
             " evidence_summary) values (%s, %s, 'per_album', 'automatic', 'Your albums belong to 2 MusicBrainz artists.')",
-            (albums["Hope"]["library_id"], albums["Hope"]["artist_id"]))
+            (albums["North Album"]["library_id"], albums["North Album"]["artist_id"]))
     repository = PostgresLibraryBrowseRepository(fixture.config)
 
-    detail = repository.build_album_detail_payload(albums["Sol"]["album_key"])
+    detail = repository.build_album_detail_payload(albums["South Album"]["album_key"])
     payload = repository.build_selected_artist_payload(query_params={"artist": "Owner"})
 
     assert detail["musicbrainz_artist"] == {
-        "artist_mbid": spanish, "musicbrainz_url": f"https://musicbrainz.org/artist/{spanish}",
-        "canonical_name": "Amarok", "tag_differs": True}
+        "artist_mbid": southern, "musicbrainz_url": f"https://musicbrainz.org/artist/{southern}",
+        "canonical_name": "Twin Name", "tag_differs": True}
     identities = [projection["identities"] for projection in _find_artist_projections(payload) if "identities" in projection]
     assert identities and all(
-        {(item["artist_mbid"], item["album_count"]) for item in found} == {(polish, 1), (spanish, 1)} for found in identities)
+        {(item["artist_mbid"], item["album_count"]) for item in found} == {(northern, 1), (southern, 1)} for found in identities)
 
 
 def test_live_every_publication_seeds_missing_ratings_and_never_overwrites_the_app(

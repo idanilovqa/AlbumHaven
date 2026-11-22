@@ -2318,7 +2318,7 @@ test('the artist panel ends its text with one disabled Open full page and lists 
   assert.match(builder, /<p data-artist-info-summary\$\{isLongBiography \? ' data-artist-info-long' : ''\}>\$\{escapeHtml\(summary\)\} \$\{fullPage\}<\/p>\$\{links \? `<div class="artist-info-overlay__links">\$\{links\}<\/div>` : ''\}/,
     'the control is the last item of the text, and the service links follow below it');
   // An artist matched under another name shows the MusicBrainz name as its title, with no
-  // "Tagged as" line (owner 2026-11-22); a split artist lists its MusicBrainz artists.
+  // "Tagged as" line; a split artist lists its MusicBrainz artists.
   assert.match(builder, /<\/div>` : ''\}\$\{identities\}/);
   assert.doesNotMatch(galleryMainInteractionsSource, /Tagged as|data-artist-info-credit/);
   assert.match(builder, /<h2>\$\{escapeHtml\(displayName\)\}<\/h2>/);

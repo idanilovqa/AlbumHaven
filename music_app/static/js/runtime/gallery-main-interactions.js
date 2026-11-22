@@ -964,7 +964,7 @@ function renderGalleryArtistInfo(anchor) {
   const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
   const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz);
-  // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the title.
+  // Matched under another name: the MusicBrainz name is the title.
   const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);
   const identities = buildGalleryArtistIdentitiesHtml(group.artist_musicbrainz);
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });

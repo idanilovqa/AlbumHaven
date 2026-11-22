@@ -328,21 +328,20 @@ test('missing Album Details host does not draw a second alert surface', () => {
 
 test('an album whose tag names another artist shows its MusicBrainz artist, display only', () => {
   const context = loadComponents();
-  const greyAlbum = {
-    album_artist: 'Jay-Z',
-    musicbrainz_artist: { canonical_name: 'Danger Mouse', tag_differs: true },
+  const retaggedAlbum = {
+    album_artist: 'Stage Name',
+    musicbrainz_artist: { canonical_name: 'Main Name', tag_differs: true },
   };
 
-  assert.equal(context.albumDisplayArtist(greyAlbum), 'Danger Mouse');
+  assert.equal(context.albumDisplayArtist(retaggedAlbum), 'Main Name');
   // An identity that agrees with the tag, or none, keeps the tag.
-  for (const album of [{ album_artist: 'Amarok', musicbrainz_artist: { canonical_name: 'Amarok', tag_differs: false } },
-    { album_artist: 'Amarok' }]) {
-    assert.equal(context.albumDisplayArtist(album), 'Amarok');
+  for (const album of [{ album_artist: 'Twin Name', musicbrainz_artist: { canonical_name: 'Twin Name', tag_differs: false } },
+    { album_artist: 'Twin Name' }]) {
+    assert.equal(context.albumDisplayArtist(album), 'Twin Name');
   }
 });
 
-// Owner 2026-11-21: "why is there an extra label for music brains band ... please remove such
-// lables. I don't want to see them", and "Tagged as <tag>": "Remove it too".
+// The Album Details header carries no artist notes, in any layout.
 function renderReleaseHeader(layout, album) {
   const context = loadComponents();
   const source = fs.readFileSync(
@@ -374,16 +373,16 @@ function renderReleaseHeader(layout, album) {
 
 for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
   for (const [name, identity, tagged, shown] of [
-    ['split', { canonical_name: 'Albion', disambiguation: 'Neo Prog band from Poland', split: true, tag_differs: false }, 'Albion', 'Albion'],
-    ['retagged', { canonical_name: 'Danger Mouse', tag_differs: true }, 'Jay-Z', 'Danger Mouse'],
+    ['split', { canonical_name: 'Twin Name', disambiguation: 'northern band', split: true, tag_differs: false }, 'Twin Name', 'Twin Name'],
+    ['retagged', { canonical_name: 'Main Name', tag_differs: true }, 'Stage Name', 'Main Name'],
   ]) {
     test(`a ${name} album's details show no artist note in the ${layout} layout`, () => {
       const html = renderReleaseHeader(layout, {
-        album_artist: tagged, name: 'Wabiac Cienie', edition: 'Deluxe', year: '2005', musicbrainz_artist: identity,
+        album_artist: tagged, name: 'First Album', edition: 'Deluxe', year: '2005', musicbrainz_artist: identity,
       });
 
       assert.ok(html.includes(`data-album-details-layout="${layout}"`), html);
-      assert.ok(html.includes(shown) && html.includes('Wabiac Cienie'), html);
+      assert.ok(html.includes(shown) && html.includes('First Album'), html);
       assert.deepEqual(
         [...html.matchAll(/<span class="album-details-header__tag[^"]*">([^<]*)</g)].map((match) => match[1]),
         ['Deluxe'],
@@ -395,13 +394,13 @@ for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
 
 test('an artist matched under another name is titled with its MusicBrainz name, display only', () => {
   const context = loadComponents();
-  const credited = { canonical_name: 'Danger Mouse', credited_as: 'Jay-Z' };
+  const credited = { canonical_name: 'Main Name', credited_as: 'Stage Name' };
 
-  assert.equal(context.galleryArtistDisplayName('Jay-Z', credited), 'Danger Mouse');
-  assert.equal(context.galleryArtistDisplayName('Amarok', { canonical_name: 'Amarok' }), 'Amarok');
-  assert.equal(context.galleryArtistDisplayName('Amarok', { identities: [] }), 'Amarok');
-  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Jay-Z', albumCount: 1, artist_musicbrainz: credited }),
-    /data-gallery-context-name>Danger Mouse<\/span>.*data-artist="Jay-Z"/s, 'the info trigger still names the tag');
+  assert.equal(context.galleryArtistDisplayName('Stage Name', credited), 'Main Name');
+  assert.equal(context.galleryArtistDisplayName('Twin Name', { canonical_name: 'Twin Name' }), 'Twin Name');
+  assert.equal(context.galleryArtistDisplayName('Twin Name', { identities: [] }), 'Twin Name');
+  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Stage Name', albumCount: 1, artist_musicbrainz: credited }),
+    /data-gallery-context-name>Main Name<\/span>.*data-artist="Stage Name"/s, 'the info trigger still names the tag');
 });
 
 test('a split artist\'s panel lists each MusicBrainz artist with its albums and link', () => {
@@ -412,16 +411,16 @@ test('a split artist\'s panel lists each MusicBrainz artist with its albums and 
     context,
   );
   const html = context.buildGalleryArtistIdentitiesHtml({ identities: [
-    { artist_mbid: '75d43a2e-ba60-427c-b2c7-bb666053d2f1', musicbrainz_url: 'https://musicbrainz.org/artist/75d43a2e-ba60-427c-b2c7-bb666053d2f1', canonical_name: 'Amarok',
-      disambiguation: 'Polish progressive rock band', album_count: 4 },
-    { artist_mbid: 'b42d111d-5932-4c00-8562-8bbf7203f850', musicbrainz_url: 'https://musicbrainz.org/artist/b42d111d-5932-4c00-8562-8bbf7203f850', canonical_name: 'Amarok',
-      disambiguation: 'Spanish fusion band', album_count: 1 },
+    { artist_mbid: '00000000-0000-4000-8000-000000000a01', musicbrainz_url: 'https://musicbrainz.org/artist/00000000-0000-4000-8000-000000000a01', canonical_name: 'Twin Name',
+      disambiguation: 'northern band', album_count: 4 },
+    { artist_mbid: '00000000-0000-4000-8000-000000000a02', musicbrainz_url: 'https://musicbrainz.org/artist/00000000-0000-4000-8000-000000000a02', canonical_name: 'Twin Name',
+      disambiguation: 'southern band', album_count: 1 },
   ] });
 
   assert.match(html, /Your albums belong to 2 MusicBrainz artists:/);
-  assert.match(html, /Amarok \(Polish progressive rock band\) · 4 albums.*href="https:\/\/musicbrainz\.org\/artist\/75d43a2e-ba60-427c-b2c7-bb666053d2f1"/s);
-  assert.match(html, /Amarok \(Spanish fusion band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/b42d111d-5932-4c00-8562-8bbf7203f850"/s);
-  assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Amarok' }), '');
+  assert.match(html, /Twin Name \(northern band\) · 4 albums.*href="https:\/\/musicbrainz\.org\/artist\/00000000-0000-4000-8000-000000000a01"/s);
+  assert.match(html, /Twin Name \(southern band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/00000000-0000-4000-8000-000000000a02"/s);
+  assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Twin Name' }), '');
 
   // Owner 2026-11-14: a person and their same-named band are separate artists; nothing
   // lists a band "also on MusicBrainz" under the person any more.

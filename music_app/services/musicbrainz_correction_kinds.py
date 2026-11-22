@@ -102,8 +102,8 @@ def classify(field: str, current: object, proposed: object) -> str:
 
 
 def credited_album_artist(credit: list[dict[str, object]]) -> str:
-    """The album artist of a release's credit (owner 2026-11-22): as credited ("Shamaani Duo" on
-    Korpiklaani), but the artist's main name where only punctuation or typography differs."""
+    """The album artist of a release's credit: as credited, but the artist's main name where
+    only case, accents, spacing, punctuation or typography differs."""
     credited = credit_text(credit)
     main = str(credit[0].get("artist_name") or "").strip() if len(credit) == 1 else ""
     return main if main and classify("album_artist", credited, main) in AUTO_KINDS else credited

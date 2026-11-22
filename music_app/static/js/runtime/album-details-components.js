@@ -15,7 +15,7 @@ function albumIdentityArtist(album) {
 }
 
 // An applied MusicBrainz data correction (S4), else the name the album's release credits
-// ("Shamaani Duo", owner 2026-11-22), shows in place of the album artist tag; a split
+// shows in place of the album artist tag; a split
 // same-name artist's album shows its group, "Amarok (Poland)" (D2 S2).
 function albumDisplayArtist(album) {
   return album?.display_artist || album?.musicbrainz_artist?.group_label || albumIdentityArtist(album);

@@ -1,6 +1,5 @@
-"""An album keeps the name MusicBrainz credits it to (owner 2026-11-22): "But Shamaani duo will
-still have the name Shamaani Duo - on MusicBrainz despite the same musicbrainid, those albums are
-under different names". A punctuation or typography-only difference shows the main name.
+"""An album keeps the name its release credits it to. A punctuation or typography-only
+difference shows the artist's main name.
 
 No database: one test per named case, with its negatives.
 """
@@ -20,11 +19,11 @@ def _credit(name, main, join=""):
     return {"name": name, "artist_mbid": "m", "artist_name": main, "join_phrase": join}
 
 
-SHAMAANI = [_credit("Shamaani Duo", "Korpiklaani")]
-RHAPSODY = [_credit("Rhapsody", "Rhapsody of Fire")]
-PUNCTUATION = [_credit("Godspeed You Black Emperor!", "Godspeed You! Black Emperor")]
-THE_SECRET = [_credit("Alan Parsons", "Alan Parsons")]
-JOINT = [_credit("Alan Menken", "Alan Menken", " & "), _credit("Howard Ashman", "Howard Ashman")]
+CREDITED_DUO = [_credit("Quillmere Duo", "Brackenfold Choir")]
+SHORTER_NAME = [_credit("Vellichor", "Vellichor of Ash")]
+PUNCTUATION = [_credit("Night Ferry Black Lanterns!", "Night Ferry! Black Lanterns")]
+SOLO_ALBUM = [_credit("Martin Vale", "Martin Vale")]
+JOINT = [_credit("Ada North", "Ada North", " & "), _credit("Ben South", "Ben South")]
 
 
 def _connection(rows, queries=None):
@@ -44,22 +43,22 @@ def _artist_changes(tag, credit):
     return [row["proposed_value"] for row in compared["rows"] if row["field"] == "album_artist"]
 
 
-@pytest.mark.parametrize(("tag", "credit"), [("Shamaani Duo", SHAMAANI), ("Rhapsody", RHAPSODY)])
+@pytest.mark.parametrize(("tag", "credit"), [("Quillmere Duo", CREDITED_DUO), ("Vellichor", SHORTER_NAME)])
 def test_data_correction_never_proposes_the_main_name_for_a_really_credited_name(tag, credit):
     assert _artist_changes(tag, credit) == []
 
 
 def test_a_punctuation_only_credit_is_corrected_to_the_main_name():
-    assert _artist_changes("Godspeed You Black Emperor!", PUNCTUATION) == ["Godspeed You! Black Emperor"]
-    assert _artist_changes("Godspeed You! Black Emperor", PUNCTUATION) == []
+    assert _artist_changes("Night Ferry Black Lanterns!", PUNCTUATION) == ["Night Ferry! Black Lanterns"]
+    assert _artist_changes("Night Ferry! Black Lanterns", PUNCTUATION) == []
 
 
-def test_the_secret_is_still_corrected_to_its_credit():
-    assert _artist_changes("Alan Parsons Project", THE_SECRET) == ["Alan Parsons"]
+def test_a_solo_album_is_still_corrected_to_its_credit():
+    assert _artist_changes("Martin Vale Project", SOLO_ALBUM) == ["Martin Vale"]
 
 
 def test_a_joint_credit_is_compared_as_written():
-    assert _artist_changes("Alan Menken", JOINT) == ["Alan Menken & Howard Ashman"]
+    assert _artist_changes("Ada North", JOINT) == ["Ada North & Ben South"]
 
 
 # Album Details ----------------------------------------------------------------------------
@@ -76,10 +75,10 @@ def _details(tag, main, credit, *, applied=(), group=None):
 
 
 @pytest.mark.parametrize(("tag", "main", "credit", "shown"), [
-    ("Shamaani Duo", "Korpiklaani", SHAMAANI, "Shamaani Duo"),
-    ("Korpiklaani", "Korpiklaani", SHAMAANI, "Shamaani Duo"),
-    ("Rhapsody", "Rhapsody of Fire", RHAPSODY, "Rhapsody"),
-    ("Godspeed You Black Emperor!", "Godspeed You! Black Emperor", PUNCTUATION, "Godspeed You! Black Emperor"),
+    ("Quillmere Duo", "Brackenfold Choir", CREDITED_DUO, "Quillmere Duo"),
+    ("Brackenfold Choir", "Brackenfold Choir", CREDITED_DUO, "Quillmere Duo"),
+    ("Vellichor", "Vellichor of Ash", SHORTER_NAME, "Vellichor"),
+    ("Night Ferry Black Lanterns!", "Night Ferry! Black Lanterns", PUNCTUATION, "Night Ferry! Black Lanterns"),
 ])
 def test_album_details_name_the_credited_artist(tag, main, credit, shown):
     album = _details(tag, main, credit)
@@ -88,45 +87,45 @@ def test_album_details_name_the_credited_artist(tag, main, credit, shown):
     assert album["album_artist"] == tag, "tags stay the tags"
 
 
-def test_the_secret_and_an_album_without_a_stored_credit_keep_todays_correction():
-    for credit in (THE_SECRET, None, []):
-        assert "display_artist" not in _details("Alan Parsons Project", "Alan Parsons", credit)
+def test_a_solo_album_and_an_album_without_a_stored_credit_keep_todays_correction():
+    for credit in (SOLO_ALBUM, None, []):
+        assert "display_artist" not in _details("Martin Vale Project", "Martin Vale", credit)
 
 
 def test_an_applied_correction_still_wins():
     applied = [{"field": "album_artist", "disc_number": 0, "track_number": 0, "proposed_value": "Corrected"}]
-    assert _details("Korpiklaani", "Korpiklaani", SHAMAANI, applied=applied)["display_artist"] == "Corrected"
+    assert _details("Brackenfold Choir", "Brackenfold Choir", CREDITED_DUO, applied=applied)["display_artist"] == "Corrected"
 
 
 def test_a_split_names_group_label_gives_way_only_to_a_really_different_credit():
-    typographic = [_credit("AMAROK", "Amarok")]
-    assert "display_artist" not in _details("Amarok", "Amarok", typographic, group="Amarok (Poland)")
-    other = [_credit("Amarok Trio", "Amarok")]
-    assert _details("Amarok", "Amarok", other, group="Amarok (Poland)")["display_artist"] == "Amarok Trio"
+    typographic = [_credit("TWIN NAME", "Twin Name")]
+    assert "display_artist" not in _details("Twin Name", "Twin Name", typographic, group="Twin Name (North)")
+    other = [_credit("Twin Name Trio", "Twin Name")]
+    assert _details("Twin Name", "Twin Name", other, group="Twin Name (North)")["display_artist"] == "Twin Name Trio"
 
 
 # Cards -----------------------------------------------------------------------------------
 
 def test_cards_name_the_credited_artist_with_one_read_for_the_whole_page():
     rows = [
-        {"album_key": "hunka", "artist_credit": SHAMAANI},
-        {"album_key": "retagged", "artist_credit": SHAMAANI},
+        {"album_key": "first", "artist_credit": CREDITED_DUO},
+        {"album_key": "retagged", "artist_credit": CREDITED_DUO},
         {"album_key": "typography", "artist_credit": PUNCTUATION},
-        {"album_key": "corrected", "artist_credit": SHAMAANI, "corrected_album_artist": "Corrected"},
+        {"album_key": "corrected", "artist_credit": CREDITED_DUO, "corrected_album_artist": "Corrected"},
     ]
     albums = [
-        {"key": "hunka", "name": "Hunka lunka", "album_artist": "Shamaani Duo"},
-        {"key": "retagged", "name": "Idja", "album_artist": "Korpiklaani"},
-        {"key": "typography", "name": "Album", "album_artist": "Godspeed You Black Emperor!"},
-        {"key": "corrected", "name": "Album", "album_artist": "Korpiklaani"},
-        {"key": "no-credit", "name": "The Secret", "album_artist": "Alan Parsons Project"},
+        {"key": "first", "name": "First Embers", "album_artist": "Quillmere Duo"},
+        {"key": "retagged", "name": "Second Embers", "album_artist": "Brackenfold Choir"},
+        {"key": "typography", "name": "Album", "album_artist": "Night Ferry Black Lanterns!"},
+        {"key": "corrected", "name": "Album", "album_artist": "Brackenfold Choir"},
+        {"key": "no-credit", "name": "The Hidden Room", "album_artist": "Martin Vale Project"},
     ]
     queries = []
     project_correction_display({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://x"}, {"albums": albums},
                                connect=lambda _url: nullcontext(_connection(rows, queries)))
 
     assert [album.get("display_artist", album["album_artist"]) for album in albums] == [
-        "Shamaani Duo", "Shamaani Duo", "Godspeed You! Black Emperor", "Corrected", "Alan Parsons Project"]
+        "Quillmere Duo", "Quillmere Duo", "Night Ferry! Black Lanterns", "Corrected", "Martin Vale Project"]
     assert "display_artist" not in albums[0], "no extra bytes where the tag already is the credit"
     assert len(queries) == 1, "no per-album query"
 

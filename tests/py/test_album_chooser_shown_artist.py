@@ -11,16 +11,16 @@ def test_the_split_choosers_releases_go_through_the_cards_display_projection(mon
 
     def project(_config, payload):
         projected.append(payload)
-        payload[0]["display_artist"] = "Shaman"
+        payload[0]["display_artist"] = "Quillmere Duo"
         return payload
 
     monkeypatch.setattr(routes, "project_correction_display", project, raising=False)
-    choices = [{"album_id": 1, "album_key": "a", "name": "Idja", "album_artist": "Korpiklaani"},
-               {"album_id": 2, "album_key": "b", "name": "Idja", "album_artist": "Korpiklaani"}]
+    choices = [{"album_id": 1, "album_key": "a", "name": "First Embers", "album_artist": "Brackenfold Choir"},
+               {"album_id": 2, "album_key": "b", "name": "First Embers", "album_artist": "Brackenfold Choir"}]
 
     payload, status = asyncio.run(routes._cover_lookup_album_split_response({}, {"one", "two"}, choices))
 
     first, second = payload["current_releases"]
     assert status == 409 and len(projected) == 1, "one read for the whole chooser"
-    assert (first["display_artist"], first["album_artist"]) == ("Shaman", "Korpiklaani")
+    assert (first["display_artist"], first["album_artist"]) == ("Quillmere Duo", "Brackenfold Choir")
     assert "display_artist" not in second

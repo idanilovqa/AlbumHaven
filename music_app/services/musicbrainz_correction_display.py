@@ -6,8 +6,8 @@ cards, get ``display_title`` and ``display_artist`` beside the unchanged tag fie
 they differ. Album keys, sorting and the tag editor keep the real tags; search matches both
 (the corrected values are stored and indexed beside the tags, 0198).
 
-An album also keeps the name its release credits it to (owner 2026-11-22), shown as
-``display_artist`` unless a correction is applied: "Shamaani Duo", never "Korpiklaani".
+An album also keeps the name its release credits it to, shown as ``display_artist`` unless a
+correction is applied: the credited name, never the artist's main one.
 
 The same read gives gallery cards ``title_latin``, the stored Latin form of an album title in
 another script (0256), which phone album rows show under the title (approved b3-1d3); never

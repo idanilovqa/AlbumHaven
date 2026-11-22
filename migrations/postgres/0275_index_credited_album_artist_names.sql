@@ -1,6 +1,6 @@
 -- depends on: 0192_create_musicbrainz_album_credits_and_artist_groups.sql
--- MusicBrainz Delivery 2: search finds an album by the name its release credits ("Shaman" on
--- Korpiklaani), beside its tags. Additive only. The index holds just the releases credited to one
+-- MusicBrainz Delivery 2: search finds an album by the name its release credits, where
+-- that isn't the artist's main one, beside its tags. Additive only. The index holds just the releases credited to one
 -- artist under another name than the main one, written as the search's predicate is, so a search
 -- reads the matching releases' albums and never every release.
 do $credited_name_index$

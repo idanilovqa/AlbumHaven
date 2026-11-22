@@ -20,9 +20,9 @@ function load(file, names, context = {}) {
 }
 
 const credited = () => ({
-  key: 'idja', name: 'Idja', year: '1999', album_artist: 'Korpiklaani', display_artist: 'Shaman',
+  key: 'first', name: 'First Embers', year: '1999', album_artist: 'Brackenfold Choir', display_artist: 'Quillmere Duo',
 });
-const plain = () => ({ key: 'manala', name: 'Manala', year: '2012', album_artist: 'Korpiklaani' });
+const plain = () => ({ key: 'winter', name: 'Winter Embers', year: '2012', album_artist: 'Brackenfold Choir' });
 const escapeHtml = (value) => String(value ?? '');
 
 test('the phone page subtitle names the artist as the card does', () => {
@@ -30,9 +30,9 @@ test('the phone page subtitle names the artist as the card does', () => {
     getAlbumRequestKey: (album) => album.key, state: { utility: {} },
   });
   for (const kind of ['album', 'cover-lookup']) {
-    assert.match(context.mobilePageDescriptor(kind, credited()).subtitle, /Shaman · 1999/);
-    assert.doesNotMatch(context.mobilePageDescriptor(kind, credited()).subtitle, /Korpiklaani/);
-    assert.match(context.mobilePageDescriptor(kind, plain()).subtitle, /Korpiklaani · 2012/);
+    assert.match(context.mobilePageDescriptor(kind, credited()).subtitle, /Quillmere Duo · 1999/);
+    assert.doesNotMatch(context.mobilePageDescriptor(kind, credited()).subtitle, /Brackenfold Choir/);
+    assert.match(context.mobilePageDescriptor(kind, plain()).subtitle, /Brackenfold Choir · 2012/);
   }
 });
 
@@ -40,15 +40,15 @@ test('the Cover Look Up subtitle and split chooser name the artist as the card d
   const context = load('cover-lookup-modal-and-drawer.js', [
     'buildCoverLookupAlbumSubtitleHtml', 'buildCoverLookupCurrentReleaseLabel', 'buildCoverLookupSearchQuery',
   ], { escapeHtml });
-  assert.match(context.buildCoverLookupAlbumSubtitleHtml(credited()), />Shaman</);
-  assert.match(context.buildCoverLookupAlbumSubtitleHtml(plain()), />Korpiklaani</);
-  assert.equal(context.buildCoverLookupCurrentReleaseLabel(credited()), 'Shaman · Idja · 1999');
-  assert.equal(context.buildCoverLookupCurrentReleaseLabel(plain()), 'Korpiklaani · Manala · 2012');
-  assert.match(context.buildCoverLookupSearchQuery(credited()), /^Korpiklaani /);
+  assert.match(context.buildCoverLookupAlbumSubtitleHtml(credited()), />Quillmere Duo</);
+  assert.match(context.buildCoverLookupAlbumSubtitleHtml(plain()), />Brackenfold Choir</);
+  assert.equal(context.buildCoverLookupCurrentReleaseLabel(credited()), 'Quillmere Duo · First Embers · 1999');
+  assert.equal(context.buildCoverLookupCurrentReleaseLabel(plain()), 'Brackenfold Choir · Winter Embers · 2012');
+  assert.match(context.buildCoverLookupSearchQuery(credited()), /^Brackenfold Choir /);
 });
 
 test('the Album Details loading title names the artist as the card does', () => {
-  for (const [album, title] of [[credited(), 'Shaman - Idja - 1999'], [plain(), 'Korpiklaani - Manala - 2012']]) {
+  for (const [album, title] of [[credited(), 'Quillmere Duo - First Embers - 1999'], [plain(), 'Brackenfold Choir - Winter Embers - 2012']]) {
     const els = { overlay: {}, title: {}, subtitle: {} };
     const context = load('track-modal-lightbox-helpers.js', ['renderTrackModalLoadingState'], {
       getTrackModalElements: () => els,
@@ -62,7 +62,7 @@ test('the Album Details loading title names the artist as the card does', () => 
 test('the version chooser names the artist as the card does', () => {
   class HTMLElement {}
   class HTMLButtonElement extends HTMLElement {}
-  for (const [album, artist] of [[credited(), 'Shaman'], [plain(), 'Korpiklaani']]) {
+  for (const [album, artist] of [[credited(), 'Quillmere Duo'], [plain(), 'Brackenfold Choir']]) {
     const description = new HTMLElement();
     const found = {
       '[data-version-picker-description]': description,
@@ -93,17 +93,17 @@ function playerText({ mobile, album, track }) {
 
 test('the player names the artist as the card does on phone and desktop, and keeps guests and the tag', () => {
   const album = { ...credited(), tracks: [
-    { path: 'one', artist: 'Korpiklaani' }, { path: 'guest', artist: 'A Guest' },
-    { path: 'corrected', artist: 'korpiklani', display_artist: 'Corrected Artist' },
+    { path: 'one', artist: 'Brackenfold Choir' }, { path: 'guest', artist: 'A Guest' },
+    { path: 'corrected', artist: 'brackenfld', display_artist: 'Corrected Artist' },
   ] };
-  const track = { path: 'one', title: 'Idja', artist: 'Korpiklaani' };
-  assert.equal(playerText({ mobile: true, album, track }), 'Shaman');
-  assert.equal(playerText({ mobile: false, album, track }), 'Shaman - Idja');
-  assert.equal(track.artist, 'Korpiklaani', 'scrobbles and identities keep the tag');
+  const track = { path: 'one', title: 'First Embers', artist: 'Brackenfold Choir' };
+  assert.equal(playerText({ mobile: true, album, track }), 'Quillmere Duo');
+  assert.equal(playerText({ mobile: false, album, track }), 'Quillmere Duo - First Embers');
+  assert.equal(track.artist, 'Brackenfold Choir', 'scrobbles and identities keep the tag');
 
   assert.equal(playerText({ mobile: true, album, track: { path: 'guest', artist: 'A Guest' } }), 'A Guest');
-  assert.equal(playerText({ mobile: true, album, track: { path: 'corrected', artist: 'korpiklani' } }), 'Corrected Artist');
+  assert.equal(playerText({ mobile: true, album, track: { path: 'corrected', artist: 'brackenfld' } }), 'Corrected Artist');
   // Another album's track, or no album known: the track's own artist.
-  assert.equal(playerText({ mobile: true, album, track: { path: 'elsewhere', artist: 'Korpiklaani' } }), 'Korpiklaani');
-  assert.equal(playerText({ mobile: true, album: null, track }), 'Korpiklaani');
+  assert.equal(playerText({ mobile: true, album, track: { path: 'elsewhere', artist: 'Brackenfold Choir' } }), 'Brackenfold Choir');
+  assert.equal(playerText({ mobile: true, album: null, track }), 'Brackenfold Choir');
 });

@@ -10842,8 +10842,8 @@ def _search_preview_sql(
              or (library.local_albums.corrected_album_artist is not null
                  and lower(btrim(coalesce(library.local_albums.corrected_album_artist, '')))
                  like lower(%(query_like)s) escape '')
-          -- And by the name the album's release credits, where that isn't the main one ("Shaman" on
-          -- Korpiklaani), written as 0275 indexes it: only the matching releases' albums are read.
+          -- And by the name the album's release credits, where that isn't the main one, written as
+          -- 0275 indexes it: only the matching releases' albums are read.
           union
           select albums.library_id, albums.id
           from integration.musicbrainz_releases releases

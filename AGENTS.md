@@ -161,7 +161,12 @@ operate, or contribute to the application.
   (owner rule, 2026-11-17). If the machine-wide heavy-job lock is free, take it
   and run them locally with `scripts/run-regression-gate.ps1 -Gate focused
   -Cases <FTC ids or exact titles> -Targets <measured target names>`, then
-  release it. If another chat holds the lock, do not wait: run the same
+  release it. Local tests never connect to port 5432, which can be
+  production's server: a local run that needs Postgres sets
+  `ALBUM_HAVEN_TEST_POSTGRES_PORT` (or names the port in its database URL) to
+  a throwaway cluster, and without one runs hosted. Never spoof
+  `GITHUB_ACTIONS` around that refusal (owner rule, 2026-11-22).
+  If another chat holds the lock, do not wait: run the same
   selection on the hosted runner with `-f gates=focused -f cases=...` and/or
   `-f targets=...` (comma-separated). A focused run never satisfies a gate;
   the full gate must still pass on the handed-off commit.

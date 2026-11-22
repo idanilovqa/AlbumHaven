@@ -2278,7 +2278,7 @@ def test_bootstrap_teardown_rejects_unowned_pgpass_before_filesystem_deletion(tm
                 },
                 "pgpass": str(victim),
                 "host": "localhost",
-                "port": 5432,
+                "port": 54329,
             }
         ),
         encoding="utf-8",
@@ -2303,6 +2303,8 @@ def test_bootstrap_teardown_rejects_unowned_pgpass_before_filesystem_deletion(tm
             str(tmp_path / "github.env"),
             "-StatePath",
             str(state_path),
+            "-Port",
+            "54329",
         ],
         capture_output=True,
         encoding="utf-8",

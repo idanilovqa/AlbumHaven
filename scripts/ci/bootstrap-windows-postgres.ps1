@@ -21,6 +21,19 @@ $ErrorActionPreference = 'Stop'
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 $allowedHosts = @('localhost', '127.0.0.1', '::1')
 $requiredExecutables = @('postgres.exe', 'psql.exe', 'pg_isready.exe')
+$onGithubActions = $env:GITHUB_ACTIONS -ceq 'true'
+
+function Write-SecretMask([string]$Secret) {
+    # A masking command only on GitHub Actions, which consumes it. Anywhere else it prints the secret.
+    if ($onGithubActions) { [Console]::Out.WriteLine("::add-mask::$Secret") }
+}
+
+function Assert-DisposableServer {
+    # Outside GitHub Actions 5432 is the installed server, which can be production's.
+    if (-not $onGithubActions -and $Port -eq 5432) {
+        throw 'The bootstrap refuses port 5432 outside GitHub Actions: pass the port of a throwaway cluster.'
+    }
+}
 
 function Assert-ContractInputs {
     $expectedServiceName = "postgresql-x64-$ExpectedMajorVersion"
@@ -235,7 +248,7 @@ function New-Secret {
 function Set-AdminAuthentication {
     $secret = [string]$env:POSTGRESQL_ADMIN_PASSWORD
     if ([string]::IsNullOrWhiteSpace($secret)) { $secret = 'root' }
-    [Console]::Out.WriteLine("::add-mask::$secret")
+    Write-SecretMask $secret
     $previous = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
     [Environment]::SetEnvironmentVariable('PGPASSWORD', $secret, 'Process')
     return $previous
@@ -325,7 +338,7 @@ function Invoke-Provision([object]$Contract) {
     }
     [IO.Directory]::CreateDirectory($RunnerTemp) | Out-Null
     $secrets = [ordered]@{ migrator = New-Secret; app = New-Secret; readonly = New-Secret }
-    foreach ($secret in $secrets.Values) { Write-Output "::add-mask::$secret" }
+    foreach ($secret in $secrets.Values) { Write-SecretMask $secret }
 
     $names = Get-Names
     $collisionSql = "select (select count(*) from pg_roles where rolname in ('$($names.Roles.migrator)','$($names.Roles.app)','$($names.Roles.readonly)')) + (select count(*) from pg_database where datname='$($names.Database)');"
@@ -668,6 +681,7 @@ function Invoke-Teardown {
 
 if ([string]::IsNullOrWhiteSpace($StatePath)) { $StatePath = Join-Path $RunnerTemp "album-haven-postgres-$DatabaseSuffix.state.json" }
 Assert-ContractInputs
+if ($Mode -cne 'Contract') { Assert-DisposableServer }
 $contract = Get-Contract
 switch ($Mode) {
     'Contract' { $contract | ConvertTo-Json -Depth 12 -Compress }

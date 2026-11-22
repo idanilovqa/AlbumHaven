@@ -160,8 +160,10 @@ function updatePlayerUi() {
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
   const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
-  // The overlay dims the other device's song under its status; Play stays pressable above it.
-  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable;
+  // The overlay dims the other device's song under its status; Play stays pressable above it. Where
+  // playback cannot be taken over there is no overlay and Play is locked.
+  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable
+    && (typeof canTakePlaybackOverHere !== 'function' || canTakePlaybackOverHere());
   els.player?.classList?.toggle('is-playing-elsewhere', playingElsewhere);
   if (els.elsewhere) els.elsewhere.hidden = !playingElsewhere;
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
@@ -209,10 +211,10 @@ function updatePlayerUi() {
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
     els.play.setAttribute('aria-label', playingElsewhere ? 'Play here'
-      : lockedByAnotherTab ? blockedLabel
+      : lockedByAnotherTab ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
       : (playback.paused ? 'Play' : 'Pause'));
     els.play.title = playingElsewhere ? 'Play in this tab instead' : '';
-    els.play.disabled = playbackUnavailable || !hasTrack;
+    els.play.disabled = (lockedByAnotherTab && !playingElsewhere) || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);

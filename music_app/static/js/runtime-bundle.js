@@ -12664,6 +12664,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.media_session.v1": "optional",
     "playback.resumption.v1": "optional",
     "playback.album_details.v1": "optional",
+    "playback.takeover.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
     "updates.choose.v1": "optional",
@@ -12930,6 +12931,9 @@ const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1'
 // after the session, the process or the device restarted (playback.resumption.v1).
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
 const ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY = 'playback.album_details.v1';
+// `loadQueue` may carry `takeover`. A shell without it refuses that key, so its page never takes
+// playback over: it fails closed before anything is asked of the server.
+const ANDROID_NATIVE_TAKEOVER_CAPABILITY = 'playback.takeover.v1';
 const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
 // How long a seek outlasts positions Android sent before it took the seek, and how near the
@@ -13158,7 +13162,7 @@ async function startAndroidNativePlaybackTrack(track, {
     if (keepCurrent) autoplay = !native.snapshot.paused;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
     // Play while another client plays: Android's claim replaces that client's (playback.claim.takeover).
-    if (takeover && autoplay) payload.takeover = true;
+    if (takeover && autoplay && hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY)) payload.takeover = true;
     native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {
@@ -13773,6 +13777,7 @@ const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
   holdsOwnClaim: true,
   recordsListens: true,
   claimClientId: () => getAndroidNativePlaybackClientId(),
+  takesOver: () => hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY),
   ownsPlayback: () => isAndroidNativePlaybackOwner(),
   adopt: persistedState => attachAndroidNativePlayback(persistedState),
   start: (track, { startSeconds = 0, autoplay = true, takeover = false } = {}) =>
@@ -14511,9 +14516,14 @@ function takeOverPlaybackHere() {
 }
 
 async function takeOverPlayback() {
-  // Inside the APK only the handshake says whether Android plays natively.
+  // Inside the APK only the handshake says whether Android plays natively, and whether it can take over.
   const handshake = playingEngineHandshake();
   if (handshake) await handshake;
+  // Decided before any request: the confirmed one stops the other device, whatever happens here after it.
+  if (!canTakePlaybackOverHere()) {
+    notifyBlockedPlaybackStart();
+    return false;
+  }
   return takeOverAtConfirmedPlace();
 }
 
@@ -14551,7 +14561,16 @@ async function takeOverAtConfirmedPlace() {
   const startSeconds = result.position ? result.position.ms / 1000 : 0;
   state.player.playbackQueue = null;
   // An engine with its own claim (Android's) starts there by a takeover of the claim now under its client.
-  if (native) return playTrackFromPayload(payload, { startSeconds, takeover: true });
+  if (native) {
+    let started = false;
+    try {
+      started = await playTrackFromPayload(payload, { startSeconds, takeover: true });
+      return started;
+    } finally {
+      // The engine never had this token: left behind, it would refuse this device's own next Play until stale.
+      if (!started) await deletePlaybackClaim(result).catch(() => {});
+    }
+  }
   // The reference is renewed with the first heartbeat: its expiry was never told here.
   acceptPlaybackClaim(result, { path: result.path, track: result.track,
     referenceExpiresAt: new Date(0).toISOString() });
@@ -14610,10 +14629,20 @@ function getPlaybackClaimContext() {
 }
 
 function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
-/** Another client of this account plays now: this one may take playback over. */
+/**
+ * Whether this client could play what it took over. An engine with its own claim must say it takes over
+ * and name its client; an installed app from before that fails closed and offers no Play here.
+ */
+function canTakePlaybackOverHere() {
+  if (isShellPlaybackUnavailable()) return false;
+  const engine = playingEngine();
+  return !engine?.holdsOwnClaim || Boolean(engine.takesOver?.() && engine.claimClientId());
+}
+/** Another client of this account plays now and this one may take playback over. */
 function isPlaybackPlayingElsewhere() {
   const ownership = getPlaybackOwnershipState();
-  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab';
+  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab'
+    && canTakePlaybackOverHere();
 }
 function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 
@@ -45483,8 +45512,10 @@ function updatePlayerUi() {
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
   const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
-  // The overlay dims the other device's song under its status; Play stays pressable above it.
-  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable;
+  // The overlay dims the other device's song under its status; Play stays pressable above it. Where
+  // playback cannot be taken over there is no overlay and Play is locked.
+  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable
+    && (typeof canTakePlaybackOverHere !== 'function' || canTakePlaybackOverHere());
   els.player?.classList?.toggle('is-playing-elsewhere', playingElsewhere);
   if (els.elsewhere) els.elsewhere.hidden = !playingElsewhere;
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
@@ -45532,10 +45563,10 @@ function updatePlayerUi() {
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
     els.play.setAttribute('aria-label', playingElsewhere ? 'Play here'
-      : lockedByAnotherTab ? blockedLabel
+      : lockedByAnotherTab ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
       : (playback.paused ? 'Play' : 'Pause'));
     els.play.title = playingElsewhere ? 'Play in this tab instead' : '';
-    els.play.disabled = playbackUnavailable || !hasTrack;
+    els.play.disabled = (lockedByAnotherTab && !playingElsewhere) || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);

@@ -1391,7 +1391,7 @@ test('Play while another client plays, for an engine with its own claim, opens i
   const started = [];
   const { context } = loadHelper({
     state: playingElsewhereState(),
-    currentPlaybackEngine: () => ({ holdsOwnClaim: true,
+    currentPlaybackEngine: () => ({ holdsOwnClaim: true, takesOver: () => true,
       claimClientId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', ownsPlayback: () => false }),
     playTrackFromPayload: async (track, options) => { started.push({ track, options }); return true; },
     fetch: async (url, init = {}) => {
@@ -1793,7 +1793,8 @@ test('inside the app Play here waits to learn whether Android plays before it ch
   const { context } = loadHelper({
     state: playingElsewhereState(),
     playbackEngineHandshake: () => Promise.resolve().then(() => {
-      engine = { holdsOwnClaim: true, claimClientId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', ownsPlayback: () => false };
+      engine = { holdsOwnClaim: true, takesOver: () => true,
+        claimClientId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', ownsPlayback: () => false };
     }),
     currentPlaybackEngine: () => engine,
     playTrackFromPayload: async () => true,

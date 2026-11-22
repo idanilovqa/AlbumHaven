@@ -105,8 +105,8 @@ test('shell sources, shared contracts, protocol changes and capabilities the sta
 
 test('the guard requires both supported stable shells to run the site', () => {
   // The interim WebView player predates the stable shells; sandbox selection and the sandbox build
-  // picker exist only in sandbox shells.
-  const legacy = ['playback.webview.v1', 'sandbox.select.v1', 'updates.choose.v1']
+  // picker exist only in sandbox shells. No published shell takes playback over yet.
+  const legacy = ['playback.webview.v1', 'playback.takeover.v1', 'sandbox.select.v1', 'updates.choose.v1']
     .map((name) => `The latest stable shell lacks ${name}; the site gates it at runtime`);
   assert.deepEqual(checkSupportedShells(policy, record), { errors: [], notes: legacy });
   const previousLacks = structuredClone(record);

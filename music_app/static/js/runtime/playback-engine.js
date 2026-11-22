@@ -31,6 +31,7 @@ const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
   holdsOwnClaim: true,
   recordsListens: true,
   claimClientId: () => getAndroidNativePlaybackClientId(),
+  takesOver: () => hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY),
   ownsPlayback: () => isAndroidNativePlaybackOwner(),
   adopt: persistedState => attachAndroidNativePlayback(persistedState),
   start: (track, { startSeconds = 0, autoplay = true, takeover = false } = {}) =>

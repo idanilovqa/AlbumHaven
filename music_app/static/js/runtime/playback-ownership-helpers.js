@@ -658,9 +658,14 @@ function takeOverPlaybackHere() {
 }
 
 async function takeOverPlayback() {
-  // Inside the APK only the handshake says whether Android plays natively.
+  // Inside the APK only the handshake says whether Android plays natively, and whether it can take over.
   const handshake = playingEngineHandshake();
   if (handshake) await handshake;
+  // Decided before any request: the confirmed one stops the other device, whatever happens here after it.
+  if (!canTakePlaybackOverHere()) {
+    notifyBlockedPlaybackStart();
+    return false;
+  }
   return takeOverAtConfirmedPlace();
 }
 
@@ -698,7 +703,16 @@ async function takeOverAtConfirmedPlace() {
   const startSeconds = result.position ? result.position.ms / 1000 : 0;
   state.player.playbackQueue = null;
   // An engine with its own claim (Android's) starts there by a takeover of the claim now under its client.
-  if (native) return playTrackFromPayload(payload, { startSeconds, takeover: true });
+  if (native) {
+    let started = false;
+    try {
+      started = await playTrackFromPayload(payload, { startSeconds, takeover: true });
+      return started;
+    } finally {
+      // The engine never had this token: left behind, it would refuse this device's own next Play until stale.
+      if (!started) await deletePlaybackClaim(result).catch(() => {});
+    }
+  }
   // The reference is renewed with the first heartbeat: its expiry was never told here.
   acceptPlaybackClaim(result, { path: result.path, track: result.track,
     referenceExpiresAt: new Date(0).toISOString() });
@@ -757,10 +771,20 @@ function getPlaybackClaimContext() {
 }
 
 function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
-/** Another client of this account plays now: this one may take playback over. */
+/**
+ * Whether this client could play what it took over. An engine with its own claim must say it takes over
+ * and name its client; an installed app from before that fails closed and offers no Play here.
+ */
+function canTakePlaybackOverHere() {
+  if (isShellPlaybackUnavailable()) return false;
+  const engine = playingEngine();
+  return !engine?.holdsOwnClaim || Boolean(engine.takesOver?.() && engine.claimClientId());
+}
+/** Another client of this account plays now and this one may take playback over. */
 function isPlaybackPlayingElsewhere() {
   const ownership = getPlaybackOwnershipState();
-  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab';
+  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab'
+    && canTakePlaybackOverHere();
 }
 function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 

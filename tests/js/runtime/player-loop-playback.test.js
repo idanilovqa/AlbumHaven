@@ -357,6 +357,32 @@ test('while a switch waits for its audio, the time and seek bar show the pressed
 
 // Owner, mockup playback-elsewhere-status v003 (2026-11-17): "Playing in another tab" sits over the
 // dimmed player, and Play stays pressable above the dimming: it takes playback over here.
+// An installed phone without the takeover capability fails closed, as main does (blocker, 2026-11-22).
+test('where playback cannot be taken over, a player locked by another device has no Play here', () => {
+  const player = new FakeElement();
+  const elsewhere = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: new FakeElement() });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ player, elsewhere, timeline, time, play, title: new FakeElement(), albumLink: new FakeElement() }),
+    isPlaybackLockedByAnotherTab: () => true,
+    canTakePlaybackOverHere: () => false,
+    getPlaybackOwnershipState: () => ({ blockedReason: 'playing_in_another_tab' }),
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+  });
+
+  context.updatePlayerUi();
+
+  assert.equal(elsewhere.hidden, true);
+  assert.equal(player.classList.contains('is-playing-elsewhere'), false);
+  assert.equal(play.disabled, true);
+  assert.equal(play.getAttribute('aria-label'), 'Playback locked in another tab');
+  assert.equal(play.title, '');
+  assert.equal(time.hidden, false);
+  assert.equal(time.textContent, 'Playing in another tab');
+});
+
 test('playback on another device shows the elsewhere overlay over the player and keeps Play pressable', () => {
   const player = new FakeElement();
   const elsewhere = new FakeElement();

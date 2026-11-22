@@ -13910,14 +13910,29 @@
         "py:music_app/services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh:background:executor"
       ],
       "owners": [
-        "music_app/services/gallery_projection_postgres.py"
+        "music_app/services/gallery_projection_postgres.py",
+        "music_app/services/library_browse_postgres.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 5,
+        "production": 60
+      },
+      "budgets": {
+        "builder_calls": 0
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_isolated_postgres_live.py::test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready",
+      "testIdentity": "test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready",
+      "rollback": "Case 60 (6.5): a search or browse read while the gallery is ready builds no whole scope. The save-path and targeted-invalidation cases are not yet proven (case60-red-cases.patch in the shared notes)."
     },
     {
       "id": "py:services/generated_preview_relocation.py#GeneratedPreviewRelocationWorker._run",

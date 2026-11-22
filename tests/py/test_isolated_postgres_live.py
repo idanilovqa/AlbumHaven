@@ -401,6 +401,70 @@ def test_live_targeted_invalidation_publishes_new_album_to_gallery(
     assert any(item["artist"] == "I'm with Her" for item in sidebar["artists_sidebar"])
 
 
+def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready(
+    watcher_repair_inventory, monkeypatch,
+):
+    """Case 60 (freeze guard): once the gallery is ready, a search and a browse read each build 0 gallery
+    scopes, at any size. Only startup preparation, a builder change or an owner-started rebuild may build a
+    whole scope. The save-path and targeted-invalidation cases wait, red, for their fix (case60-red-cases.patch)."""
+    import time
+
+    from music_app.services import gallery_projection_postgres, state
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from tests.py.bounded_interactions import OperationCounts, _checked_in_entries, measure_scale_pair
+
+    fixture = watcher_repair_inventory
+    built = []
+    publish = gallery_projection_postgres.publish_gallery_projection
+    monkeypatch.setattr(gallery_projection_postgres, "publish_gallery_projection",
+                        lambda *args, **kwargs: built.append(args[2]) or publish(*args, **kwargs))
+    schedule = gallery_projection_postgres.schedule_gallery_projection_refresh
+    scheduled = []
+
+    def schedule_with_test_connection(config, **options):
+        options.setdefault("connect", isolatedPostgres._connect)
+        scheduled.append(schedule(config, **options))
+        return scheduled[-1]
+
+    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", schedule_with_test_connection)
+    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", schedule_with_test_connection)
+
+    def scopes_built_by(action):
+        built.clear()
+        scheduled.clear()
+        action()
+        for future in [future for future in scheduled if future is not None]:
+            future.result(timeout=60)
+        deadline = time.monotonic() + 60
+        while gallery_projection_postgres._PENDING and time.monotonic() < deadline:
+            time.sleep(0.05)  # a coalesced trailing refresh still running
+        return len(built)
+
+    def run(albums):
+        entries = [fixture.entry(f"Artist {index:03d}/Album {index:03d}/01.flac", artist=f"Artist {index:03d}",
+                                 album=f"Album {index:03d}") for index in range(albums)]
+        fixture.seed(*entries)
+        gallery_projection_postgres.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+        browse = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+        counts = OperationCounts()
+        # Each whole gallery scope a refresh publishes counts as one builder call.
+        counts.builder_calls = scopes_built_by(browse.build_root_sidebar_payload) + scopes_built_by(
+            lambda: browse.build_search_payload(query_params={"q": "Album", "surface": "albums"}),
+        )
+        return counts
+
+    interaction = "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh"
+    entry = _checked_in_entries()[interaction]
+    measure_scale_pair(
+        interaction_id=interaction,
+        small=entry["cardinalities"]["small"],
+        large=entry["cardinalities"]["production"],
+        run=run,
+        budgets=entry["budgets"],
+        growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
+    )
+
+
 def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(
     watcher_repair_inventory,
     monkeypatch,

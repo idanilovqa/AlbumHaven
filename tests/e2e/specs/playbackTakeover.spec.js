@@ -253,17 +253,23 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
     const mark = await playbackEvidence.playbackMark();
     await trackModalActions.playTrackByTitle(TITLE);
     await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[TITLE] });
-    await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 3 });
+    // Well into the song, so its running time cannot pass for the pressed song's.
+    await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 8 });
     await expect(player.title).toContainText(TITLE);
   });
 
-  await stepLogger.step('Read continuously from the press until the other song has played a second, the title never goes back', async () => {
+  // Owner round 9 (2026-11-21): "title is changing qucil;ly, but the majority of player UI does not [...]
+  // All these should be syncronoized." The time is read right after each title: one redraw sets both.
+  await stepLogger.step('Read continuously from the press until the other song has played a second, the title never goes back and the time switches with it', async () => {
     // The visible title is read back to back, a few milliseconds apart: a flicker a listener sees
     // lasts several frames, so it cannot fall between two reads.
     const samples = [];
     let sampling = true;
     const sampler = (async () => {
-      while (sampling) samples.push(String(await player.title.textContent() || ''));
+      while (sampling) {
+        const title = String(await player.title.textContent() || '');
+        samples.push({ title, seconds: displayedSeconds(await player.time.textContent()) });
+      }
     })();
     const mark = await playbackEvidence.playbackMark();
     await trackModalActions.playTrackByTitle(OTHER_TITLE);
@@ -273,9 +279,12 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
     sampling = false;
     await sampler;
     expect(samples.length, 'read often enough to see a flicker').toBeGreaterThan(50);
-    const firstPressed = samples.findIndex((text) => text.includes(OTHER_TITLE));
+    const firstPressed = samples.findIndex(({ title }) => title.includes(OTHER_TITLE));
     expect(firstPressed, 'the pressed song shows').toBeGreaterThanOrEqual(0);
-    expect(samples.slice(firstPressed).filter((text) => !text.includes(OTHER_TITLE)), 'never the playing song again').toEqual([]);
+    expect(samples.slice(firstPressed).filter(({ title }) => !title.includes(OTHER_TITLE)), 'never the playing song again').toEqual([]);
+    // From its first frame the pressed song shows its own time, from its start: never the old song's
+    // running time (8 s and more) under the new title.
+    expect(samples.slice(firstPressed).filter(({ seconds }) => !(seconds < 5)), 'the time switches with the title').toEqual([]);
     await trackModalActions.close();
     await globalPlayerActions.pauseToReleasePlaybackClaim();
   });

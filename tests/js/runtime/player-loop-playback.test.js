@@ -322,6 +322,39 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
+// Owner round 9 (2026-11-21): "title is changing qucil;ly, but the majority of player UI does not
+// [...] All these should be syncronoized." A pressed song shows its own start and length with its
+// title from the press, not the old song's running time, until its audio starts.
+test('while a switch waits for its audio, the time and seek bar show the pressed song from the press', async () => {
+  const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A' };
+  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A', durationSeconds: 180 };
+  const title = new FakeElement();
+  const time = new FakeElement();
+  const timeline = new FakeElement();
+  let finishStart;
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title, time, timeline }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 75, duration: 200, paused: false, ended: false, src: oldTrack.src }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+  });
+  context.state.player.current = oldTrack;
+  context.updatePlayerUi();
+  assert.equal(time.textContent, '75 / 200');
+
+  const playing = context.playTrackFromPayload(newTrack);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(title.textContent, 'A - New');
+  assert.equal(time.textContent, '0 / 180', 'the time switches with the title, at the press');
+  assert.equal(timeline.value, '0');
+  context.updatePlayerUi();
+  assert.equal(time.textContent, '0 / 180', 'a redraw while the switch waits keeps the pressed song');
+
+  finishStart({ role: 'current', streamId: 2, generation: 2, track: newTrack });
+  await playing;
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
 // Owner, mockup playback-elsewhere-status v003 (2026-11-17): "Playing in another tab" sits over the
 // dimmed player, and Play stays pressable above the dimming: it takes playback over here.
 test('playback on another device shows the elsewhere overlay over the player and keeps Play pressable', () => {
@@ -1500,7 +1533,8 @@ test('a stale rapid-selection start completion cannot replace the newer streamin
     },
   });
   context.updatePlayerUi = () => {
-    uiCurrentPaths.push(String(context.state.player.current?.path || ''));
+    // A redraw while a press waits draws the pressed song; these count the playing song's.
+    if (!context.state.player.selectedTrack) uiCurrentPaths.push(String(context.state.player.current?.path || ''));
   };
   const olderTrack = {
     path: 'C:\\Music\\Older.flac', src: '/track?path=Older.flac', title: 'Older',
@@ -1570,7 +1604,8 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
     },
   });
   context.updatePlayerUi = () => {
-    uiCurrentPaths.push(String(context.state.player.current?.path || ''));
+    // A redraw while a press waits draws the pressed song; these count the playing song's.
+    if (!context.state.player.selectedTrack) uiCurrentPaths.push(String(context.state.player.current?.path || ''));
   };
   const repeatedFirstFrame = {
     generation: promotedCurrent.generation,

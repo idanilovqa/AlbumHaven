@@ -869,9 +869,9 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
-  if (typeof applyTagEditToArtistTree === 'function') {
-    applyTagEditToArtistTree(album, optimisticUpdatedAlbums, artistTreeKeepsAlbum);
-  }
+  const artistTreeEdit = typeof applyTagEditToArtistTree === 'function'
+    ? applyTagEditToArtistTree(album, optimisticUpdatedAlbums, artistTreeKeepsAlbum)
+    : 0;
   // Before the first render, so no frame shows both cards of a fold that is already decided.
   const saveFolds = typeof saveFoldDecisions !== 'undefined'
     ? saveFoldDecisions.start({
@@ -1101,6 +1101,7 @@ async function confirmManualTagEdit() {
       }
       return;
     }
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit, { failed: true });
     if (
       tagEditOriginStillOwnsView(originatingViewStateRevision)
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
@@ -1143,6 +1144,7 @@ async function confirmManualTagEdit() {
     }
   } finally {
     saveFolds?.finish();
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit);
   }
 }
 

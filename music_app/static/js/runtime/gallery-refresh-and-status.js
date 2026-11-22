@@ -1130,7 +1130,9 @@ async function refreshArtistTreeAfterInventoryMutation(revision) {
   }
   if (viewBusy() || readViewStateRevision() !== viewRevision
     || String(state.view?.query || '').trim()) return;
-  state.view.artists_sidebar = data.artists_sidebar;
+  state.view.artists_sidebar = typeof withPendingArtistTreeEdits === 'function'
+    ? withPendingArtistTreeEdits(data.artists_sidebar)
+    : data.artists_sidebar;
   if (Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')) {
     state.view.show_all_artists_sidebar_link = data.show_all_artists_sidebar_link;
   }
@@ -1157,6 +1159,10 @@ async function readGalleryResponse(response, ownsResponse) {
     : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  // The tree in a response doesn't hold the saves this page is still writing.
+  if (Array.isArray(data?.artists_sidebar) && typeof withPendingArtistTreeEdits === 'function') {
+    data.artists_sidebar = withPendingArtistTreeEdits(data.artists_sidebar);
   }
   return data;
 }

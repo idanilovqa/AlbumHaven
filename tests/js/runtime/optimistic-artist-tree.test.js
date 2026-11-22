@@ -19,6 +19,9 @@ function tree(sidebar, visible = []) {
     apply: (original, updated, kept = false) => context.applyTagEditToArtistTree(original, updated, kept),
     keeps: (album, updates) => context.artistTreeKeepsEditedAlbum(album, updates),
     list: () => context.state.view.artists_sidebar,
+    serverTree: (sidebar) => JSON.parse(JSON.stringify(
+      context.withPendingArtistTreeEdits(sidebar).map(({ artist, count }) => [artist, count]))),
+    settle: (id, options) => context.settleArtistTreeEdit(id, options),
     read: () => JSON.parse(JSON.stringify(context.state.view.artists_sidebar.map(({ artist, count }) => [artist, count]))),
   };
 }
@@ -86,4 +89,31 @@ test('FTC-TAGS-036 an edit that moves no album between artists keeps the same tr
   view.apply({ key: 'a::x', album_artist: 'Alpha' }, [{ key: 'a::y', album_artist: 'Alpha' }], false);
 
   assert.equal(view.list(), before);
+});
+
+test('FTC-TAGS-040 a tree the server sends while the save is written still shows the move', () => {
+  const view = tree([entry('Alpha', 2)]);
+  view.apply({ key: 'a::x', album_artist: 'Alpha' }, [{ key: 'm::x', album_artist: 'Mike' }], false);
+
+  assert.deepEqual(view.serverTree([entry('Alpha', 2), entry('Zulu', 1)]), [['Alpha', 1], ['Mike', 1], ['Zulu', 1]]);
+});
+
+test('FTC-TAGS-040 a failed save takes its artist back out of the tree', () => {
+  const view = tree([entry('Alpha', 2)]);
+  const id = view.apply({ key: 'a::x', album_artist: 'Alpha' }, [{ key: 'm::x', album_artist: 'Mike' }], false);
+
+  view.settle(id, { failed: true });
+
+  assert.deepEqual(view.read(), [['Alpha', 2]]);
+  assert.deepEqual(view.serverTree([entry('Alpha', 2)]), [['Alpha', 2]]);
+});
+
+test('a finished save leaves the trees the server sends afterwards as they are', () => {
+  const view = tree([entry('Alpha', 2)]);
+  const id = view.apply({ key: 'a::x', album_artist: 'Alpha' }, [{ key: 'm::x', album_artist: 'Mike' }], false);
+
+  view.settle(id);
+
+  assert.deepEqual(view.read(), [['Alpha', 1], ['Mike', 1]]);
+  assert.deepEqual(view.serverTree([entry('Alpha', 1), entry('Mike', 1)]), [['Alpha', 1], ['Mike', 1]]);
 });

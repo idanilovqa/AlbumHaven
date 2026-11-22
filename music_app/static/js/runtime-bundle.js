@@ -21708,7 +21708,9 @@ async function refreshArtistTreeAfterInventoryMutation(revision) {
   }
   if (viewBusy() || readViewStateRevision() !== viewRevision
     || String(state.view?.query || '').trim()) return;
-  state.view.artists_sidebar = data.artists_sidebar;
+  state.view.artists_sidebar = typeof withPendingArtistTreeEdits === 'function'
+    ? withPendingArtistTreeEdits(data.artists_sidebar)
+    : data.artists_sidebar;
   if (Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')) {
     state.view.show_all_artists_sidebar_link = data.show_all_artists_sidebar_link;
   }
@@ -21735,6 +21737,10 @@ async function readGalleryResponse(response, ownsResponse) {
     : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  // The tree in a response doesn't hold the saves this page is still writing.
+  if (Array.isArray(data?.artists_sidebar) && typeof withPendingArtistTreeEdits === 'function') {
+    data.artists_sidebar = withPendingArtistTreeEdits(data.artists_sidebar);
   }
   return data;
 }
@@ -42129,8 +42135,8 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 
 // BEGIN js/runtime/optimistic-artist-tree.js
 
-// Owner (2026-11-22): a save changes the Artist Tree at the Save click, as it changes the cards. The
-// view refresh after the save (or after its failure) replaces these counts with the library's own.
+// Owner (2026-11-22): a save changes the Artist Tree at the Save click, as it changes the cards, and every
+// tree drawn while it is written shows it. A failed save takes it back out.
 
 function optimisticTreeArtist(album) {
   return String(album?.album_artist || album?.artist || '').trim();
@@ -42144,30 +42150,34 @@ function optimisticAlbumKey(album) {
   return String(album?.key || '').trim().toLocaleLowerCase();
 }
 
-// ``kept``: the edited album keeps its card, so its artist keeps its count.
-function moveSidebarArtistCounts(sidebar, original, updatedAlbums, kept) {
+// Each new album the save leaves counts once; the album it edited, only if it lost its card (``kept``).
+function artistTreeDeltas(original, updatedAlbums, kept) {
   const from = optimisticTreeArtist(original);
   const originalKey = optimisticAlbumKey(original);
   const destinations = (updatedAlbums || [])
     .filter((album) => !originalKey || optimisticAlbumKey(album) !== originalKey)
     .map(optimisticTreeArtist)
     .filter(Boolean);
-  if (!from || !destinations.length) return sidebar;
   const deltas = new Map();
+  if (!from || !destinations.length) return [];
   const change = (artist, delta) => {
     const key = optimisticTreeKey(artist);
     const entry = deltas.get(key) || { artist, delta: 0 };
     entry.delta += delta;
     deltas.set(key, entry);
   };
-  // Each new album the save leaves counts once; the album it edited, only if it lost its card.
   destinations.forEach((artist) => change(artist, 1));
   if (!kept) change(from, -1);
-  const changes = Array.from(deltas.entries()).filter(([, { delta }]) => delta);
+  return Array.from(deltas.entries()).filter(([, { delta }]) => delta);
+}
+
+// ``sign`` -1 takes a save's changes back out.
+function applyArtistTreeDeltas(sidebar, changes, sign = 1) {
   // No artist gains or loses an album: the tree keeps its list, so nothing redraws.
-  if (!changes.length) return sidebar;
+  if (!Array.isArray(sidebar) || !changes.length) return sidebar;
   const next = sidebar.map((entry) => ({ ...entry }));
-  changes.forEach(([key, { artist, delta }]) => {
+  changes.forEach(([key, { artist, delta: change }]) => {
+    const delta = change * sign;
     const index = next.findIndex((entry) => optimisticTreeKey(String(entry?.artist || '').trim()) === key);
     if (index >= 0) {
       next[index].count = Math.max(0, Number(next[index].count || 0) + delta);
@@ -42192,16 +42202,42 @@ function artistTreeKeepsEditedAlbum(album, updates) {
     || Array.from(getAlbumTrackPaths(card)).some((path) => !updates?.[path]);
 }
 
-function applyTagEditToArtistTree(original, updatedAlbums, kept) {
+// The saves this page is writing: a tree the server sends meanwhile doesn't hold them yet.
+const pendingArtistTreeEdits = new Map();
+let nextArtistTreeEditId = 0;
+
+function changeArtistTreeLists(changes, sign) {
   const view = state.view || {};
-  if (Array.isArray(view.artists_sidebar)) {
-    view.artists_sidebar = moveSidebarArtistCounts(view.artists_sidebar, original, updatedAlbums, kept);
-  }
+  view.artists_sidebar = applyArtistTreeDeltas(view.artists_sidebar, changes, sign);
   if (Array.isArray(state.gallery?.sidebarArtistsOverride) && state.gallery.sidebarArtistsOverride.length) {
-    state.gallery.sidebarArtistsOverride = moveSidebarArtistCounts(
-      state.gallery.sidebarArtistsOverride, original, updatedAlbums, kept,
-    );
+    state.gallery.sidebarArtistsOverride = applyArtistTreeDeltas(state.gallery.sidebarArtistsOverride, changes, sign);
   }
+}
+
+// At the Save click; the id ends it with settleArtistTreeEdit.
+function applyTagEditToArtistTree(original, updatedAlbums, kept) {
+  const changes = artistTreeDeltas(original, updatedAlbums, kept);
+  if (!changes.length) return 0;
+  const id = ++nextArtistTreeEditId;
+  pendingArtistTreeEdits.set(id, changes);
+  changeArtistTreeLists(changes, 1);
+  return id;
+}
+
+// A tree the server sends while saves are written shows them, as the cards do.
+function withPendingArtistTreeEdits(sidebar) {
+  let next = sidebar;
+  pendingArtistTreeEdits.forEach((changes) => { next = applyArtistTreeDeltas(next, changes, 1); });
+  return next;
+}
+
+// When the save ends. A failed save takes its changes back out; a saved one stays until the library's
+// own tree replaces it.
+function settleArtistTreeEdit(id, { failed = false } = {}) {
+  const changes = pendingArtistTreeEdits.get(id);
+  if (!changes) return;
+  pendingArtistTreeEdits.delete(id);
+  if (failed) changeArtistTreeLists(changes, -1);
 }
 
 // END js/runtime/optimistic-artist-tree.js
@@ -43079,9 +43115,9 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
-  if (typeof applyTagEditToArtistTree === 'function') {
-    applyTagEditToArtistTree(album, optimisticUpdatedAlbums, artistTreeKeepsAlbum);
-  }
+  const artistTreeEdit = typeof applyTagEditToArtistTree === 'function'
+    ? applyTagEditToArtistTree(album, optimisticUpdatedAlbums, artistTreeKeepsAlbum)
+    : 0;
   // Before the first render, so no frame shows both cards of a fold that is already decided.
   const saveFolds = typeof saveFoldDecisions !== 'undefined'
     ? saveFoldDecisions.start({
@@ -43311,6 +43347,7 @@ async function confirmManualTagEdit() {
       }
       return;
     }
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit, { failed: true });
     if (
       tagEditOriginStillOwnsView(originatingViewStateRevision)
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
@@ -43353,6 +43390,7 @@ async function confirmManualTagEdit() {
     }
   } finally {
     saveFolds?.finish();
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit);
   }
 }
 

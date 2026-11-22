@@ -1058,6 +1058,55 @@ test('IAR-W12: an offline navigation waits for the page being written, not for c
   assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
 });
 
+// Sandbox5 r25 (D2): offline right after sign-in, a new tab sometimes took 11-13 s. Assets being
+// written queue behind the page's covers, and a navigation or an asset never kept waited for them.
+test('IAR-W12: assets written behind covers hold neither an offline navigation nor an asset never kept', async () => {
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.slowCovers) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => {
+        const key = typeof request === 'string' ? request : request.url;
+        if (key.includes('/__album-haven-cover/')) await new Promise(resolve => setTimeout(resolve, 300));
+        return put(request, response);
+      };
+      cache.slowCovers = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, event, settled } = setup({
+    mode: 'web', caches,
+    respond: (request) => {
+      if (!online) return new TypeError('Failed to fetch');
+      const { pathname } = new URL(request.url);
+      if (pathname === '/') return page('acct-a');
+      if (pathname.startsWith('/static/')) return new Response('img', { headers: { 'Content-Type': 'image/svg+xml' } });
+      return coverResponse(10);
+    },
+  });
+  await worker.handle('page', navigation('/'), event);
+  await settled();
+  for (let index = 0; index < 10; index += 1) {
+    void worker.handle('cover', resource(`/cover/${String(index).padStart(22, 'C')}?size=480`), event);
+  }
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  await worker.handle('asset', resource('/static/images/mark.svg'), event);
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  online = false;
+
+  const started = Date.now();
+  const navigated = await worker.handle('page', navigation('/'), event);
+  const unkept = worker.handle('asset', resource('/static/images/never-kept.svg'), event);
+  await assert.rejects(unkept, TypeError);
+
+  assert.match(await navigated.text(), /content="cache"/);
+  assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
+  await settled();
+});
+
 // Owner round on sandbox5 r24 (530s): after scrolling, a new tab waited 11-21 s, because data
 // writes queued behind the covers were waited for like pages.
 test('IAR-W12: data queued behind covers holds no offline navigation and answers offline at once', async () => {

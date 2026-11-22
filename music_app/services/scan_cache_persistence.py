@@ -146,6 +146,7 @@ class ScanCacheAdapter(Protocol):
         observed_library_root_ids: set[str] | None = None,
         unreachable_scope: dict[str, object] | None = None,
         publish_paths: set[str] | None = None,
+        cover_inventory_checked_at: dict[str, float] | None = None,
     ) -> dict[str, object] | None:
         ...
 
@@ -405,6 +406,13 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
+
+    def load_cover_inventory_checked_at(self) -> dict[str, float]:
+        """When the last published scan that could read each root started."""
+        with self._connect_to_database() as connection:
+            row = _first_row(connection.execute(_load_cover_inventory_checked_at_sql()))
+        checked_at = _row_mapping(row).get("checked_at") if row is not None else None
+        return dict(checked_at) if isinstance(checked_at, dict) else {}
 
     def load_inventory_published_since(self, since_epoch: float) -> tuple[dict[str, dict[str, object]], set[str]]:
         """Files another publication wrote or removed after a full scan started."""
@@ -2336,6 +2344,7 @@ class PostgresScanCacheAdapter:
         observed_library_root_ids: set[str] | None = None,
         unreachable_scope: dict[str, object] | None = None,
         publish_paths: set[str] | None = None,
+        cover_inventory_checked_at: dict[str, float] | None = None,
     ) -> dict[str, object] | None:
         """Publish the snapshot; with publish_paths, only the albums those files belong to.
 
@@ -2625,7 +2634,12 @@ class PostgresScanCacheAdapter:
                     metadata=projection_metadata, relations_last_built=resolved_relations_last_built,
                 )
                 shared_snapshot_payload = {**snapshot_payload, 'relation_views': legacy_views}
-            connection.execute(_save_scan_snapshot_sql(), {"scan_cache": _jsonb(shared_snapshot_payload)})
+            snapshot_parameters = {"scan_cache": _jsonb(shared_snapshot_payload)}
+            if cover_inventory_checked_at:
+                snapshot_parameters["cover_inventory_checked_at"] = _jsonb(cover_inventory_checked_at)
+            connection.execute(
+                _save_scan_snapshot_sql(record_cover_check=bool(cover_inventory_checked_at)), snapshot_parameters,
+            )
             if projection_metadata.get('status') == 'ready':
                 from music_app.services.gallery_projection_postgres import finish_full_relation_publication
                 finish_full_relation_publication(connection, self._config, deserialize_relation_views(relation_views_payload))
@@ -7918,8 +7932,26 @@ def _load_file_entries_sql(*, targeted_albums: bool = False, targeted_paths: boo
     )
 
 
-def _save_scan_snapshot_sql() -> str:
+def _load_cover_inventory_checked_at_sql() -> str:
     return """
+        select library.libraries.metadata -> 'cover_inventory_checked_at' as checked_at
+        from app.bootstrap_owners
+        join library.libraries
+          on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+         and library.libraries.name = 'Local Library'
+         and library.libraries.library_kind = 'local'
+        where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+        limit 1;
+    """
+
+
+def _save_scan_snapshot_sql(*, record_cover_check: bool = False) -> str:
+    # Merged per root and beside scan_cache: a root change, or a scan that could not read a root, keeps its time.
+    cover_check = """
+               || jsonb_build_object('cover_inventory_checked_at',
+                    coalesce(library.libraries.metadata -> 'cover_inventory_checked_at', '{}'::jsonb)
+                    || %(cover_inventory_checked_at)s::jsonb)""" if record_cover_check else ""
+    return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
           from app.bootstrap_owners
@@ -7931,7 +7963,7 @@ def _save_scan_snapshot_sql() -> str:
           limit 1
         )
         update library.libraries
-           set metadata = library.libraries.metadata || jsonb_build_object('scan_cache', %(scan_cache)s::jsonb),
+           set metadata = library.libraries.metadata || jsonb_build_object('scan_cache', %(scan_cache)s::jsonb){cover_check},
                updated_at = now()
         from bootstrap_context
         where library.libraries.id = bootstrap_context.library_id;

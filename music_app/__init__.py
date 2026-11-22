@@ -776,10 +776,11 @@ def create_asgi_app():
                     logger=runtime.logger,
                 )
 
+            live_library_roots = tuple(get_library_roots(runtime.config))
             targeted_reconciler = TargetedLibraryReconciler(
                 runtime.config,
                 repository=select_scan_cache_adapter(runtime.config),
-                root_definitions=get_library_roots(runtime.config),
+                root_definitions=live_library_roots,
                 exception_overrides_provider=lambda: load_exception_overrides(
                     runtime.config
                 ),
@@ -948,9 +949,11 @@ def create_asgi_app():
             raise
 
         def replace_live_library_roots(roots) -> None:
+            nonlocal live_library_roots
             root_definitions = tuple(dict(root) for root in roots)
             targeted_reconciler.replace_roots(root_definitions)
-            _app.state.local_cover_inventory.rescan()
+            _app.state.local_cover_inventory.roots_changed(live_library_roots, root_definitions)
+            live_library_roots = root_definitions
             try:
                 runtime.library_watch_service.replace_roots(root_definitions)
             except Exception:

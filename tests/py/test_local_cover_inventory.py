@@ -331,6 +331,24 @@ def test_no_recorded_check_time_uses_the_changed_tracks_only():
     assert calls == [(["edited.mp3", "new.mp3"], {}), (["gone.mp3"], {"context_changed": True})]
 
 
+def test_an_unreadable_check_time_advances_nothing():
+    check, worker, calls = _scan_check(None)
+    changed = check.apply(
+        worker, previous={"a.mp3": {"mtime": 1, "size": 1}}, scanned={"a.mp3": {"mtime": 2, "size": 1}},
+        readable_root_ids={"main"},
+    )
+    assert calls == [(["a.mp3"], {})], "the changed tracks are still re-listed"
+    assert changed == {}, "the images nobody looked at must be looked for by the next scan"
+
+
+def test_a_published_scan_merges_its_check_times_beside_the_scan_cache():
+    from music_app.services import scan_cache_persistence
+
+    sql = " ".join(scan_cache_persistence._save_scan_snapshot_sql(record_cover_check=True).split())
+    assert "coalesce(library.libraries.metadata -> 'cover_inventory_checked_at', '{}'::jsonb) || %(cover_inventory_checked_at)s::jsonb" in sql
+    assert "cover_inventory_checked_at" not in scan_cache_persistence._save_scan_snapshot_sql()
+
+
 def test_an_empty_previous_cache_never_counts_every_track_as_changed():
     check, worker, calls = _scan_check({})
     check.apply(worker, previous={}, scanned={"a.mp3": {"mtime": 1, "size": 1}}, readable_root_ids={"main"})

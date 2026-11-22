@@ -971,6 +971,8 @@ def refresh_relation_views_for_state(
             raise ValueError(
                 "expected_scan_generation is required for the final scan publication"
             )
+        if target_state.get("cover_inventory_checked_at"):
+            snapshot_options["cover_inventory_checked_at"] = dict(target_state["cover_inventory_checked_at"])
         snapshot_options["publication_commit_guard"] = (
             lambda commit_action: _run_scan_publication_commit_for_current_generation(
                 library_state,

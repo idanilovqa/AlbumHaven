@@ -18,6 +18,7 @@ from music_app.services.library_indexing import (
 )
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.library_watch_health import FORCED_FULL_SCAN_MODE
+from music_app.services.local_cover_inventory import LocalCoverScanCheck
 from music_app.services.progressive_scan_publication import ProgressiveScanPublisher, contiguous_revision
 from music_app.services.musicbrainz_enrichment_triggers import schedule_after_scan
 from music_app.services.scan_cache_persistence import (
@@ -463,6 +464,19 @@ def refresh_library_state(
                 publication_state
             )
 
+    local_cover_inventory = cfg.get("_LOCAL_COVER_INVENTORY")
+    cover_check = None
+    if local_cover_inventory is not None:
+        load_checked_at = getattr(scan_cache_adapter, "load_cover_inventory_checked_at", None)
+        try:
+            checked_at = load_checked_at() if callable(load_checked_at) else {}
+        except Exception:
+            # The scan still runs, on changed tracks alone.
+            logger.exception("Could not read when the cover inventory was last checked.")
+            checked_at = None
+        cover_check = LocalCoverScanCheck(scan_started_at, checked_at, full_rescan=ignore_existing_cache)
+        publication_state["cover_inventory_check"] = cover_check
+
     # Albums publish as their folders finish reading; the final publication
     # below then writes only what the batches did not, plus stale-marking.
     publish_folders = getattr(scan_cache_adapter, "persist_targeted_inventory_mutation", None)
@@ -522,6 +536,18 @@ def refresh_library_state(
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_phase"] = "finalizing"
                 start_scan_stage(library_state, "relations")
+        if cover_check is not None:
+            del publication_state["cover_inventory_check"]
+            # Before publishing: a failed invalidation must not advance its roots' check times.
+            publication_state["cover_inventory_checked_at"] = cover_check.apply(
+                local_cover_inventory,
+                previous=existing_cache,
+                scanned=new_file_cache,
+                readable_root_ids=(
+                    set(publication_state.get("observed_library_root_ids") or ())
+                    - set(publication_state.get("scan_incomplete_root_ids") or ())
+                ),
+            )
         relation_refresh_options: dict[str, object] = {
             "final_scan_publication": True,
             "expected_scan_generation": scan_generation,
@@ -558,8 +584,8 @@ def refresh_library_state(
                     "Library scan republishing over newer watcher or tag-edit changes",
                     level="info", attempt=republish_attempt + 1,
                 )
-        local_cover_inventory = cfg.get("_LOCAL_COVER_INVENTORY")
-        if local_cover_inventory is not None:
+        publication_state.pop("cover_inventory_checked_at", None)
+        if ignore_existing_cache and local_cover_inventory is not None:
             local_cover_inventory.rescan()
         finish_scan_stage(library_state, "relations")
         library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)

@@ -4215,6 +4215,22 @@ test('cancelling a pending selection keeps its stream from starting after a hand
   assert.equal(context.state.player.selectedTrack, null);
 });
 
+test('a refused press that superseded a pending switch leaves no pending selection behind', async () => {
+  let refuse = false;
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 200, paused: false, ended: false, src: 'old' }),
+    canStartPlaybackInThisTab: () => !refuse,
+    startStreamingTrack: () => new Promise(() => {}),
+  });
+  context.state.player.current = { src: 'old', path: 'old.flac', title: 'Old', artist: 'A' };
+  void context.playTrackFromPayload({ src: 'b', path: 'b.flac', title: 'B', artist: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  refuse = true;
+  assert.equal(await context.playTrackFromPayload({ src: 'c', path: 'c.flac', title: 'C', artist: 'A' }), false);
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
 test('a pending start in the middle of a song shows that place, not 0:00', async () => {
   const time = new FakeElement();
   const { context } = loadHelper({

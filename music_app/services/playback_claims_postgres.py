@@ -54,6 +54,13 @@ def _position(value):
     return {"ms": min(value["ms"], value["durationMs"]), "durationMs": value["durationMs"]}
 
 
+def validate_taker(client_id, client_surface):
+    """A confirmed Play here is checked whole before the playing client is asked to stop."""
+    _client(client_id)
+    if client_surface not in ("private_web", "mobile"):
+        raise PlaybackContractError()
+
+
 class PostgresPlaybackClaims:
     def __init__(self, config, *, clock=None, connect=None):
         self._config = config
@@ -277,9 +284,8 @@ class PostgresPlaybackClaims:
         one, at its saved place. It is one statement, only over the token that was observed, so no
         later save of the holder lands after it and a third client that claimed meanwhile keeps playback.
         """
+        validate_taker(client_id, client_surface)
         client_id = _client(client_id)
-        if client_surface not in ("private_web", "mobile"):
-            raise PlaybackContractError()
         if client_id == observed["client_id"]:
             raise PlaybackContractError(409)
         track = position = None
@@ -289,18 +295,24 @@ class PostgresPlaybackClaims:
             except PlaybackContractError:
                 track = position = None
         confirmed = track is not None
-        with self._connect(self._database_url) as connection:
-            account_id, library_id = require_playback_membership(connection, actor)
-            if not confirmed:
+        if not confirmed:
+            with self._connect(self._database_url) as connection:
+                account_id, library_id = require_playback_membership(connection, actor)
                 row = connection.execute("""select track from app.playback_claims
                     where account_id = %s and library_id = %s and token_digest = %s""",
                     (account_id, library_id, observed["digest"])).fetchone()
-                if row is None:
-                    raise PlaybackContractError(409)
-                track, position = self._stored(row["track"])
-            references = PlaybackReferenceService(self._config, clock=self._clock, connect=self._connect)
+            if row is None:
+                raise PlaybackContractError(409)
+            track, position = self._stored(row["track"])
+        try:
             # The browser opens a song by its library path, as today's takeover read gives it.
-            path = references.resolve_library_path(actor, track["playbackRef"])
+            path = PlaybackReferenceService(self._config, clock=self._clock, connect=self._connect) \
+                .resolve_library_path(actor, track["playbackRef"])
+        except PlaybackContractError:
+            # Nothing is taken over for a song this client cannot open.
+            raise PlaybackContractError(422) from None
+        with self._connect(self._database_url) as connection:
+            account_id, library_id = require_playback_membership(connection, actor)
             now = self._clock()
             stored = {**track, "position": {**position, "at": now.isoformat()}} if position else track
             expires = now + timedelta(seconds=_CLAIM_LEASE_SECONDS)

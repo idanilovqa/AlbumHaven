@@ -392,11 +392,16 @@ async function playTrackFromPayload(track, options = {}) {
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
     ? canStartPlaybackInThisTab(track, { takeover: options.takeover === true })
     : true;
-  if (pendingClaim === false) return false;
-  if (knownElsewhere && !await pendingClaim) return false;
+  // A press that goes no further also ends the switch it superseded.
+  const refused = () => {
+    if (selectionToken === playerTrackSelectionToken) clearSelectedTrack();
+    return false;
+  };
+  if (pendingClaim === false) return refused();
+  if (knownElsewhere && !await pendingClaim) return refused();
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
-  if (!track?.path) return false;
+  if (!track?.path) return refused();
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   const requestedStartSeconds = Number(options.startSeconds);

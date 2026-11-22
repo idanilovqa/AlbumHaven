@@ -157,3 +157,17 @@ def test_play_here_on_a_tab_that_just_paused_starts_at_its_paused_place(handover
             assert Claims.replaced[0]["observed"]["client_id"] == HOLDER
 
     asyncio.run(scenario())
+
+
+def test_a_malformed_press_is_refused_before_the_playing_tab_is_asked_to_stop(handover_app):
+    async def scenario():
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}") as holder:
+            status, _, _ = await run_asgi_request_async(handover_app, "PUT", "/playback/state", json_body={
+                "protocol": 1, "state": "playing", "clientId": "not-a-uuid", "clientSurface": "private_web",
+                "takeover": True, "confirm": True,
+            })
+            assert status == 400
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(holder.receive_json(), 0.2)
+
+    asyncio.run(scenario())

@@ -31,6 +31,7 @@ class PlaybackHandoverHub:
         self._asks: dict[tuple[int, int, str], _Ask] = {}
         self._released: dict[tuple[int, int], tuple[float, str, bytes]] = {}
         self._answered: dict[tuple[int, int, str], tuple[Send, str]] = {}
+        self._telling: set[asyncio.Task] = set()
 
     def register(self, account_id: int, client_id: str, send: Send) -> None:
         self._sockets.setdefault((account_id, client_id), []).append(send)
@@ -104,8 +105,14 @@ class PlaybackHandoverHub:
         if answered is None:
             return
         send, request_id = answered
+        # Its socket may be busy with audio: the press never waits to tell it.
+        telling = asyncio.create_task(self._tell(send, {"type": "handover-done", "requestId": request_id}))
+        self._telling.add(telling)
+        telling.add_done_callback(self._telling.discard)
+
+    async def _tell(self, send: Send, event: dict) -> None:
         try:
-            await asyncio.wait_for(send({"type": "handover-done", "requestId": request_id}), timeout=1)
+            await asyncio.wait_for(send(event), timeout=1)
         except Exception:  # It learns at its next claim read instead.
             pass
 

@@ -166,3 +166,67 @@ def test_the_client_that_just_paused_can_still_be_asked_briefly_and_only_in_its_
     assert hub.released(ACCOUNT, LIBRARY + 1) is None
     now[0] += 16
     assert hub.released(ACCOUNT, LIBRARY) is None
+
+
+def test_telling_the_holder_the_press_is_over_never_delays_the_press():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        busy = asyncio.Event()
+
+        async def send(event):
+            if event["type"] == "handover-done":
+                await busy.wait()
+            await holder.send(event)
+
+        hub.register(ACCOUNT, HOLDER, send)
+        asking = asyncio.create_task(ask(hub))
+        hub.answer(send, answer(await holder.request_id()))
+        await asking
+        await asyncio.wait_for(hub.settled(ACCOUNT, LIBRARY, HOLDER), 0.2)
+        busy.set()
+        await asyncio.sleep(0.05)
+        assert holder.sent[-1]["type"] == "handover-done"
+
+    asyncio.run(scenario())
+
+
+def test_a_handover_never_holds_one_database_connection_while_it_takes_another(monkeypatch):
+    from contextlib import contextmanager
+    from datetime import datetime, timezone
+
+    from music_app.services import playback_claims_postgres
+
+    depth = [0]
+    deepest = [0]
+
+    class Connection:
+        def execute(self, *_args):
+            return self
+
+        def fetchone(self):
+            return {"client_id": "taker", "track": {"playbackRef": "saved", "title": "", "artist": "", "album": ""}}
+
+    @contextmanager
+    def connect(_url):
+        depth[0] += 1
+        deepest[0] = max(deepest[0], depth[0])
+        try:
+            yield Connection()
+        finally:
+            depth[0] -= 1
+
+    class References:
+        def __init__(self, *_args, connect, **_kwargs):
+            self._connect = connect
+
+        def resolve_library_path(self, _actor, _reference):
+            with self._connect(None):
+                return "a-path"
+
+    monkeypatch.setattr(playback_claims_postgres, "PlaybackReferenceService", References)
+    monkeypatch.setattr(playback_claims_postgres, "require_playback_membership", lambda *_: (ACCOUNT, LIBRARY))
+    claims = playback_claims_postgres.PostgresPlaybackClaims(
+        {}, clock=lambda: datetime.now(timezone.utc), connect=connect)
+    claims.hand_over(object(), client_id="6b1f2e0a-9c4d-4e53-8a77-2f0d9e8c1b22", client_surface="private_web",
+                     observed={"client_id": HOLDER, "digest": b"held"}, answer=None)
+    assert deepest[0] == 1

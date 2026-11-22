@@ -502,7 +502,7 @@ async function releasePlaybackOwnership() {
     if (version !== ownership.requestVersion) return false;
     ownership.activeClaim = null;
     // Play here elsewhere can still ask the tab that just paused.
-    ownership.releasedClaim = claim;
+    if (claim) ownership.releasedClaim = claim;
     if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
     clearBlockedPlaybackState();
     await deletePlaybackClaim(claim).catch(() => {});
@@ -572,8 +572,12 @@ async function answerPlaybackHandover(requestId) {
   const claim = ownership.activeClaim || ownership.releasedClaim;
   if (!claim?.claimToken) return;
   const snapshot = getPlayerPlaybackSnapshot();
+  // With no stream yet, a stopped player is at its place and a first start at the place it starts from.
   const sounding = (typeof getSoundingStreamingPlayback === 'function' && getSoundingStreamingPlayback())
-    || { track: state.player.current, seconds: snapshot.currentTime, durationSeconds: snapshot.duration };
+    || (state.player.current
+      ? { track: state.player.current, seconds: snapshot.currentTime, durationSeconds: snapshot.duration }
+      : { track: state.player.selectedTrack, seconds: state.player.selectedStartSeconds,
+        durationSeconds: state.player.selectedTrack?.durationSeconds });
   const { track } = sounding;
   if (!track?.path) return;
   const known = [claim, ownership.previousClaim].find((held) => held?.path === track.path) || null;
@@ -608,10 +612,16 @@ function settlePlaybackHandover() {
 function takeOverPlaybackHere() {
   const ownership = getPlaybackOwnershipState();
   if (ownership.takingOver) return ownership.takingOver;
-  // An engine with its own claim (Android's) takes over by that claim, at the saved place.
-  const take = playingEngine()?.holdsOwnClaim ? takeOverAtSavedPlace() : takeOverAtConfirmedPlace();
-  ownership.takingOver = take.finally(() => { ownership.takingOver = null; });
+  ownership.takingOver = takeOverPlayback().finally(() => { ownership.takingOver = null; });
   return ownership.takingOver;
+}
+
+async function takeOverPlayback() {
+  // Inside the APK only the handshake says whether Android plays natively.
+  const handshake = playingEngineHandshake();
+  if (handshake) await handshake;
+  // An engine with its own claim (Android's) takes over by that claim, at the saved place.
+  return playingEngine()?.holdsOwnClaim ? takeOverAtSavedPlace() : takeOverAtConfirmedPlace();
 }
 
 /**
@@ -625,9 +635,10 @@ async function takeOverAtConfirmedPlace() {
   try {
     result = await requestPlaybackClaim({ protocol: 1, state: 'playing', clientId: getPlaybackOwnershipTabId(),
       clientSurface: 'private_web', takeover: true, confirm: true });
-  } catch (_error) {
+  } catch (error) {
     if (version === ownership.requestVersion) {
-      notifyBlockedPlaybackStart();
+      if (error?.status !== 422) notifyBlockedPlaybackStart();
+      else if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
       void handlePlaybackOwnershipEvent();
     }
     return false;

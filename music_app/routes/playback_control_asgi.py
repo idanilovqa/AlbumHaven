@@ -28,7 +28,7 @@ from music_app.services.listen_history import (
 )
 from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
-from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
+from music_app.services.playback_claims_postgres import PostgresPlaybackClaims, validate_taker
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
@@ -193,6 +193,7 @@ async def _confirmed_takeover(request, payload):
     hub = request.app.state.playback_pcm_registry.handover
     client_id = payload.get("clientId")
     async with timed_playback_step("handover", "confirmed", "ask_ms") as timing:
+        await playback_call(validate_taker, client_id, payload.get("clientSurface"))
         observed = await playback_call(claims.holder, actor)
         # A pause gives the claim back while the other tab still shows Play here: it is asked all the same.
         paused = observed["client_id"] is None

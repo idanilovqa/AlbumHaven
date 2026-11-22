@@ -1680,6 +1680,56 @@ test('two Play here presses at once send one request', async () => {
   assert.equal(requests, 1);
 });
 
+test('a second release keeps the claim a just-paused tab answers with', async () => {
+  const { context } = loadHelper({ state: activeOwnershipState(), fetch: async () => jsonResponse({ protocol: 1 }) });
+  await context.releasePlaybackOwnership();
+  await context.releasePlaybackOwnership();
+  assert.equal(context.state.player.ownership.releasedClaim?.claimToken, 'departing-claim');
+});
+
+test('asked during its first start, a tab with nothing sounding answers that start and its place', async () => {
+  const { context, state, answers } = handoverHolder();
+  context.getSoundingStreamingPlayback = () => null;
+  state.player.current = null;
+  state.player.selectedTrack = { ...localTrack, durationSeconds: 195 };
+  state.player.selectedStartSeconds = 87;
+  await context.answerPlaybackHandover('request-6');
+  assert.equal(answers[0].track.playbackRef, 'departing-ref');
+  assert.equal(answers[0].position.ms, 87000);
+});
+
+test('Play here on a song that cannot be opened here says so', async () => {
+  const toasts = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    showToast: (text) => toasts.push(text),
+    fetch: async (url, init = {}) => (init.method === 'PUT'
+      ? jsonResponse({}, { ok: false, status: 422 })
+      : jsonResponse({ protocol: 1, is_playing_elsewhere: true, track: { title: 'Their Song' } })),
+  });
+  assert.equal(await context.takeOverPlaybackHere(), false);
+  assert.deepEqual(toasts, ['That song cannot be opened here.']);
+});
+
+test('inside the app Play here waits to learn whether Android plays before it chooses how to take over', async () => {
+  let engine = null;
+  const methods = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    playbackEngineHandshake: () => Promise.resolve().then(() => {
+      engine = { holdsOwnClaim: true, claimClientId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', ownsPlayback: () => false };
+    }),
+    currentPlaybackEngine: () => engine,
+    playTrackFromPayload: async () => true,
+    fetch: async (url, init = {}) => {
+      methods.push(init.method || 'GET');
+      return jsonResponse({ protocol: 1, is_playing_elsewhere: false });
+    },
+  });
+  await context.takeOverPlaybackHere();
+  assert.equal(methods[0], 'GET', 'Android takes over by its own claim');
+});
+
 test('a renewal refused because another client took over shows that client as playing elsewhere', async () => {
   const requests = [];
   const { context } = loadHelper({

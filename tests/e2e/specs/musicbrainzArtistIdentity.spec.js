@@ -96,7 +96,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
         await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
           expect.objectContaining({
             heading: nativeCase.name,
-            credit: [],
+            taggedAsLines: [],
             identityRows: [],
           }),
         );
@@ -164,7 +164,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
-          credit: [],
+          taggedAsLines: [],
           countries: ['Finland'],
           genres: ['ambient', 'dark wave'],
           links: expect.arrayContaining([
@@ -175,13 +175,13 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       );
     });
 
-    await stepLogger.step('MBD1-38: an artist matched under another name shows that name and how it is tagged', async () => {
+    await stepLogger.step('MBD1-38: an artist matched under another name shows that name', async () => {
       await openArtist({ galleryActions, searchToolbarActions }, CREDITED, 'Signal Guest Collective');
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
           heading: 'Signal Guest Collective',
-          credit: [`Tagged as ${CREDITED} in your files.`],
+          taggedAsLines: [],
         }),
       );
     });
@@ -192,7 +192,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
           heading: 'Korpiklaani',
-          credit: [`Tagged as ${SHAMAANI} in your files.`],
+          taggedAsLines: [],
           links: expect.arrayContaining([`https://musicbrainz.org/artist/${MBID.korpiklaani}`]),
         }),
       );

@@ -150,7 +150,7 @@
     };
     // Raised by every forget: a page or cover fetched before it is never stored after it.
     let generation = 0;
-    // When the last reachability check failed; 0 once the server answers it.
+    // When a reachability check last found the server down; 0 once the server answers one.
     let unreachableAt = 0;
 
     // Work that continues after the answer; a storage failure only means nothing is kept.
@@ -205,6 +205,8 @@
       readStyles.clear();
       const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY));
       await Promise.all(names.map(name => caches.delete(name)));
+      // A read that overlapped the deletion must not carry the old copy's index into the next one.
+      dataIndex = null;
     }
 
     function forget() {
@@ -309,7 +311,7 @@
         initial = { cache, name: CACHE_PREFIX + account, key, html, expiresAt };
       }));
       // Outside the page's turn: an offline tab waits for the page being written, never for reading
-      // its gallery (sandbox5 r29: right after a cold sign-in, a new tab offline took 6-12 s).
+      // its gallery (100-170 ms of the worker's one thread).
       if (initial) await keepInitialGallery(initial, fetchedIn);
       return started;
     }
@@ -639,7 +641,10 @@
       return `${url.pathname}?${new URLSearchParams(params)}`;
     }
 
-    const keepsData = url => DATA_PATHS.has(url.pathname) && !UNKEPT_DATA_PARAMS.some(name => url.searchParams.has(name));
+    // An album without a reference is asked for by its paths: those never name a kept entry either.
+    const keepsData = url => DATA_PATHS.has(url.pathname)
+      && !UNKEPT_DATA_PARAMS.some(name => url.searchParams.has(name))
+      && !Array.from(url.searchParams.values()).some(namesFilePath);
 
     // The gallery [url] belongs to, without what places a page in it or names an artist.
     function galleryBase(url) {
@@ -839,6 +844,11 @@
       }));
     }
 
+    // Data the server never answered within the wait, as a gateway would say it.
+    const unansweredData = () => new Response(JSON.stringify({ ok: false, error: 'Album Haven cannot be reached' }), {
+      status: 504, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+
     // A kept answer as the page reads it, marked as coming from the copy.
     const dataAnswer = payload => new Response(JSON.stringify(payload), {
       headers: { 'Content-Type': 'application/json', [COPY_HEADER]: 'cache' },
@@ -996,14 +1006,16 @@
 
     // Library data, server first: an answer the server marks is kept as it passes. The copy answers
     // only when the server cannot be reached (no answer, a gateway failure, or still nothing after
-    // dataCheckMs and a failed reachability check); anything never kept fails as it would have.
+    // dataCheckMs and a reachability check that failed or timed out). Anything never kept fails as
+    // it would have, or answers 504 when the worker gave up waiting.
     async function data(request, event) {
       const url = new URL(request.url);
       if (!keepsData(url)) return fetch(request);
       const headers = new Headers(request.headers);
       headers.set(COPY_HEADER, '1');
       const fetchedIn = generation;
-      const arrived = fetch(new Request(request, { headers })).then((response) => {
+      // Past the browser's HTTP cache, like the page: it would store the answer with its file paths.
+      const arrived = fetch(new Request(request, { headers, cache: 'no-store' })).then((response) => {
         if (response.status === 200 && response.headers.get(COPY_HEADER) && !noStore(response)) {
           const copy = response.clone();
           later(event, () => keepData(url, copy, fetchedIn, event));
@@ -1011,13 +1023,11 @@
         return response;
       });
       const settled = arrived.then(response => ({ response }), error => ({ error }));
+      const waitMs = unreachableAt && now() - unreachableAt < UNREACHABLE_KNOWN_MS ? 0 : dataCheckMs;
       let timer;
       let outcome = await Promise.race([
         settled,
-        new Promise((resolve) => {
-          const known = unreachableAt && now() - unreachableAt < UNREACHABLE_KNOWN_MS;
-          timer = setTimeout(() => resolve(NO_ANSWER), known ? 0 : dataCheckMs);
-        }),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(NO_ANSWER), waitMs); }),
       ]);
       clearTimeout(timer);
       if (outcome === NO_ANSWER) {
@@ -1026,17 +1036,21 @@
           const kept = await keptData(url);
           if (kept) return kept;
         }
-        // Never kept and certainly unreachable: fail now as a lost network does, so the page says
-        // Offline. A slow check may be a busy server: its answer is waited for up to noAnswerMs in
-        // all (a cut network may hold the request forever), then the page says Offline.
-        if (server === 'down') throw new TypeError('Album Haven cannot be reached');
+        // Never kept and certainly unreachable: give up now. A slow check may be a busy server: its
+        // answer is waited for up to noAnswerMs in all, the check included (a cut network may hold
+        // the request forever). Giving up after waiting answers a gateway's 504, Offline to the page,
+        // and never rejects: the page's fetch (session-csrf-fetch.js) repeats a rejected read, which
+        // would wait the whole time again.
+        if (server === 'down') return unansweredData();
         if (server === 'slow') {
           outcome = await Promise.race([
             settled,
-            new Promise((resolve) => { timer = setTimeout(() => resolve(NO_ANSWER), Math.max(0, noAnswerMs - dataCheckMs)); }),
+            new Promise((resolve) => {
+              timer = setTimeout(() => resolve(NO_ANSWER), Math.max(0, noAnswerMs - waitMs - CHECK_TIMEOUT_MS));
+            }),
           ]);
           clearTimeout(timer);
-          if (outcome === NO_ANSWER) throw new TypeError('Album Haven cannot be reached');
+          if (outcome === NO_ANSWER || (outcome.error && !request.signal?.aborted)) outcome = { response: unansweredData() };
         } else outcome = await settled;
       }
       if (outcome.error) {

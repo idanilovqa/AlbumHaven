@@ -1790,8 +1790,9 @@ test('IAR-W25: a slow server is waited for; the kept data answers only when the 
   assert.deepEqual(artistsOf(await json(kept)), ['slow']);
 
   // Owner steps on sandbox5: a Wi-Fi cut holds connections open, and an album never kept loaded
-  // forever. Unreachable with nothing kept fails as a lost network does, so the page says Offline.
-  await assert.rejects(handle(resource('/album-details?album_key=never-kept')).finally(() => release()), TypeError);
+  // forever. Unreachable with nothing kept answers as a gateway does, so the page says Offline and
+  // its fetch does not wait again.
+  assert.equal((await handle(resource('/album-details?album_key=never-kept')).finally(() => release())).status, 504);
 });
 
 // Owner steps on sandbox5 r23: behind a Wi-Fi cut every kept album waited the full check delay.
@@ -1867,9 +1868,74 @@ test('IAR-W25: a check with no answer in time is a busy server, not offline: nev
 
   dataDelayMs = null;
   const hungAt = Date.now();
-  await assert.rejects(handle(resource('/album-details?album_key=never')), TypeError);
+  const gaveUp = await handle(resource('/album-details?album_key=never'));
   const hungMs = Date.now() - hungAt;
-  assert.ok(hungMs >= 2000 && hungMs < 4000, `a server that never answers says Offline within the bound (${hungMs} ms)`);
+  assert.equal(gaveUp.status, 504);
+  assert.ok(hungMs >= 2400 && hungMs < 2900, `the bound is the whole wait, the check included (${hungMs} ms of 2500)`);
+});
+
+// Sandbox5 r31, held connections: an album never kept said Offline after 21 s. The page's fetch
+// (session-csrf-fetch.js) repeats a read that rejects, so a wait that rejected was waited twice.
+test('IAR-W25: behind a held connection the page waits once for data never kept, for the navigation bound in all', async () => {
+  const held = request => new Promise((_resolve, reject) => {
+    request.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  });
+  const { handle } = setup({ mode: 'web', dataCheckMs: 50, noAnswerMs: 1500, respond: held });
+  let asks = 0;
+  const window = {
+    location: { href: `${ORIGIN}/`, origin: ORIGIN },
+    fetch: (input) => {
+      asks += 1;
+      return handle(resource(input));
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'session-csrf-fetch.js'), 'utf8'),
+    { window, document: { cookie: '' }, URL, Headers });
+
+  const started = Date.now();
+  const response = await window.fetch('/album-details?album_key=never');
+  const waited = Date.now() - started;
+
+  assert.equal(asks, 1, 'the page asks once');
+  assert.equal(response.status, 504, 'a gateway status: unreachable to the page, never a kept answer');
+  assert.notEqual(response.headers.get(COPY_HEADER), 'cache');
+  assert.ok(waited >= 1400 && waited < 1900, `waited ${waited} ms of 1500`);
+});
+
+// A held connection can also end in an error: after the wait, that must not start the wait again.
+test('IAR-W25: a connection reset after the wait began is not waited for again', async () => {
+  const { handle } = setup({
+    mode: 'web',
+    dataCheckMs: 50,
+    noAnswerMs: 2500,
+    respond: request => new Promise((_resolve, reject) => {
+      request.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      if (new URL(request.url).pathname !== '/app-copy/account') setTimeout(() => reject(new TypeError('Connection reset')), 1200);
+    }),
+  });
+
+  assert.equal((await handle(resource('/album-details?album_key=reset'))).status, 504);
+});
+
+// Real Chrome, 3 of 3 runs: fetched with the default cache mode, a marked answer (private, no-cache)
+// was written with its paths to the browser's own HTTP cache, which no forget deletes.
+test('data is fetched past the HTTP cache: only the redacted copy is stored on the device', async () => {
+  const { calls, handle } = setup({ mode: 'web', respond: () => dataAnswer({ ok: true }) });
+
+  await handle(resource('/album-details?album_key=broadcast'));
+
+  assert.equal(calls[0].cache, 'no-store');
+});
+
+test('a request whose address names a file path is never kept: its key would be that path', async () => {
+  const { calls, caches, handle } = setup({ mode: 'web', respond: () => dataAnswer({ ok: true }) });
+
+  await handle(resource(`/album-details?album_key=${encodeURIComponent('Q:/Made Up/Album/01.flac')}`));
+
+  assert.equal(calls[0].headers.get(COPY_HEADER), null);
+  for (const store of caches.stores.values()) {
+    for (const key of store.entries.keys()) assert.doesNotMatch(decodeURIComponent(key), /Made.Up/);
+  }
 });
 
 test('a data request the page cancels is never answered from the copy', async () => {

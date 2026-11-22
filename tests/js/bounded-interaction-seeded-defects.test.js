@@ -820,6 +820,83 @@ test('the guard rejects a test identity that is only a substring of the real tes
   ]);
 });
 
+// The repeated-request rule. Each case measures the registered Album Details
+// request-capture contract with a seeded interaction: opening an album wires a
+// click listener that GETs its details. A leaked listener (one more per open)
+// makes the repeated open send the same GET twice.
+const ALBUM_DETAILS_CONTRACT = 'js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails';
+
+function seededAlbumOpens({ leakListener = false, extraOnRepeat = null }) {
+  const { createRequestCapture, jsonResponse } = require('./helpers/request-capture');
+  return {
+    setup: () => ({ capture: createRequestCapture(() => jsonResponse({ ok: true })), listeners: [] }),
+    async act({ capture, listeners }, pass) {
+      const before = capture.requests.length;
+      if (leakListener || !listeners.length) listeners.push(() => capture.fetch('/album-details?album_key=alpha'));
+      await Promise.all(listeners.map(listener => listener()));
+      if (pass === 2 && extraOnRepeat) await capture.fetch(extraOnRepeat);
+      return { requests: capture.urls().slice(before) };
+    },
+  };
+}
+
+test('the repeated-request rule rejects a leaked listener that sends a duplicate GET on the repeat', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await measureInteractionContract(ALBUM_DETAILS_CONTRACT, seededAlbumOpens({}));
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, seededAlbumOpens({ leakListener: true })),
+    (error) => {
+      assert.deepEqual(error.message.split('\n'), [
+        `${ALBUM_DETAILS_CONTRACT}: the repeated interaction fanned out from 1 to 2 requests`,
+        `${ALBUM_DETAILS_CONTRACT}: the repeated interaction sent GET /album-details?album_key=alpha 2 times, the first pass 1`,
+      ]);
+      return true;
+    },
+  );
+});
+
+test('the repeated-request rule rejects a repeat that duplicates a GET without sending more requests', () => {
+  const { repeatedRequestViolations } = require('./helpers/request-capture');
+  const alpha = '/album-details?album_key=alpha';
+  const beta = '/album-details?album_key=beta';
+  assert.deepEqual(repeatedRequestViolations('seeded', [alpha, beta], [alpha, alpha]), [
+    `seeded: the repeated interaction sent GET ${alpha} 2 times, the first pass 1`,
+  ]);
+  // A first pass that repeats a GET by design (a pending retry) may repeat it as often again,
+  // and identical writes are not duplicate GETs.
+  assert.deepEqual(repeatedRequestViolations('seeded', [alpha, alpha], [alpha, alpha]), []);
+  const post = { url: '/playback/session/scrobble', method: 'POST' };
+  assert.deepEqual(repeatedRequestViolations('seeded', [post, alpha], [post, post]), []);
+});
+
+test('the repeated-request rule rejects a repeat that fans out into distinct requests', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, seededAlbumOpens({ extraOnRepeat: '/album-details?album_key=beta' })),
+    { message: `${ALBUM_DETAILS_CONTRACT}: the repeated interaction fanned out from 1 to 2 requests` },
+  );
+});
+
+test('a request-capture contract cannot be proved without repeating its interaction', async () => {
+  const { measureScalePair } = require('./helpers/bounded-interaction-counter');
+  const { loadRegistry } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const entry = loadRegistry().interactions.find(item => item.id === ALBUM_DETAILS_CONTRACT);
+  await assert.rejects(() => measureScalePair({
+    id: entry.id, small: entry.cardinalities.small, large: entry.cardinalities.production,
+    run: async () => ({ requests: 1 }), budgets: entry.budgets, growth: entry.growth,
+  }), /a request-capture contract is measured by measureInteractionContract, which repeats the interaction/);
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, { setup: () => ({}), act: async () => ({ metrics: { requests: 0 } }) }),
+    /pass 1 did not return the requests it sent/,
+  );
+  // Returning fewer requests than were counted cannot shrink the measured interaction.
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, { setup: () => ({}), act: async () => ({ requests: [], metrics: { requests: 2 } }) }),
+    /pass 1 counted 2 requests but returned 0/,
+  );
+});
+
 test('the guard reports every seeded historical defect in real application sources', { timeout: 300_000 }, async () => {
   const [clean, injected] = await validations();
   const baseline = new Set(clean.errors);

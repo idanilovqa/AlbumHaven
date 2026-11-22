@@ -225,6 +225,12 @@ export class GlobalPlayerActions {
     return this.globalPlayer.readPlaybackSummary();
   }
 
+  // After a play or pause, the player repaints its control from the playback
+  // snapshot asynchronously; wait for the visible summary to settle on `expected`.
+  async expectSettledPlaybackSummary(expected, options = {}) {
+    await expect.poll(() => this.readCurrentPlaybackSummary(), { timeout: options.timeout || 10000 }).toEqual(expected);
+  }
+
   /**
    * Mockup playback-elsewhere-status v003 (owner, 2026-11-17): "Playing in another tab" centred over
    * the whole dimmed player, the other device's song still there underneath, and Play lifted above

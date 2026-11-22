@@ -66,6 +66,7 @@ async function expectAlbumDetailsCover({ coverLookupActions, trackModalActions }
 
 async function expectPartAlbumCoversAfterSave(actions, albumDirectory, savedCoverPath) {
   const { coverLookupActions, galleryActions, trackModalActions } = actions;
+  await openAlbumGallery(galleryActions);
   await galleryActions.selectAlbumDetailsByIdentity({ artist: ARTIST, album: PART_ALBUM, year: YEAR });
   await trackModalActions.waitForInteractiveSummary();
   await expectAlbumDetailsCover(actions, savedCoverPath);
@@ -81,6 +82,7 @@ async function expectPartAlbumCoversAfterSave(actions, albumDirectory, savedCove
 
 async function expectPartAlbumWithoutDuplicateWarning({ galleryActions, trackModalActions }) {
   const identity = { artist: ARTIST, album: PART_ALBUM, year: YEAR };
+  await openAlbumGallery(galleryActions);
   expect(await galleryActions.readAlbumIdentityCardCount(identity)).toBe(1);
   await expect(galleryActions.galleryPage.albumCard.duplicateFilesBadgeByIdentity(ARTIST, PART_ALBUM, YEAR)).toHaveCount(0);
   await galleryActions.selectAlbumDetailsByIdentity(identity);
@@ -95,6 +97,7 @@ async function expectPartAlbumWithoutDuplicateWarning({ galleryActions, trackMod
 
 async function expectCopiedAlbumWithDuplicateWarning({ galleryActions, trackModalActions }) {
   const identity = { artist: ARTIST, album: COPIED_ALBUM, year: YEAR };
+  await openAlbumGallery(galleryActions);
   expect(await galleryActions.readAlbumIdentityCardCount(identity)).toBe(1);
   await expect(galleryActions.galleryPage.albumCard.duplicateFilesBadgeByIdentity(ARTIST, COPIED_ALBUM, YEAR)).toBeVisible();
   await galleryActions.selectAlbumDetailsByIdentity(identity);
@@ -162,11 +165,11 @@ test(
       });
 
       await stepLogger.step('Show the four-part album once with every disc and no duplicate warning', async () => {
-        await openAlbumGallery(galleryActions);
         await expectPartAlbumWithoutDuplicateWarning({ galleryActions, trackModalActions });
       });
 
       await stepLogger.step('List the four album-folder covers in Cover Look Up and save a new one beside them', async () => {
+        await openAlbumGallery(galleryActions);
         await galleryActions.selectAlbumDetailsByIdentity({ artist: ARTIST, album: PART_ALBUM, year: YEAR });
         await trackModalActions.waitForInteractiveSummary();
         await trackModalActions.openCoverLookup();
@@ -185,7 +188,6 @@ test(
       await stepLogger.step('Keep both results after an application restart', async () => {
         await managedAppLifecycle.restart();
         await appBarActions.waitForScanAndCoverRefreshIdle();
-        await openAlbumGallery(galleryActions);
         await expectPartAlbumWithoutDuplicateWarning({ galleryActions, trackModalActions });
         await expectPartAlbumCoversAfterSave(actions, fixture.albumDirectory, savedCoverPath);
         await expectCopiedAlbumWithDuplicateWarning({ galleryActions, trackModalActions });

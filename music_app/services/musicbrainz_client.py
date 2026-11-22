@@ -673,13 +673,14 @@ class MusicBrainzClient:
             ],
         }}
 
-    def lookup_release_group(self, release_group_mbid: object) -> JsonDict:
+    def lookup_release_group(self, release_group_mbid: object, *, artist_credit: bool = False) -> JsonDict:
         """A release group's raw types, first-release date, genres (most votes first) and the
-        series it is part of."""
+        series it is part of; with ``artist_credit``, who it is credited to."""
         normalized = _valid_mbid(release_group_mbid)
         if not normalized:
             return {"classification": "invalid_request"}
-        query = urllib.parse.urlencode({"inc": "genres series-rels", "fmt": "json"})
+        included = "artist-credits genres series-rels" if artist_credit else "genres series-rels"
+        query = urllib.parse.urlencode({"inc": included, "fmt": "json"})
         payload, transport = self.get_json(f"{self.base_url}/release-group/{normalized}?{query}", self.user_agent)
         if not isinstance(payload, dict):
             return {"classification": _transport_classification(transport), "transport": transport}
@@ -696,6 +697,7 @@ class MusicBrainzClient:
             "disambiguation": _text(payload.get("disambiguation")) or None,
             "genres": sorted(genres, key=lambda genre: (-genre["count"], genre["name"].casefold())),
             "series": _series_parts(payload.get("relations")),
+            **({"artist_credit": _artist_credit(payload.get("artist-credit"))} if artist_credit else {}),
         }}
 
     def lookup_series(self, series_mbid: object) -> JsonDict:

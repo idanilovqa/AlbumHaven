@@ -307,3 +307,19 @@ def test_a_merged_mbid_names_the_entity_it_now_points_to(method, key):
 
     # The matcher keys stored groups and releases by the id it asked for.
     assert (found["id"], found["canonical_id"]) == (requested, target)
+
+
+def test_a_release_groups_credit_is_asked_for_only_when_wanted():
+    asked = []
+    credit = [{"name": "Band", "joinphrase": "", "artist": {"id": "00000000-0000-4000-8000-0000000000a3", "name": "Band"}}]
+    client = _client_api().MusicBrainzClient(
+        base_url="http://127.0.0.1:5050/ws/2", user_agent="AlbumHaven/test",
+        get_json=lambda url, _agent, **_kwargs: asked.append(url) or ({"title": "Album", "artist-credit": credit}, {}))
+    group = "00000000-0000-4000-8000-0000000000a1"
+
+    plain = client.lookup_release_group(group)["release_group"]
+    credited = client.lookup_release_group(group, artist_credit=True)["release_group"]
+
+    assert "artist-credits" not in asked[0] and "artist_credit" not in plain
+    assert "artist-credits" in asked[1]
+    assert credited["artist_credit"][0]["artist_name"] == "Band"

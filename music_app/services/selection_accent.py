@@ -6,13 +6,11 @@ from collections.abc import Callable, Mapping
 import re
 from typing import Any
 
+from music_app.services.postgres_connections import leased_connection as _leased_connection
+
 try:  # pragma: no cover - the driver is optional for import-time tooling.
-    import psycopg
-    from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
     Jsonb = None
 
 
@@ -97,6 +95,4 @@ def _account_id(value: object) -> int:
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for selection accent preferences.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)

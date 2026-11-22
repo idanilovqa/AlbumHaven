@@ -729,7 +729,13 @@ class PostgresLibraryBrowseRepository:
         view_state = _root_sidebar_view_state(query_params)
         selected_artist = str(params.get("artist") or "").strip()
         query = str(params.get("q") or "")
-        with self._connect_to_database() as connection:
+        # Only the background rebuild reads the whole library and stores a snapshot;
+        # it must not hold a shared browse connection. Requests only read the snapshot.
+        with (
+            self._owned_connection_context()
+            if rebuild_missing_snapshot
+            else self._browse_connection_context()
+        ) as connection:
             tracks = self._load_non_album_track_snapshot(connection)
             relation_alias_maps = None
             browse_only = bool(self._config.get("SHARED_LIBRARY_BROWSE_ONLY"))
@@ -1072,7 +1078,14 @@ class PostgresLibraryBrowseRepository:
         except (TypeError, ValueError):
             gallery_offset = 0
         view_state["gallery_offset"] = gallery_offset
-        connection = self._connect_to_database()
+        # The first page reads the ready gallery projection; later pages always
+        # recount the whole library and must not hold a shared browse connection.
+        connection_stack = ExitStack()
+        connection = connection_stack.enter_context(
+            self._owned_connection_context()
+            if gallery_offset
+            else self._browse_connection_context()
+        )
         try:
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
@@ -1148,9 +1161,7 @@ class PostgresLibraryBrowseRepository:
                 if callable(rollback):
                     rollback()
             finally:
-                close = getattr(connection, "close", None)
-                if callable(close):
-                    close()
+                connection_stack.close()
         if projected_sidebar is not None:
             # The projection already counts missing albums under their artists.
             artists_sidebar, album_count = projected_sidebar
@@ -1231,8 +1242,7 @@ class PostgresLibraryBrowseRepository:
             schedule_gallery_projection_refresh,
         )
 
-        connection = self._connect_to_database()
-        try:
+        with self._browse_connection_context() as connection:
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
             )
@@ -1240,15 +1250,6 @@ class PostgresLibraryBrowseRepository:
                 connection,
                 _root_sidebar_view_state(query_params),
             )
-        finally:
-            try:
-                rollback = getattr(connection, "rollback", None)
-                if callable(rollback):
-                    rollback()
-            finally:
-                close = getattr(connection, "close", None)
-                if callable(close):
-                    close()
         if projected is None:
             schedule_gallery_projection_refresh(self._config, connect=self._connect)
             raise GalleryProjectionPending("Gallery is being prepared.")
@@ -1604,7 +1605,7 @@ class PostgresLibraryBrowseRepository:
         _connection: Any | None = None,
     ) -> dict[str, object]:
         if _connection is None:
-            with self._connect_to_database() as connection:
+            with self._browse_connection_context() as connection:
                 connection.execute(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
                 )
@@ -4116,7 +4117,7 @@ class PostgresLibraryBrowseRepository:
 
         if connection is not None:
             return load_rows(connection)
-        with self._connect_to_database() as owned_connection:
+        with self._browse_connection_context() as owned_connection:
             return load_rows(owned_connection)
 
     def _load_search_rows(
@@ -4252,7 +4253,7 @@ class PostgresLibraryBrowseRepository:
         )
 
         if connection is None:
-            with self._connect_to_database() as owned_connection:
+            with self._browse_connection_context() as owned_connection:
                 return self._load_relation_alias_maps(connection=owned_connection)
 
         def fetch_one(cursor: Any) -> object | None:
@@ -4478,7 +4479,12 @@ class PostgresLibraryBrowseRepository:
 
         if connection is not None:
             return load_rows(connection)
-        with self._connect_to_database() as owned_connection:
+        # One album is a short read; the whole-library scan must not hold a shared browse connection.
+        with (
+            self._browse_connection_context()
+            if normalized_album_key
+            else self._owned_connection_context()
+        ) as owned_connection:
             return load_rows(owned_connection)
 
     def _load_problematic_loose_file_rows(
@@ -4593,7 +4599,7 @@ class PostgresLibraryBrowseRepository:
         return rows
 
     def _load_utility_rules_rows(self) -> list[object]:
-        with self._connect_to_database() as connection:
+        with self._browse_connection_context() as connection:
             cursor = connection.execute(_utility_rules_sql(), {})
             return list(cursor.fetchall())
 
@@ -4604,10 +4610,17 @@ class PostgresLibraryBrowseRepository:
 
     @contextmanager
     def _browse_connection_context(self) -> Any:
+        """Short reads lease the small shared browse pool."""
         if self._use_shared_connection_pool:
             with _pooled_connection(self._database_url, workload="browse") as connection:
                 yield connection
             return
+        with self._owned_connection_context() as connection:
+            yield connection
+
+    @contextmanager
+    def _owned_connection_context(self) -> Any:
+        """A fresh connection, for writes and whole-library reads that must not starve the browse pool."""
         connection_resource = self._connect_to_database()
         if callable(getattr(connection_resource, "__enter__", None)):
             with connection_resource as connection:

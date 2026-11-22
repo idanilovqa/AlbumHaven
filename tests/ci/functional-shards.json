@@ -598,6 +598,27 @@
               "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
               "case": "FTC-GALLERY-NAV-043 phone Back and Forward restore a cleared search and its tree",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-044 a page loaded from a search URL selects its artist and ends the search like a typed one",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-045 the logo goes home from a page loaded from a search URL",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-046 an artist that fails to load while the server is down puts back the page it left",
+              "area": "gallery-search"
             }
           ]
         }

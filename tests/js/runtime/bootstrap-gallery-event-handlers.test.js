@@ -2081,6 +2081,52 @@ test('unrelated sidebar artist selection clears the stale family panel while its
   assert.deepEqual(calls.sequence, ['fetchAndRender']);
 });
 
+// Owner 2026-11-21: an artist clicked while the server restarted kept the tree and heading on it, the URL on the old
+// artist and an empty gallery; the cleared search then read "All artists 0" from that placeholder view.
+test('an unrelated sidebar artist that fails to load puts back the page it left and says so', async () => {
+  for (const newerNavigation of [false, true]) {
+    const { context, calls } = createContext({ fetchAndRenderResult: Promise.reject(new TypeError('Failed to fetch')) });
+    const sidebarArtists = [{ artist: 'Neal Morse', count: 3 }, { artist: 'Broadcast', count: 2 }];
+    const searchView = {
+      query: 'progressive',
+      selected_artist: 'Neal Morse',
+      all_artists_active: false,
+      gallery_scope: 'all',
+      visible_library_categories: ['main_library'],
+      related_filter_artists: [],
+      primary_filter_active: false,
+      related_artists: ['The Neal Morse Band'],
+      primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'neal-morse-one' }] }],
+      family_artist_groups: [{ artist: 'The Neal Morse Band', albums: [{ key: 'nmb-one' }] }],
+      artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'neal-morse-one' }] }],
+      artists_sidebar: sidebarArtists,
+      artist_count: 2,
+      show_all_artists_sidebar_link: true,
+    };
+    context.state.view = searchView;
+    context.state.gallery.sidebarArtistsOverride = null;
+
+    context.handleSidebarArtistSelectionClick(createImmediateSidebarArtistEvent(sidebarArtists, 'Broadcast').event);
+    assert.equal(context.state.view.selected_artist, 'Broadcast');
+    const newerView = { ...searchView, selected_artist: 'Yes' };
+    if (newerNavigation) context.state.view = newerView;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    if (newerNavigation) {
+      assert.equal(context.state.view, newerView);
+      assert.equal(calls.showToast.length, 0);
+    } else {
+      assert.equal(context.state.view.selected_artist, 'Neal Morse');
+      assert.equal(context.state.view.artist_count, 2);
+      assert.deepEqual(context.state.view.artist_groups, searchView.artist_groups);
+      assert.equal(context.state.gallery.sidebarArtistsOverride, null);
+      assert.deepEqual(calls.showToast.map(({ message, level }) => [message, level]), [
+        ['This artist could not be loaded. Try again.', 'error'],
+      ]);
+    }
+  }
+});
+
 test('tree selection preserves search while rendering an optimistic selected-artist view before fetch', () => {
   const { context, calls } = createContext();
   context.state.view = {
@@ -3652,6 +3698,53 @@ test('clearing an interactive canonical-root search reloads the full auto-select
   assert.equal(requestUrl.searchParams.get('artist'), 'The Neal Morse Band');
   assert.equal(requestUrl.searchParams.get('payload_tier'), 'gallery_summary');
   assert.equal(calls.fetchAndRender[0].runtimeOptions, undefined);
+});
+
+// Owner 2026-11-21: after opening an artist outside the best match's family, the cleared search read "All artists 1":
+// the restored tree took the artist page's own count.
+test('clearing a search onto an artist page restores the saved tree with its own artist count', () => {
+  const selectedGroup = { artist: 'Roine Stolt', artist_display: 'Roine Stolt', albums: [{ key: 'roine-stolt-signal' }] };
+  const { context, calls } = createContext({ searchInputValue: '', useProductionBuildApiUrl: true });
+  context.state.view = {
+    surface: { active: 'albums' },
+    query: 'Signal',
+    selected_artist: 'Roine Stolt',
+    all_artists_active: false,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    primary_artist_groups: [selectedGroup],
+    family_artist_groups: [],
+    artist_groups: [selectedGroup],
+    artists_sidebar: [{ artist: 'Signal Family Lead', count: 1 }, { artist: 'Roine Stolt', count: 1 }],
+    artist_count: 1,
+    album_count: 1,
+  };
+  context.state.ui.preSearchView = {
+    selected_artist: '',
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artists_sidebar: [
+      { artist: 'Agents Of Mercy', count: 1 },
+      { artist: 'Roine Stolt', count: 10 },
+      { artist: 'Signal Family Lead', count: 1 },
+    ],
+    artist_count: 39,
+    show_all_artists_sidebar_link: true,
+  };
+  context.state.ui.preSearchViewOrigin = 'interactive';
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(context.state.view.artist_count, 39);
+  assert.deepEqual(context.state.view.artists_sidebar.map(({ artist }) => artist),
+    ['Agents Of Mercy', 'Roine Stolt', 'Signal Family Lead']);
+  assert.equal(calls.fetchAndRender.length, 1);
+  const requestUrl = new URL(calls.fetchAndRender[0].url, 'http://localhost');
+  assert.equal(requestUrl.searchParams.get('artist'), 'Roine Stolt');
+  assert.equal(requestUrl.searchParams.get('q'), null);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender[0].runtimeOptions)), { preserveSidebarState: true });
 });
 
 test('interactive-origin no-match clear restores Home with a bounded albums request without restoring a pre-search artist', () => {

@@ -280,6 +280,179 @@ test('FTC-GALLERY-NAV-041 browser Back and Forward restore a search with no matc
   });
 });
 
+// Owner 2026-11-21 (Sandbox1, after a server restart): a page loaded from a search URL that selects an artist other
+// than the best match (q=rhapsody&artist=Thundercross). Its tree selected the URL's artist while the gallery showed
+// the best match, and emptying the field then clicking outside left the search on screen. Both kinds of selected
+// artist: a family artist of the best match, and an artist found only by an album title.
+const DIRECT_SEARCHES = [
+  { query: SEARCH_QUERY, artist: 'Roine Stolt' },
+  { query: 'transatlantic', artist: 'Neal Morse' },
+];
+
+function directSearchUrl({ query, artist }) {
+  return `/?surface=albums&q=${encodeURIComponent(query)}&artist=${encodeURIComponent(artist)}`
+    + '&gallery_scope=all&category=main_library&category=new_arrivals&category=hoard';
+}
+
+async function readGalleryHeading(page) {
+  return (await page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]').innerText())
+    .trim().replace(/ family$/, '');
+}
+
+// The page the URL describes: the search in the field, the search's tree, and the URL's artist selected in the tree
+// and shown in the gallery.
+async function expectDirectSearchPage(page, { query, artist }, { navigationPanelActions }) {
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return [url.searchParams.get('q'), url.searchParams.get('artist')];
+  }).toEqual([query, artist]);
+  await expect(page.locator('#search-input')).toHaveValue(query);
+  await expect(page.locator('#sidebar-list')).toHaveAttribute('data-navigation-tree', 'artists');
+  await navigationPanelActions.waitForSidebarSelection(artist);
+  expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(artist);
+  await expect.poll(() => readGalleryHeading(page)).toBe(artist);
+  await expect(page.locator('#sidebar-list [data-sidebar-all-artists="1"]')).toBeHidden();
+}
+
+// A search ended: no query anywhere, the library's whole tree, and the tree's selection is what the gallery shows.
+async function expectSearchEnded(page, { galleryActions, navigationPanelActions }) {
+  await expect.poll(() => new URL(page.url()).searchParams.has('q')).toBe(false);
+  await expect(page.locator('#search-input')).toHaveValue('');
+  await galleryActions.waitForGalleryReady();
+  await expect(page.locator('#sidebar-list')).toHaveAttribute('data-navigation-tree', 'artists');
+  await expect(page.locator('#sidebar-list [data-sidebar-all-artists="1"]')).toBeVisible();
+  await expect(page.locator('#sidebar-list')).not.toContainText('No match found');
+  await expect.poll(async () => page.locator('#sidebar-list [data-sidebar-artist]').count()).toBeGreaterThan(5);
+  const urlArtist = new URL(page.url()).searchParams.get('artist') || '';
+  if (urlArtist) {
+    await navigationPanelActions.waitForSidebarSelection(urlArtist);
+    await expect.poll(() => readGalleryHeading(page)).toBe(urlArtist);
+  } else {
+    await expect(navigationPanelActions.navigationPanel.activeAllArtistsLink).toHaveCount(1);
+    expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe('');
+  }
+}
+
+const DIRECT_SEARCH_ENDINGS = ['emptying the field and clicking outside', 'emptying the field and pressing Enter'];
+
+test('FTC-GALLERY-NAV-044 a page loaded from a search URL selects its artist and ends the search like a typed one', {
+  tag: '@area:gallery-search',
+}, async ({ galleryActions, navigationPanelActions, page, stepLogger }) => {
+  const actions = { galleryActions, navigationPanelActions };
+  for (const search of DIRECT_SEARCHES) for (const ending of DIRECT_SEARCH_ENDINGS) {
+    await stepLogger.step(`Load ${directSearchUrl(search)}: its artist is selected in the tree and the gallery`, async () => {
+      await galleryActions.goto(directSearchUrl(search));
+      await galleryActions.waitForGalleryReady();
+      await expectDirectSearchPage(page, search, actions);
+    });
+
+    await stepLogger.step(`End the search by ${ending}`, async () => {
+      const input = page.locator('#search-input');
+      await input.click();
+      await input.fill('');
+      if (ending.endsWith('Enter')) await input.press('Enter');
+      else await page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]').click();
+      await expectSearchEnded(page, actions);
+    });
+
+    await stepLogger.step('Back returns to the search page, Forward ends it again', async () => {
+      await page.goBack();
+      await expectDirectSearchPage(page, search, actions);
+      await page.goForward();
+      await expectSearchEnded(page, actions);
+    });
+  }
+});
+
+test('FTC-GALLERY-NAV-045 the logo goes home from a page loaded from a search URL', {
+  tag: '@area:gallery-search',
+}, async ({ galleryActions, navigationPanelActions, page, stepLogger }) => {
+  const actions = { galleryActions, navigationPanelActions };
+  const expectHome = async () => {
+    await expect.poll(() => {
+      const url = new URL(page.url());
+      return [url.searchParams.has('q'), url.searchParams.has('artist')];
+    }).toEqual([false, false]);
+    await expectSearchEnded(page, actions);
+    await expect(navigationPanelActions.navigationPanel.activeAllArtistsLink).toHaveCount(1);
+  };
+  for (const search of DIRECT_SEARCHES) {
+    await stepLogger.step(`Load ${directSearchUrl(search)}, then click the logo`, async () => {
+      await galleryActions.goto(directSearchUrl(search));
+      await galleryActions.waitForGalleryReady();
+      await expectDirectSearchPage(page, search, actions);
+      await page.getByRole('link', { name: 'Album Haven library', exact: true }).click();
+      await expectHome();
+    });
+
+    await stepLogger.step('Back returns to the search, Forward goes home again, and reload stays home', async () => {
+      await page.goBack();
+      await expectDirectSearchPage(page, search, actions);
+      await page.goForward();
+      await expectHome();
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expectHome();
+    });
+  }
+});
+
+// Owner 2026-11-21 (Sandbox1, server restarted under load): an artist clicked in a search's tree while its request
+// could not finish left the tree and heading on the new artist, the URL on the old one and the gallery without its
+// albums, and the cleared search then showed "All artists 0". A failed selection puts back the page it left.
+const MIXED_SEARCH_QUERY = 'Signal';
+const UNRELATED_SEARCH_ARTIST = 'Roine Stolt';
+
+test('FTC-GALLERY-NAV-046 an artist that fails to load while the server is down puts back the page it left', {
+  tag: '@area:gallery-search',
+}, async ({ galleryActions, managedAppLifecycle, navigationPanelActions, page, searchToolbarActions, stepLogger }) => {
+  const actions = { galleryActions, navigationPanelActions };
+  let searchPage = null;
+  let libraryArtistCount = '';
+  await stepLogger.step('Search for a word several unrelated artists match', async () => {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    libraryArtistCount = (await page.locator('#sidebar-list [data-sidebar-all-artists="1"]').innerText())
+      .replace(/\s+/g, ' ').trim();
+    await searchToolbarActions.search(MIXED_SEARCH_QUERY, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(MIXED_SEARCH_QUERY);
+    await galleryActions.waitForGalleryReady();
+    searchPage = await readVisibleState(page);
+    expect(searchPage.artist).not.toBe(UNRELATED_SEARCH_ARTIST);
+    await expect(page.locator(`#sidebar-list [data-sidebar-artist="${UNRELATED_SEARCH_ARTIST}"]`)).toHaveCount(1);
+  });
+
+  try {
+    await stepLogger.step('With the server down, click an unrelated artist: the search page comes back', async () => {
+      await managedAppLifecycle.stop();
+      await page.locator(`#sidebar-list [data-sidebar-artist="${UNRELATED_SEARCH_ARTIST}"]`).click();
+      await expect(page.locator('#toast-layer')).toContainText('could not be loaded', { timeout: 30000 });
+      await expect.poll(() => readVisibleState(page), { timeout: 30000 }).toEqual(searchPage);
+      await expect(page.locator('#artist-groups .album-card').first()).toBeVisible();
+    });
+  } finally {
+    await managedAppLifecycle.restart();
+  }
+
+  await stepLogger.step('With the server back, the same click opens the artist and its URL', async () => {
+    await page.locator(`#sidebar-list [data-sidebar-artist="${UNRELATED_SEARCH_ARTIST}"]`).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get('artist')).toBe(UNRELATED_SEARCH_ARTIST);
+    await expect.poll(() => readGalleryHeading(page)).toBe(UNRELATED_SEARCH_ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(UNRELATED_SEARCH_ARTIST);
+    await expect(page.locator('#artist-groups .album-card').first()).toBeVisible();
+  });
+
+  await stepLogger.step('Ending the search shows the library tree with its real artist count', async () => {
+    const input = page.locator('#search-input');
+    await input.click();
+    await input.fill('');
+    await page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]').click();
+    await expectSearchEnded(page, actions);
+    await expect(page.locator('#sidebar-list [data-sidebar-all-artists="1"]')).toHaveText(libraryArtistCount, {
+      useInnerText: true,
+    });
+  });
+});
+
 // Collections the test owns: the rarity fixture's two tracks, each moved to its own Custom Collection, and back.
 const RARITY_ARTIST = 'E2E Rarity Artist';
 const RARITY_ALBUM = 'Two Track Rarity Fixture';

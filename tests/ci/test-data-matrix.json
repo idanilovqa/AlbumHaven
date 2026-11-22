@@ -10887,5 +10887,74 @@
       "reload-keeps-search"
     ],
     "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-044 a page loaded from a search URL selects its artist and ends the search like a typed one",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "search:flower-kings-family-best-match"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "direct-search-url-selects-url-artist",
+      "direct-search-blur-clear-ends-search",
+      "direct-search-enter-clear-ends-search",
+      "history-restores-direct-search"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-045 the logo goes home from a page loaded from a search URL",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "search:flower-kings-family-best-match"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "logo-goes-home-from-direct-search",
+      "history-restores-direct-search",
+      "reload-keeps-home"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-046 an artist that fails to load while the server is down puts back the page it left",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:mixed-unrelated-artist-matches"
+    ],
+    "filesystemScenarios": [
+      "media-copy:browser-history-server-restart"
+    ],
+    "expectedContracts": [
+      "failed-artist-selection-restores-previous-page",
+      "failed-artist-selection-reports-error",
+      "library-tree-keeps-real-artist-count"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:browser-history-server-restart",
+      "filesystemCopy": "media/cases/browser-history-server-restart"
+    },
+    "ownerApproval": "pending"
   }
 ]

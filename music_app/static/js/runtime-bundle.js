@@ -45360,6 +45360,20 @@ function clearSelectedTrack() {
   renderSelectedTrackState();
 }
 
+// Settles once the next frame has painted; at once where no frame comes (a hidden tab).
+function afterNextPlayerPaint() {
+  if (typeof requestAnimationFrame !== 'function' || typeof document === 'undefined' || document.hidden) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const fallback = setTimeout(resolve, 100);
+    requestAnimationFrame(() => setTimeout(() => {
+      clearTimeout(fallback);
+      resolve();
+    }, 0));
+  });
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
@@ -45397,6 +45411,10 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback engine is unavailable');
   }
   showSelectedTrackImmediately(track, shouldAutoplay);
+  // The pressed song paints before its stream starts: the start's own work never holds the frame
+  // that shows the press (owner: instant even at 100% CPU).
+  if (shouldAutoplay) await afterNextPlayerPaint();
+  if (selectionToken !== playerTrackSelectionToken) return false;
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {

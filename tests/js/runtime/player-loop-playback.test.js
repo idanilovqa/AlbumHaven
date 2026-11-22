@@ -905,8 +905,9 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
   finishEffects();
   await pause;
   assert.equal(selected, false, 'an earlier selection cannot override a later Pause');
-  // The stream starts while the claim is asked for (instant start); the later Pause still wins.
-  assert.deepEqual(starts, [newTrack.path]);
+  // The stream starts while the claim is asked for (instant start), once the press has painted; a
+  // Pause in the same moment as the press means it never starts. Either way the later Pause wins.
+  assert.deepEqual(starts, pendingStage === 'stream' ? [newTrack.path] : []);
   assert.equal(snapshot.paused, true, 'no audio may remain after the claim is released');
   assert.equal(context.state.player.current.path, oldTrack.path);
   assert.equal(ownership.activeClaim, null);
@@ -2783,11 +2784,13 @@ test('album-row click awaits prepared-start acceptance before installing one fir
 
   context.attachSharedPlayer();
   playTrackButton.dispatch('click');
+  // The stream starts once the press has painted; the album queue is installed meanwhile.
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(callOrder, [
     'play-track-from-payload',
-    'streaming-start',
     'queue-install',
+    'streaming-start',
   ]);
   assert.strictEqual(context.state.player.playbackQueue, exactQueue);
   assert.equal(playbackStartCalls, 1);
@@ -4051,6 +4054,41 @@ test('thin mobile Play hit area yields horizontal playhead drag but preserves ta
   assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
 });
 
+// sandbox5 r28 (2026-11-21): at 4x CPU the stream's start ran in the press's own task, ahead of the
+// frame that shows the pressed song. The press paints first; the stream starts after that frame, and
+// at once in a hidden tab, where no frame comes.
+test('a pressed song paints before its stream starts, and a hidden tab starts at once', async () => {
+  for (const hidden of [false, true]) {
+    const frames = [];
+    const starts = [];
+    const title = new FakeElement();
+    const { context } = loadHelper({
+      document: { hidden, querySelectorAll: () => [], addEventListener: () => {} },
+      requestAnimationFrame: (callback) => frames.push(callback),
+      setTimeout: (callback, delay) => (delay ? 0 : setImmediate(callback)),
+      clearTimeout: () => {},
+      getPlayerElements: () => ({ title }),
+      canStartPlaybackInThisTab: () => true,
+      startStreamingTrack: (track) => { starts.push(track.path); return new Promise(() => {}); },
+    });
+    context.state.player.current = { src: 'old', path: 'old.flac', title: 'Old', artist: 'A' };
+    void context.playTrackFromPayload({ src: 'new', path: 'new.flac', title: 'New', artist: 'A' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(title.textContent, 'A - New', 'the press shows the song');
+    if (hidden) {
+      assert.deepEqual(frames, [], 'no frame is waited for in a hidden tab');
+      assert.deepEqual(starts, ['new.flac']);
+      continue;
+    }
+    assert.deepEqual(starts, [], 'nothing starts before the frame that shows the press');
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(starts, ['new.flac'], 'the stream starts right after that frame');
+  }
+});
+
 test('a clicked track shows as playing before streaming starts', async () => {
   let finishStart;
   const shown = [];
@@ -4066,6 +4104,8 @@ test('a clicked track shows as playing before streaming starts', async () => {
   const playing = context.playTrackFromPayload({ path: 'new.flac', src: 'new' });
 
   assert.deepEqual(shown, ['new.flac'], 'the row updates before the switch completes');
+  assert.equal(finishStart, undefined, 'and before the stream starts');
+  await new Promise((resolve) => setImmediate(resolve));
   finishStart(null);
   await assert.rejects(playing, /did not start/);
   assert.equal(context.state.player.selectedTrack, null, 'a failed switch shows the real track again');

@@ -5,6 +5,36 @@ const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
 const TITLE = 'Long Cold Signal';
 
+// Every painted frame for two seconds, with whether [titleLocator] names [title], and the browser's own
+// timing of the press inside it (Event Timing: when the pointer went down, when the click's handlers
+// ended). Start it, press, then await it.
+function samplePressPaint(titleLocator, title) {
+  // parity-check: allow-read-only-measurement-evaluate -- frame-by-frame timing of the visible title after a press
+  return titleLocator.evaluate((element, expected) => new Promise((resolve) => {
+    const frames = [];
+    const events = [];
+    const started = performance.now();
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (['pointerdown', 'mousedown', 'click'].includes(entry.name)) {
+          events.push({ name: entry.name, startTime: entry.startTime, processingEnd: entry.processingEnd });
+        }
+      }
+    });
+    observer.observe({ type: 'event', durationThreshold: 16 });
+    const sample = () => {
+      frames.push({ at: performance.now(), shows: String(element.textContent || '').includes(expected) });
+      if (performance.now() - started < 2000) {
+        requestAnimationFrame(sample);
+        return;
+      }
+      observer.disconnect();
+      resolve({ started, frames, events });
+    };
+    requestAnimationFrame(sample);
+  }), title);
+}
+
 const displayedSeconds = (text) => {
   const match = String(text || '').match(/^(\d+):(\d{2})/u);
   return match ? Number(match[1]) * 60 + Number(match[2]) : Number.NaN;
@@ -272,12 +302,24 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
       }
     })();
     const mark = await playbackEvidence.playbackMark();
+    const pressPaint = samplePressPaint(player.title, OTHER_TITLE);
     await trackModalActions.playTrackByTitle(OTHER_TITLE);
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[OTHER_TITLE] });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     await page.waitForTimeout(1000);
     sampling = false;
     await sampler;
+    // The press shows its song at once: within 150 ms, in the first frame after its click (orchestrator,
+    // 2026-11-21, for the owner's "instant").
+    const { started, frames, events } = await pressPaint;
+    const pressedAt = events.find(({ name }) => name !== 'click')?.startTime ?? started;
+    const clickEnded = events.find(({ name }) => name === 'click')?.processingEnd;
+    const shown = frames.find(({ shows }) => shows);
+    expect(shown, 'the pressed title is painted').toBeTruthy();
+    expect(shown.at - pressedAt, `press to title (${JSON.stringify(events)})`).toBeLessThan(150);
+    if (clickEnded !== undefined) {
+      expect(frames.find(({ at }) => at > clickEnded)?.shows, 'the first frame after the click shows it').toBe(true);
+    }
     expect(samples.length, 'read often enough to see a flicker').toBeGreaterThan(50);
     const firstPressed = samples.findIndex(({ title }) => title.includes(OTHER_TITLE));
     expect(firstPressed, 'the pressed song shows').toBeGreaterThanOrEqual(0);

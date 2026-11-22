@@ -163,6 +163,7 @@ function loadHelper(overrides = {}) {
   });
   const context = {
     HTMLElement: FakeElement,
+    performance: { now: () => 0 },
     state: {
       player: {
         current: { src: '/track?path=song.flac' },

@@ -8805,3 +8805,284 @@ for (const between of ['another row', 'a seek that gave it up']) {
     assert.equal(report.presses, 1);
   });
 }
+
+// Play again while a song is still starting is ignored.
+function installRowPresses(harness, current = makeTrack('01.flac')) {
+  const { context } = harness;
+  loadLeaseRecoveryRuntime(harness);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(enginePath), 'album-track-table.js'), 'utf8'), context);
+  Object.assign(context, {
+    canStartPlaybackInThisTab: () => true,
+    setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+    renderSelectedTrackState: () => {},
+    beginStreamingPlayerListenSession: () => {},
+    setAlbumPlaybackQueue: () => {},
+    closeListenSegment: () => {},
+    markListenSessionPaused: () => {},
+    maybeScrobbleListenSession: async () => {},
+    persistPausedListenSession: async () => {},
+    releasePlaybackOwnership: async () => {},
+    focusPlayerTimeline: () => {},
+    usesMobilePageLayout: () => true,
+    triggerAlbumTrackPlayActivation: () => {},
+  });
+  context.document = { ...(context.document || {}), getElementById: () => ({ hidden: true }) };
+  context.state.player.current = current;
+  const rows = new Map();
+  const rowOf = (name) => {
+    if (rows.has(name)) return rows.get(name);
+    const track = makeTrack(name);
+    const attributes = { 'data-src': track.src, 'data-track-path': track.path, 'data-track-duration-seconds': '240' };
+    const button = {
+      getAttribute: (key) => attributes[key] || '',
+      classList: { contains: () => false },
+      click: () => context.activateSharedTrackButton(button),
+    };
+    const row = { dataset: {}, querySelector: () => button, ownerDocument: { getSelection: () => null } };
+    rows.set(name, { button, row });
+    return rows.get(name);
+  };
+  return {
+    async press(name) {
+      rowOf(name).button.click();
+      await harness.settle();
+    },
+    // The real mobile handler: the second tap of a double tap asks for a restart.
+    async doubleTap(name) {
+      for (const detail of [1, 2]) {
+        context.handleAlbumTrackRowClick({
+          detail, currentTarget: rowOf(name).row, target: { closest: () => null }, preventDefault() {},
+        });
+        await harness.settle();
+      }
+    },
+  };
+}
+
+const opensOf = (harness, name) => harness.sent('open').filter(({ path: opened }) => opened === makeTrack(name).path);
+const refreshesOf = (harness) => harness.sockets[0].probes.filter(({ authorityOnly }) => authorityOnly === true);
+
+const PENDING_STARTS = {
+  'over a second of the old song left': async (t) => {
+    const playing = await playingSong(t);
+    return { ...playing, rows: installRowPresses(playing.harness), name: '05.flac' };
+  },
+  'under a second of the old song left': async (t) => {
+    const playing = await playingSong(t);
+    heardFor(playing.node, 384);
+    return { ...playing, rows: installRowPresses(playing.harness), name: '05.flac' };
+  },
+  'another switch pending': async (t) => {
+    const playing = await playingSong(t);
+    const rows = installRowPresses(playing.harness);
+    await rows.press('04.flac');
+    return { ...playing, rows, name: '05.flac' };
+  },
+  'a switch just cut over': async (t) => {
+    const playing = await playingSong(t);
+    const rows = installRowPresses(playing.harness);
+    await rows.press('04.flac');
+    await answerOpen(playing.harness, opensOf(playing.harness, '04.flac')[0], NEXT_SONG);
+    playing.node.render();
+    playing.node.deliverEvents();
+    await playing.harness.settle();
+    return { ...playing, rows, name: '05.flac' };
+  },
+  'the pressed row prepared as the next track': async (t) => {
+    const playing = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+    return { ...playing, rows: installRowPresses(playing.harness), name: '02.flac', prepared: true };
+  },
+};
+
+for (const [pending, arrange] of Object.entries(PENDING_STARTS)) {
+  for (const again of ['presses', 'a double tap']) {
+    test(`${again} on a row still starting, with ${pending}, leave its one start waiting`, async (t) => {
+      const { harness, node, rows, name, prepared } = await arrange(t);
+      harness.engine.timingRequested = true;
+      const opens = opensOf(harness, name).length;
+      harness.setNow(5_000);
+      if (again === 'presses') await rows.press(name);
+      else await rows.doubleTap(name);
+      harness.setNow(5_400);
+      for (let press = 0; press < 3; press += 1) await rows.press(name);
+
+      assert.equal(opensOf(harness, name).length, opens + (prepared ? 0 : 1), 'one start');
+      assert.equal(refreshesOf(harness).length, prepared ? 1 : 0, 'one refresh');
+      assert.equal(harness.api.snapshot().paused, false, 'ignored is not a pause');
+
+      harness.setNow(5_700);
+      if (prepared) answerAuthority(harness, refreshesOf(harness)[0]);
+      else {
+        const open = opensOf(harness, name).at(-1);
+        acceptMetadata(harness, open, { timing: true });
+        receiveSong(harness, open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+      }
+      await harness.settle();
+      const levels = heardFor(node, 4);
+      assert.equal(levels.at(-1), prepared ? NEXT_SONG : PRESSED_SONG, 'the one start sounds');
+      const [report] = harness.sent('start-report');
+      assert.equal(report.presses, again === 'presses' ? 4 : 5, 'the timing line still counts each press');
+      assert.equal(report.audibleMs, 700, 'timed from the first press, whose wait was never restarted');
+    });
+  }
+}
+
+test('presses on a row still cutting over leave its one start', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  await answerOpen(harness, opensOf(harness, '05.flac')[0], PRESSED_SONG);
+  assert.equal(harness.engine.pendingSeek.prepareSent, true);
+  await rows.press('05.flac');
+  await rows.doubleTap('05.flac');
+
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+  await harness.settle();
+  assert.equal(opensOf(harness, '05.flac').length, 1);
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+async function coldStartPending(t, options = {}) {
+  const harness = createEngineHarness({ realProcessor: true, ...options });
+  t.after(() => harness.api.stop());
+  const rows = installRowPresses(harness, null);
+  await rows.press('05.flac');
+  await harness.settle();
+  return { harness, rows };
+}
+
+test('with nothing playing, presses and a double tap before the song sounds neither pause nor restart it', async (t) => {
+  const { harness, rows } = await coldStartPending(t);
+  assert.equal(harness.api.snapshot().mode, 'starting');
+  await rows.press('05.flac');
+  await rows.doubleTap('05.flac');
+
+  const opens = opensOf(harness, '05.flac');
+  assert.equal(opens.length, 1);
+  assert.equal(harness.api.snapshot().paused, false);
+  acceptMetadata(harness, opens[0]);
+  receiveSong(harness, opens[0], PRESSED_SONG, 2 * ONE_SECOND);
+  await harness.settle();
+  assert.deepEqual(heardFor(harness.nodes[0], 4), [PRESSED_SONG]);
+  await harness.settle();
+
+  await rows.press('05.flac');
+  assert.equal(harness.api.snapshot().paused, true, 'once it sounds its row pauses it as ever');
+});
+
+test('once a switched-to song sounds its row pauses it as ever', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  await answerOpen(harness, opensOf(harness, '05.flac')[0], PRESSED_SONG);
+  heardFor(node, 4);
+  await harness.settle();
+
+  await rows.press('05.flac');
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+test('a double tap on a song already sounding still restarts it', async (t) => {
+  const { harness } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  const opens = opensOf(harness, '01.flac').length;
+  await rows.doubleTap('01.flac');
+
+  assert.equal(opensOf(harness, '01.flac').length, opens + 1);
+});
+
+test('a press on a different song still switches, and back', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  await rows.press('06.flac');
+  assert.equal(opensOf(harness, '06.flac').length, 1);
+  await rows.press('05.flac');
+
+  const opens = opensOf(harness, '05.flac');
+  assert.equal(opens.length, 2, 'the song pressed first is another song by then');
+  await answerOpen(harness, opens.at(-1), PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+});
+
+for (const ended of ['Pause', 'a seek']) {
+  test(`after ${ended} gave a pending start up, its row starts it again at once`, async (t) => {
+    const { harness } = await playingSong(t);
+    const rows = installRowPresses(harness);
+    await rows.press('05.flac');
+    if (ended === 'Pause') {
+      harness.context.togglePlayerPlayback();
+      await harness.settle();
+      assert.equal(harness.api.snapshot().paused, true, 'Pause is unchanged');
+    } else await harness.api.seek(120);
+    await harness.settle();
+    await rows.press('05.flac');
+    await harness.settle();
+
+    assert.equal(opensOf(harness, '05.flac').length, 2);
+  });
+}
+
+for (const when of ['before', 'after']) {
+  test(`a start that failed ${when} the player took the song can be pressed again at once`, async (t) => {
+    let harness;
+    let rows;
+    if (when === 'before') {
+      ({ harness } = await playingSong(t));
+      rows = installRowPresses(harness);
+      await rows.press('05.flac');
+    } else {
+      ({ harness, rows } = await coldStartPending(t));
+      assert.equal(harness.context.state.player.current.path, makeTrack('05.flac').path);
+    }
+    harness.sockets[0].unexpectedClose({ code: 4404 });
+    await harness.settle();
+    await harness.settle();
+    assert.equal(harness.engine.mode, 'error');
+    await rows.press('05.flac');
+    await harness.settle();
+    await harness.settle();
+
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.sockets.length, 2, 'it starts again on a new socket');
+  });
+}
+
+test('a start with no sound after fifteen seconds has timed out and can be pressed again', async (t) => {
+  const { harness } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  harness.setNow(10_000);
+  await rows.press('05.flac');
+  harness.setNow(24_999);
+  await rows.press('05.flac');
+  assert.equal(opensOf(harness, '05.flac').length, 1);
+  harness.setNow(25_000);
+  await rows.press('05.flac');
+
+  assert.equal(opensOf(harness, '05.flac').length, 2);
+});
+
+test('an ignored press while the connection is gone retries the connection at once and keeps the one start', async (t) => {
+  const timers = manualTimers();
+  const harness = createEngineHarness({
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  t.after(() => harness.api.stop());
+  await harness.api.start(makeTrack('01.flac'));
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets[1]?.readyState, 0, 'the attempt begun in the outage hangs');
+  const started = harness.engine.startRequestId;
+
+  await rows.press('05.flac');
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[1].closeCalls, 1, 'the hanging attempt is given up');
+  assert.equal(harness.sockets.length, 3, 'a fresh attempt starts at once');
+  assert.equal(harness.engine.startRequestId, started, 'without starting the song again');
+});

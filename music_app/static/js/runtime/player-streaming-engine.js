@@ -822,6 +822,16 @@ function pauseStreamingReconnect() {
   stopStreamingReconnectTimers(detached);
 }
 
+// A press, ignored or not, is a fresh reason to try: an attempt begun before it may hang on the
+// network that went (a song pressed after a 10 s outage played 8.4 s later).
+function retryStreamingConnection() {
+  const engine = streamingEngineState();
+  if (!engine.detached || engine.socket?.readyState === WebSocket.OPEN) return;
+  if (streamingSocketConnecting(engine.socket)) abandonStreamingConnectingSocket(engine.socket);
+  resumeStreamingReconnect();
+  reconnectStreamingTransport();
+}
+
 function resumeStreamingReconnect() {
   const detached = streamingEngineState().detached;
   if (!detached?.paused) return;
@@ -1507,7 +1517,7 @@ function noteStreamingPress(track) {
   const engine = streamingEngineState();
   const path = String(track?.path || '');
   const last = engine.startTiming;
-  // A press on the song whose start still waits starts it again: one more press of that start.
+  // A start of the song whose start still waits (timed out, or not from its row) is one more press of it.
   const waiting = last?.path === path
     && [state.player.selectedTrack?.path, state.player.current?.path].includes(path);
   const pressedAtMs = performance.now();
@@ -1521,6 +1531,12 @@ function noteStreamingPress(track) {
     prepared: false,
     marks: {},
   };
+}
+
+// An ignored press starts nothing, so every time stays from the press that did.
+function countIgnoredStreamingPress(path) {
+  const timing = streamingEngineState().startTiming;
+  if (timing?.path === path) timing.presses += 1;
 }
 
 function followStreamingPress(roleState, prepared = false) {
@@ -3331,13 +3347,7 @@ async function openBrowserStreamingTrack(track, {
   if (detached && !keepDetached && engine.socket?.readyState !== WebSocket.OPEN) {
     detached.kind = 'reopen';
     detached.spliceFrame = null;
-    if (autoplay) {
-      // A press is a fresh reason to try: an attempt begun before it may hang on the network that went
-      // (sandbox5 r20: a song pressed after a 10 s outage played 8.4 s later).
-      if (streamingSocketConnecting(engine.socket)) abandonStreamingConnectingSocket(engine.socket);
-      resumeStreamingReconnect();
-      reconnectStreamingTransport();
-    }
+    if (autoplay) retryStreamingConnection();
   } else if (!keepDetached) {
     endStreamingDetach();
   }

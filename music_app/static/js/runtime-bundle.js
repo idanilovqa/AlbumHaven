@@ -8944,6 +8944,16 @@ function pauseStreamingReconnect() {
   stopStreamingReconnectTimers(detached);
 }
 
+// A press, ignored or not, is a fresh reason to try: an attempt begun before it may hang on the
+// network that went (a song pressed after a 10 s outage played 8.4 s later).
+function retryStreamingConnection() {
+  const engine = streamingEngineState();
+  if (!engine.detached || engine.socket?.readyState === WebSocket.OPEN) return;
+  if (streamingSocketConnecting(engine.socket)) abandonStreamingConnectingSocket(engine.socket);
+  resumeStreamingReconnect();
+  reconnectStreamingTransport();
+}
+
 function resumeStreamingReconnect() {
   const detached = streamingEngineState().detached;
   if (!detached?.paused) return;
@@ -9629,7 +9639,7 @@ function noteStreamingPress(track) {
   const engine = streamingEngineState();
   const path = String(track?.path || '');
   const last = engine.startTiming;
-  // A press on the song whose start still waits starts it again: one more press of that start.
+  // A start of the song whose start still waits (timed out, or not from its row) is one more press of it.
   const waiting = last?.path === path
     && [state.player.selectedTrack?.path, state.player.current?.path].includes(path);
   const pressedAtMs = performance.now();
@@ -9643,6 +9653,12 @@ function noteStreamingPress(track) {
     prepared: false,
     marks: {},
   };
+}
+
+// An ignored press starts nothing, so every time stays from the press that did.
+function countIgnoredStreamingPress(path) {
+  const timing = streamingEngineState().startTiming;
+  if (timing?.path === path) timing.presses += 1;
 }
 
 function followStreamingPress(roleState, prepared = false) {
@@ -11453,13 +11469,7 @@ async function openBrowserStreamingTrack(track, {
   if (detached && !keepDetached && engine.socket?.readyState !== WebSocket.OPEN) {
     detached.kind = 'reopen';
     detached.spliceFrame = null;
-    if (autoplay) {
-      // A press is a fresh reason to try: an attempt begun before it may hang on the network that went
-      // (sandbox5 r20: a song pressed after a 10 s outage played 8.4 s later).
-      if (streamingSocketConnecting(engine.socket)) abandonStreamingConnectingSocket(engine.socket);
-      resumeStreamingReconnect();
-      reconnectStreamingTransport();
-    }
+    if (autoplay) retryStreamingConnection();
   } else if (!keepDetached) {
     endStreamingDetach();
   }
@@ -46200,6 +46210,19 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 }
 
 let playerTrackSelectionToken = 0;
+// As long as the app's bridge waits for an answer: a start with no sound by then has timed out.
+const PLAYER_START_TIMEOUT_MS = 15000;
+let pendingPlayerStart = null;
+
+// From the press until the song sounds, its start fails or times out, or a later action replaces it.
+function isPlayerStartPending(path) {
+  const start = pendingPlayerStart;
+  if (!start || start.path !== path || start.selectionToken !== playerTrackSelectionToken
+      || performance.now() - start.pressedAtMs >= PLAYER_START_TIMEOUT_MS) return false;
+  if (!start.settled) return true;
+  const playback = getPlayerPlaybackSnapshot();
+  return !playback.paused && !playback.ended && ['starting', 'buffering'].includes(playback.mode);
+}
 
 // A switch takes a moment to reach the listener; the click should not.
 function renderSelectedTrackState(track) {
@@ -46254,6 +46277,10 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback engine is unavailable');
   }
   showSelectedTrackImmediately(track, shouldAutoplay);
+  const pendingStart = shouldAutoplay
+    ? { path: requestedTrackPath, selectionToken, pressedAtMs: performance.now(), settled: false }
+    : null;
+  pendingPlayerStart = pendingStart;
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
@@ -46263,14 +46290,17 @@ async function playTrackFromPayload(track, options = {}) {
     });
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
+    pendingPlayerStart = null;
     clearSelectedTrack();
     throw error;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
   clearSelectedTrack();
   if (startedRole === null) {
+    pendingPlayerStart = null;
     throw new Error('Streaming playback did not start');
   }
+  if (pendingStart) pendingStart.settled = true;
   const startedTrackPath = String(startedRole?.track?.path || '');
   if (startedTrackPath && startedTrackPath !== String(track.path)) {
     throw new Error('Streaming playback started an unexpected track identity');
@@ -46335,6 +46365,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  if (pendingPlayerStart?.path === selectedTrackPath) pendingPlayerStart = null;
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -47035,6 +47066,13 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     triggerAlbumTrackPlayActivation(btn);
   }
   const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
+  if (isPlayerStartPending(trackPath)) {
+    // A press on a song still starting is ignored. Its one start keeps the wait it began with, double
+    // tap or not.
+    if (typeof countIgnoredStreamingPress === 'function') countIgnoredStreamingPress(trackPath);
+    if (typeof retryStreamingConnection === 'function') retryStreamingConnection();
+    return;
+  }
   const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
   const playback = getPlayerPlaybackSnapshot();
   const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);

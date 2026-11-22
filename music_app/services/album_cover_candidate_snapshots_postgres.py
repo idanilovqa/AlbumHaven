@@ -7,14 +7,11 @@ from music_app.services.album_cover_candidate_publisher import (
     sanitize_persisted_candidate_snapshot,
 )
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
-    import psycopg
-    from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
-    psycopg = None
-    dict_row = None
     Jsonb = None
 
 
@@ -224,9 +221,7 @@ def _album_id_for_track_paths(connection: Any, normalized_paths: list[str]) -> i
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for cover candidate snapshots.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _transaction(connection: Any) -> Any:

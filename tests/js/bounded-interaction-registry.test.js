@@ -81,6 +81,9 @@ for (const [name, mutate, expected] of [
   ['bare slash wildcard endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/home-data', '/*'], forbidden: [] }; }, /endpoint \/\* is a bare wildcard/],
   ['nested bare wildcard endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/*/*'], forbidden: [] }; }, /endpoint \/\*\/\* is a bare wildcard/],
   ['star endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['*'], forbidden: [] }; }, /endpoint \* is a bare wildcard/],
+  ['request-capture contract outside JavaScript', (reg) => {
+    Object.assign(reg.interactions[0], { requestOwnership: { allowed: ['/home-data'], forbidden: [] }, command: 'python -m pytest tests/py/test_bounded_interaction_counter.py' });
+  }, /a request-capture contract must be a JavaScript test/],
 ]) {
   test(`rejects ${name}`, () => {
     const candidate = registry([contractEntry()]);
@@ -278,4 +281,15 @@ test('sync adds a reviewable empty endpoint list when a request joins a static e
   assert.deepEqual(synced.interactions.map(entry => [entry.id, entry.entrypoints, entry.requestOwnership]), [
     [id, [click.key, request.key], { allowed: [], forbidden: [] }],
   ]);
+});
+
+test('a navigation entrypoint needs a request-capture contract with alreadyShown, and only navigation declares it', () => {
+  const navigating = { entrypoints: [entrypoint(KEY, { navigation: true })], hazards: [] };
+  const requestCapture = contractEntry({ requestOwnership: { allowed: ['/view-data'], forbidden: [] } });
+  assert.match(validateInventory(registry([contractEntry()]), navigating).join('\n'),
+    /^BI-H01-loose-track-drag: navigation entrypoint .*event:pointermove needs a request-capture contract with alreadyShown: /);
+  assert.match(validateInventory(registry([requestCapture]), navigating).join('\n'), /needs a request-capture contract with alreadyShown/);
+  assert.deepEqual(validateInventory(registry([{ ...requestCapture, alreadyShown: true }]), navigating), []);
+  assert.deepEqual(validateInventory(registry([{ ...requestCapture, alreadyShown: true }]), { entrypoints: [entrypoint()], hazards: [] }),
+    ['BI-H01-loose-track-drag: alreadyShown is declared but no entrypoint navigates']);
 });

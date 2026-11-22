@@ -8,7 +8,9 @@ contract; any interactive path that reaches a registered library-scale
 operation is rejected at any depth; an `async def` route, websocket or
 middleware whose event-loop call chain reaches blocking I/O is rejected
 (BI-08); a database connection opened per loop item is rejected in an
-interactive path and needs a contract elsewhere (BI-05); and filesystem, media
+interactive path and needs a contract elsewhere (BI-05); a new database
+connection opened anywhere a route, middleware, poller, scheduler or watcher
+reaches, instead of a lease from the shared pool, is rejected (BI-15); and filesystem, media
 or database work done per item of a loop over the whole library state
 (`library-state-scan-io`, BI-04) is reported at the loop, which the validator
 rejects in any background entry narrower than background-batch.
@@ -30,6 +32,7 @@ import argparse
 import ast
 import json
 import logging
+import re
 import sys
 from collections import deque
 from dataclasses import dataclass, field
@@ -101,6 +104,23 @@ BLOCKING_CALLS = {
 DATABASE_METHODS = frozenset({"execute", "executemany", "fetchone", "fetchall", "fetchmany", "getconn", "connection"})
 DATABASE_DRIVERS = ("psycopg", "psycopg2", "psycopg_pool")
 POOLED_CONNECTION_MODULE = "music_app.services.postgres_connections"
+# Entries that run per request or per tick: a new connection there costs a TCP
+# and TLS handshake and authentication every time (hundreds of milliseconds),
+# so they lease from the shared pool. Background workers may hold their own.
+POOLED_ENTRY_KINDS = frozenset({"route", "middleware", "poller", "scheduler", "watcher"})
+POOL_LEASES = frozenset(
+    f"{POOLED_CONNECTION_MODULE}.{name}" for name in ("pooled_connection", "leased_connection", "session_connection")
+)
+SESSION_LEASE = f"{POOLED_CONNECTION_MODULE}.session_connection"
+# SQL whose effect outlives its transaction and stays with the server session. On a shared lease it
+# would reach the next borrower: the pool restores the connection object's settings, never these.
+SESSION_STATE_SQL = {
+    "advisory-lock": re.compile(r"\bpg_(try_)?advisory_lock(_shared)?\b", re.I),
+    "listen": re.compile(r"(^|;)\s*listen\s+[\w\"]+\s*(;|$)", re.I),
+    "set": re.compile(r"(^|;)\s*set\s+((session|role)\b|(?!local\b|transaction\b|constraints\b)[\w.]+\s*(=|\bto\b))", re.I),
+    "set-config": re.compile(r"\bset_config\s*\([^;]*,\s*false\s*\)", re.I),
+    "temp-table": re.compile(r"\bcreate\s+(local\s+)?temp(orary)?\s+table\b(?![^;]*\bon\s+commit\s+drop\b)", re.I),
+}
 # Methods that open, lease or wrap a connection: `with store._connect(url) as
 # connection`, `with pool.connection() as connection`, `with connection.cursor() as cursor`.
 CONNECTION_FACTORY_METHODS = frozenset({"connection", "_connect", "_connect_to_database", "getconn", "cursor"})
@@ -799,6 +819,97 @@ def _database_connect(node: ast.Call, module: Module) -> str | None:
     return name if name in DATABASE_CONNECTS else None
 
 
+def _pool_lease(node: ast.Call, module: Module) -> str | None:
+    """A connection leased from the shared pool."""
+    name = _qualified_name(node.func, module)
+    return name if name in POOL_LEASES else None
+
+
+def _session_state(nodes) -> tuple[str, int] | None:
+    """The first SQL text among `nodes` that leaves state on the server session."""
+    for node in nodes:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for kind, pattern in SESSION_STATE_SQL.items():
+                if pattern.search(node.value):
+                    return kind, node.lineno
+    return None
+
+
+def _default_name(node: ast.AST) -> str:
+    """The name a value binds by default: `connect or session_connection` binds the latter."""
+    if isinstance(node, ast.BoolOp):
+        node = node.values[-1]
+    return node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else ""
+
+
+def _session_sources(module: Module, definitions: list[Definition]) -> set[str]:
+    """Names in `module` that yield a connection nobody borrows afterwards: a session lease, a
+    connection of its own, or a function or attribute whose default is one of those."""
+    sources = {alias for alias, (source, symbol) in module.imports.items() if f"{source}.{symbol}" == SESSION_LEASE}
+    for definition in definitions:
+        if any(_database_connect(call, module) for call, _ in _facts(definition).calls):
+            sources.add(definition.node.name)
+    while True:
+        found = {
+            attribute
+            for attributes in module.attribute_values.values()
+            for attribute, values in attributes.items()
+            if values and all(_default_name(value) in sources for value in values)
+        }
+        for definition in definitions:
+            returned = [node.value for node in _own_nodes(definition) if isinstance(node, ast.Return) and node.value]
+            if returned and all(isinstance(value, ast.Call) and _default_name(value.func) in sources for value in returned):
+                found.add(definition.node.name)
+        if found <= sources:
+            return sources
+        sources |= found
+
+
+def _session_state_hazards(modules: list[Module]) -> list[dict[str, object]]:
+    """BI-15: session state is set up only in a function that takes its connection from a session
+    source, whatever reaches it. A helper or constant used on some caller's connection cannot prove
+    that, so it is rejected."""
+    definitions_by_module: dict[str, list[Definition]] = {}
+    for definition in _all_definitions(modules):
+        if isinstance(definition.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions_by_module.setdefault(definition.module, []).append(definition)
+    hazards = []
+    for module in modules:
+        definitions = definitions_by_module.get(module.name, [])
+        found = [
+            (name, state, None)
+            for name, values in module.assignments.items()
+            for value in values
+            if (state := _session_state(ast.walk(value)))
+        ]
+        found += [
+            (definition.qualname, state, definition)
+            for definition in definitions
+            if (state := _session_state(_own_nodes(definition)))
+        ]
+        if not found:
+            continue
+        sources = _session_sources(module, definitions)
+        for function, (kind, line), definition in found:
+            if definition is not None and any(
+                _database_connect(call, module) or _default_name(call.func) in sources
+                for call, _ in _facts(definition).calls
+            ):
+                continue
+            hazards.append({
+                "rule": "BI-15",
+                "operation": f"session-state-on-shared-connection:{kind}",
+                "path": module.path,
+                "function": function,
+                "line": line,
+                "entrypoint": f"py:{module.path}#{function}",
+                "depth": "direct",
+                "via": [],
+                "reject": True,
+            })
+    return hazards
+
+
 def _blocking_operation(node: ast.Call, module: Module, owner: Definition) -> tuple[str, str] | None:
     """(family, operation) for a call that blocks its thread until I/O or
     another thread completes."""
@@ -959,19 +1070,25 @@ def _filesystem_operation(node: ast.Call) -> str | None:
 def _direct_hazards(definition: Definition, looped: bool, module: Module | None = None) -> list[dict[str, object]]:
     """Directory enumeration always counts. A single stat/open/media parse of a
     selected file is bounded; the same probe repeated per item is not. A new
-    database connection opened per item (BI-05) is an N+1 connection storm."""
+    database connection opened or leased per item (BI-05) is an N+1 round-trip
+    storm, and one opened once is a per-request handshake outside the shared
+    pool (BI-15)."""
     hazards = []
+    pooled = module is not None and module.name == POOLED_CONNECTION_MODULE
     for node, in_loop in _facts(definition).calls:
-        connect = _database_connect(node, module) if module is not None else None
-        if connect is not None and (in_loop or looped):
+        per_item = in_loop or looped
+        connect = _database_connect(node, module) if module is not None and not pooled else None
+        if connect is None and per_item and module is not None:
+            connect = _pool_lease(node, module)
+        if connect is not None:
             hazards.append({
-                "rule": "BI-05",
-                "operation": f"database-connect-per-item:{connect}",
+                "rule": "BI-05" if per_item else "BI-15",
+                "operation": f"database-connect-per-{'item' if per_item else 'request'}:{connect}",
                 "path": definition.path,
                 "function": definition.qualname,
                 "line": node.lineno,
                 "enumeration": False,
-                "per_item_connect": True,
+                "per_item_connect" if per_item else "fresh_connect": True,
             })
             continue
         operation = _filesystem_operation(node)
@@ -1916,6 +2033,7 @@ def analyze_python_repository(
     for entry, definition in _all_entrypoints(modules, index):
         entrypoints.append(entry)
         interactive = entry["kind"] in {"route", "middleware"}
+        pooled_entry = entry["kind"] in POOLED_ENTRY_KINDS
         hazards.extend(event_loop.hazards(entry, definition))
         queue = deque([(definition, [], None, None, None)])
         seen = set()
@@ -1957,6 +2075,16 @@ def analyze_python_repository(
                     *library_state.scans(current, bound),
                 ]
             for hazard in hazard_cache[cache_key]:
+                if hazard.get("fresh_connect"):
+                    if pooled_entry:
+                        hazards.append({
+                            **{key: value for key, value in hazard.items() if key not in {"enumeration", "fresh_connect"}},
+                            "entrypoint": entry["key"],
+                            "depth": depth,
+                            "via": via,
+                            "reject": True,
+                        })
+                    continue
                 record = {key: value for key, value in hazard.items() if key not in {"enumeration", "per_item_connect"}}
                 if hazard.get("per_item_connect"):
                     # Reported at the loop that repeats the connection: the
@@ -2017,6 +2145,7 @@ def analyze_python_repository(
                 callee_loop = loop or ((current.path, line, current.qualname) if call_in_loop else None)
                 callee_bound = library_state.bound_collections(current, bound, call, callee)
                 queue.append((callee, [*via, callee.qualname], callee_loop, scan_of(call), callee_bound))
+    hazards.extend(_session_state_hazards(modules))
     unique: dict[str, dict[str, object]] = {}
     for hazard in hazards:
         site = f"{hazard['path']}#{hazard['function']}"

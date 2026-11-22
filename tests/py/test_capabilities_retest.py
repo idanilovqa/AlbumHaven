@@ -157,7 +157,7 @@ def test_pool_reuses_transport_but_returns_a_separate_checkout_for_each_request(
     third = postgres_connections.pooled_connection('postgresql://test-two')
     assert len(pools) == 2
     assert first is not second and second is not third
-    assert pools[0].kwargs['max_size'] == 4
+    assert pools[0].kwargs['max_size'] == 8
     assert len(pools[0].checkouts) == 2
     postgres_connections.close_pools()
     assert all(pool.closed for pool in pools)
@@ -339,7 +339,8 @@ def test_pool_isolates_browse_capacity_from_authentication(monkeypatch):
 
     assert auth_checkout is not browse_checkout
     assert len(pools) == 2
-    assert all(pool.kwargs["max_size"] == 4 for pool in pools)
+    # Request-path repositories share the larger default pool; browse keeps its own small one.
+    assert [pool.kwargs["max_size"] for pool in pools] == [8, 4]
     postgres_connections.close_pools()
 
 
@@ -359,11 +360,16 @@ def test_pool_prewarm_opens_and_returns_default_and_browse_connections(monkeypat
     class FakePool:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
+            self.min_size = kwargs["min_size"]
+            self.max_size = kwargs["max_size"]
             self.closed = False
             pools.append(self)
 
         def connection(self):
             return FakeCheckout()
+
+        def resize(self, min_size, max_size=None):
+            self.min_size = min_size
 
         def close(self):
             self.closed = True

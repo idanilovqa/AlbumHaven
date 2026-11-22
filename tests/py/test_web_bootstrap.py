@@ -1572,9 +1572,11 @@ def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asg
         (source, preview)
     )
 
-    # A cover is asked for by reference; an unnamed path is refused (500ac7e02).
+    # A cover is asked for by reference; an unnamed path is refused (500ac7e02). Only a revisioned
+    # preview follows the storage policy and is recorded (1404cd72c, 0845e566c).
     cover_url = cover_reference_url(asgi_app, cover_path)
-    status, _headers, body = run_asgi_request(asgi_app, "GET", cover_url, query={"size": "480"})
+    revisioned = {"size": "480", "v": "d" * 64}
+    status, _headers, body = run_asgi_request(asgi_app, "GET", cover_url, query=revisioned)
     assert status == 200
     assert body != cover_path.read_bytes()
     assert len(recorded) == 1
@@ -1584,10 +1586,14 @@ def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asg
     assert preview_path.read_bytes() == body
     assert not (app.config["DATA_DIR"] / "display-cover-cache").exists()
 
-    status, _headers, cached_body = run_asgi_request(asgi_app, "GET", cover_url, query={"size": "480"})
+    status, _headers, cached_body = run_asgi_request(asgi_app, "GET", cover_url, query=revisioned)
     assert status == 200
     assert cached_body == body
     assert len(recorded) == 1
+
+    status, _headers, _body = run_asgi_request(asgi_app, "GET", cover_url, query={"size": "480"})
+    assert status == 200
+    assert len(recorded) == 1, "an unrevisioned preview is never recorded for relocation"
 
 
 @pytest.mark.parametrize("mode", ["album_folders", "custom"])

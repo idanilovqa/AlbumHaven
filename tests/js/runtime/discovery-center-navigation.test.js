@@ -170,6 +170,16 @@ test('request capture: Discovery Center tabs fetch only /news, once per navigati
     preventDefault() {}, defaultPrevented: false, button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
   });
   await measureInteractionContract('js:runtime/discovery-center-navigation.js#navigate', {
+    // The freshly loaded Inbox tab: clicking Inbox again, or a history step that stays on it, loads nothing.
+    async alreadyShown(items) {
+      const app = harness();
+      app.replacement.items = Array.from({ length: items }, (_, index) => ({ index }));
+      click(app, 'https://albumhaven.test/news?tab=inbox');
+      await settle();
+      await app.windowListeners.get('popstate')({ stopImmediatePropagation() {} });
+      await settle();
+      return { requests: app.requests.map(([url]) => url) };
+    },
     setup(items) {
       const app = harness();
       app.replacement.items = Array.from({ length: items }, (_, index) => ({ index }));

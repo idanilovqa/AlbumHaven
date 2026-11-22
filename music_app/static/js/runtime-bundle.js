@@ -2440,6 +2440,8 @@ function pushBrowserViewState(view, stateSnapshot = view) {
     async function navigate(value, { historyMode = 'push' } = {}) {
       const url = resolveUrl(value);
       if (!url) return false;
+      // The tab already shown, with no other tab loading: nothing to load (owner, 11-18).
+      if (url.href === currentUrl && !pending) return true;
       const ownSequence = ++sequence;
       pending?.abort();
       pending = new AbortController();
@@ -19550,9 +19552,18 @@ function buildRootGalleryPageUrl(view) {
 // the artist whose label the scrolled viewport has passed is the one on screen.
 function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop = 0) {
   const albumKey = String(scrollAnchor?.albumKey || '');
-  let viewportIndex = albumKey
-    ? groups.findIndex(group => (group.albums || []).some(album => String(album.key || '') === albumKey))
+  const holdsAnchorAlbum = group => (group.albums || []).some(album => String(album.key || '') === albumKey);
+  // A jointly credited album sits under several artists: the captured card's own section says which
+  // one is on screen. The first group holding it can be far above, and a window anchored there would
+  // end before the artist on screen (FTC-TAGS-011/012).
+  const anchorSection = typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.sectionByRenderedKey?.get?.(String(scrollAnchor?.sectionOccurrenceKey || ''));
+  const anchorSectionArtist = String(anchorSection?.group?.artist || '').trim();
+  let viewportIndex = albumKey && anchorSectionArtist
+    ? groups.findIndex(group => String(group.artist || '').trim() === anchorSectionArtist && holdsAnchorAlbum(group))
     : -1;
+  if (viewportIndex < 0 && albumKey) viewportIndex = groups.findIndex(holdsAnchorAlbum);
   if (viewportIndex < 0 && scrollTop > 0) {
     const visibleArtist = findGalleryMainContextSection(scrollTop)?.artist;
     viewportIndex = visibleArtist ? groups.findIndex(group => galleryMainGroupArtist(group) === visibleArtist) : -1;
@@ -51216,16 +51227,14 @@ function handleGalleryBootstrapClick(event) {
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = activeSearchQuery;
     closeRecentSearchPopover();
-    const currentSurface = String(
-      state.view?.surface?.active || state.view?.surface_request || 'albums'
-    ).trim().toLowerCase();
+    // A freshly loaded root gallery says all_artists_active: false yet shows exactly what Home shows;
+    // only the view's surface decides whether Home has anything to load.
     const alreadyAtLibraryHome = Boolean(
       isLibraryHome
       && !opensMobileHome
-      && currentSurface === 'albums'
+      && resolveViewSurface(state.view || {}) === 'albums'
       && !String(state.view?.query || '').trim()
       && !String(state.view?.selected_artist || '').trim()
-      && state.view?.all_artists_active !== false
       && !(Array.isArray(state.view?.related_filter_artists) && state.view.related_filter_artists.length)
       && !Boolean(state.view?.primary_filter_active)
       && !Boolean(state.view?.gallery_page?.has_previous)
@@ -52998,6 +53007,19 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       : []
     ).some((album) => String(album?.name || '').toLocaleLowerCase().includes(normalizedQuery))
   );
+  // Clicking the artist already shown, who has no family to resolve, reuses the mounted gallery:
+  // it is what the fetch would return (owner, 11-18: navigation never reloads the view on screen).
+  const isMountedSoloSelectedArtist = Boolean(
+    !query
+    && currentSelectedArtist === normalizedArtist
+    && currentPrimaryGroups.length === 1
+    && !currentFamilyGroups.length
+    && !currentRelatedArtists.length
+    && !Boolean(state.view?.initial_view_partial)
+    && String(state.view?.payload_tier || '').trim().toLowerCase() !== 'sidebar'
+    && !Boolean(state.view?.primary_filter_active)
+    && !(Array.isArray(state.view?.related_filter_artists) && state.view.related_filter_artists.length)
+  );
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -53015,7 +53037,7 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
         )
       )
     )
-    : hasAuthoritativeMountedFamilyContext;
+    : hasAuthoritativeMountedFamilyContext || isMountedSoloSelectedArtist;
   if (matchedSelectedArtistGroupIndex >= 0) {
     const optimisticMatchedSelectedArtistGroup = deepCloneJson(matchedSelectedArtistGroup);
     const selectedAlbumKeys = new Set(
@@ -53594,7 +53616,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// A history step onto the address of the view already shown (a duplicate history entry) keeps
+// that view: reloading it is navigation that changes nothing (owner, 11-18).
+function historyStepShowsCurrentView(href) {
+  if (state.ui?.activeViewRequestController || state.ui?.pendingViewRequest) return false;
+  if (state.view?.initial_view_partial) return false;
+  if (String(state.view?.payload_tier || '').trim().toLowerCase() === 'sidebar') return false;
+  return buildUrl(parseBrowserUrlState(href)) === buildUrl(state.view || {});
+}
+
 function handleGalleryBootstrapPopState(options = {}) {
+  if (!options.parentViewUrl && !options.galleryAnchorArtist && historyStepShowsCurrentView(getBrowserLocationHref())) return;
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist

@@ -449,6 +449,8 @@ test('shared gallery popstate forwards retained-scroll options to the existing r
   const context = load('bootstrap-gallery-event-handlers.js', {
     syncGalleryMainStateFromLocation: () => calls.push('location'),
     getBrowserLocationHref: () => 'https://example.test/?q=After+the+Rain',
+    parseBrowserUrlState: (href) => ({ q: new URL(href, 'https://example.test').searchParams.get('q') || '' }),
+    buildUrl: (view) => `/?q=${encodeURIComponent(view.q || '')}`,
     fetchAndRender: (...args) => calls.push(args),
   });
   context.handleGalleryBootstrapPopState(options);
@@ -1075,6 +1077,8 @@ test('mobile popstate restores canonical route and scroll only at the immediate 
       window: { history: { state: { albumHavenNavigationPosition: destination, mobilePages: [] } } },
       virtualGrid: { restoreOwnedAbsoluteScrollPosition: position => { restored.push(position.scrollTop); return true; }, render() {} },
       syncGalleryMainStateFromLocation() {}, getBrowserLocationHref: () => '/?q=Gallery+A',
+      parseBrowserUrlState: (href) => ({ q: new URL(href, 'https://example.test').searchParams.get('q') || '' }),
+      buildUrl: (view) => `/?q=${encodeURIComponent(view.q || '')}`,
       fetchAndRender: (...args) => calls.push(args),
     });
     vm.runInContext(fs.readFileSync(path.join(runtime, 'bootstrap-gallery-event-handlers.js'), 'utf8'), context);

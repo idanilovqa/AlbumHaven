@@ -9870,14 +9870,63 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#rescan_missing_album:route:POST /api/library/albums/{album_key:path}/rescan"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/missing_album_rescan.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 400
+      },
+      "budgets": {
+        "sql_statements": 2,
+        "stat_calls": 4,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_missing_album_rescan.py::test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
+      "testIdentity": "test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
+      "rollback": "Walking a root or listing a candidate folder in the request makes filesystem_enumerations exceed 0; checking more places as the library grows makes stat_calls grow (freeze guard case 59)."
+    },
+    {
+      "id": "py:services/missing_album_rescan.py#MissingAlbumSearches._run",
+      "action": "Search the readable roots once, in the background, for a missing album a Re-scan did not find by lookups",
+      "entrypoints": [
+        "py:music_app/services/missing_album_rescan.py#MissingAlbumSearches._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/missing_album_rescan.py",
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 400
+      },
+      "budgets": {
+        "filesystem_enumerations": 5,
+        "stat_calls": 6
+      },
+      "growth": {
+        "metric": "filesystem_enumerations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_missing_album_rescan.py::test_missing_album_search_contract_walks_each_readable_root_once_at_any_library_size",
+      "testIdentity": "test_missing_album_search_contract_walks_each_readable_root_once_at_any_library_size",
+      "rollback": "Walking a root more than once, or listing each candidate folder, makes filesystem_enumerations grow with the library. The walk stays within the 15 s cap and stops at shutdown (freeze guard case 59)."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#revert_problem_ignore",

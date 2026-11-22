@@ -157,6 +157,49 @@ def test_the_search_honours_its_time_cap_and_says_why_the_album_is_missing(tmp_p
     assert searches.result(_ALBUM) == {"status": "missing", "reason": "deleted"}
 
 
+_ROUTE = "py:routes/api_wave_a_asgi_routes.py#rescan_missing_album"
+_SEARCH = "py:services/missing_album_rescan.py#MissingAlbumSearches._run"
+
+
+def _contract(interaction_id, run):
+    from tests.py.bounded_interactions import _checked_in_entries, measure_scale_pair
+
+    entry = _checked_in_entries()[interaction_id]
+    measure_scale_pair(
+        interaction_id=interaction_id,
+        small=entry["cardinalities"]["small"],
+        large=entry["cardinalities"]["production"],
+        run=run,
+        budgets=entry["budgets"],
+        growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
+    )
+
+
+def test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size(tmp_path, monkeypatch):
+    def run(other_albums):
+        roots, _album, files = _library(tmp_path / str(other_albums), other_albums)
+        database, counts = _Database(files), OperationCounts()
+        searches = MissingAlbumSearches(start=lambda _key, _run: None)
+        with count_filesystem_and_media(monkeypatch, counts):
+            assert _rescan(roots, database, searches=searches).rescan(_ALBUM) == {"status": "searching"}
+        counts.sql_statements = len(database.statements)
+        return counts
+
+    _contract(_ROUTE, run)
+
+
+def test_missing_album_search_contract_walks_each_readable_root_once_at_any_library_size(tmp_path, monkeypatch):
+    def run(other_albums):
+        roots, album, files = _library(tmp_path / str(other_albums), other_albums)
+        rescan, counts = _rescan(roots, _Database(files)), OperationCounts()
+        paths = [Path(path) for path, _root in files]
+        with count_filesystem_and_media(monkeypatch, counts):
+            assert rescan._search(_ALBUM, "main", album, paths) == {"status": "missing", "reason": "deleted"}
+        return counts
+
+    _contract(_SEARCH, run)
+
+
 def test_a_search_stops_at_shutdown_and_publishes_nothing(tmp_path, monkeypatch):
     roots, album, files = _library(tmp_path, 30)
     entered, release = threading.Event(), threading.Event()

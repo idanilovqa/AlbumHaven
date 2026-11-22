@@ -6528,6 +6528,42 @@ test('a tab asked by Play here answers only when its output is silent, at the la
   assert.equal(answer().position.ms, Math.round((100 * 128) / 48), 'nothing repeated, nothing skipped');
 });
 
+// Owner, round 10 (2026-11-22): "half a second of glitch" when Play here starts in tab 2.
+test('a paused tab that takes over starts once at that place, with none of the audio it had buffered', async (t) => {
+  const harness = createEngineHarness({ realProcessor: true });
+  t.after(() => harness.api.stop());
+  const fill = (open, value) => {
+    acceptMetadata(harness, open);
+    for (const sequence of [0, 1]) {
+      receivePcmAndAssertEnqueue(harness, {
+        generation: open.generation, streamId: open.streamId, sequence,
+        samples: new Array(48_000 * 2).fill(value),
+      });
+    }
+  };
+  await harness.api.start(makeTrack('mine.flac'));
+  fill(harness.sent('open')[0], 0.25);
+  const node = harness.nodes[0];
+  node.render();
+  node.deliverEvents();
+  await harness.api.pause();
+  const opensBefore = harness.sent('open').length;
+  const playsBefore = harness.portMessages('play').length;
+
+  await harness.api.start(makeTrack('theirs.flac'), { startSeconds: 87.654 });
+  const output = [];
+  for (let quantum = 0; quantum < 4; quantum += 1) output.push(...node.render()[0]);
+  assert.ok(output.every((sample) => sample === 0), 'nothing sounds before the confirmed place has arrived');
+  const opens = harness.sent('open').slice(opensBefore);
+  assert.equal(opens.length, 1, 'one stream, no second start');
+  assert.equal(opens[0].startFrame, Math.round(87.654 * 48_000));
+  fill(opens[0], 0.75);
+  for (let quantum = 0; quantum < 4; quantum += 1) {
+    assert.ok(node.render()[0].every((sample) => sample === 0.75), 'only the taken-over song, from its first frame');
+  }
+  assert.equal(harness.portMessages('play').length - playsBefore, 1);
+});
+
 test('music playback asks for large output buffers', async () => {
   const harness = createEngineHarness();
 

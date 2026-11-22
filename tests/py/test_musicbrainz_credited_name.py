@@ -129,3 +129,18 @@ def test_cards_name_the_credited_artist_with_one_read_for_the_whole_page():
         "Shamaani Duo", "Shamaani Duo", "Godspeed You! Black Emperor", "Corrected", "Alan Parsons Project"]
     assert "display_artist" not in albums[0], "no extra bytes where the tag already is the credit"
     assert len(queries) == 1, "no per-album query"
+
+
+def test_a_name_of_symbols_alone_is_never_a_punctuation_difference():
+    assert _artist_changes("!!!", [_credit("!!!", "???")]) == []
+    assert _details("!!!", "???", [_credit("!!!", "???")])["display_artist"] == "!!!"
+
+
+@pytest.mark.parametrize(("field", "kind"), [
+    ("album_artist", "album_artist_renamed"), ("album", "album_title"), ("title", "track_title"),
+])
+def test_a_change_between_symbol_only_values_waits_for_review(field, kind):
+    from music_app.services.musicbrainz_correction_kinds import classify
+
+    assert classify(field, "!!!", "???") == kind
+    assert classify(field, "! !", "!  !") == "spacing"

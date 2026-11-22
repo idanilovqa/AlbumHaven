@@ -82,6 +82,10 @@ def classify(field: str, current: object, proposed: object) -> str:
         return "spacing"
     if _spaced(a).casefold() == _spaced(b).casefold():
         return "case_spacing"
+    if not _letters(a) and not _letters(b):
+        # Symbols alone ("!!!", "???") have no letters to agree on: another name, for review.
+        return {"album": "album_title", "title": "track_title", "album_artist": "album_artist_renamed",
+                "artist": "track_artist_renamed"}[field]
     if _letters(a) == _letters(b):
         return "punctuation"
     if _letters(_unaccented(a)) == _letters(_unaccented(b)):

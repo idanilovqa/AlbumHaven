@@ -18,6 +18,7 @@ import pytest
 from music_app.services import cache, cover_workflow
 from music_app.services import gallery_projection_postgres as gallery
 from music_app.services import library_browse_postgres as browse
+from music_app.services import state as state_service
 from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
 from tests.py.asgi_testing import decode_json, run_asgi_request
 from tests.py.bounded_interactions import CountingConnection, OperationCounts, measure_scale_pair
@@ -180,10 +181,11 @@ def test_cover_save_contract_next_cover_lookup_and_problematic_files_open_grow_w
 
             counted.__wrapped__ = build
             monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, kind, counted)
-        monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", lambda *_a, **_k: counts.count("worker_wakes"))
+        for owner in (gallery, state_service):
+            monkeypatch.setattr(owner, "schedule_gallery_projection_refresh", lambda *_a, **_k: counts.count("worker_wakes"))
         monkeypatch.setattr(
-            browse, "_UTILITY_PROJECTION_PREWARM_EXECUTOR",
-            SimpleNamespace(submit=lambda *_a, **_k: counts.count("worker_wakes")),
+            browse.PostgresLibraryBrowseRepository, "queue_settings_projection_prewarm",
+            lambda _self: counts.count("worker_wakes"),
         )
 
         def call(method: str, route: str, **request):

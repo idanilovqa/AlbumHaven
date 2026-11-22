@@ -197,18 +197,16 @@ def record_cover_change_in_utility_projections(
         return
     changes = dict.fromkeys(track_paths, object())
     with _UTILITY_PROJECTION_CACHE_LOCK:
-        for kind in (*_COVER_DEPENDENT_KINDS, _PROBLEMATIC_FILES_PAGE_KIND):
+        for kind in _COVER_DEPENDENT_KINDS:
             cache_key = (normalized_database_url, kind)
-            if kind in _COVER_DEPENDENT_KINDS and (
-                cache_key in _UTILITY_PROJECTION_CACHE or cache_key in _UTILITY_PROJECTION_SINGLEFLIGHT
-            ):
+            # With nothing cached or being built, the next build reads this change itself.
+            if cache_key in _UTILITY_PROJECTION_CACHE or cache_key in _UTILITY_PROJECTION_SINGLEFLIGHT:
                 _UTILITY_COVER_CHANGES.setdefault(cache_key, {}).update(changes)
-                continue
-            # A first page can't be patched (the album may leave it) and only
-            # stands in until the complete list is cached. With nothing cached,
-            # a build under way must not cache what preceded this change.
-            _UTILITY_PROJECTION_GENERATIONS[cache_key] = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
-            _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+        # A first page can't be patched (the album may leave it) and only stands
+        # in until the complete list is cached.
+        page_key = (normalized_database_url, _PROBLEMATIC_FILES_PAGE_KIND)
+        _UTILITY_PROJECTION_GENERATIONS[page_key] = _UTILITY_PROJECTION_GENERATIONS.get(page_key, 0) + 1
+        _UTILITY_PROJECTION_CACHE.pop(page_key, None)
 
 
 def _request_flag(value: object) -> bool:
@@ -2908,11 +2906,15 @@ class PostgresLibraryBrowseRepository:
             _begin_problematic_files_read(connection)
             albums, projected_items = self._problematic_albums_of_tracks(connection, track_paths)
             # A cover change never moves an album: its place follows name, artist, year and key.
-            for album in albums:
-                order = _problematic_item_order(album)
-                position = bisect_left(items, order, key=_problematic_item_order)
-                if position < len(items) and _problematic_item_order(items[position]) == order:
-                    del items[position]
+            positions = _listed_positions(items, albums)
+            listed_paths = {path for position in positions for path in items[position].get("track_paths") or []}
+            reloaded_paths = {track["path"] for album in albums for track in album["tracks"]}
+            if not listed_paths <= reloaded_paths:
+                # A separate release split by year can list two album rows as one album.
+                albums, projected_items = self._problematic_albums_of_tracks(connection, track_paths | listed_paths)
+                positions = _listed_positions(items, albums)
+            for position in sorted(positions, reverse=True):
+                del items[position]
             for item, _album in projected_items:
                 insort(items, item, key=_problematic_item_order)
             first_key = items[0]["key"] if items else None
@@ -3120,20 +3122,18 @@ class PostgresLibraryBrowseRepository:
 
     def build_utility_rules_payload(self) -> dict[str, object]:
         kind = "rules"
-        self._apply_cover_changes(kind, self._utility_rules_with_reloaded_covers)
-        cached_payload = self._get_cached_utility_projection(kind)
-        if cached_payload is not None:
-            return cached_payload
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            cache_key = self._utility_projection_cache_key(kind)
-            generation = (
-                _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
-                if cache_key is not None
-                else None
-            )
-        payload = _utility_rules_projection_payload(self._load_utility_rules_rows())
-        self._set_cached_utility_projection(kind, payload, expected_generation=generation)
-        return deepcopy(payload)
+
+        def cached() -> dict[str, object] | None:
+            self._apply_cover_changes(kind, self._utility_rules_with_reloaded_covers)
+            return self._get_cached_utility_projection(kind)
+
+        def build(generation: int | None) -> dict[str, object]:
+            payload = _utility_rules_projection_payload(self._load_utility_rules_rows())
+            self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+            return deepcopy(payload)
+
+        # One build at a time, so none can cache over a cover change applied meanwhile.
+        return self._build_utility_projection_once(kind, cached, build)
 
     def _utility_rules_with_reloaded_covers(
         self,
@@ -12398,6 +12398,20 @@ def _problematic_item_order(item: Mapping[str, object]) -> tuple[str, str, str, 
         str(item.get("year") or ""),
         str(item.get("key") or "").lower(),
     )
+
+
+def _listed_positions(
+    items: list[dict[str, object]],
+    albums: list[dict[str, object]],
+) -> set[int]:
+    """Where `albums` are in the sorted Problematic Files `items`."""
+    positions = set()
+    for album in albums:
+        order = _problematic_item_order(album)
+        position = bisect_left(items, order, key=_problematic_item_order)
+        if position < len(items) and _problematic_item_order(items[position]) == order:
+            positions.add(position)
+    return positions
 
 
 def _load_cover_change_albums(connection: Any, track_paths: set[str]) -> list[Mapping[str, object]]:

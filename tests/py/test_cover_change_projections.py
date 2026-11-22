@@ -74,12 +74,40 @@ def test_a_reload_never_overwrites_a_rebuild_that_finished_meanwhile(repository)
     assert browse._UTILITY_PROJECTION_CACHE[KEY] == {"build": 2, "reloaded": True}
 
 
-def test_a_change_during_a_rules_build_keeps_that_build_out_of_the_cache(repository, monkeypatch):
+def test_a_change_during_a_rules_build_is_applied_on_the_next_read(repository, monkeypatch):
     monkeypatch.setattr(repository, "_load_utility_rules_rows", lambda: _save("a") or [])
+    monkeypatch.setattr(
+        repository, "_utility_rules_with_reloaded_covers",
+        lambda payload, paths: {**payload, "reloaded": paths},
+    )
 
-    repository.build_utility_rules_payload()
+    assert "reloaded" not in repository.build_utility_rules_payload()
+    assert repository.build_utility_rules_payload()["reloaded"] == {"a"}
 
-    assert (URL, "rules") not in browse._UTILITY_PROJECTION_CACHE
+
+def test_a_split_release_listed_from_two_album_rows_is_reloaded_whole(repository, monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(execute=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repository, "_browse_connection_context", lambda: nullcontext(connection))
+    reads = []
+
+    def albums_of_tracks(_connection, paths):
+        reads.append(paths)
+        album = {"key": "release::year::2001", "name": "Release", "album_artist": "Artist", "year": 2001,
+                 "tracks": [{"path": path} for path in sorted(paths)]}
+        return [album], [({**album, "track_paths": sorted(paths)}, album)]
+
+    monkeypatch.setattr(repository, "_problematic_albums_of_tracks", albums_of_tracks)
+    monkeypatch.setattr(repository, "_problematic_initial_detail", lambda _connection, album: {"key": album["key"]})
+    listed = {"key": "release::year::2001", "name": "Release", "album_artist": "Artist", "year": 2001,
+              "track_paths": ["a", "b"]}
+
+    reloaded = repository._problematic_files_with_reloaded_albums({"items": [listed]}, {"a"})
+
+    assert reads == [{"a"}, {"a", "b"}]
+    assert [item["track_paths"] for item in reloaded["items"]] == [["a", "b"]]
 
 
 def test_a_full_invalidation_discards_the_noted_changes(repository):

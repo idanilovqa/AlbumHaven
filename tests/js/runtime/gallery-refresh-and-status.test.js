@@ -7139,6 +7139,31 @@ test('request capture: gallery navigation fetches its own endpoint once and disp
   });
 });
 
+test('request capture: browsing scanned results requests the root gallery once, however often it is pressed', async () => {
+  const id = 'js:runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot';
+  const scannedRoot = { surface: { active: 'albums' }, artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }], album_count: 1 };
+  const pressRepeatedly = async ({ context }, presses) => {
+    await Promise.all(Array.from({ length: presses }, () => context.browseScannedLibrarySnapshot()));
+    await settleRequests();
+  };
+  await measureInteractionContract(id, {
+    // The scanned gallery is already shown from the browse cache while scan work continues: nothing to load.
+    async alreadyShown(presses) {
+      const gallery = capturedGallery(() => jsonResponse(scannedRoot));
+      gallery.context.getReusableRootBrowseView = () => JSON.parse(JSON.stringify(scannedRoot));
+      gallery.context.state.status = { ...gallery.context.state.status, scan_in_progress: true };
+      await pressRepeatedly(gallery, presses);
+      return { requests: gallery.capture.urls() };
+    },
+    setup: presses => ({ gallery: capturedGallery(() => jsonResponse(scannedRoot)), presses }),
+    async act({ gallery, presses }) {
+      const pass = await capturedPass(gallery, () => pressRepeatedly(gallery, presses));
+      assert.deepEqual(pass.requests.map(url => new URL(url, 'http://localhost').pathname), ['/view-data']);
+      return pass;
+    },
+  });
+});
+
 test('request capture: startup hydration follow-ups dispatch one request after busy retries', async () => {
   const id = 'js:runtime/gallery-refresh-and-status.js#runDispatch';
   await measureInteractionContract(id, {
@@ -7923,4 +7948,31 @@ test('IAR-W15: a view shown from the device copy is brought up to date in place 
   await flushMicrotasks();
 
   assert.equal(refreshed, 1);
+});
+
+test('a refreshed root window anchors on the section of the card on screen, not the first group holding its album', () => {
+  // FTC-TAGS-011/012: the card at the top of the screen was a jointly credited album, also listed
+  // under an artist far above; anchoring there ended the window before the artist on screen.
+  const { context } = createContext();
+  const joint = { key: 'joint-album' };
+  const groups = [
+    { artist: 'Compilation Signal Guest', albums: [{ key: 'guest-1' }, joint] },
+    { artist: 'Control Signal Lead', albums: [{ key: 'lead-1' }] },
+    { artist: 'Control Signal Partner', albums: [joint, { key: 'partner-2' }] },
+    { artist: 'E2E Rarity Artist', albums: [{ key: 'rarity-1' }] },
+  ];
+  // The captured key is the grid's own rendered section key; derive it from the real grid.
+  const gridContext = vm.createContext({});
+  const gridSource = fs.readFileSync(path.join(path.dirname(helperPath), 'virtual-artist-grid.js'), 'utf8');
+  // The class only; the file's last statement mounts the live grid on the page.
+  vm.runInContext(gridSource.slice(0, gridSource.indexOf('const virtualGrid = new VirtualArtistGrid();')), gridContext);
+  const renderedKey = vm.runInContext(
+    "VirtualArtistGrid.prototype.getRenderedSectionKey({ kind: 'artist', sectionKey: 'all:Control Signal Partner:0' })",
+    gridContext,
+  );
+  context.virtualGrid = { sectionByRenderedKey: new Map([[renderedKey, { group: groups[2] }]]) };
+  const anchor = { albumKey: 'joint-album', sectionOccurrenceKey: renderedKey };
+  assert.equal(context.rootGalleryViewportArtists(groups, anchor, 900).artists[0], 'Control Signal Partner');
+  // Without a known section the first group holding the album still anchors the window.
+  assert.equal(context.rootGalleryViewportArtists(groups, { albumKey: 'joint-album' }, 900).artists[0], 'Compilation Signal Guest');
 });

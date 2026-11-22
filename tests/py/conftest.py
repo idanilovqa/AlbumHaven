@@ -687,3 +687,39 @@ def asgi_request():
     from tests.py.asgi_testing import run_asgi_request
 
     return run_asgi_request
+
+
+@pytest.fixture
+def unreachable_postgres_pool(monkeypatch: pytest.MonkeyPatch):
+    """Every pool checkout fails at once, as `psycopg.connect` does against a missing database.
+
+    A real pool's first checkout before it has ever connected may wait up to 5 s while its
+    background attempts fail, which breaks tests that time their own threads in seconds.
+    """
+    import psycopg
+
+    from music_app.services import postgres_connections
+
+    class _UnreachableCheckout:
+        def __enter__(self):
+            raise psycopg.OperationalError("test database is deliberately unreachable")
+
+        def __exit__(self, *_args):
+            return False
+
+    class _UnreachablePool:
+        min_size = 0
+
+        def __init__(self, **options):
+            self.max_size = options.get("max_size")
+
+        def connection(self, timeout=None):
+            return _UnreachableCheckout()
+
+        def close(self):
+            pass
+
+    postgres_connections.close_pools()
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", _UnreachablePool)
+    yield
+    postgres_connections.close_pools()

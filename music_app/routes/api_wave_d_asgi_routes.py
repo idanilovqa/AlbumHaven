@@ -83,6 +83,7 @@ from music_app.services.cover_workflow import (
     resolve_album_context,
     resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
+    run_serialized_cover_selection,
     save_pasted_image_as_authoritative_cover,
     validate_local_cover_source,
 )
@@ -1289,21 +1290,27 @@ async def _selected_cover_inventory_state(
         path in file_cache for path in track_paths
     ):
         return library_state
+    return await run_in_threadpool(_load_selected_album_state, config, library_state, track_paths)
+
+
+def _load_selected_album_state(
+    config: dict[str, object],
+    library_state: dict[str, object],
+    track_paths: set[str],
+) -> dict[str, object]:
+    """One album as Postgres has it now, request-local."""
     from music_app.services.library import build_albums_from_file_cache
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
-    def load_selected_inventory() -> dict[str, object]:
-        repository = PostgresLibraryBrowseRepository(config)
-        paths = {
-            str(track.get("path") or "").strip()
-            for album in repository.build_album_payloads_by_track_paths(track_paths)
-            for track in album.get("tracks", [])
-            if str(track.get("path") or "").strip()
-        }
-        entries = repository.build_track_file_entries_by_paths(paths)
-        return {**library_state, "file_cache": entries, "albums": build_albums_from_file_cache(entries)}
-
-    return await run_in_threadpool(load_selected_inventory)
+    repository = PostgresLibraryBrowseRepository(config)
+    paths = {
+        str(track.get("path") or "").strip()
+        for album in repository.build_album_payloads_by_track_paths(track_paths)
+        for track in album.get("tracks", [])
+        if str(track.get("path") or "").strip()
+    }
+    entries = repository.build_track_file_entries_by_paths(paths)
+    return {**library_state, "file_cache": entries, "albums": build_albums_from_file_cache(entries)}
 
 
 @router.post("/utilities/cover-lookup/local-select")
@@ -1790,9 +1797,32 @@ def _delete_local_cover(
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+    return run_serialized_cover_selection(
+        album_context.album_root,
+        lambda: _delete_cover_and_repoint(config, logger, library_state, album_context, resolved),
+        resolved.parent,
+    )
+
+
+def _delete_cover_and_repoint(
+    config: dict[str, object],
+    logger: logging.Logger,
+    library_state: dict[str, object],
+    album_context: CoverAlbumContext,
+    resolved: Path,
+) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
+    if not resolved.is_file():  # another request deleted it while this one waited for the folder
+        return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+    # Postgres owns the selection. The runtime cache is empty after startup and stale after a paste, so it is
+    # read only where there is no database to ask.
+    selection_state = (
+        _load_selected_album_state(config, library_state, album_context.track_paths)
+        if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        else library_state
+    )
     deleted_cover_bytes = resolved.read_bytes()
     active_cover = active_cover_path_for_track_paths_in_state(
-        library_state.get("file_cache", {}) or {},
+        selection_state.get("file_cache", {}) or {},
         album_context.track_paths,
     )
     next_cover = delete_local_cover_and_choose_next(
@@ -1828,6 +1858,16 @@ def _delete_local_cover(
             library_state=library_state,
             schedule_cache_update=False,
         )
+        if selection_state is not library_state:
+            # The answer names the album even when the runtime library does not hold it.
+            updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
+                album_context.track_paths,
+                next_cover,
+                config=config,
+                logger=logger,
+                library_state=selection_state,
+                schedule_cache_update=False,
+            )
     return updated_albums, updated_problematic_album, resolved
 
 

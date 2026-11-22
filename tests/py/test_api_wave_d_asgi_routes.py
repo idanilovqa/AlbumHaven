@@ -165,6 +165,19 @@ def postgres_runtime_fakes(app, monkeypatch):
     app.config["_TEST_COVER_LOOKUP_NOTIFICATIONS"] = persisted_notifications
 
 
+@pytest.fixture
+def seeded_state_is_the_stored_selection(monkeypatch):
+    """Delete reads the album's selection from Postgres; for these tests that is the state they seed."""
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    load = asgi_routes._load_selected_album_state
+
+    def stored_selection(config, state, paths):
+        return state if all(path in state.get("file_cache", {}) for path in paths) else load(config, state, paths)
+
+    monkeypatch.setattr(asgi_routes, "_load_selected_album_state", stored_selection)
+
+
 class _FilesystemCoverInventory:
     """Route tests have no isolated database for the Postgres-backed local cover
     inventory, so resolve an album's folder from its track paths instead."""
@@ -1068,6 +1081,7 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch, 
     ]
 
 
+@pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
 def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_bridge(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cache as cache_module
@@ -3312,6 +3326,7 @@ def test_asgi_pasted_cover_save_names_the_backup_of_the_replaced_cover(app, monk
     assert invalidated[-1] == [previous_cover, backup]
 
 
+@pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
 def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 
@@ -3519,6 +3534,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     assert _decode_json(pasted_body) == {"ok": False, "error": "Clipboard image format is invalid."}
 
 
+@pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
 def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selection(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services.local_cover_inventory import discover_local_cover_inventory
@@ -3576,6 +3592,7 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
     ] == [str(active_cover)]
 
 
+@pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
 def test_cover_lookup_names_images_by_reference_and_acts_on_the_named_one(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services.cover_reference_boundary import CoverReferenceBoundary
@@ -3607,6 +3624,7 @@ def test_cover_lookup_names_images_by_reference_and_acts_on_the_named_one(app, m
     assert str(track_path.parent) not in body.decode("utf-8")
 
 
+@pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
 def test_asgi_cover_lookup_delete_final_local_cover_durably_clears_selection(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 
@@ -3645,6 +3663,7 @@ def test_asgi_cover_lookup_delete_final_local_cover_durably_clears_selection(app
     assert app.library_state["file_cache"][str(track_path)]["cover_path"] is None
 
 
+@pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
 def test_asgi_cover_lookup_delete_final_local_cover_persistence_failure_restores_file_and_state(
     app,
     monkeypatch,

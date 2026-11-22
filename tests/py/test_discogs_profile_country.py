@@ -7,7 +7,7 @@ from music_app.services.discogs_profile_country import profile_origin_country
 
 
 @pytest.mark.parametrize("profile,country", [
-    ("A progressive rock project from Poland masterminded by Michał Wojtas.", "PL"),
+    ("An art rock project from Poland led by Jan Kowalski.", "PL"),
     ("Progressive folk rock band from Spain.", "ES"),
     ("Heavy metal band from Tampa, Florida, United States.", "US"),
     ("Black metal band from the Netherlands, formed in 1998.", "NL"),
@@ -35,9 +35,9 @@ def test_a_statement_of_origin_gives_the_country(profile, country):
     "Band inspired by a group from Sweden.",
     "Metal band signed to a label from Japan.",
     "Not to be confused with the band from Spain.",
-    "For the band from Spain, see Amarok (2).",
+    "For the band from Spain, see Example (2).",
     "There is also a band from Spain of this name.",
-    "Band similar to the Polish progressive rock band Riverside.",
+    "Band similar to the Polish progressive rock band Example.",
     "Session player for a band from Italy.",
     "Drummer, ex-member of a band from Norway.",
     "Progressive rock band. They moved to France in 2004.",

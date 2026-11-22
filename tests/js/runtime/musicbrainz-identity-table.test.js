@@ -19,23 +19,23 @@ function loadContext() {
   return context;
 }
 
-const ARK = '166ef05e-53f7-44b8-a5d5-3944c188e12d';
-const UK = '3d77bd89-f6da-47f9-aecd-d092403d0986';
+const FIRST = '00000000-0000-4000-8000-0000000000c1';
+const SECOND = '00000000-0000-4000-8000-0000000000c2';
 const ROWS = [
-  { mbid: ARK, name: 'Ark', prefix: 'Suggested: ', facts: 'norwegian metal band', evidence: '1 of 3 sampled recordings',
-    url: `https://musicbrainz.org/artist/${ARK}` },
-  { mbid: UK, name: 'Ark', evidence: 'No sampled recordings', url: `https://musicbrainz.org/artist/${UK}` },
+  { mbid: FIRST, name: 'Example', prefix: 'Suggested: ', facts: 'example metal band', evidence: '1 of 3 sampled recordings',
+    url: `https://musicbrainz.org/artist/${FIRST}` },
+  { mbid: SECOND, name: 'Example', evidence: 'No sampled recordings', url: `https://musicbrainz.org/artist/${SECOND}` },
 ];
 
 test('the table draws the rows and selection it is given, reading no Problematic Files state', () => {
   const html = loadContext().buildMusicBrainzIdentityTableHtml({
-    rows: ROWS, selectedMbid: ARK, ariaLabel: 'MusicBrainz artist candidates', targetLabel: 'Candidate artist / MBID',
+    rows: ROWS, selectedMbid: FIRST, ariaLabel: 'MusicBrainz artist candidates', targetLabel: 'Candidate artist / MBID',
   });
   assert.match(html, /aria-label="MusicBrainz artist candidates"/);
   assert.match(html, />Candidate artist \/ MBID</);
-  assert.match(html, /<strong>Suggested: Ark<\/strong><small>norwegian metal band<\/small>/);
+  assert.match(html, /<strong>Suggested: Example<\/strong><small>example metal band<\/small>/);
   assert.equal((html.match(/ checked/g) || []).length, 1);
-  assert.match(html, new RegExp(`value="${ARK}"[^>]* checked`));
+  assert.match(html, new RegExp(`value="${FIRST}"[^>]* checked`));
   assert.match(html, /No sampled recordings/);
   assert.equal((html.match(/data-open-musicbrainz-url=/g) || []).length, 2);
 });

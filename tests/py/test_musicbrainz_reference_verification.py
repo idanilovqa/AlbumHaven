@@ -10,7 +10,7 @@ MERGED = "00000000-0000-4000-8000-00000000000b"
 EDITIONS = [f"00000000-0000-4000-8000-0000000000{n:02d}" for n in range(1, 7)]
 CREDIT = [{"name": "Band", "artist_mbid": "00000000-0000-4000-8000-0000000000ff",
            "artist_name": "Band", "join_phrase": ""}]
-TITLES = ("Opening", "The Mirror", "Closing")
+TITLES = ("Opening", "The Middle", "Closing")
 
 
 def _local(*titles):
@@ -121,7 +121,7 @@ def test_a_group_with_no_editions_has_nothing_to_warn_about():
 
 def test_a_pinned_editions_credit_names_the_album():
     edition = _release(EDITIONS[0])
-    edition["release"]["artist_credit"] = [{**CREDIT[0], "name": "Shamaani Duo", "artist_name": "Korpiklaani"}]
+    edition["release"]["artist_credit"] = [{**CREDIT[0], "name": "Band Duo", "artist_name": "Band"}]
     client = _Client(group=_group(), editions=_editions(3), releases={EDITIONS[0]: edition})
 
     found = verify_musicbrainz_reference(client, GROUP, _local())
@@ -132,7 +132,7 @@ def test_a_pinned_editions_credit_names_the_album():
 @pytest.mark.parametrize("titles", [TITLES, ("One", "Two", "Three")])
 def test_the_groups_credit_is_kept_without_a_pinned_editions_one(titles):
     edition = _release(EDITIONS[0], titles)
-    edition["release"]["artist_credit"] = [] if titles == TITLES else [{**CREDIT[0], "name": "Shamaani Duo"}]
+    edition["release"]["artist_credit"] = [] if titles == TITLES else [{**CREDIT[0], "name": "Band Duo"}]
     client = _Client(group=_group(), editions=_editions(3), releases={EDITIONS[0]: edition})
 
     assert verify_musicbrainz_reference(client, GROUP, _local())["artist_credit"] == CREDIT

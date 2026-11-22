@@ -650,9 +650,9 @@ def test_a_suggested_third_band_is_stored_for_its_row_and_joins_no_split():
     api = enrichment_api()
     repository = Repository()
     repository.claims.append({"id": 18, "local_artist_id": 42, "attempt_count": 0})
-    repository.contexts[18] = {"local_artist_id": 42, "local_name": "Amarok", "manual_decision": False}
-    split = [{"mbid": "00000000-0000-4000-8000-000000000001", "canonical_name": "Amarok"}]
-    third = [{"mbid": "00000000-0000-4000-8000-000000000003", "canonical_name": "Amarok"}]
+    repository.contexts[18] = {"local_artist_id": 42, "local_name": "Example", "manual_decision": False}
+    split = [{"mbid": "00000000-0000-4000-8000-000000000001", "canonical_name": "Example"}]
+    third = [{"mbid": "00000000-0000-4000-8000-000000000003", "canonical_name": "Example"}]
     processor = api.MusicBrainzArtistEnrichmentProcessor(
         repository=repository,
         client=object(),

@@ -8,7 +8,7 @@ from music_app.services.musicbrainz_identity_references import (
     read_musicbrainz_reference,
 )
 
-MBID = "f4882811-13ce-4fc3-af46-7717fb20f7d5"
+MBID = "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d"
 
 
 @pytest.mark.parametrize("value,entity", [
@@ -34,7 +34,7 @@ def test_another_kind_of_page_is_named(entity):
 
 
 @pytest.mark.parametrize("value", [
-    None, 12, "", "  ", "inspired-by-the-witcher", MBID[:-1], "00000000-0000-0000-0000-000000000000",
+    None, 12, "", "  ", "an-album-title", MBID[:-1], "00000000-0000-0000-0000-000000000000",
     f"https://musicbrainz.org/release/{MBID}x", f"https://musicbrainz.org/{MBID}",
     f"https://example.com/release/{MBID}", f"https://musicbrainz.org.example.com/release/{MBID}",
     f"https://example.com@evil.test/release/{MBID}", f"javascript://musicbrainz.org/release/{MBID}",
@@ -45,16 +45,16 @@ def test_anything_else_is_invalid(value):
 
 
 @pytest.mark.parametrize("value", [
-    "15864790", "r15864790", "[r15864790]", " https://www.discogs.com/release/15864790 ",
-    "https://www.discogs.com/release/15864790-Some-Band-Some-Album",
-    "https://www.discogs.com/ru/release/15864790-Стрелок", "discogs.com/release/15864790?ev=rr",
+    "123456", "r123456", "[r123456]", " https://www.discogs.com/release/123456 ",
+    "https://www.discogs.com/release/123456-Some-Band-Some-Album",
+    "https://www.discogs.com/ru/release/123456-Пример", "discogs.com/release/123456?ev=rr",
 ])
 def test_a_discogs_release_is_read(value):
-    assert read_discogs_reference(value) == {"status": "ok", "release_id": 15864790}
+    assert read_discogs_reference(value) == {"status": "ok", "release_id": 123456}
 
 
 @pytest.mark.parametrize("value,entity", [
-    ("https://www.discogs.com/artist/7568961", "artist"),
+    ("https://www.discogs.com/artist/654321", "artist"),
     ("https://www.discogs.com/master/123-Name", "master"),
     ("https://www.discogs.com/ru/label/55", "label"),
 ])
@@ -63,8 +63,8 @@ def test_another_discogs_page_is_named(value, entity):
 
 
 @pytest.mark.parametrize("value", [
-    None, "", "0", "-4", "15864790x", "a name", "1" * 13, "https://example.com/release/15864790",
-    "https://discogs.com.evil.test/release/15864790",
+    None, "", "0", "-4", "123456x", "a name", "1" * 13, "https://example.com/release/123456",
+    "https://discogs.com.evil.test/release/123456",
 ])
 def test_anything_else_is_no_discogs_release(value):
     assert read_discogs_reference(value) == {"status": "invalid"}

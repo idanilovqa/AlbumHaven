@@ -140,7 +140,8 @@ export async function cleanupWatchedAlbumFixture({
   const cleanupFailures = [];
   try { await context.close(); } catch (error) { cleanupFailures.push(error); }
   try {
-    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true });
+    // Windows refuses to delete a file the running app still has open; Node retries those briefly.
+    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true, maxRetries: 10, retryDelay: 200 });
   } catch (error) {
     cleanupFailures.push(error);
   }
@@ -152,6 +153,10 @@ export async function cleanupWatchedAlbumFixture({
     cleanupFailures.push(error);
   }
   if (cleanupFailures.length) {
+    // The runner stops on reportFailure before Playwright reports, so name the cause here.
+    console.error('[watcher-fixture-cleanup-failure]', cleanupFailures.map(
+      (error) => `${error?.code || error?.name || 'Error'}: ${error?.message || error}`,
+    ).join(' | '));
     const failures = [...(originalFailure ? [originalFailure] : []), ...cleanupFailures];
     try { await managedAppLifecycle.reportFailure(); } catch (reportFailure) { failures.push(reportFailure); }
     if (failures.length > 1) throw new AggregateError(failures, 'Watcher scenario and fixture cleanup failed.');

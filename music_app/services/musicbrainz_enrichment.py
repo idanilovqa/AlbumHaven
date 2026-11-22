@@ -304,7 +304,7 @@ class MusicBrainzArtistEnrichmentProcessor:
                 # compare and choose instead of facing an empty conflict.
                 self._repository.replace_candidates(
                     local_artist_id=local_artist_id,
-                    candidates=list(outcome.get("candidates") or []),
+                    candidates=self._with_details(list(outcome.get("candidates") or [])),
                     match_state=_CANDIDATE_MATCH_STATES.get(classification, "conflict"),
                     evidence_summary=evidence_summary,
                     observed_at=observed_at,
@@ -328,6 +328,33 @@ class MusicBrainzArtistEnrichmentProcessor:
             preserve_existing=bool(context.get("existing_artist_mbid")),
         )
         return {"processed": True, "state": terminal_state, "job_id": job_id, "local_artist_id": local_artist_id}
+
+    def _with_details(self, candidates: list[dict[str, object]]) -> list[dict[str, object]]:
+        """A release credit carries only an id and a name: each shown candidate known only so
+        is looked up once, until its details are stored. A provider failure ends the lookups;
+        the next normal re-check tries again."""
+        credited = [candidate for candidate in candidates[:_MAX_CANDIDATES] if candidate.get("details_missing")]
+        if not credited:
+            return candidates
+        missing = self._repository.artist_mbids_without_details(
+            [str(candidate["artist_mbid"]) for candidate in credited])
+        for candidate in credited:
+            mbid = str(candidate["artist_mbid"])
+            if mbid not in missing:
+                continue
+            found = self._client.lookup_artist(mbid)
+            if found.get("classification") == "not_found":
+                continue
+            if found.get("classification") != "matched":
+                break
+            artist = found["artist"]
+            # A merged artist answers under another MBID: not this candidate's details.
+            if str(artist.get("mbid") or "").lower() != mbid.lower():
+                continue
+            candidate.update({key: artist.get(key) for key in
+                              ("sort_name", "disambiguation", "country_code", "area_mbid", "area_name")})
+            candidate["artist_kind"] = artist.get("artist_type")
+        return candidates
 
 
 # Bounds per artist, so one artist can never stall the queue: every mirror
@@ -1122,6 +1149,11 @@ def _candidate_for_storage(candidate: dict[str, Any]) -> dict[str, object]:
         "disambiguation": candidate.get("disambiguation"),
         "artist_kind": candidate.get("artist_type"),
         "country_code": candidate.get("country_code"),
+        "sort_name": candidate.get("sort_name"),
+        "area_mbid": candidate.get("area_mbid"),
+        "area_name": candidate.get("area_name"),
+        # A search or a lookup gives a sort name; a release credit does not.
+        "details_missing": not candidate.get("sort_name"),
         "candidate_score": max(0, min(score, 1)),
         "evidence_summary": summary,
     }

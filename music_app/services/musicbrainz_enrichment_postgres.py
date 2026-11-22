@@ -587,6 +587,21 @@ class MusicBrainzEnrichmentPostgresRepository:
                     ))
         return bool(row.get("updated"))
 
+    def artist_mbids_without_details(self, mbids: list[str]) -> set[str]:
+        """Those of the artists with no stored lookup or search answer (a release credit stores
+        a name alone, never a sort name)."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(
+                """
+                select requested.mbid::text as mbid
+                from unnest(%(mbids)s::uuid[]) as requested(mbid)
+                left join integration.musicbrainz_artists artists on artists.mbid = requested.mbid
+                where artists.sort_name is null
+                """,
+                {"mbids": [_mbid(mbid) for mbid in mbids]},
+            ).fetchall()
+        return {str(_row_mapping(row)["mbid"]) for row in rows}
+
     def replace_candidates(
         self,
         *,
@@ -1391,6 +1406,9 @@ def _candidate_rows(value: object) -> list[dict[str, object]]:
             "disambiguation": _bounded_text(raw.get("disambiguation"), 1024) or None,
             "artist_kind": _bounded_text(raw.get("artist_kind") or raw.get("artist_type"), 64) or None,
             "country_code": _country_code(raw.get("country_code")),
+            "sort_name": _bounded_text(raw.get("sort_name"), 512) or None,
+            "area_mbid": _optional_mbid(raw.get("area_mbid")),
+            "area_name": _bounded_text(raw.get("area_name"), 256) or None,
             "score": _confidence(score),
             "evidence": _bounded_text(raw.get("evidence_summary"), 2048, required=True),
             "rejection": _bounded_text(raw.get("rejection_reason"), 512) or None,
@@ -1450,6 +1468,9 @@ def _candidate_array_params(rows: list[dict[str, object]]) -> dict[str, object]:
         "candidate_disambiguations": [row["disambiguation"] for row in rows],
         "candidate_kinds": [row["artist_kind"] for row in rows],
         "candidate_countries": [row["country_code"] for row in rows],
+        "candidate_sort_names": [row["sort_name"] for row in rows],
+        "candidate_area_mbids": [row["area_mbid"] for row in rows],
+        "candidate_area_names": [row["area_name"] for row in rows],
         "candidate_scores": [row["score"] for row in rows],
         "candidate_evidence": [row["evidence"] for row in rows],
         "candidate_rejections": [row["rejection"] for row in rows],
@@ -1762,20 +1783,25 @@ def _upsert_candidate_artists_sql() -> str:
           cross join unnest(
             %(candidate_mbids)s::uuid[], %(candidate_names)s::text[],
             %(candidate_disambiguations)s::text[], %(candidate_kinds)s::text[],
-            %(candidate_countries)s::text[]
-          ) as rows(mbid, canonical_name, disambiguation, artist_kind, country_code)
+            %(candidate_countries)s::text[], %(candidate_sort_names)s::text[],
+            %(candidate_area_mbids)s::uuid[], %(candidate_area_names)s::text[]
+          ) as rows(mbid, canonical_name, disambiguation, artist_kind, country_code,
+                    sort_name, area_mbid, area_name)
         ), upserted as (
           insert into integration.musicbrainz_artists (
-            mbid, canonical_name, disambiguation, artist_kind,
+            mbid, canonical_name, disambiguation, artist_kind, sort_name, area_mbid, area_name,
             refreshed_at, created_at, updated_at
           )
-          select mbid, canonical_name, disambiguation, artist_kind,
+          select mbid, canonical_name, disambiguation, artist_kind, sort_name, area_mbid, area_name,
                  %(observed_at)s, %(observed_at)s, %(observed_at)s
           from candidate_rows
           on conflict (mbid) do update
           set canonical_name = excluded.canonical_name,
               disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
               artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
+              sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning mbid

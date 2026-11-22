@@ -34,6 +34,7 @@ class Repository:
         self.automatic_outcomes = []
         self.candidate_replacements = []
         self.projection_refreshes = []
+        self.detailed_mbids = set()
         self.retry_calls = []
         self.completed = []
 
@@ -60,6 +61,9 @@ class Repository:
     def replace_candidates(self, **kwargs):
         self.candidate_replacements.append(kwargs)
         return len(kwargs["candidates"])
+
+    def artist_mbids_without_details(self, mbids):
+        return set(mbids) - self.detailed_mbids
 
     def refresh_artist_projection(self, **kwargs):
         self.projection_refreshes.append(kwargs)
@@ -663,3 +667,88 @@ def test_each_album_reaches_the_matcher_with_its_root_relative_folders():
     processor.process_next(worker_id="worker-a")
 
     assert [album["folders"] for album in resolver.calls[0][0]["albums"]] == [["3:Amarok PL/Hope"], []]
+
+
+def _credit_found(number):
+    return {"artist_mbid": f"00000000-0000-4000-8000-{number:012d}", "canonical_name": f"Credited {number}",
+            "candidate_score": 0.5, "evidence_summary": "1 of 1 album agree", "details_missing": True}
+
+
+class _DetailsClient:
+    def __init__(self, classification="matched"):
+        self.classification = classification
+        self.lookups = []
+
+    def lookup_artist(self, mbid):
+        self.lookups.append(mbid)
+        if self.classification != "matched":
+            return {"classification": self.classification, "artist": None}
+        return {"classification": "matched", "artist": {
+            "mbid": mbid, "canonical_name": "Credited", "sort_name": "Credited", "artist_type": "Group",
+            "country_code": "FI", "disambiguation": "folk band", "area_name": "Finland"}}
+
+
+def _recheck(repository, client, candidates, classification="ambiguous"):
+    api = enrichment_api()
+    repository.claims.append({"id": 17, "local_artist_id": 41, "attempt_count": 1})
+    repository.contexts[17] = {"local_artist_id": 41, "local_name": "Local", "manual_decision": False}
+    result = api.MusicBrainzArtistEnrichmentProcessor(
+        repository=repository, client=client, now=lambda: NOW,
+        resolve_artist=Resolver({"classification": classification, "evidence_summary": "Review.",
+                                 "candidates": [dict(candidate) for candidate in candidates]}),
+    ).process_next(worker_id="worker-a")
+    return result, repository.candidate_replacements[-1]["candidates"]
+
+
+def test_a_shown_candidate_known_only_from_a_credit_gets_its_details():
+    repository, client = Repository(), _DetailsClient()
+    searched = {**_credit_found(2), "details_missing": False}
+
+    _result, stored = _recheck(repository, client, [_credit_found(1), searched])
+
+    assert client.lookups == [_credit_found(1)["artist_mbid"]]
+    assert (stored[0]["country_code"], stored[0]["artist_kind"], stored[0]["disambiguation"],
+            stored[0]["area_name"], stored[0]["sort_name"]) == ("FI", "Group", "folk band", "Finland", "Credited")
+    assert stored[1] == searched
+
+
+def test_a_second_recheck_makes_no_extra_candidate_lookup():
+    repository, client = Repository(), _DetailsClient()
+    _recheck(repository, client, [_credit_found(1)])
+    repository.detailed_mbids.add(_credit_found(1)["artist_mbid"])
+
+    _recheck(repository, client, [_credit_found(1)])
+
+    assert len(client.lookups) == 1
+
+
+def test_candidate_lookups_stay_within_the_shown_candidate_cap():
+    repository, client = Repository(), _DetailsClient()
+
+    _recheck(repository, client, [_credit_found(number) for number in range(1, 26)])
+
+    assert len(client.lookups) == 15
+
+
+@pytest.mark.parametrize("failure", ["rate_limited", "provider_unavailable", "catch_up_pending"])
+def test_a_provider_failure_stops_candidate_lookups_and_keeps_the_candidates(failure):
+    repository, client = Repository(), _DetailsClient(failure)
+    candidates = [_credit_found(1), _credit_found(2)]
+
+    result, stored = _recheck(repository, client, candidates)
+
+    assert len(client.lookups) == 1
+    assert stored == candidates
+    assert result["state"] == "needs_review" and repository.retry_calls == []
+
+
+def test_a_candidate_that_merged_into_another_artist_keeps_its_credit_row():
+    class Merged(_DetailsClient):
+        def lookup_artist(self, mbid):
+            found = super().lookup_artist(mbid)
+            found["artist"]["mbid"] = _credit_found(9)["artist_mbid"]
+            return found
+
+    _result, stored = _recheck(Repository(), Merged(), [_credit_found(1)])
+
+    assert stored == [_credit_found(1)]

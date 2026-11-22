@@ -116,7 +116,7 @@ test('the Shamaani Duo album assertion locates the canonical Korpiklaani heading
   const step = spec.slice(start, spec.indexOf('FTC-MBID-002', start));
 
   assert.match(step, /albumDetailsTags\(\{ galleryActions, trackModalActions \}, 'Korpiklaani', 'Hunka lunka'\)/);
-  assert.match(step, /toContain\('Tagged as Shamaani Duo'\)/);
+  assert.match(step, /tag\.startsWith\('Tagged as'\)\)\)\.toEqual\(\[\]\)/);
 });
 
 test('the held hydration case uses the scrollable compilation artist fixture', () => {

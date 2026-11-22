@@ -51,10 +51,10 @@ def test_each_browse_query_reads_the_split_groups_once_through_the_per_album_cte
 
 def test_album_details_name_the_group_of_a_proven_split_album_only():
     mbid = "6b1f0c2e-1111-4000-8000-000000000001"
-    split = _Connection([{"mbid": mbid, "canonical_name": "Amarok", "disambiguation": None,
-                          "tag_differs": False, "split": True, "group_label": "Amarok (Poland)"}])
-    matched = _Connection([{"mbid": mbid, "canonical_name": "Angra", "disambiguation": None,
-                            "tag_differs": False, "split": False, "group_label": None}])
+    split = _Connection([{"mbid": mbid, "canonical_name": "Amarok",
+                          "tag_differs": False, "group_label": "Amarok (Poland)"}])
+    matched = _Connection([{"mbid": mbid, "canonical_name": "Angra",
+                            "tag_differs": False, "group_label": None}])
     assert browse._album_musicbrainz_artist(split, 1)["group_label"] == "Amarok (Poland)"
     assert "group_label" not in browse._album_musicbrainz_artist(matched, 2)
     sql = _normalized(split.sql[0])

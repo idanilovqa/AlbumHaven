@@ -1978,7 +1978,7 @@ function renderTrackModalRelease(album) {
       alternativeTitles: album.musicbrainz_release?.alternative_titles,
       year: album.display_year || album.year || '',
       releaseType: albumDetailsReleaseType(album),
-      tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });

@@ -6575,7 +6575,7 @@ def test_live_album_details_and_artist_header_show_each_album_s_musicbrainz_arti
 
     assert detail["musicbrainz_artist"] == {
         "artist_mbid": spanish, "musicbrainz_url": f"https://musicbrainz.org/artist/{spanish}",
-        "canonical_name": "Amarok", "disambiguation": "Spanish fusion band", "tag_differs": True, "split": True,
+        "canonical_name": "Amarok", "tag_differs": True,
         "group_label": "Owner (Spanish fusion band)"}
     identities = [projection["identities"] for projection in _find_artist_projections(payload) if "identities" in projection]
     assert identities and all(

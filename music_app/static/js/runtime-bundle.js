@@ -5597,16 +5597,6 @@ function albumDisplayArtist(album) {
   return album?.display_artist || album?.musicbrainz_artist?.group_label || albumIdentityArtist(album);
 }
 
-function albumTaggedArtistNote(album) {
-  const tagged = album?.album_artist || album?.artist || '';
-  if (albumIdentityArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
-  // A name shared by several MusicBrainz artists (Amarok): say which one this album is.
-  const identity = album?.musicbrainz_artist;
-  return identity?.split && identity.canonical_name
-    ? `MusicBrainz: ${[identity.canonical_name, identity.disambiguation ? `(${identity.disambiguation})` : ''].filter(Boolean).join(' ')}`
-    : '';
-}
-
 // The romanized form of the album's original-script artist name (J3), or empty.
 function albumDetailsRomanizedArtist(album) {
   return typeof romanizedArtistName === 'function' ? romanizedArtistName(albumDisplayArtist(album)) : '';
@@ -40886,7 +40876,7 @@ function renderTrackModalRelease(album) {
       alternativeTitles: album.musicbrainz_release?.alternative_titles,
       year: album.display_year || album.year || '',
       releaseType: albumDetailsReleaseType(album),
-      tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });

@@ -454,7 +454,7 @@
         "app-open-all-artists",
         "artist-tree-scroll-navigation"
       ],
-      "rollback": "Remove the data route from the worker (DATA_PATHS, the data handler and its OWN_PATHS entries) and this entry; data requests then go straight to the network as before and nothing is kept for them. Kept data entries are deleted with the copy on the next forget. No server data change."
+      "rollback": "Remove the data route from the worker (DATA_PATHS and the data handler) and this entry; data requests then pass through the worker to the network as before and nothing is kept for them. Kept data entries are deleted with the copy on the next forget. No server data change."
     },
     {
       "id": "js:app-copy-worker.js#fetchPage",

@@ -1056,6 +1056,56 @@ test('IAR-W12: an offline navigation waits for the page being written, not for c
   assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
 });
 
+// Sandbox5 r29 (cold D2): offline seconds after a first visit, the copy was still being filled with
+// the page's assets, and the new tab's page and every asset not yet kept waited for all of them.
+test('asset writes of the fill hold neither an offline navigation nor another asset; an asset waits only for its own write', async () => {
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.slowAssets) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => {
+        const key = typeof request === 'string' ? request : request.url;
+        if (key.includes('/static/')) await new Promise(resolve => setTimeout(resolve, 300));
+        return put(request, response);
+      };
+      cache.slowAssets = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, event, settled } = setup({
+    mode: 'web', caches,
+    respond: (request) => {
+      if (!online) return new TypeError('Failed to fetch');
+      const { pathname } = new URL(request.url);
+      if (pathname === '/') return page('acct-a');
+      return new Response('asset', { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
+    },
+  });
+  await worker.handle('page', navigation('/'), event);
+  await settled();
+  // Ten assets arrive and queue their writes, 3 s in all.
+  for (let index = 0; index < 10; index += 1) {
+    await worker.handle('versioned-asset', resource(`/static/js/runtime/fill-${index}.js?v=v1`), event);
+  }
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  online = false;
+
+  const started = Date.now();
+  const navigated = await worker.handle('page', navigation('/'), event);
+  assert.match(await navigated.text(), /content="cache"/);
+  await assert.rejects(worker.handle('versioned-asset', resource('/static/js/never-kept.js?v=v1'), event), TypeError);
+  assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the fill's 3 s of writes`);
+
+  // An asset still being written is answered from the copy once its own write ends.
+  const second = await worker.handle('versioned-asset', resource('/static/js/runtime/fill-1.js?v=v1'), event);
+  assert.equal(await second.text(), 'asset');
+  assert.ok(Date.now() - started < 2000, `fill-1 answered after ${Date.now() - started} ms, not after every write`);
+  await settled();
+});
+
 // Sandbox5 r25 (D2): offline right after sign-in, a new tab sometimes took 11-13 s. Assets being
 // written queue behind the page's covers, and a navigation or an asset never kept waited for them.
 test('IAR-W12: assets written behind covers hold neither an offline navigation nor an asset never kept', async () => {

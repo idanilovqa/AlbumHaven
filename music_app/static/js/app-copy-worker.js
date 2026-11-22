@@ -58,6 +58,8 @@
   const quietly = promise => promise.catch(() => {});
   const STYLE_URL = /url\(\s*(['"]?)(\/static\/[^'")\s]+)\1\s*\)/g;
   const NO_ANSWER = Symbol('no answer');
+  // What a page being written is waited for under (an asset is waited for under its URL).
+  const PAGES = Symbol('pages');
 
   function createAppCopyWorker({
     caches, fetch, origin, now = Date.now, maxCoverBytes = MAX_COVER_BYTES, mode = 'app', noAnswerMs = NO_ANSWER_MS,
@@ -102,25 +104,31 @@
       event?.waitUntil?.(work);
       return work;
     };
-    // Pages and versioned assets being written to the copy (covers are not waited for).
-    const writing = new Set();
-    const written = (work) => {
-      writing.add(work);
-      void quietly(work).then(() => writing.delete(work));
+    // Pages and versioned assets being written to the copy, under PAGES or the asset's URL (covers
+    // are not waited for).
+    const writing = new Map();
+    const written = (key, work) => {
+      const works = writing.get(key) || new Set();
+      writing.set(key, works.add(work));
+      void quietly(work).then(() => {
+        works.delete(work);
+        if (!works.size && writing.get(key) === works) writing.delete(key);
+      });
       return work;
     };
     // What was already arriving when the server became unreachable is kept before the copy is
     // read: a connection lost just after the page loaded still leaves that page for a new tab.
-    // Downloads get a short wait, so one that hangs rather than fails never holds the copy up; the
-    // pages and assets that arrived are then being written, which touches only storage and is waited
-    // for in full. Covers kept meanwhile are not: right after a page loads they are many, and
-    // waiting for them held an offline tab for up to 30 s on a busy computer (sandbox5, round 10).
-    const keptSoFar = async () => {
+    // Downloads get a short wait, so one that hangs rather than fails never holds the copy up; what
+    // [key] reads (PAGES, or one asset's URL) and arrived is then being written, which touches only
+    // storage and is waited for in full. Nothing else being written is: right after a first visit
+    // the copy is being filled with every asset of the page, and an offline tab waited for all of
+    // them (sandbox5 r29), as it once did for covers (up to 30 s on a busy computer, round 10).
+    const keptSoFar = async (key) => {
       await Promise.race([
         Promise.all(Array.from(keeping)),
         new Promise(resolve => setTimeout(resolve, KEEP_WAIT_MS)),
       ]);
-      await Promise.all(Array.from(writing, quietly));
+      await Promise.all(Array.from(writing.get(key) || [], quietly));
     };
 
     async function accountCache() {
@@ -204,7 +212,7 @@
       const text = await response.text();
       if (PATH_COVER_URL.test(text)) return false;
       let started = false;
-      await written(exclusive(async () => {
+      await written(PAGES, exclusive(async () => {
         if (fetchedIn !== generation) return;
         const html = withoutPaths(text.replace(NETWORK_MARKER, COPY_MARKER));
         const account = response.headers.get(COPY_HEADER);
@@ -340,7 +348,7 @@
         return prepared.response;
       }
       if (answer && answer.status < 500) return answer;
-      await keptSoFar();
+      await keptSoFar(PAGES);
       return (await freshCopy(url)) || (await standInCopy(url)) || network;
     }
 
@@ -355,10 +363,10 @@
     // an offline page waiting on it).
     async function storeAsset(cache, request, response, fetchedIn) {
       const kept = new Response(await response.arrayBuffer(), { headers: response.headers });
-      await written(exclusive(async () => {
+      const url = new URL(typeof request === 'string' ? request : request.url, origin);
+      await written(url.href, exclusive(async () => {
         if (fetchedIn !== generation) return;
         await cache.put(request, kept);
-        const url = new URL(typeof request === 'string' ? request : request.url, origin);
         if (url.pathname.startsWith('/static/') && url.searchParams.has('v')) (await listedIndex())?.assets.add(url.href);
       }));
     }
@@ -378,7 +386,7 @@
       try {
         response = await fetch(request);
       } catch (error) {
-        await keptSoFar();
+        await keptSoFar(request.url);
         const keptSince = target ? await target.cache.match(request) : null;
         if (keptSince) return keptSince;
         throw error;
@@ -397,7 +405,7 @@
       try {
         response = await fetch(request);
       } catch (error) {
-        await keptSoFar();
+        await keptSoFar(request.url);
         const kept = target ? await target.cache.match(request) : null;
         if (kept) return kept;
         throw error;

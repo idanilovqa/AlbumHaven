@@ -4716,7 +4716,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 1,
+        "timers": 1,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
+      "testIdentity": "bounded interaction: an artist availability pass sends one request and arms at most one retry at any library size",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; one availability pass already shares one request per artist scope and arms at most one retry. The uncapped retry cadence while the server stays deferred is a reported finding (6.5), not covered here."
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks",

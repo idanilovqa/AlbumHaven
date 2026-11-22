@@ -2908,3 +2908,41 @@ test('request capture: loose-track hydration requests each scope once', async ()
     },
   });
 });
+
+test('bounded interaction: an artist availability pass sends one request and arms at most one retry at any library size', async () => {
+  const { createInteractionCounter, countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const pass = async (albums) => {
+    const { context } = loadHelper();
+    const counter = createInteractionCounter();
+    const live = new Set();
+    context.URL = URL;
+    context.updateGalleryMainControls = () => {};
+    context.scheduleBrowserTimeout = (callback) => { const id = live.size + 1; live.add(id); return id; };
+    context.state.status = { inventory_mutation_revision: 7 };
+    // The rest of the library the page holds; the selected artist's count must not walk it.
+    const library = countedCollection(Array.from({ length: albums }, (_value, index) => ({ key: `album-${index}` })), counter);
+    context.state.albums = library;
+    context.state.view = {
+      selected_artist: 'Agalloch', visible_library_categories: ['main_library'],
+      non_album_tracks: [], non_album_tracks_deferred: true, artist_groups: library,
+    };
+    // The server's snapshot is still being prepared: the pass must retry, once.
+    context.fetch = async () => {
+      counter.count('requests');
+      return { ok: true, status: 200, json: async () => ({ non_album_track_count: 0, non_album_tracks_deferred: true }) };
+    };
+    return counter.measure(async () => {
+      // Two asks for the same artist while the first is in flight share one request.
+      await Promise.all([context.hydrateArtistNonAlbumAvailability(), context.hydrateArtistNonAlbumAvailability()]);
+      counter.count('timers', live.size);
+    });
+  };
+  await measureScalePair({
+    id: 'js:runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability',
+    small: 20,
+    large: 14000,
+    run: pass,
+    budgets: { requests: 1, timers: 1, itemsVisited: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});

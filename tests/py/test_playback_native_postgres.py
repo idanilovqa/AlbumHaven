@@ -407,6 +407,80 @@ def test_a_takeover_is_only_a_fresh_boolean_request(playback_inventory, extra):
     assert getattr(refused.value, "status_code", None) == 400
 
 
+def test_a_confirmed_handover_is_never_overwritten_by_the_holders_late_save(playback_inventory):
+    # Owner, 2026-11-22: Play here starts where the playing tab says, whatever it saved before or since.
+    fixture = playback_inventory
+    clock = lambda: datetime.now(timezone.utc)
+    service = claims_service(fixture, clock)
+    items = issue(reference_service(fixture, clock), fixture)["tracks"]
+    saved = {"playbackRef": items[0]["playbackRef"], "title": "Saved", "artist": "A", "album": "B", "artworkUrl": None}
+    sounding = {**saved, "playbackRef": items[1]["playbackRef"], "title": "Sounding"}
+    place = {"ms": 117_600, "durationMs": 195_000}
+    holder, taker = str(uuid4()), str(uuid4())
+    held = service.acquire(fixture.actor, client_id=holder, client_surface="private_web", track=saved,
+                           position={"ms": 5_000, "durationMs": 195_000})
+    observed = service.holder(fixture.actor)
+    assert service.holds(observed, held["claimToken"]) and not service.holds(observed, "x" * 43)
+    # A save that was already on its way lands before the replace: the answer still wins.
+    service.acquire(fixture.actor, client_id=holder, client_surface="private_web", track=saved,
+                    claim_token=held["claimToken"], position={"ms": 9_000, "durationMs": 195_000})
+
+    taken = service.hand_over(fixture.actor, client_id=taker, client_surface="private_web", observed=observed,
+                              answer={"track": sounding, "position": place})
+
+    assert (taken["confirmed"], taken["track"], taken["position"]) == (True, sounding, place)
+    assert taken["path"] == fixture.paths[0]
+    with pytest.raises(ValueError) as late:
+        service.acquire(fixture.actor, client_id=holder, client_surface="private_web", track=saved,
+                        claim_token=held["claimToken"], position={"ms": 9_500, "durationMs": 195_000})
+    assert getattr(late.value, "status_code", None) == 409
+    seen = service.get(fixture.actor, holder)
+    assert seen["track"] == sounding and seen["position"]["ms"] >= place["ms"]
+    service.release(fixture.actor, client_id=taker, claim_token=taken["claimToken"])
+
+
+def test_a_handover_without_an_answer_uses_the_newest_save_and_yields_to_a_third_client(playback_inventory):
+    fixture = playback_inventory
+    now = datetime.now(timezone.utc)
+    service = claims_service(fixture, lambda: now)
+    reference = issue(reference_service(fixture, lambda: now), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "A", "album": "B", "artworkUrl": None}
+    holder, taker, third = str(uuid4()), str(uuid4()), str(uuid4())
+    held = service.acquire(fixture.actor, client_id=holder, client_surface="private_web", track=track)
+    observed = service.holder(fixture.actor)
+    service.acquire(fixture.actor, client_id=holder, client_surface="private_web", track=track,
+                    claim_token=held["claimToken"], position={"ms": 88_000, "durationMs": 195_000})
+    taken = service.hand_over(fixture.actor, client_id=taker, client_surface="private_web", observed=observed,
+                              answer=None)
+    assert (taken["confirmed"], taken["position"]["ms"]) == (False, 88_000)
+
+    stale = service.holder(fixture.actor)
+    other = service.acquire(fixture.actor, client_id=third, client_surface="private_web", track=track, takeover=True)
+    with pytest.raises(ValueError) as lost:
+        service.hand_over(fixture.actor, client_id=holder, client_surface="private_web", observed=stale,
+                          answer={"track": track, "position": None})
+    assert getattr(lost.value, "status_code", None) == 409
+    service.require_claim(fixture.actor, client_id=third, claim_token=other["claimToken"])
+    service.release(fixture.actor, client_id=third, claim_token=other["claimToken"])
+
+
+def test_a_handover_of_a_just_paused_claim_takes_the_answer(playback_inventory):
+    fixture = playback_inventory
+    clock = lambda: datetime.now(timezone.utc)
+    service = claims_service(fixture, clock)
+    reference = issue(reference_service(fixture, clock), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "A", "album": "B", "artworkUrl": None}
+    holder, taker = str(uuid4()), str(uuid4())
+    held = service.acquire(fixture.actor, client_id=holder, client_surface="private_web", track=track)
+    released = service.release(fixture.actor, client_id=holder, claim_token=held["claimToken"])
+    assert service.holder(fixture.actor)["client_id"] is None
+    place = {"ms": 42_000, "durationMs": 195_000}
+    taken = service.hand_over(fixture.actor, client_id=taker, client_surface="private_web", observed=released,
+                              answer={"track": track, "position": place})
+    assert (taken["confirmed"], taken["position"]) == (True, place)
+    service.release(fixture.actor, client_id=taker, claim_token=taken["claimToken"])
+
+
 def test_concurrent_clients_cannot_both_acquire_playback(playback_inventory):
     fixture = playback_inventory
     now = datetime(2026, 10, 23, tzinfo=timezone.utc)

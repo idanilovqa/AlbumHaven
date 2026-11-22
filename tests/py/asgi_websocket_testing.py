@@ -17,7 +17,7 @@ class AsgiWebSocketSession:
         scheme: str,
     ) -> None:
         self._app = app
-        self._path = path
+        self._path, _, self._query = path.partition("?")
         self._origin = origin
         self._host = host
         self._scheme = scheme
@@ -38,7 +38,7 @@ class AsgiWebSocketSession:
             "scheme": self._scheme,
             "path": self._path,
             "raw_path": self._path.encode("ascii"),
-            "query_string": b"",
+            "query_string": self._query.encode("ascii"),
             "headers": headers,
             "client": ("testclient", 50000),
             "server": (self._host.split(":", 1)[0], 80),

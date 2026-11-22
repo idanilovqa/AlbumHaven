@@ -1,6 +1,7 @@
 """One transactional, expiring playback owner per account and library."""
 
 from datetime import datetime, timedelta, timezone
+import hmac
 import json
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -88,14 +89,7 @@ class PostgresPlaybackClaims:
     def _state(self, row, client_id, path_for=None):
         here = row is not None and str(row["client_id"]) == client_id
         elsewhere = row is not None and not here
-        stored = dict(row["track"]) if row else None
-        heard = stored.pop("position", None) if stored else None
-        position = None
-        if heard:
-            # The claim's song played on since its client last said where it was.
-            played = int((self._clock() - datetime.fromisoformat(heard["at"])).total_seconds() * 1000)
-            position = {"ms": min(heard["ms"] + max(0, played), heard["durationMs"]),
-                        "durationMs": heard["durationMs"]}
+        stored, position = self._stored(row["track"]) if row else (None, None)
         state = {"protocol": 1, "is_playing_here": here, "is_playing_elsewhere": elsewhere,
                  "elsewhere_client_kind": row["client_surface"] if elsewhere else None,
                  "status_label": "Playing elsewhere" if elsewhere else "Playing here" if here else "Ready to play",
@@ -261,7 +255,87 @@ class PostgresPlaybackClaims:
             return {"protocol": 1, "staged": True,
                     "expiresAt": handoff_expires.astimezone(timezone.utc).isoformat()}
 
+    def holder(self, actor):
+        """Who a confirmed Play here asks; `client_id` is None when nobody holds a live claim."""
+        with self._connect(self._database_url) as connection:
+            account_id, library_id = require_playback_membership(connection, actor)
+            row = connection.execute("""select client_id, token_digest from app.playback_claims
+                where account_id = %s and library_id = %s and expires_at > %s""",
+                (account_id, library_id, self._clock())).fetchone()
+        return {"account_id": account_id, "library_id": library_id,
+                "client_id": str(row["client_id"]) if row else None,
+                "digest": bytes(row["token_digest"]) if row else None}
+
+    def holds(self, holder, token):
+        try:
+            return hmac.compare_digest(_token(token), holder["digest"])
+        except PlaybackContractError:
+            return False
+
+    def hand_over(self, actor, *, client_id, client_surface, observed, answer):
+        """Replaces the observed holder's claim with the taker's: at the holder's [answer] or, without
+        one, at its saved place. It is one statement, only over the token that was observed, so no
+        later save of the holder lands after it and a third client that claimed meanwhile keeps playback.
+        """
+        client_id = _client(client_id)
+        if client_surface not in ("private_web", "mobile"):
+            raise PlaybackContractError()
+        if client_id == observed["client_id"]:
+            raise PlaybackContractError(409)
+        track = position = None
+        if answer is not None:
+            try:
+                track, position = self._track(actor, answer["track"]), _position(answer["position"])
+            except PlaybackContractError:
+                track = position = None
+        confirmed = track is not None
+        with self._connect(self._database_url) as connection:
+            account_id, library_id = require_playback_membership(connection, actor)
+            if not confirmed:
+                row = connection.execute("""select track from app.playback_claims
+                    where account_id = %s and library_id = %s and token_digest = %s""",
+                    (account_id, library_id, observed["digest"])).fetchone()
+                if row is None:
+                    raise PlaybackContractError(409)
+                track, position = self._stored(row["track"])
+            references = PlaybackReferenceService(self._config, clock=self._clock, connect=self._connect)
+            # The browser opens a song by its library path, as today's takeover read gives it.
+            path = references.resolve_library_path(actor, track["playbackRef"])
+            now = self._clock()
+            stored = {**track, "position": {**position, "at": now.isoformat()}} if position else track
+            expires = now + timedelta(seconds=_CLAIM_LEASE_SECONDS)
+            issued = issue_opaque_token()
+            row = connection.execute("""insert into app.playback_claims
+                (account_id, library_id, client_id, client_surface, token_digest, expires_at, track)
+                values (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                on conflict (account_id, library_id) do update set
+                  client_id = excluded.client_id, client_surface = excluded.client_surface,
+                  token_digest = excluded.token_digest, expires_at = excluded.expires_at,
+                  track = excluded.track, pending_handoff_id = null,
+                  pending_handoff_digest = null, pending_completion_digest = null,
+                  pending_handoff_expires_at = null
+                where app.playback_claims.token_digest = %s
+                returning client_id""",
+                (account_id, library_id, client_id, client_surface, issued.digest, expires,
+                 json.dumps(stored), observed["digest"])).fetchone()
+            if row is None:
+                raise PlaybackContractError(409)
+        return {"protocol": 1, "claimToken": issued.raw, "expiresAt": expires.isoformat(),
+                "leaseMs": _CLAIM_LEASE_SECONDS * 1000, "confirmed": confirmed,
+                "track": track, "position": position, "path": path}
+
+    def _stored(self, stored):
+        """A claim's track and where it has played to since its client last said."""
+        track = dict(stored)
+        heard = track.pop("position", None)
+        if not heard:
+            return track, None
+        played = int((self._clock() - datetime.fromisoformat(heard["at"])).total_seconds() * 1000)
+        return track, {"ms": min(heard["ms"] + max(0, played), heard["durationMs"]),
+                       "durationMs": heard["durationMs"]}
+
     def release(self, actor, *, client_id, claim_token):
+        """The claim given back, for a Play here pressed on it moments later; None when none was held."""
         client_id, digest = _client(client_id), _token(claim_token)
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
@@ -272,6 +346,7 @@ class PostgresPlaybackClaims:
             if str(row["client_id"]) != client_id or bytes(row["token_digest"]) != digest:
                 raise PlaybackContractError(403)
             connection.execute("delete from app.playback_claims where account_id = %s and library_id = %s", (account_id, library_id))
+        return {"account_id": account_id, "library_id": library_id, "client_id": client_id, "digest": digest}
 
     def require_claim(self, actor, *, client_id, claim_token):
         digest = _token(claim_token)

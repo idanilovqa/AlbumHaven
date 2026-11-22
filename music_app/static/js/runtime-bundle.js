@@ -21837,6 +21837,8 @@ async function pollStatus() {
       && !busyNow
       && !coverBusyNow
       && !state.busy
+      // The reload would cancel a gallery page in flight: a later poll runs it.
+      && !isRootGalleryPageRequestLoading()
       && !hasPendingSidebarNavigation()
     ) {
       state.ui.pendingInventoryMutationViewRefresh = false;

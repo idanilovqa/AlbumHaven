@@ -3714,6 +3714,26 @@ test('a republished gallery reloads an open tree once, with no inventory change'
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
 });
 
+test('a republication waits for the gallery page in flight, then reloads once', async () => {
+  const { context, calls, poll } = galleryPublicationFixture(4);
+  vm.runInContext('rootGalleryPageRequest = { controller: { abort() { globalThis.continuationAborted = true; } } };', context);
+  await poll(5);
+  assert.equal(context.continuationAborted, undefined, 'the continuation is never cancelled by the reload');
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), ['/status']);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+
+  vm.runInContext('rootGalleryPageRequest = null;', context); // The page settled.
+  await poll(5, {
+    artists_sidebar: [{ artist: 'Amarok', artist_display: 'Amarok (Poland)', count: 4 }],
+    artist_groups: [{ artist: 'Amarok', albums: [{ key: 'amarok::neo' }] }],
+    album_count: 4,
+    payload_tier: 'full',
+    inventory_mutation_revision: 12,
+  });
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), ['/status', '/status', '/view-data?surface=albums']);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
 test('an unchanged gallery publication count, or a first one, never refetches the view', async () => {
   for (const known of [4, undefined]) {
     const { context, calls, poll } = galleryPublicationFixture(known);

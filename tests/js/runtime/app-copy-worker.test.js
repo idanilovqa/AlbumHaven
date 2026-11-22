@@ -122,6 +122,22 @@ test('a page answered from the copy is no-store, as the page the server sends', 
   assert.match(await response.text(), /content="cache"/);
 });
 
+test('a save reads each page it asked for to the end, also one that is not kept', async () => {
+  const answers = [];
+  const { worker } = setup({
+    respond: () => {
+      const answer = new Response('<html></html>', { headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' } });
+      answers.push(answer);
+      return answer;
+    },
+  });
+
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+
+  assert.equal(answers.length, 2, 'the view, and Home beside it');
+  assert.deepEqual(answers.map(answer => answer.bodyUsed), [true, true]);
+});
+
 test('a copy of another page is not shown for this one', async () => {
   const { calls, handle } = setup();
   await handle(navigation('/?artist=Broadcast'));

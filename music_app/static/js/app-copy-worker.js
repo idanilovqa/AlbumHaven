@@ -354,6 +354,9 @@
     };
     const handle = (name, request) => handlers[name](request);
 
+    // A save reads its answer to the end: unread, a no-store one never finishes.
+    const savePage = async url => (await fetchPage(url)).arrayBuffer();
+
     // The page asks to keep its current view, to forget every copy, or whether a copy exists.
     async function message(data) {
       if (data?.type === 'forget') await forget();
@@ -361,11 +364,11 @@
         const url = new URL(String(data.url || ''), origin);
         if (url.origin === origin && isAppPage(url)) {
           try {
-            await fetchPage(url);
+            await savePage(url);
             // A full restart opens Home, so the shell's "a copy exists" must cover it too.
             const target = await accountCache();
             if (pageKey(url) !== '/' && !(target && isFresh((await readMeta(target.cache)).pages['/']))) {
-              await fetchPage(new URL('/', origin));
+              await savePage(new URL('/', origin));
             }
             await fillCovers();
           } catch (_error) {

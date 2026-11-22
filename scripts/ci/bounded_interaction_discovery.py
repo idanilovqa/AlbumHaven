@@ -1927,6 +1927,7 @@ def analyze_python_repository(
     _MODULES.update(index.modules)
     _compute_called_parameters(modules, index)
     library_scale = set(library_scale_operations)
+    definition_keys = {definition.key for definition in _all_definitions(modules)}
     collections = set(library_state_collections)
     entrypoints: list[dict[str, object]] = []
     hazards: list[dict[str, object]] = []
@@ -1941,6 +1942,19 @@ def analyze_python_repository(
         interactive = entry["kind"] in {"route", "middleware"}
         pooled_entry = entry["kind"] in POOLED_ENTRY_KINDS
         forbidden = (forbidden_work or {}).get(entry["key"], frozenset())
+        # The walk matches exact keys, so a misnamed target would forbid nothing.
+        for target in sorted(set(forbidden) - definition_keys - {"library-state-scan"}):
+            hazards.append({
+                "rule": "BI-04",
+                "operation": f"unknown-forbidden-work:{target}",
+                "path": entry["path"],
+                "function": entry["owner"],
+                "line": entry["line"],
+                "entrypoint": entry["key"],
+                "depth": "direct",
+                "via": [],
+                "reject": True,
+            })
         hazards.extend(event_loop.hazards(entry, definition))
         queue = deque([(definition, [], None, None, None)])
         seen = set()
@@ -2100,7 +2114,14 @@ def _registry_names(registry_path: Path | None, key: str, field: str) -> list[st
 
 
 def _forbidden_work(registry_path: Path | None) -> dict[str, set[str]]:
-    """What each entry forbids itself, by entrypoint."""
+    """What each entry forbids itself, by entrypoint.
+
+    A list covers only what that entry's own static walk reaches. Work handed
+    to a thread or executor starts an entry of its own, and a callback the walk
+    cannot resolve is not followed: launched work needs its own entry's list,
+    as the watcher cover-refresh drain has. A target is the exact qualified
+    name of a definition; any other name is rejected.
+    """
     if registry_path is None or not registry_path.exists():
         return {}
     registry = json.loads(registry_path.read_text(encoding="utf-8"))

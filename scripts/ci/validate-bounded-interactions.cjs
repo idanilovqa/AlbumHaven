@@ -172,11 +172,9 @@ function validateSchema(registry, { fileExists, readFile }) {
     if (forbidden !== undefined) {
       if (!Array.isArray(forbidden) || !forbidden.length) errors.push(`${label}: forbiddenWork must be a nonempty list`);
       for (const work of Array.isArray(forbidden) ? forbidden : []) {
-        if (work === 'library-state-scan') continue;
-        // A renamed function would silently forbid nothing.
-        const [, file, name] = /^py:([^#]+)#(?:\w+\.)*(\w+)$/.exec(String(work)) || [];
-        if (!file || !fileExists(file) || !new RegExp(`def ${name}\\(`).test(readFile(file))) {
-          errors.push(`${label}: forbiddenWork ${work} must be library-state-scan or an existing py:<path>#<function>`);
+        // Discovery checks that the named definition exists, by its exact qualified name.
+        if (work !== 'library-state-scan' && !/^py:[^#]+#.+$/.test(String(work))) {
+          errors.push(`${label}: forbiddenWork ${work} must be library-state-scan or py:<path>#<qualified name>`);
         }
       }
     }

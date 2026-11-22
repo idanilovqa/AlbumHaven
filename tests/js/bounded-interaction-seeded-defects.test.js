@@ -837,9 +837,19 @@ function seededOverrides() {
   return { jsOverrides: js, pyOverrides: py };
 }
 
+// A real method under a class that does not own it would silently forbid nothing.
+const MISQUALIFIED_WORK = 'py:music_app/services/library_browse_postgres.py#_SearchPreviewRows.queue_settings_projection_prewarm';
+const MISQUALIFIED_ENTRYPOINT = 'py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image_save:route:POST /utilities/cover-lookup/pasted-image-save';
+
+function seededRegistry() {
+  const registry = require('../../scripts/ci/validate-bounded-interactions.cjs').loadRegistry();
+  registry.interactions.find(entry => entry.entrypoints.includes(MISQUALIFIED_ENTRYPOINT)).forbiddenWork.push(MISQUALIFIED_WORK);
+  return registry;
+}
+
 let runs = null;
 const validations = () => {
-  runs ??= Promise.all([validateRepository(), validateRepository(seededOverrides())]);
+  runs ??= Promise.all([validateRepository(), validateRepository({ ...seededOverrides(), registry: seededRegistry() })]);
   return runs;
 };
 
@@ -886,19 +896,13 @@ test('the guard rejects a test identity that is only a substring of the real tes
   ]);
 });
 
-test('the guard rejects forbidden work naming a function that no longer exists', () => {
-  const { loadRegistry, validateSchema } = require('../../scripts/ci/validate-bounded-interactions.cjs');
-  const registry = loadRegistry();
-  const entry = registry.interactions.find(item => item.id === 'py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image_save');
-  const renamed = 'py:music_app/services/state.py#renamed_invalidator';
-  entry.forbiddenWork = ['library-state-scan', renamed];
-  const errors = validateSchema(registry, {
-    fileExists: file => fs.existsSync(path.join(ROOT, file)),
-    readFile: file => fs.readFileSync(path.join(ROOT, file), 'utf8'),
-  });
-  assert.deepEqual(errors, [
-    `${entry.id}: forbiddenWork ${renamed} must be library-state-scan or an existing py:<path>#<function>`,
-  ]);
+test('the guard rejects forbidden work naming a real method under the wrong class', { timeout: 300_000 }, async () => {
+  const [, injected] = await validations();
+  assert.ok(
+    injected.errors.some(error => error.startsWith(`rejected BI-04 unknown-forbidden-work:${MISQUALIFIED_WORK} at `)
+      && error.endsWith(` from ${MISQUALIFIED_ENTRYPOINT}`)),
+    `guard accepted a misqualified forbiddenWork target; errors were:\n${injected.errors.join('\n')}`,
+  );
 });
 
 // The repeated-request rule. Each case measures the registered Album Details

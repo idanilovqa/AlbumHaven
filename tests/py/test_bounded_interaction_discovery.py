@@ -110,6 +110,34 @@ def library_wide(request):
     }
 
 
+def test_forbidden_work_must_name_a_discovered_definition_exactly(tmp_path: Path):
+    _write(tmp_path, "music_app/services/covers.py", """
+class Real:
+    def wipe(self):
+        pass
+
+class Other:
+    pass
+
+def save():
+    def finish():
+        pass
+    finish()
+""")
+    _write(tmp_path, "music_app/routes/covers.py", """
+@router.post("/save")
+def scoped(request):
+    return None
+""")
+    entry = "py:music_app/routes/covers.py#scoped:route:POST /save"
+    owner = "py:music_app/services/covers.py#"
+    exact = {f"{owner}Real.wipe", f"{owner}save.<locals>.finish", "library-state-scan"}
+    misnamed = {f"{owner}Other.wipe", f"{owner}wipe", f"{owner}finish", "py:music_app/services/gone.py#save"}
+    analysis = discovery.analyze_python_repository(tmp_path, forbidden_work={entry: exact | misnamed})
+    rejected = {item["operation"] for item in analysis["hazards"] if item["reject"]}
+    assert rejected == {f"unknown-forbidden-work:{target}" for target in misnamed}
+
+
 def test_background_closures_are_not_followed_until_called(tmp_path: Path):
     _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
     _write(tmp_path, "music_app/routes/read.py", """

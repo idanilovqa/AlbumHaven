@@ -7,6 +7,10 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.44 - 2026-11-21
+
+- Clearing a search is faster. The X only empties the box; clicking the search button, or clicking outside the box on desktop, applies the clear. The full gallery then appears straight from memory, as Home does, when the library hasn't changed, and a late search answer can no longer replace it. An artist the search selected stays selected.
+
 ## 0.11.43 - 2026-11-21
 
 - Test-only: the bounded-interaction freeze guard now performs every request-capture interaction twice and fails when the repeat sends an identical request more often than the first pass, or sends more requests in total. This catches leaked listeners and duplicated fetches that a single pass misses.

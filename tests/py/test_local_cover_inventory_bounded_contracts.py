@@ -350,6 +350,71 @@ def _drain(monkeypatch, library, worker) -> None:
     worker._run()
 
 
+@pytest.mark.parametrize("snapshot_updates", [True, False], ids=["saved roots", "mutation: snapshot not updated"])
+def test_an_open_after_a_root_save_judges_stored_folders_against_the_saved_roots(tmp_path, monkeypatch, snapshot_updates):
+    """6.5: the inventory judges a stored album folder by the roots the real settings save just stored.
+
+    The mutation case disables that save's snapshot update; it must then judge by the old roots, which
+    proves the saved-roots case depends on the update and not on anything else."""
+    from music_app.services import library_roots, persistence_selection
+
+    library = _seed_library(tmp_path, 1)
+    tables, repository = library.tables, library.worker.repository
+    main, extra = (root_key(root["path"]) for root in library.roots)
+    main_album, extra_album = library.album, Path(library.roots[1]["path"]) / "Artist" / "Album"
+    monkeypatch.setattr(
+        persistence_selection, "select_runtime_persistence_adapter",
+        lambda _name, _config: SimpleNamespace(effective_backend=library_roots.PERSISTENCE_BACKEND_POSTGRES),
+    )
+
+    class Store:
+        def __init__(self, _config):
+            pass
+
+        def save_settings(self, _payload):
+            return {library_roots._MAIN_ROOTS_KEY: [{"path": main}]}  # the second root is removed
+
+    monkeypatch.setattr(library_roots, "PostgresLibraryRootSettingsStore", Store)
+    if not snapshot_updates:
+        monkeypatch.setattr(library_roots, "_store_configured_root_paths_snapshot", lambda _config, _settings: ())
+
+    library_roots.save_library_root_settings(library.config, {"main_library_roots": [{"path": main}]})
+
+    assert repository._roots() == ([main] if snapshot_updates else [main, extra])
+    # Opening each album through the cover-lookup path reads its stored folder.
+    main_tracks = {str(main_album / "01.mp3"), str(main_album / "02.mp3")}
+    extra_tracks = {str(extra_album / "01.mp3"), str(extra_album / "02.mp3")}
+    assert repository.root_for_tracks(main_tracks) == Path(root_key(main_album)), "a folder below a saved root stays"
+    extra_row = tables.contexts[context_key(extra_tracks)]
+    if snapshot_updates:
+        assert repository.root_for_tracks(extra_tracks) is None
+        assert extra_row["root"] is None and extra_row["revision"] == 2, "only that row is cleared, by key"
+    else:
+        assert repository.root_for_tracks(extra_tracks) == Path(root_key(extra_album))
+        assert extra_row["revision"] == 1
+
+
+def test_resolving_an_albums_folder_after_a_scoped_root_save_loads_the_roots_once(tmp_path, monkeypatch):
+    """A scoped save drops the shared snapshot; the next reader reloads it into the live config, once."""
+    from music_app.services import library_roots
+    from music_app.services.local_cover_inventory import local_inventory_root_for_tracks
+
+    library = _seed_library(tmp_path, 1)
+    library.config.pop("_library_root_paths_snapshot")  # as save_library_root_settings does for a scoped save
+    loads = []
+
+    def load(config, **_options):
+        loads.append(True)
+        return {library_roots._MAIN_ROOTS_KEY: [{"path": root["path"]} for root in library.roots]}
+
+    monkeypatch.setattr(library_roots, "load_library_root_settings", load)
+    tracks = [str(library.album / "01.mp3"), str(library.album / "02.mp3")]
+
+    for _ in range(3):
+        assert local_inventory_root_for_tracks(library.config, tracks) == Path(root_key(library.album))
+    assert len(loads) == 1, "each open would otherwise reload the root settings from Postgres"
+
+
 @pytest.mark.parametrize("root_ids", [("main", "extra"), (7, 8)], ids=["text ids", "numeric ids"])
 @pytest.mark.parametrize("unreadable", ["away", "incomplete"])
 def test_a_full_rescan_hands_the_inventory_exactly_the_roots_it_read(tmp_path, monkeypatch, root_ids, unreadable):

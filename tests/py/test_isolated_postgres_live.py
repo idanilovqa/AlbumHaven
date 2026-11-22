@@ -610,13 +610,17 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
 
     interaction = "py:routes/api_read_asgi_routes.py#library_loose_tracks"
     entry = _checked_in_entries()[interaction]
-    measure_scale_pair(
+    small, large = measure_scale_pair(
         interaction_id=interaction,
         small=entry["cardinalities"]["small"],
         large=entry["cardinalities"]["production"],
         run=run,
         budgets=entry["budgets"],
         growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
+    )
+    # The registry's growth metric is candidate_rows; a statement per stored track must fail here too.
+    assert small.sql_statements == large.sql_statements, (
+        f"statements grew from {small.sql_statements} at 20 stored rows to {large.sql_statements} at 20,000"
     )
 
 

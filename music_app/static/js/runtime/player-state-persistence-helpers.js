@@ -1,25 +1,35 @@
+function getPersistedCueSegmentRef(track) {
+  const path = String(track?.path || '');
+  // A player saved before CUE identities were kept still names its CUE track by a `cue:` path.
+  return String(track?.cueSegmentRef || track?.cue_segment_ref || (path.startsWith('cue:') ? path : ''));
+}
+
+// The one shape of a saved track: the current one, each queued one, and each read back.
+function buildPersistedPlayerTrack(track) {
+  const cueSegmentRef = getPersistedCueSegmentRef(track);
+  return {
+    src: String(track.src || ''),
+    path: String(track.path || ''),
+    ...(cueSegmentRef ? { cueSegmentRef } : {}),
+    title: String(track.title || ''),
+    artist: String(track.artist || ''),
+    ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
+    album: String(track.album || ''),
+    ...(track.year ? { year: String(track.year) } : {}),
+    coverRef: String(track.coverRef || ''),
+    ...(Number(track.durationSeconds) > 0
+      ? { durationSeconds: Number(track.durationSeconds) }
+      : {}),
+  };
+}
+
 function buildPersistedPlaybackQueue(currentTrackPath) {
   const queue = state.player.playbackQueue;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const normalizedCurrentTrackPath = String(currentTrackPath || '');
   const queueTracks = queue.tracks
-    .map((track) => {
-      if (!track?.src || !track?.path) return null;
-      return {
-        src: String(track.src || ''),
-        path: String(track.path || ''),
-        title: String(track.title || ''),
-        artist: String(track.artist || ''),
-        ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
-        album: String(track.album || ''),
-        ...(track.year ? { year: String(track.year) } : {}),
-        coverRef: String(track.coverRef || ''),
-        ...(Number(track.durationSeconds) > 0
-          ? { durationSeconds: Number(track.durationSeconds) }
-          : {}),
-      };
-    })
-    .filter(Boolean);
+    .filter((track) => track?.src && track?.path)
+    .map(buildPersistedPlayerTrack);
   if (!queueTracks.length) return null;
   const currentIndex = queueTracks.findIndex((track) => String(track.path || '') === normalizedCurrentTrackPath);
   if (currentIndex < 0) return null;
@@ -55,19 +65,7 @@ function buildPersistedPlayerState(options = {}) {
     ? playbackDuration
     : (currentDuration > 0 ? currentDuration : 0);
   return {
-    track: {
-      src,
-      path: String(current.path || ''),
-      title: String(current.title || ''),
-      artist: String(current.artist || ''),
-      ...(current.albumArtist ? { albumArtist: String(current.albumArtist) } : {}),
-      album: String(current.album || ''),
-      ...(current.year ? { year: String(current.year) } : {}),
-      coverRef: String(current.coverRef || ''),
-      ...(durationSeconds > 0
-        ? { durationSeconds }
-        : {}),
-    },
+    track: buildPersistedPlayerTrack({ ...current, src, durationSeconds }),
     playbackQueue: buildPersistedPlaybackQueue(current.path),
     currentTime: Math.max(0, Math.round((Number(playback.currentTime) || 0) * 100) / 100),
     paused,
@@ -82,23 +80,8 @@ function buildPersistedPlayerState(options = {}) {
 function restorePersistedPlaybackQueue(parsedState, currentTrackPath) {
   const tracks = Array.isArray(parsedState?.playbackQueue?.tracks)
     ? parsedState.playbackQueue.tracks
-      .map((track) => {
-        if (!track?.src || !track?.path) return null;
-        return {
-          src: String(track.src || ''),
-          path: String(track.path || ''),
-          title: String(track.title || ''),
-          artist: String(track.artist || ''),
-          ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
-          album: String(track.album || ''),
-          ...(track.year ? { year: String(track.year) } : {}),
-          coverRef: String(track.coverRef || ''),
-          ...(Number(track.durationSeconds) > 0
-            ? { durationSeconds: Number(track.durationSeconds) }
-            : {}),
-        };
-      })
-      .filter(Boolean)
+      .filter((track) => track?.src && track?.path)
+      .map(buildPersistedPlayerTrack)
     : [];
   if (!tracks.length) return false;
   const normalizedCurrentTrackPath = String(currentTrackPath || '');
@@ -246,6 +229,8 @@ function restorePlayerState() {
   }
   const track = parsed?.track;
   if (!track || !track.src) return;
+  const cueSegmentRef = getPersistedCueSegmentRef(track);
+  if (cueSegmentRef) track.cueSegmentRef = cueSegmentRef;
   const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
   const savedPaused = typeof parsed.paused === 'boolean'
     ? parsed.paused
@@ -305,9 +290,16 @@ function restorePlayerState() {
       updatePlayerUi();
       persistPlayerState(true);
     };
+    const selectionChanged = () => Boolean((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
+      || (state.player.current && state.player.current.path !== track.path));
     const startWithOwnership = (allowed) => {
-      if ((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
-        || (state.player.current && state.player.current.path !== track.path)) return null;
+      if (selectionChanged()) return null;
+      if (typeof cueTrackNeedsPlaybackRef === 'function' && cueTrackNeedsPlaybackRef(track)) {
+        return attachCuePlaybackRef(track).then(() => (selectionChanged() ? null : startRestoredStream(allowed)));
+      }
+      return startRestoredStream(allowed);
+    };
+    const startRestoredStream = (allowed) => {
       canResumePlayback = Boolean(allowed)
         && (typeof isActivePlaybackOwner !== 'function' || isActivePlaybackOwner());
       return startStreamingTrack(track, {

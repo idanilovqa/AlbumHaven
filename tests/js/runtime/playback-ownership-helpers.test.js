@@ -1536,3 +1536,16 @@ test('bounded interaction: playing lease renewals keep the claim without repaint
     growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
   });
 });
+
+test('only the browser engine needs a CUE reference attached before a restored stream opens', () => {
+  const context = { console };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'playback-ownership-helpers.js'), 'utf8'), context);
+  const track = { path: 'cue:two', cueSegmentRef: 'cue:two' };
+  context.currentPlaybackEngine = () => ({ holdsOwnClaim: false });
+  assert.equal(context.cueTrackNeedsPlaybackRef(track), true);
+  assert.equal(context.cueTrackNeedsPlaybackRef({ path: 'C:/song.mp3' }), false);
+  assert.equal(context.cueTrackNeedsPlaybackRef({ ...track, playbackRef: 'ref', playbackRefExpiresAt: '2999-01-01T00:00:00Z' }), false);
+  context.currentPlaybackEngine = () => ({ holdsOwnClaim: true });
+  assert.equal(context.cueTrackNeedsPlaybackRef(track), false);
+});

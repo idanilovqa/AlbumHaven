@@ -1921,9 +1921,15 @@ function buildCueBoundaryCorrection(tracks, trackIdentity, field, value) {
   const priorStart = targetIndex > 0
     ? Number(cueTracks[targetIndex - 1]?.cue_structure?.start_frame)
     : -1;
-  const targetEnd = Number(target?.cue_structure?.end_frame);
-  if (startFrame <= priorStart || !Number.isFinite(targetEnd) || startFrame >= targetEnd) {
-    throw new Error('Invalid CUE boundary order.');
+  // As on the server: a corrected next start ends this track, otherwise the sheet's end does. (In a sheet of
+  // several files the next track's start counts from its own file, so it is no end for this one.)
+  const following = cueTracks[targetIndex + 1];
+  const targetEnd = Number((following?.cue_boundary_corrected ? following : null)?.cue_structure?.start_frame
+    ?? target?.cue_structure?.end_frame);
+  if (!Number.isFinite(targetEnd)) throw new Error('CUE boundary is not editable.');
+  if (startFrame <= priorStart || startFrame >= targetEnd) {
+    const after = targetIndex > 0 ? `after ${formatCueTimecode(priorStart)} and ` : '';
+    throw new Error(`This time would overlap a neighbouring track. Choose a time ${after}before ${formatCueTimecode(targetEnd)}.`);
   }
   return {
     cue_segment_ref: targetIdentity,

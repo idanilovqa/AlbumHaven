@@ -269,6 +269,20 @@ async function playbackOwnershipTrack(track, previous = null) {
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
 }
 
+// References are short-lived and never saved, and a CUE track's `cue:` path is no file to stream:
+// a restored CUE track gets a segment reference before any stream opens for it. An engine that holds
+// its own claim (Android's) asks for its references itself.
+function cueTrackNeedsPlaybackRef(track) {
+  return Boolean(track?.cueSegmentRef) && !playingEngine()?.holdsOwnClaim
+    && !(track.playbackRef && Date.parse(track.playbackRefExpiresAt || '') > Date.now());
+}
+
+async function attachCuePlaybackRef(track) {
+  const prepared = await playbackOwnershipTrack(track, getPlaybackOwnershipState().activeClaim);
+  track.playbackRef = prepared.track.playbackRef;
+  track.playbackRefExpiresAt = prepared.referenceExpiresAt;
+}
+
 async function deletePlaybackClaim(claim) {
   if (!claim?.claimToken) return;
   await playbackOwnershipRequest('DELETE', '/playback/state', {

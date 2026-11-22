@@ -4300,3 +4300,33 @@ test('bounded interaction: mobile player metadata motion measures its three rows
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });
+
+test('playing a stopped restored CUE track gets its segment reference before the stream opens', async () => {
+  const track = { src: '/track?cue=cue%3Atwo', path: 'cue:two', cueSegmentRef: 'cue:two', title: 'Two' };
+  const calls = [];
+  const { context } = loadHelper({
+    state: {
+      player: {
+        current: track, listenSession: null, loopActive: false, loopStart: 0, loopEnd: 30, saveBusy: false,
+        waveform: { renderToken: 0 },
+      },
+      utility: {
+        loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '',
+        selectedLoopDetailMode: '', activeTab: '',
+      },
+    },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 0, paused: true, ended: false, mode: 'stopped', src: track.src }),
+    canStartPlaybackInThisTab: () => true,
+    resumeStreamingPlayback: async () => true,
+    startStreamingTrack: async (started) => { calls.push(['stream', started.playbackRef]); return { generation: 1 }; },
+  });
+  context.cueTrackNeedsPlaybackRef = (current) => !current.playbackRef;
+  context.attachCuePlaybackRef = async (current) => { calls.push(['refs']); current.playbackRef = 'segment-ref'; };
+  context.beginStreamingPlayerListenSession = () => {};
+  context.updatePlayerUi = () => {};
+
+  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, [['refs'], ['stream', 'segment-ref']]);
+});

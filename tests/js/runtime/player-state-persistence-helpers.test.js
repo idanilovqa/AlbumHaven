@@ -1691,3 +1691,80 @@ test('a restore inside the APK re-attaches to the native queue instead of starti
   const browser = await run(null);
   assert.deepEqual(browser.starts, [[persistedTrack.path, 12]]);
 });
+
+const cueTrack = (ref) => ({
+  src: `/track?cue=${encodeURIComponent(ref)}`, path: ref, cueSegmentRef: ref, title: ref, artist: 'A', album: 'B', coverRef: '',
+});
+
+function loadRestoredCuePlayer(saved, { refused = false } = {}) {
+  const requests = [];
+  const streams = [];
+  const context = loadHelper({
+    getLocalStorageItem: () => JSON.stringify(saved),
+    startStreamingTrack: (track) => {
+      streams.push(JSON.parse(JSON.stringify(track)));
+      return Promise.resolve({ generation: 1, streamId: 1 });
+    },
+    console: { error() {}, warn() {} },
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'playback-ownership-helpers.js'), 'utf8'), context);
+  Object.assign(context, {
+    canRestoreActivePlayback: () => true,
+    getPlaybackOwnershipTabId: () => 'tab',
+    getPlaybackOwnershipState: () => ({ activeClaim: null }),
+    playbackOwnershipRequest: async (method, url, body) => {
+      requests.push(JSON.parse(JSON.stringify({ method, url, body })));
+      if (refused) throw new Error('refused');
+      return { protocol: 1, expiresAt: '2999-01-01T00:00:00Z', tracks: [{ playbackRef: 'segment-ref' }] };
+    },
+  });
+  context.setCurrentPlayerTrack = (track) => { context.state.player.current = track; };
+  context.restorePlayerState();
+  return { context, requests, streams };
+}
+
+test('a saved player keeps the CUE identity of its track and of its queue', () => {
+  const current = cueTrack('cue:two');
+  const context = loadHelper({
+    state: { player: { current, playbackQueue: { tracks: [cueTrack('cue:one'), current], currentIndex: 1 } } },
+  });
+
+  const saved = JSON.parse(JSON.stringify(context.buildPersistedPlayerState()));
+
+  assert.equal(saved.track.cueSegmentRef, 'cue:two');
+  assert.deepEqual(saved.playbackQueue.tracks.map(track => track.cueSegmentRef), ['cue:one', 'cue:two']);
+  assert.equal(context.restorePersistedPlaybackQueue(saved, 'cue:two'), true);
+  assert.deepEqual(Array.from(context.state.player.playbackQueue.tracks, track => track.cueSegmentRef), ['cue:one', 'cue:two']);
+});
+
+for (const savedBeforeFix of [false, true]) {
+  test(`a restored CUE track streams by a segment reference, never as a file path${savedBeforeFix ? ' (saved before the fix)' : ''}`, async () => {
+    const track = cueTrack('cue:two');
+    const next = cueTrack('cue:three');
+    if (savedBeforeFix) {
+      delete track.cueSegmentRef;
+      delete next.cueSegmentRef;
+    }
+    const { context, requests, streams } = loadRestoredCuePlayer({
+      track, playbackQueue: { tracks: [track, next], currentIndex: 0 }, paused: true, currentTime: 0,
+    });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(requests.map(({ url, body }) => [url, body.tracks]), [
+      ['/playback/refs', [{ clientKey: 'tab', cueSegmentRef: 'cue:two' }]],
+    ]);
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].playbackRef, 'segment-ref');
+    assert.equal(context.state.player.playbackQueue.tracks[1].cueSegmentRef, 'cue:three');
+  });
+}
+
+test('a restored CUE track with no reference stays loaded and opens no stream by path', async () => {
+  const { context, streams } = loadRestoredCuePlayer(
+    { track: cueTrack('cue:two'), paused: true, currentTime: 0 }, { refused: true },
+  );
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(streams, []);
+  assert.equal(context.state.player.current.path, 'cue:two');
+});

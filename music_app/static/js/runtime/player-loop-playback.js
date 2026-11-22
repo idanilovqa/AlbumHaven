@@ -972,6 +972,10 @@ function togglePlayerPlayback(options = {}) {
       pendingPlayerPlaybackHandoff = null;
       if (early) return early;
       if (playback.mode === 'stopped') {
+        if (typeof cueTrackNeedsPlaybackRef === 'function' && cueTrackNeedsPlaybackRef(track)) {
+          await attachCuePlaybackRef(track);
+          if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
+        }
         return Boolean(await startStreamingTrack(track, {
           startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),
         }));

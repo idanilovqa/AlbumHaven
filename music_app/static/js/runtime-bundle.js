@@ -7973,12 +7973,15 @@ function findGalleryMainContextSection(threshold) {
   const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
     ? virtualGrid.sections
     : [];
+  // A pinch lays the same sections out for another column count; settled tops then name artists far away.
+  const pinching = Boolean(sections.length && virtualGrid._pinchPreview);
+  const sectionTop = section => (pinching ? virtualGrid.pinchContextTop?.(section) : null) ?? Number(section?.top || 0);
   let low = 0;
   let high = sections.length - 1;
   let index = -1;
   while (low <= high) {
     const middle = (low + high) >> 1;
-    if (Number(sections[middle]?.top || 0) <= threshold) {
+    if (sectionTop(sections[middle]) <= threshold) {
       index = middle;
       low = middle + 1;
     } else {
@@ -7999,7 +8002,7 @@ function findGalleryMainContextSection(threshold) {
       rendered: Boolean(label),
       labelBottom: label
         ? label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop
-        : Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
+        : sectionTop(section) + Number(virtualGrid?.sectionHeaderHeight || 0),
     };
   };
   // Rendered labels that the viewport has passed although their modelled top is still below it.
@@ -15439,6 +15442,20 @@ async function playbackOwnershipTrack(track, previous = null) {
   }
   return { path: track.path, referenceExpiresAt,
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
+}
+
+// References are short-lived and never saved, and a CUE track's `cue:` path is no file to stream:
+// a restored CUE track gets a segment reference before any stream opens for it. An engine that holds
+// its own claim (Android's) asks for its references itself.
+function cueTrackNeedsPlaybackRef(track) {
+  return Boolean(track?.cueSegmentRef) && !playingEngine()?.holdsOwnClaim
+    && !(track.playbackRef && Date.parse(track.playbackRefExpiresAt || '') > Date.now());
+}
+
+async function attachCuePlaybackRef(track) {
+  const prepared = await playbackOwnershipTrack(track, getPlaybackOwnershipState().activeClaim);
+  track.playbackRef = prepared.track.playbackRef;
+  track.playbackRefExpiresAt = prepared.referenceExpiresAt;
 }
 
 async function deletePlaybackClaim(claim) {
@@ -35288,9 +35305,15 @@ function buildCueBoundaryCorrection(tracks, trackIdentity, field, value) {
   const priorStart = targetIndex > 0
     ? Number(cueTracks[targetIndex - 1]?.cue_structure?.start_frame)
     : -1;
-  const targetEnd = Number(target?.cue_structure?.end_frame);
-  if (startFrame <= priorStart || !Number.isFinite(targetEnd) || startFrame >= targetEnd) {
-    throw new Error('Invalid CUE boundary order.');
+  // As on the server: a corrected next start ends this track, otherwise the sheet's end does. (In a sheet of
+  // several files the next track's start counts from its own file, so it is no end for this one.)
+  const following = cueTracks[targetIndex + 1];
+  const targetEnd = Number((following?.cue_boundary_corrected ? following : null)?.cue_structure?.start_frame
+    ?? target?.cue_structure?.end_frame);
+  if (!Number.isFinite(targetEnd)) throw new Error('CUE boundary is not editable.');
+  if (startFrame <= priorStart || startFrame >= targetEnd) {
+    const after = targetIndex > 0 ? `after ${formatCueTimecode(priorStart)} and ` : '';
+    throw new Error(`This time would overlap a neighbouring track. Choose a time ${after}before ${formatCueTimecode(targetEnd)}.`);
   }
   return {
     cue_segment_ref: targetIdentity,
@@ -37790,7 +37813,8 @@ async function saveOrderedCoverSelection() {
   const lookupTaskId = String(modal.remoteSelectionOverrideGeneration || modal.taskId || '').trim();
   // Closing or reopening Cover Look Up starts a new session: this save then updates the album only.
   const session = coverLookupModalSession;
-  const ownsModal = () => session === coverLookupModalSession && modal.album === album;
+  // A refresh may replace modal.album with a newer copy of the same album; only the session says whose modal it is.
+  const ownsModal = () => session === coverLookupModalSession;
   modal.orderedCoverMutationId = mutationId;
   modal.saving = true;
   // The album keeps its saved covers until the server confirms this choice: a cover that is still
@@ -37820,10 +37844,13 @@ async function saveOrderedCoverSelection() {
         image_url: selectedCoverImageUrl(libraryId, albumId, item.selection_id),
       } : {}),
     }));
-    applyOrderedCoverSlotsToAlbum(album, saved, data.selected_covers_revision);
-    album.selected_covers_album_id = albumId;
+    const shownAlbum = ownsModal() ? modal.album : album;
+    for (const savedAlbum of new Set([album, shownAlbum])) {
+      applyOrderedCoverSlotsToAlbum(savedAlbum, saved, data.selected_covers_revision);
+      savedAlbum.selected_covers_album_id = albumId;
+    }
     try {
-      showSavedOrderedCoverEverywhere(album, saved);
+      showSavedOrderedCoverEverywhere(shownAlbum, saved);
     } catch (error) {
       // The save is confirmed; a view that could not refresh catches up on its next render.
       console.warn('[AlbumHaven][CoverLookup] Saved cover could not refresh every view.', error);
@@ -44233,28 +44260,38 @@ async function confirmProblemSuggestions() {
 
 // BEGIN js/runtime/player-state-persistence-helpers.js
 
+function getPersistedCueSegmentRef(track) {
+  const path = String(track?.path || '');
+  // A player saved before CUE identities were kept still names its CUE track by a `cue:` path.
+  return String(track?.cueSegmentRef || track?.cue_segment_ref || (path.startsWith('cue:') ? path : ''));
+}
+
+// The one shape of a saved track: the current one, each queued one, and each read back.
+function buildPersistedPlayerTrack(track) {
+  const cueSegmentRef = getPersistedCueSegmentRef(track);
+  return {
+    src: String(track.src || ''),
+    path: String(track.path || ''),
+    ...(cueSegmentRef ? { cueSegmentRef } : {}),
+    title: String(track.title || ''),
+    artist: String(track.artist || ''),
+    ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
+    album: String(track.album || ''),
+    ...(track.year ? { year: String(track.year) } : {}),
+    coverRef: String(track.coverRef || ''),
+    ...(Number(track.durationSeconds) > 0
+      ? { durationSeconds: Number(track.durationSeconds) }
+      : {}),
+  };
+}
+
 function buildPersistedPlaybackQueue(currentTrackPath) {
   const queue = state.player.playbackQueue;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const normalizedCurrentTrackPath = String(currentTrackPath || '');
   const queueTracks = queue.tracks
-    .map((track) => {
-      if (!track?.src || !track?.path) return null;
-      return {
-        src: String(track.src || ''),
-        path: String(track.path || ''),
-        title: String(track.title || ''),
-        artist: String(track.artist || ''),
-        ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
-        album: String(track.album || ''),
-        ...(track.year ? { year: String(track.year) } : {}),
-        coverRef: String(track.coverRef || ''),
-        ...(Number(track.durationSeconds) > 0
-          ? { durationSeconds: Number(track.durationSeconds) }
-          : {}),
-      };
-    })
-    .filter(Boolean);
+    .filter((track) => track?.src && track?.path)
+    .map(buildPersistedPlayerTrack);
   if (!queueTracks.length) return null;
   const currentIndex = queueTracks.findIndex((track) => String(track.path || '') === normalizedCurrentTrackPath);
   if (currentIndex < 0) return null;
@@ -44290,19 +44327,7 @@ function buildPersistedPlayerState(options = {}) {
     ? playbackDuration
     : (currentDuration > 0 ? currentDuration : 0);
   return {
-    track: {
-      src,
-      path: String(current.path || ''),
-      title: String(current.title || ''),
-      artist: String(current.artist || ''),
-      ...(current.albumArtist ? { albumArtist: String(current.albumArtist) } : {}),
-      album: String(current.album || ''),
-      ...(current.year ? { year: String(current.year) } : {}),
-      coverRef: String(current.coverRef || ''),
-      ...(durationSeconds > 0
-        ? { durationSeconds }
-        : {}),
-    },
+    track: buildPersistedPlayerTrack({ ...current, src, durationSeconds }),
     playbackQueue: buildPersistedPlaybackQueue(current.path),
     currentTime: Math.max(0, Math.round((Number(playback.currentTime) || 0) * 100) / 100),
     paused,
@@ -44317,23 +44342,8 @@ function buildPersistedPlayerState(options = {}) {
 function restorePersistedPlaybackQueue(parsedState, currentTrackPath) {
   const tracks = Array.isArray(parsedState?.playbackQueue?.tracks)
     ? parsedState.playbackQueue.tracks
-      .map((track) => {
-        if (!track?.src || !track?.path) return null;
-        return {
-          src: String(track.src || ''),
-          path: String(track.path || ''),
-          title: String(track.title || ''),
-          artist: String(track.artist || ''),
-          ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
-          album: String(track.album || ''),
-          ...(track.year ? { year: String(track.year) } : {}),
-          coverRef: String(track.coverRef || ''),
-          ...(Number(track.durationSeconds) > 0
-            ? { durationSeconds: Number(track.durationSeconds) }
-            : {}),
-        };
-      })
-      .filter(Boolean)
+      .filter((track) => track?.src && track?.path)
+      .map(buildPersistedPlayerTrack)
     : [];
   if (!tracks.length) return false;
   const normalizedCurrentTrackPath = String(currentTrackPath || '');
@@ -44481,6 +44491,8 @@ function restorePlayerState() {
   }
   const track = parsed?.track;
   if (!track || !track.src) return;
+  const cueSegmentRef = getPersistedCueSegmentRef(track);
+  if (cueSegmentRef) track.cueSegmentRef = cueSegmentRef;
   const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
   const savedPaused = typeof parsed.paused === 'boolean'
     ? parsed.paused
@@ -44540,9 +44552,16 @@ function restorePlayerState() {
       updatePlayerUi();
       persistPlayerState(true);
     };
+    const selectionChanged = () => Boolean((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
+      || (state.player.current && state.player.current.path !== track.path));
     const startWithOwnership = (allowed) => {
-      if ((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
-        || (state.player.current && state.player.current.path !== track.path)) return null;
+      if (selectionChanged()) return null;
+      if (typeof cueTrackNeedsPlaybackRef === 'function' && cueTrackNeedsPlaybackRef(track)) {
+        return attachCuePlaybackRef(track).then(() => (selectionChanged() ? null : startRestoredStream(allowed)));
+      }
+      return startRestoredStream(allowed);
+    };
+    const startRestoredStream = (allowed) => {
       canResumePlayback = Boolean(allowed)
         && (typeof isActivePlaybackOwner !== 'function' || isActivePlaybackOwner());
       return startStreamingTrack(track, {
@@ -47718,14 +47737,20 @@ class VirtualArtistGrid {
   // layout that places the cards; settled positions belong to the old column count and would name artists
   // far below the anchored cover once the content grows.
   pinchContextLabelBottom(section) {
+    if (!section || section.kind === 'label') return null;
+    const top = this.pinchContextTop(section);
+    if (top === null) return null;
+    return top + (this._pinchPreview.headerHeights.get(this.getRenderedSectionKey(section)) ?? this.sectionHeaderHeight);
+  }
+
+  pinchContextTop(section) {
     const preview = this._pinchPreview;
     const model = preview?.contextLayout;
-    if (!model || !section || section.kind === 'label') return null;
+    if (!model || !section) return null;
     const key = this.getRenderedSectionKey(section);
     const first = model.a.section(key), second = model.b.section(key);
     if (!first || !second) return null;
-    const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
-    return Number(preview.contentOffset || 0) + first.top + (second.top - first.top) * model.progress + headerHeight;
+    return Number(preview.contentOffset || 0) + first.top + (second.top - first.top) * model.progress;
   }
 
   finishPinchPreview(_columns, { cancelled = false } = {}) {
@@ -51079,6 +51104,10 @@ function togglePlayerPlayback(options = {}) {
       pendingPlayerPlaybackHandoff = null;
       if (early) return early;
       if (playback.mode === 'stopped') {
+        if (typeof cueTrackNeedsPlaybackRef === 'function' && cueTrackNeedsPlaybackRef(track)) {
+          await attachCuePlaybackRef(track);
+          if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
+        }
         return Boolean(await startStreamingTrack(track, {
           startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),
         }));

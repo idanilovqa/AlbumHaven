@@ -55,7 +55,7 @@ def _safe_text(value: object) -> str | None:
     return text
 
 
-def _timestamp(frame: int) -> str:
+def cue_timestamp(frame: int) -> str:
     minutes, remainder = divmod(frame, 60 * 75)
     seconds, frames = divmod(remainder, 75)
     return f"{minutes:02d}:{seconds:02d}:{frames:02d}"
@@ -160,7 +160,7 @@ def render_external_cue(source: bytes, corrections: Sequence[Mapping[str, object
                 continue
             match = _DIRECTIVE.match(lines[index_line])
             replacements[index_line] = (
-                f'{match.group("indent")}INDEX 01 {_timestamp(frame)}'
+                f'{match.group("indent")}INDEX 01 {cue_timestamp(frame)}'
                 f'{match.group("ending") or ""}'
             )
             persisted[correction_id] = None

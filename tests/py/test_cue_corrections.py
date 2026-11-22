@@ -40,10 +40,17 @@ class Connection:
                 "program_id": 7,
                 "source_kind": "external",
                 "revision_sha256": REVISION,
+                "program_ordinal": 1,
                 "start_frame": 900,
                 "end_frame": 1800,
-                "previous_start_frame": 0,
             })
+        if "cue_lock_program" in sql:
+            return Cursor()
+        if "cue_boundary_neighbours" in sql:
+            return Cursor(rows=[
+                {"program_ordinal": 0, "start_frame": 0, "end_frame": 900, "corrected_start": None},
+                {"program_ordinal": 2, "start_frame": 1800, "end_frame": 2700, "corrected_start": None},
+            ])
         if "cue_editor_tracks" in sql:
             return Cursor(rows=[{
                 "cue_segment_ref": "cue:track-2",
@@ -351,3 +358,162 @@ def test_a_second_correction_retires_the_active_one_before_storing():
         })
     assert connection.order == ["retire", "store", "retire", "store"]
     assert all("with restored" not in sql for sql, _params in connection.writes)
+
+
+class ProgramConnection:
+    """Four ten-second tracks of one CUE program, with their active boundary corrections."""
+
+    SHEET = ((0, 750), (750, 1500), (1500, 2250), (2250, 3000))
+
+    def __init__(self, corrected=None):
+        self.corrected = dict(corrected or {})
+        self.statements = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def execute(self, sql, params=()):
+        self.statements.append(sql)
+        if "cue_correction_target" in sql:
+            ordinal = int(params[1].rsplit("-", 1)[1])
+            start, end = self.SHEET[ordinal]
+            return Cursor(row={
+                "track_id": ordinal, "program_id": 7, "program_ordinal": ordinal,
+                "revision_sha256": REVISION, "start_frame": start, "end_frame": end,
+            })
+        if "cue_lock_program" in sql:
+            return Cursor()
+        if "cue_boundary_neighbours" in sql:
+            return Cursor(rows=[{
+                "program_ordinal": ordinal,
+                "start_frame": self.SHEET[ordinal][0],
+                "end_frame": self.SHEET[ordinal][1],
+                "corrected_start": self.corrected.get(ordinal),
+            } for ordinal in params[-1] if 0 <= ordinal < len(self.SHEET)])
+        if "cue_retire_correction" in sql:
+            self.corrected.pop(params[1], None)
+            return Cursor()
+        if "cue_store_correction" in sql:
+            self.corrected[params[1]] = params[5].obj["start_frame"]
+            return Cursor(row={"id": 9})
+        if "cue_restore_correction" in sql:
+            restored = self.corrected.pop(int(params[2].rsplit("-", 1)[1]), None)
+            return Cursor(row=None if restored is None else {"id": 9})
+        raise AssertionError(sql)
+
+    def playable(self):
+        # The span playback issues: a track's own corrected start, up to the next track's corrected start.
+        return all(
+            self.corrected.get(ordinal, start) < self.corrected.get(ordinal + 1, end)
+            for ordinal, (start, end) in enumerate(self.SHEET)
+        )
+
+
+def move_start(connection, ordinal, start_frame):
+    return CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: connection,
+        write_enabled=lambda _library_id: False,
+    ).apply(actor=actor(), payload={
+        "cue_segment_ref": f"cue:track-{ordinal}",
+        "base_revision_sha256": REVISION,
+        "kind": "boundary",
+        "start_frame": start_frame,
+    })
+
+
+def restore_start(connection, ordinal):
+    return CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: connection,
+    ).restore(actor=actor(), cue_segment_ref=f"cue:track-{ordinal}", kind="boundary")
+
+
+def test_a_correction_cannot_start_after_the_next_tracks_corrected_start():
+    # Owner 2026-11-21 ("why is playback unavailable"): saves were checked against the sheet's times only,
+    # so a track could end before it started and every attempt to play it was refused.
+    connection = ProgramConnection()
+    move_start(connection, 2, 12 * 75)
+
+    with pytest.raises(CueCorrectionError, match="after 00:00:00 and before 00:12:00"):
+        move_start(connection, 1, 15 * 75)
+
+    assert connection.corrected == {2: 12 * 75}
+
+
+def test_a_correction_cannot_start_before_the_previous_tracks_corrected_start():
+    connection = ProgramConnection({1: 15 * 75})
+
+    with pytest.raises(CueCorrectionError, match="after 00:15:00 and before 00:30:00"):
+        move_start(connection, 2, 12 * 75)
+
+    assert connection.corrected == {1: 15 * 75}
+
+
+def test_a_correction_may_follow_a_neighbour_that_made_room_for_it():
+    connection = ProgramConnection({2: 25 * 75})
+
+    move_start(connection, 1, 22 * 75)
+
+    assert connection.playable()
+
+
+@pytest.mark.parametrize(("corrected", "ordinal", "neighbour"), [
+    ({1: 22 * 75, 2: 25 * 75}, 2, "before"),
+    ({1: 5 * 75, 2: 8 * 75}, 1, "after"),
+])
+def test_restoring_a_start_cannot_overlap_a_corrected_neighbour(corrected, ordinal, neighbour):
+    connection = ProgramConnection(corrected)
+
+    with pytest.raises(CueCorrectionError, match=f"overlap the track {neighbour} it"):
+        restore_start(connection, ordinal)
+
+    assert connection.corrected == corrected
+
+
+@pytest.mark.parametrize("ordinal", [1, 2])
+def test_either_side_of_an_already_overlapping_pair_can_be_restored(ordinal):
+    connection = ProgramConnection({1: 15 * 75, 2: 12 * 75})
+
+    assert restore_start(connection, ordinal)["restored"] is True
+    assert connection.playable()
+
+
+def test_no_accepted_sequence_of_corrections_and_restores_leaves_an_unplayable_track():
+    changes = [(ordinal, start) for ordinal in range(4) for start in (*range(0, 3000, 225), None)]
+    reached = {()}
+    pending = [()]
+    for _depth in range(3):
+        following = []
+        for before in pending:
+            for ordinal, start in changes:
+                connection = ProgramConnection(before)
+                try:
+                    if start is None:
+                        restore_start(connection, ordinal)
+                    else:
+                        move_start(connection, ordinal, start)
+                except CueCorrectionError:
+                    continue
+                assert connection.playable(), (before, ordinal, start)
+                after = tuple(sorted(connection.corrected.items()))
+                if after not in reached:
+                    reached.add(after)
+                    following.append(after)
+        pending = following
+
+
+def test_a_boundary_check_locks_the_program_then_reads_only_the_two_neighbours():
+    connection = ProgramConnection()
+
+    move_start(connection, 2, 22 * 75)
+
+    reads = [sql for sql in connection.statements if "cue_boundary_neighbours" in sql]
+    assert len(reads) == 1 and "program_ordinal = any" in reads[0]
+    target = next(sql for sql in connection.statements if "cue_correction_target" in sql)
+    assert "over (" not in target, "the target lookup must not window every program in the library"
+    lock = next(index for index, sql in enumerate(connection.statements) if "cue_lock_program" in sql)
+    assert lock < connection.statements.index(reads[0])

@@ -98,3 +98,26 @@ test('a moved CUE boundary updates both track lengths in the open album at once'
   assert.deepEqual(album.tracks.map((track) => track.duration_seconds), [5, 15]);
   assert.equal(rendered.length, 1, 'Album Details redraws with the new lengths');
 });
+
+test("a CUE start is checked against the next track's corrected start, and says the allowed range", () => {
+  const { context } = loadEditor();
+  const base_revision_sha256 = 'a'.repeat(64);
+  const track = (ref, start_frame, end_frame) => ({ cue_segment_ref: ref, cue_structure: { start_frame, end_frame, base_revision_sha256 } });
+  // Track 3 was moved from 20 s to 12 s; track 2 still carries the sheet's 20 s end.
+  const tracks = [track('cue:1', 0, 750), track('cue:2', 750, 1500), { ...track('cue:3', 900, 2250), cue_boundary_corrected: true }];
+
+  assert.throws(
+    () => context.buildCueBoundaryCorrection(tracks, 'cue:2', 'index_01', '00:15:00'),
+    /after 00:00:00 and before 00:12:00/,
+  );
+  assert.equal(context.buildCueBoundaryCorrection(tracks, 'cue:2', 'index_01', '00:11:00').start_frame, 825);
+});
+
+test("the last track of a file keeps the sheet's end when the next track starts another file", () => {
+  const { context } = loadEditor();
+  const base_revision_sha256 = 'a'.repeat(64);
+  const track = (ref, start_frame, end_frame) => ({ cue_segment_ref: ref, cue_structure: { start_frame, end_frame, base_revision_sha256 } });
+  const tracks = [track('cue:1', 0, 750), track('cue:2', 750, 1500), track('cue:3', 0, 900)];
+
+  assert.equal(context.buildCueBoundaryCorrection(tracks, 'cue:2', 'index_01', '00:11:00').start_frame, 825);
+});

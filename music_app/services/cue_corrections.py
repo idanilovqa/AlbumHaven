@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 from psycopg.types.json import Jsonb
 
+from music_app.services.cue_external_writer import cue_timestamp
 from music_app.services.postgres_connections import pooled_connection
 
 
@@ -92,17 +93,11 @@ class CueCorrectionService:
     def _target(self, connection, *, library_id: int, cue_segment_ref: str):
         row = connection.execute(
             """/* cue_correction_target */
-            with ordered as (
-                select s.track_id, s.program_id, s.start_frame, s.end_frame,
-                       lag(s.start_frame) over (
-                           partition by s.program_id order by s.program_ordinal
-                       ) as previous_start_frame
-                from library.cue_track_segments s
-            )
-            select ordered.*, p.revision_sha256
-            from ordered
-            join library.local_tracks t on t.id = ordered.track_id
-            join library.cue_programs p on p.id = ordered.program_id
+            select s.track_id, s.program_id, s.program_ordinal, s.start_frame, s.end_frame,
+                   p.revision_sha256
+            from library.cue_track_segments s
+            join library.local_tracks t on t.id = s.track_id
+            join library.cue_programs p on p.id = s.program_id
             where t.library_id = %s and t.track_key = %s
               and p.library_id = t.library_id and p.is_active and p.is_valid""",
             (library_id, cue_segment_ref),
@@ -110,6 +105,61 @@ class CueCorrectionService:
         if row is None:
             raise CueCorrectionError("CUE track is unavailable.")
         return row
+
+    @staticmethod
+    def _check_boundary(
+        connection, *, library_id: int, target: Mapping[str, object], start_frame: int | None,
+    ) -> None:
+        """Refuse a start (None: back to the sheet's) that overlaps a neighbour as playback will span it.
+
+        Playback runs each track from its corrected start to the next track's corrected start. The program
+        lock keeps two simultaneous edits of neighbours from each passing against the other's old time.
+        """
+        program_id, ordinal = target["program_id"], target["program_ordinal"]
+        connection.execute(
+            """/* cue_lock_program */
+            select id from library.cue_programs where library_id = %s and id = %s for update""",
+            (library_id, program_id),
+        )
+        rows = connection.execute(
+            """/* cue_boundary_neighbours */
+            select s.program_ordinal, s.start_frame, s.end_frame,
+                   (select (c.payload->>'start_frame')::bigint
+                    from library.cue_corrections c
+                    where c.library_id = %s and c.track_id = s.track_id
+                      and c.base_program_id = s.program_id
+                      and c.correction_kind = 'boundary' and c.status = 'active'
+                    order by c.updated_at desc, c.id desc limit 1) as corrected_start
+            from library.cue_track_segments s
+            where s.program_id = %s and s.program_ordinal = any(%s::integer[])""",
+            (library_id, program_id, [ordinal - 1, ordinal + 1]),
+        ).fetchall()
+        neighbours = {row["program_ordinal"]: row for row in rows}
+        previous, following = neighbours.get(ordinal - 1), neighbours.get(ordinal + 1)
+
+        earliest, latest = None, target["end_frame"]
+        if previous is not None:
+            earliest = previous["start_frame"] if previous["corrected_start"] is None else previous["corrected_start"]
+        if following is not None and following["corrected_start"] is not None:
+            latest = following["corrected_start"]
+
+        if start_frame is None:
+            # Uncorrected, the track starts where the sheet says and the previous track ends where it says.
+            if previous is not None and earliest >= previous["end_frame"]:
+                raise CueCorrectionError(
+                    "Restoring this start would overlap the track before it. Restore that track's start first."
+                )
+            if target["start_frame"] >= latest:
+                raise CueCorrectionError(
+                    "Restoring this start would overlap the track after it. Restore that track's start first."
+                )
+        elif (earliest is not None and start_frame <= earliest) or start_frame >= latest:
+            after = "" if earliest is None else f"after {cue_timestamp(earliest)} and "
+            # The END field edits the next track's start, so the message names neither field.
+            raise CueCorrectionError(
+                "This time would overlap a neighbouring track. "
+                f"Choose a time {after}before {cue_timestamp(latest)}."
+            )
 
     def load_editor(self, *, actor: object, cue_segment_ref: object) -> dict[str, object]:
         _account_id, library_id = self._scope(actor)
@@ -224,14 +274,9 @@ class CueCorrectionService:
                 raise CueCorrectionError("The CUE program changed. Reload before applying.")
             if kind == "boundary":
                 start_frame = payload.get("start_frame")
-                previous_start = target.get("previous_start_frame")
-                if (
-                    type(start_frame) is not int
-                    or start_frame < 0
-                    or (previous_start is not None and start_frame <= previous_start)
-                    or start_frame >= target["end_frame"]
-                ):
-                    raise CueCorrectionError("Invalid CUE boundary order.")
+                if type(start_frame) is not int or start_frame < 0:
+                    raise CueCorrectionError("Invalid CUE start time.")
+                self._check_boundary(connection, library_id=library_id, target=target, start_frame=start_frame)
                 correction_payload = {
                     "start_frame": start_frame,
                     "source_start_frame": target["start_frame"],
@@ -339,6 +384,9 @@ class CueCorrectionService:
                 },
             }
         with self._connect(self._database_url) as connection:
+            if correction_kind == "boundary":
+                target = self._target(connection, library_id=library_id, cue_segment_ref=identity)
+                self._check_boundary(connection, library_id=library_id, target=target, start_frame=None)
             row = connection.execute(
                 """/* cue_restore_correction */
                 update library.cue_corrections c

@@ -4093,7 +4093,21 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
 
     def search(**kwargs):
         searches.append(kwargs["folder"])
+        if album_ids == (12, 13) and kwargs["folder"] == tmp_path / "Album":
+            def write():
+                writes.append("file")
+
+            write.provisional_cover_revision = "candidate-revision"
+            assert kwargs["automatic_write_guard"](write, cover_selection_origin="automatic") is False
+            return None, False, {"reason": write.blocked_reason}
         return None, False, {"reason": "remote_search_returned_no_candidate"}
+
+    def persist(_config, paths, *_args, **options):
+        if album_ids == (12, 13) and {Path(path).parent for path in paths} == {tmp_path / "Album"}:
+            # Postgres knows the folder holds two albums, so it refuses before any write (5518b3ed6).
+            assert options["reject_if_mixed_album_folder"] is True
+            return {"blocked_by_mixed_album_folder": True}
+        writes.append("selection")
 
     monkeypatch.setattr(
         cover_refresh_execution.cover_refresh_provider, "ensure_best_cover_for_folder", search,
@@ -4107,10 +4121,7 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
             begin_candidate_generation=lambda: None, fail=lambda: None, complete=lambda: None,
         ),
     )
-    monkeypatch.setattr(
-        cover_refresh_execution, "persist_cover_selection_in_shared_transaction",
-        lambda *_args, **_kwargs: writes.append("selection"),
-    )
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
 
     result = cover_refresh_execution.run_cover_jobs(
         get_state=lambda: library_state, config=config, logger=logger,
@@ -4119,17 +4130,17 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
         cover_cache=SimpleNamespace(save=lambda: None), job_workers=workers,
     )
 
-    expected_searches = {tmp_path / "Following"}
-    if album_ids == (12, 12):
-        expected_searches.add(tmp_path / "Album")
-    assert set(searches) == expected_searches
-    assert len(searches) == len(expected_searches)
+    # Each album in the folder keeps its own search (eea310882); only its automatic write is refused.
+    album_searches = 2 if album_ids == (12, 13) else 1
+    expected_searches = [tmp_path / "Album"] * album_searches + [tmp_path / "Following"]
+    assert sorted(searches) == sorted(expected_searches)
     assert writes == []
     assert entries == baseline
-    assert result["processed"] == 2, "ambiguous selected jobs need an explicit terminal outcome"
+    assert result["processed"] == len(expected_searches), "ambiguous selected jobs need an explicit terminal outcome"
     assert result["downloaded"] == 0
     if album_ids == (12, 13):
-        assert sum(item["reason"] == "mixed_album_folder" for item in result["job_results"]) == 1
+        assert sum(item["reason"] == "mixed_album_folder" for item in result["job_results"]) == 2
+        assert result["skipped"] == 2, "a refusal is skipped, not failed"
     else:
         assert all(item["reason"] == "remote_search_returned_no_candidate" for item in result["job_results"])
 

@@ -8,7 +8,9 @@ import pytest
 
 from music_app.services.jobs.models import JobState
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
-from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.library_browse_postgres import (
+    PostgresLibraryBrowseRepository, _load_duplicate_candidate_album_ids_for_keys,
+)
 from music_app.services.problematic_files_projection import _duplicate_sources_from_rows
 from music_app.services.problematic_projection_postgres import PostgresProblematicProjectionRepository
 from tests.e2e.support import isolatedPostgres
@@ -141,6 +143,111 @@ def _assert_published_matches_main(db, build, browse, rows):
                 "order by semantic_child_identity", (db.library_id, build.revision, identity),
             ).fetchall()
         assert [chunk["normalized_text"] for chunk in chunks] == [record["document"]]
+
+
+@pytest.fixture
+def _nfc_greek_copies(live_projection_database):
+    from music_app.services.metadata import extract_year, first_tag
+
+    db = live_projection_database
+    rows = _copy_rows()
+    forms = {"a-owner": "\u1fb4", "b-copy": "\u03b1\u0345\u0301"}
+    for row in rows:
+        tags = {"album": [forms[row["album_key"]]],
+                "albumartist": [forms[row["album_key"]]], "date": ["1988"]}
+        album = first_tag(tags, ["album"])
+        artist = first_tag(tags, ["albumartist"])
+        year = extract_year(tags)
+        assert album == artist == forms[row["album_key"]]
+        assert type(year) is int and year == 1988
+        row.update(album_title=album, artist_name=artist,
+                   album_metadata={"album_artist": artist})
+        row["file_entry"].update(album=album, album_artist=artist, artist=artist, year=year)
+    owner_id = _seed_native_overlap(db, rows)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        owners = connection.execute(
+            "select id,album_key from library.local_albums "
+            "where library_id=%s and album_key=any(%s::text[])",
+            (db.library_id, list(forms)),
+        ).fetchall()
+        ids = {row["album_key"]: row["id"] for row in owners}
+        assert set(ids) == set(forms) and ids["a-owner"] == owner_id
+        updated = connection.execute(
+            "update library.local_tracks set duration_seconds=180,disc_number=1 "
+            "where library_id=%s and album_id=any(%s::bigint[]) returning id",
+            (db.library_id, list(ids.values())),
+        ).fetchall()
+        assert len(updated) == 4
+        files = connection.execute(
+            "select file.id,file.private_path from library.local_track_files file "
+            "join library.local_tracks track on track.id=file.track_id "
+            "where track.library_id=%s and track.album_id=any(%s::bigint[])",
+            (db.library_id, list(ids.values())),
+        ).fetchall()
+    paths = {row["id"]: row["private_path"] for row in files}
+    assert len(paths) == 4 and set(paths.values()) == {row["file_private_path"] for row in rows}
+    browse, native_rows = _canonical_rows(db)
+    assert len(native_rows) == 4
+    assert all(row["duration_seconds"] == 180 for row in native_rows)
+    assert all(row["file_entry"]["album"] == row["file_entry"]["album_artist"]
+               == forms[row["album_key"]] for row in native_rows)
+    assert all(type(row["file_entry"]["year"]) is int and row["file_entry"]["year"] == 1988
+               for row in native_rows)
+    expected = _topology_unit_main_records(native_rows)
+    assert len(expected) == 2
+    assert {record["summary"]["key"] for record in expected.values()} == set(forms)
+    assert all(len(record["detail"]["duplicate_sources"]) == 2 for record in expected.values())
+    assert all("Duplicate files" in record["summary"]["problem_reasons"] for record in expected.values())
+    return SimpleNamespace(db=db, browse=browse, native_rows=native_rows,
+                           owners=ids, paths=paths, expected=expected)
+
+
+def test_live_targeted_duplicate_candidates_and_opaque_detail_preserve_nfc_greek_copies(
+    _nfc_greek_copies,
+):
+    fixture = _nfc_greek_copies
+    with isolatedPostgres._connect(fixture.db.app_url) as connection:
+        candidates = _load_duplicate_candidate_album_ids_for_keys(
+            connection, ["a-owner"], canonical_library=True,
+        )
+    assert set(candidates) == set(fixture.owners.values())
+    worker, claim, _build, _now = _main_search_claimed_v2(fixture.db)
+    assert _run_topology_worker(worker, claim).next_state is JobState.SUCCEEDED
+    page = fixture.browse.build_problematic_files_page(limit=50)
+    selected = next(item for item in page["items"] if item["key"] == "a-owner")
+    expected = fixture.expected[selected["projection_id"]]["detail"]["duplicate_sources"]
+    detail = fixture.browse.build_problematic_file_detail_payload(
+        projection_id=selected["projection_id"],
+    )
+    assert detail is not None and detail["projection_id"] == selected["projection_id"]
+    assert len(detail["duplicate_sources"]) == len(expected) == 2
+    assert [(source["folder_path"], [track["track_ref"] for track in source["tracks"]])
+            for source in detail["duplicate_sources"]] == [
+                (source["folder_path"], [track["track_ref"] for track in source["tracks"]])
+                for source in expected
+            ]
+
+
+def test_live_topology_identity_discovery_and_publication_preserve_nfc_greek_copies(
+    _nfc_greek_copies, monkeypatch,
+):
+    fixture = _nfc_greek_copies
+    worker, claim, build, _now = _main_search_claimed_v2(fixture.db)
+    load = worker.load_claimed_topology_node
+    discovered = set()
+
+    def record_identity_page(**options):
+        page = load(**options)
+        if options["node_key"][0] == "topology_identity":
+            for row in page["rows"]:
+                assert fixture.paths[row["file_id"]] == row["path"]
+                discovered.add(row["file_id"])
+        return page
+
+    monkeypatch.setattr(worker, "load_claimed_topology_node", record_identity_page)
+    assert _run_topology_worker(worker, claim).next_state is JobState.SUCCEEDED
+    assert discovered == set(fixture.paths)
+    _assert_published_matches_main(fixture.db, build, fixture.browse, fixture.native_rows)
 
 
 def test_live_topology_present_null_exception_clear_matches_main(live_projection_database):
@@ -370,7 +477,7 @@ def test_live_topology_numeric_candidates_filter_before_hydration_and_bind_termi
 
 
 def _claimed_version(db, version):
-    if version == 2:
+    if version == 3:
         return _main_search_claimed_v2(db)
     with isolatedPostgres._connect(db.app_url) as connection:
         queued = connection.execute(
@@ -412,16 +519,18 @@ def _source_call(claim, build, now, *, version, chunk=None):
 
 
 @pytest.mark.parametrize("persisted,requested,operation", [
-    (2, None, "load"), (2, None, "stage"), (2, 1, "load"), (2, 1, "stage"),
-    (1, 2, "load"), (1, 2, "stage"),
-], ids=["v2-legacy-load", "v2-legacy-stage", "v2-v1-load", "v2-v1-stage", "v1-v2-load", "v1-v2-stage"])
+    (3, None, "load"), (3, None, "stage"), (3, 1, "load"), (3, 1, "stage"),
+    (3, 2, "load"), (3, 2, "stage"), (1, 2, "load"), (1, 2, "stage"),
+    (1, 3, "load"), (1, 3, "stage"),
+], ids=["v3-legacy-load", "v3-legacy-stage", "v3-v1-load", "v3-v1-stage",
+        "v3-v2-load", "v3-v2-stage", "v1-v2-load", "v1-v2-stage", "v1-v3-load", "v1-v3-stage"])
 def test_live_topology_source_version_mismatch_rejects_without_progress(
     live_projection_database, persisted, requested, operation,
 ):
     db = live_projection_database
     _seed_native_overlap(db, _copy_rows())
     _worker, claim, build, now = _claimed_version(db, persisted)
-    matching = persisted if persisted == 2 else None
+    matching = persisted if persisted == 3 else None
     sql, arguments = _source_call(claim, build, now, version=matching)
     with isolatedPostgres._connect(db.worker_url) as connection:
         page = connection.execute(sql, arguments).fetchall()
@@ -740,7 +849,7 @@ def test_live_topology_numeric_source_receipt_preserves_jsonb_equality(
     chunk = page.chunks[0]
     assert chunk.group_key == ("album", album) and len(chunk.rows) == 1 and not chunk.complete
     assert type(chunk.rows[0]["duration_seconds"]) is float and chunk.rows[0]["duration_seconds"] == 180.0
-    load_sql, load_arguments = _source_call(claim, build, now, version=2)
+    load_sql, load_arguments = _source_call(claim, build, now, version=3)
     with isolatedPostgres._connect(db.worker_url) as connection:
         native = connection.execute(
             "select page.*,page.rows::text as exact_rows from (" + load_sql + ") page "
@@ -757,10 +866,10 @@ def test_live_topology_numeric_source_receipt_preserves_jsonb_equality(
         rows=chunk.rows, complete=chunk.complete, now=now,
     )
     before_replay = _progress(db, claim, build)
-    stage_sql, _arguments = _source_call(claim, build, now, version=2, chunk=native)
+    stage_sql, _arguments = _source_call(claim, build, now, version=3, chunk=native)
     semantic_replay = _scope(claim, build) + tuple(native[key] for key in (
         "group_kind", "group_identity", "source_kind", "source_identity", "child_kind", "child_identity",
-    )) + (native["exact_rows"], native["group_complete"], now, 2)
+    )) + (native["exact_rows"], native["group_complete"], now, 3)
     with isolatedPostgres._connect(db.worker_url) as connection:
         assert connection.execute(stage_sql, semantic_replay).fetchone()["accepted"] is True
     worker.stage_claimed_source_chunk(
@@ -785,7 +894,7 @@ def test_live_topology_numeric_source_receipt_preserves_jsonb_equality(
         assert connection.execute(
             "select %s::jsonb=%s::jsonb as equal", (native["exact_rows"], json.dumps(changed["rows"])),
         ).fetchone()["equal"] is False
-    changed_sql, changed_arguments = _source_call(claim, build, now, version=2, chunk=changed)
+    changed_sql, changed_arguments = _source_call(claim, build, now, version=3, chunk=changed)
     _reject(db, claim, build, changed_sql, changed_arguments, sqlstate="55000",
             message="projection source page differs from authoritative cursor")
     assert worker.validate_claimed_build(claim=claim, build=build, now=now)

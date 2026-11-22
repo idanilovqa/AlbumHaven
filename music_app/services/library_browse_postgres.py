@@ -4954,13 +4954,13 @@ def _load_duplicate_candidate_album_ids(
             return _duplicate_candidate_ids_from_index(cached["index"], album_keys)
         repository.queue_utility_projection_prewarm(kind)
         return None
-    if (
-        album_keys
-        and _coerce_int(
-            getattr(getattr(connection, "info", None), "server_version", 0)
-        ) >= 180000
-        and _duplicate_identity_helpers_available(connection)
-    ):
+    if album_keys and _coerce_int(
+        getattr(getattr(connection, "info", None), "server_version", 0)
+    ) >= 180000:
+        if not _duplicate_identity_helpers_available(connection):
+            from music_app.services.problematic_projection_postgres import ProblematicProjectionStorageError
+
+            raise ProblematicProjectionStorageError("problematic duplicate lookup unavailable")
         return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
     kind = "duplicate-identities"
     cache_key = repository._utility_projection_cache_key(kind, connection=connection)
@@ -5002,7 +5002,7 @@ def _load_duplicate_candidate_album_ids(
 def _duplicate_identity_helpers_available(connection: Any) -> bool:
     row = _row_mapping(connection.execute("""
         select (
-          to_regprocedure('library.duplicate_identity_text(text)') is not null
+          to_regprocedure('library.problematic_duplicate_identity_text(text)') is not null
           and to_regprocedure('library.duplicate_identity_year(text)') is not null
         ) as available
     """).fetchone())
@@ -5050,9 +5050,9 @@ def _duplicate_candidate_album_ids_for_keys_sql(*, canonical_library: bool = Fal
         ), requested_identities as materialized (
           select distinct
             requested_albums.library_id,
-            library.duplicate_identity_text(files.scan_file_album_artist)
+            library.problematic_duplicate_identity_text(files.scan_file_album_artist)
               as album_artist_identity,
-            library.duplicate_identity_text(files.scan_file_album)
+            library.problematic_duplicate_identity_text(files.scan_file_album)
               as album_identity,
             library.duplicate_identity_year(files.scan_file_year)
               as album_year
@@ -5064,8 +5064,8 @@ def _duplicate_candidate_album_ids_for_keys_sql(*, canonical_library: bool = Fal
             on files.track_id = tracks.id
           where files.scan_cache_stale is false
             and files.scan_file_entry_is_object is true
-            and library.duplicate_identity_text(files.scan_file_album_artist) <> ''
-            and library.duplicate_identity_text(files.scan_file_album) <> ''
+            and library.problematic_duplicate_identity_text(files.scan_file_album_artist) <> ''
+            and library.problematic_duplicate_identity_text(files.scan_file_album) <> ''
             and library.duplicate_identity_year(files.scan_file_year)
               between 1000 and 9999
         ), candidate_containers as materialized (
@@ -5078,9 +5078,13 @@ def _duplicate_candidate_album_ids_for_keys_sql(*, canonical_library: bool = Fal
             {physical_container} as folder
           from requested_identities
           join library.local_track_files files
-            on library.duplicate_identity_text(files.scan_file_album_artist)
+            on md5(library.problematic_duplicate_identity_text(files.scan_file_album_artist))
+                 = md5(requested_identities.album_artist_identity)
+           and md5(library.problematic_duplicate_identity_text(files.scan_file_album))
+                 = md5(requested_identities.album_identity)
+           and library.problematic_duplicate_identity_text(files.scan_file_album_artist)
                  = requested_identities.album_artist_identity
-           and library.duplicate_identity_text(files.scan_file_album)
+           and library.problematic_duplicate_identity_text(files.scan_file_album)
                  = requested_identities.album_identity
            and library.duplicate_identity_year(files.scan_file_year)
                  = requested_identities.album_year
@@ -10414,6 +10418,11 @@ def _problematic_projection_item_summary_sql() -> str:
         from ops.resolve_problematic_projection_library() canonical_library
         join ops.problematic_projection_state state
           on state.library_id = canonical_library.library_id
+        join ops.problematic_projection_headers header
+          on header.library_id = state.library_id and header.revision = state.committed_revision
+         and header.builder_version = 3 and header.verified
+         and header.topology_completed_group_count is not null
+         and header.topology_completed_group_fingerprint is not null
         join ops.problematic_projection_items item
           on item.library_id = state.library_id
          and item.revision = state.committed_revision
@@ -10737,8 +10746,7 @@ def _problematic_files_sql(
             else "library.local_path_key(library.local_track_files.private_path) <> ''",
         ).replace(
             "__FILE_ALBUM_IDENTITY__",
-            "library.local_track_files.scan_file_album_identity" if path_columns
-            else "library.duplicate_identity_text(nullif(lower(btrim(library.local_track_files.scan_file_album)), ''))",
+            "library.problematic_duplicate_identity_text(nullif(btrim(library.local_track_files.scan_file_album), ''))",
         )
     )
     candidate_ctes = ""
@@ -10770,6 +10778,11 @@ def _problematic_files_sql(
           from ops.resolve_problematic_projection_library() canonical_library
           join ops.problematic_projection_state state
             on state.library_id = canonical_library.library_id
+          join ops.problematic_projection_headers header
+            on header.library_id = state.library_id and header.revision = state.committed_revision
+           and header.builder_version = 3 and header.verified
+           and header.topology_completed_group_count is not null
+           and header.topology_completed_group_fingerprint is not null
           join ops.problematic_projection_items item
             on item.library_id = state.library_id
            and item.revision = state.committed_revision
@@ -10804,10 +10817,9 @@ def _problematic_files_sql(
         """
     duplicate_album_ids_cte = """
         duplicate_album_ids as (
-          -- Duplicate-source checks run only for these albums. PostgreSQL 18
-          -- duplicate_identity_text is Python's NFC + casefold identity, so equal
-          -- identities are complete; older servers only lower(), so they keep the
-          -- broad superset as duplicate candidates too.
+          -- Duplicate-source checks run only for these candidate albums.
+          -- Normalize before folding; older servers only lower(), so retain
+          -- their broad Unicode/year superset below.
           select distinct candidate.album_id
           from active_problem_rows candidate
           join (

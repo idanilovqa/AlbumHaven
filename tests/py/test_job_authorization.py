@@ -1095,13 +1095,13 @@ def test_decisions_expose_only_bounded_canonical_reason_codes():
     assert "token" not in rendered
 
 
-def test_existing_resource_validator_accepts_exact_persisted_v2_job_scope():
+def test_existing_resource_validator_accepts_exact_persisted_v3_job_scope():
     service, repository = _service()
     repository.actor = None
     claim = _problematic_projection_claim(
         parameters={"projection_kind": "problematic_files", "source_generation": 18,
-                    "rebuild_epoch": 2, "builder_version": 2},
-        idempotency_key="problematic-files-projection:9:18:2:v2",
+                    "rebuild_epoch": 2, "builder_version": 3},
+        idempotency_key="problematic-files-projection:9:18:2:v3",
     )
     assert service.authorize(claim, NOW) == AuthorizationDecision(
         True, "problematic_projection_scope_current",
@@ -1117,11 +1117,12 @@ def test_existing_resource_validator_retains_closed_legacy_v1_scope():
 
 
 @pytest.mark.parametrize("version, key, extra", [
-    (True, "problematic-files-projection:9:18:2:v2", {}),
-    ("2", "problematic-files-projection:9:18:2:v2", {}),
+    (True, "problematic-files-projection:9:18:2:v3", {}),
+    ("3", "problematic-files-projection:9:18:2:v3", {}),
     (3, "problematic-files-projection:9:18:2:v2", {}),
-    (2, "problematic-files-projection:9:18:2", {}),
-    (2, "problematic-files-projection:9:18:2:v2", {"unrecognized": 1}),
+    (2, "problematic-files-projection:9:18:2:v2", {}),
+    (3, "problematic-files-projection:9:18:2", {}),
+    (3, "problematic-files-projection:9:18:2:v3", {"unrecognized": 1}),
 ])
 def test_existing_resource_validator_rejects_incoherent_or_unclosed_version_scope(version, key, extra):
     service, repository = _service()

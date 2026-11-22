@@ -6,7 +6,7 @@ alter table ops.problematic_projection_headers
   drop constraint problematic_projection_headers_builder_version_check;
 alter table ops.problematic_projection_headers
   add constraint problematic_projection_headers_builder_version_check
-  check (builder_version in (1, 2));
+  check (builder_version in (1, 2, 3));
 alter table ops.problematic_projection_state
   add column topology_completed_group_count bigint check (topology_completed_group_count >= 0),
   add column topology_completed_group_fingerprint bit(256),
@@ -44,6 +44,34 @@ create index problematic_projection_topology_folder_lookup_idx
   (job_id, attempt, revision, semantic_child_identity, group_identity)
   where group_kind = 'topology_address' and projection_id = 'topology'
     and fact_kind = 'topology_folder_status';
+
+-- Preserve the historical identity helper/index contract. Normalize input
+-- before delegating so corrected candidates follow the canonical NFC order.
+create or replace function library.problematic_duplicate_identity_text(value text)
+returns text language sql immutable parallel safe strict set search_path = pg_catalog
+as $$
+  select library.duplicate_identity_text(normalize(value, NFC));
+$$;
+revoke all on function library.problematic_duplicate_identity_text(text) from public;
+do $privileges$
+begin
+  if pg_catalog.to_regrole('album_haven_app') is not null then
+    grant execute on function library.problematic_duplicate_identity_text(text) to album_haven_app;
+  end if;
+  if pg_catalog.to_regrole('album_haven_migrator') is not null then
+    grant execute on function library.problematic_duplicate_identity_text(text) to album_haven_migrator;
+  end if;
+end;
+$privileges$;
+
+-- Hashes select candidates only; lookups retain full identity witnesses. Keep
+-- tuples bounded without storing raw identities or private paths in the index.
+create index local_track_files_problematic_nfc_identity_page_idx
+  on library.local_track_files (
+    pg_catalog.md5(library.problematic_duplicate_identity_text(scan_file_album_artist)),
+    pg_catalog.md5(library.problematic_duplicate_identity_text(scan_file_album)),
+    library.duplicate_identity_year(scan_file_year), library_root_id, id
+  ) include (track_id) where scan_cache_stale is false;
 
 create or replace function library.problematic_immediate_folder_parent(path_value text)
 returns text language sql immutable parallel safe strict set search_path = pg_catalog
@@ -86,7 +114,7 @@ begin
   ) then raise exception 'stale projection claim' using errcode = '55000'; end if;
   select state.* into selected_state from ops.problematic_projection_state state
   join ops.jobs job on job.id = p_job_id and job.library_id = state.library_id
-    and ops.problematic_projection_builder_version(job.parameters) = 2
+    and ops.problematic_projection_builder_version(job.parameters) = 3
   where state.library_id = p_library_id and state.live_job_id = p_job_id
     and state.source_generation = p_source_generation and state.rebuild_epoch = p_rebuild_epoch
     and state.build_revision = p_revision and state.requested_job_id = p_job_id
@@ -158,7 +186,7 @@ begin
     (p_definition -> 'key')::text, 'UTF8')), 'hex');
   definition := (p_definition - 'reference_kind') || pg_catalog.jsonb_build_object(
     'library_id', p_library_id, 'job_id', p_job_id, 'revision', p_revision,
-    'source_generation', p_source_generation, 'rebuild_epoch', p_rebuild_epoch, 'builder_version', 2
+    'source_generation', p_source_generation, 'rebuild_epoch', p_rebuild_epoch, 'builder_version', 3
   );
   insert into ops.problematic_projection_group_accumulators(
     job_id, attempt, revision, group_kind, group_identity, updated_at
@@ -231,7 +259,7 @@ begin
     'key', pg_catalog.jsonb_build_array('parent', p_parent), 'subordinate_input', true,
     'lookup_address', p_lookup_address, 'library_id', p_library_id, 'job_id', p_job_id,
     'revision', p_revision, 'source_generation', p_source_generation,
-    'rebuild_epoch', p_rebuild_epoch, 'builder_version', 2
+    'rebuild_epoch', p_rebuild_epoch, 'builder_version', 3
   );
   insert into ops.problematic_projection_group_accumulators(
     job_id, attempt, revision, group_kind, group_identity, updated_at
@@ -279,7 +307,7 @@ begin
     'key', pg_catalog.jsonb_build_array('rank', p_original_album_key), 'subordinate_own_rank', true,
     'album_id', selected_album_id, 'owner_file_id', case when selected_album_id is null then p_file_id else null end,
     'library_id', p_library_id, 'job_id', p_job_id, 'revision', p_revision,
-    'source_generation', p_source_generation, 'rebuild_epoch', p_rebuild_epoch, 'builder_version', 2
+    'source_generation', p_source_generation, 'rebuild_epoch', p_rebuild_epoch, 'builder_version', 3
   );
   insert into ops.problematic_projection_group_accumulators(
     job_id, attempt, revision, group_kind, group_identity, updated_at
@@ -793,7 +821,6 @@ declare
   result_rows jsonb;
   after_root bigint;
   after_file bigint;
-  after_container text;
   after_partition text;
   after_track bigint;
   candidate record;
@@ -856,14 +883,8 @@ begin
   end if;
   after_root := (progress ->> 'root_id')::bigint;
   after_file := (progress ->> 'file_id')::bigint;
-  after_container := progress ->> 'container';
   after_partition := progress ->> 'partition';
   after_track := coalesce((progress ->> 'track_id')::bigint, 0);
-  if relation = 'identity' and after_file > 0 then
-    select library.problematic_physical_album_container(file.private_path) into after_container
-    from library.local_track_files file where file.id = after_file;
-    if not found then raise exception 'topology cursor file disappeared' using errcode = '55000'; end if;
-  end if;
   result_rows := '[]'::jsonb;
   if relation = 'bucket' then
     if not exists (
@@ -904,12 +925,17 @@ begin
         and root.library_id = p_library_id and root.is_active
       join library.local_tracks track on track.id = file.track_id and track.library_id = p_library_id
       where relation = 'identity' and file.scan_cache_stale is false
-        and library.duplicate_identity_text(file.scan_file_album_artist) = selected_definition #>> '{key,1}'
-        and library.duplicate_identity_text(file.scan_file_album) = selected_definition #>> '{key,2}'
+        and pg_catalog.md5(library.problematic_duplicate_identity_text(file.scan_file_album_artist)) =
+          pg_catalog.md5(library.problematic_duplicate_identity_text(selected_definition #>> '{key,1}'))
+        and pg_catalog.md5(library.problematic_duplicate_identity_text(file.scan_file_album)) =
+          pg_catalog.md5(library.problematic_duplicate_identity_text(selected_definition #>> '{key,2}'))
+        and library.problematic_duplicate_identity_text(file.scan_file_album_artist) =
+          library.problematic_duplicate_identity_text(selected_definition #>> '{key,1}')
+        and library.problematic_duplicate_identity_text(file.scan_file_album) =
+          library.problematic_duplicate_identity_text(selected_definition #>> '{key,2}')
         and library.duplicate_identity_year(file.scan_file_year) = (selected_definition #>> '{key,3}')::integer
-        and (file.library_root_id, library.problematic_physical_album_container(file.private_path), file.id) >
-          (after_root, after_container, after_file)
-      order by file.library_root_id, library.problematic_physical_album_container(file.private_path), file.id
+        and (file.library_root_id, file.id) > (after_root, after_file)
+      order by file.library_root_id, file.id
       limit p_limit)
       union all
       (select file.id, file.library_root_id, file.track_id, file.private_path, ''::text as container
@@ -957,7 +983,7 @@ begin
         and file.scan_cache_stale is false and (track.id, file.id) > (after_track, after_file)
       order by track.id, file.id limit p_limit)
     ) page order by case when relation = 'own_rank' then page.track_id else page.library_root_id end,
-      page.container, page.id
+      case when relation = 'identity' then '' else page.container end, page.id
     loop
       candidate_value := pg_catalog.jsonb_build_object('file_id', candidate.id,
         'root_id', candidate.library_root_id, 'track_id', candidate.track_id, 'path', candidate.private_path);
@@ -1230,7 +1256,7 @@ begin
   select pg_catalog.jsonb_build_object(
     'library_id', p_library_id, 'job_id', p_job_id, 'revision', p_revision,
     'source_generation', p_source_generation, 'rebuild_epoch', p_rebuild_epoch,
-    'builder_version', 2, 'group_kind', p_group_kind, 'group_identity', p_group_identity,
+    'builder_version', 3, 'group_kind', p_group_kind, 'group_identity', p_group_identity,
     'fact_count', count(*), 'fact_fingerprint',
     coalesce(bit_xor(('x' || pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
       pg_catalog.jsonb_build_array(fact.projection_id, fact.fact_kind,
@@ -1694,7 +1720,7 @@ as $$
       then case
         when not (p_parameters ? 'builder_version') then 1
         when pg_catalog.jsonb_typeof(p_parameters -> 'builder_version') = 'number'
-          and p_parameters ->> 'builder_version' in ('1', '2')
+          and p_parameters ->> 'builder_version' in ('1', '3')
           then (p_parameters ->> 'builder_version')::integer
         else null end
       else null end
@@ -1743,7 +1769,7 @@ as $$
       and state.build_revision = p_revision and state.requested_job_id = p_job_id
       and state.requested_attempt = p_attempt and state.requested_revision = p_revision
       and (ops.problematic_projection_builder_version(job.parameters) = 1 or (
-        ops.problematic_projection_builder_version(job.parameters) = 2
+        ops.problematic_projection_builder_version(job.parameters) = 3
         and state.topology_completed_group_count is not null
         and state.topology_completed_group_fingerprint is not null
       ))
@@ -1762,7 +1788,7 @@ declare
   state_row ops.problematic_projection_state%rowtype;
   existing_job ops.jobs%rowtype;
 begin
-  if p_builder_version is null or p_builder_version not in (1, 2) or
+  if p_builder_version is null or p_builder_version not in (1, 3) or
      p_library_id is null or p_library_id < 1 or
      nullif(pg_catalog.btrim(p_requested_by), '') is null or
      pg_catalog.octet_length(p_requested_by) > 128 then
@@ -1786,7 +1812,7 @@ begin
        and (existing_job.parameters ->> 'rebuild_epoch')::bigint = state_row.rebuild_epoch
        and existing_job.idempotency_key = 'problematic-files-projection:' || p_library_id::text || ':' ||
          state_row.source_generation::text || ':' || state_row.rebuild_epoch::text ||
-         (case when p_builder_version = 2 then ':v2' else '' end) then
+         (case when p_builder_version = 3 then ':v3' else '' end) then
       return query select existing_job.id, state_row.rebuild_epoch, false;
       return;
     end if;
@@ -1807,12 +1833,12 @@ begin
       'projection_kind', 'problematic_files',
       'source_generation', state_row.source_generation,
       'rebuild_epoch', state_row.rebuild_epoch
-    ) || case when p_builder_version = 2
-      then pg_catalog.jsonb_build_object('builder_version', 2) else '{}'::jsonb end,
+    ) || case when p_builder_version = 3
+      then pg_catalog.jsonb_build_object('builder_version', 3) else '{}'::jsonb end,
     p_library_id, 'self_hosted', 'private_web',
     'problematic-files-projection:' || p_library_id::text || ':' ||
       state_row.source_generation::text || ':' || state_row.rebuild_epoch::text ||
-      case when p_builder_version = 2 then ':v2' else '' end,
+      case when p_builder_version = 3 then ':v3' else '' end,
     pg_catalog.clock_timestamp(), 3, 'retry_safe', state_row.source_generation
   ) returning id into job_id;
   update ops.problematic_projection_state as projection_state set
@@ -1866,13 +1892,13 @@ declare
   selected_state ops.problematic_projection_state%rowtype;
 begin
   select * into selected_job from ops.jobs where id = p_job_id;
-  if p_builder_version is null or p_builder_version not in (1, 2)
+  if p_builder_version is null or p_builder_version not in (1, 3)
      or ops.problematic_projection_builder_version(selected_job.parameters) is distinct from p_builder_version
      or selected_job.idempotency_key is distinct from
        'problematic-files-projection:' || selected_job.library_id::text || ':' ||
        (selected_job.parameters ->> 'source_generation') || ':' ||
        (selected_job.parameters ->> 'rebuild_epoch') ||
-       (case when p_builder_version = 2 then ':v2' else '' end) then
+       (case when p_builder_version = 3 then ':v3' else '' end) then
     return;
   end if;
   select * into selected_state from ops.problematic_projection_state
@@ -1887,11 +1913,11 @@ begin
            (selected_job.parameters ->> 'source_generation')::bigint and
        selected_state.rebuild_epoch =
            (selected_job.parameters ->> 'rebuild_epoch')::bigint then
-        if p_builder_version = 2 and not exists (
+        if p_builder_version = 3 and not exists (
           select 1 from ops.problematic_projection_headers header
           where header.library_id = selected_state.library_id
             and header.revision = selected_state.committed_revision
-            and header.builder_version = 2
+            and header.builder_version = 3
             and header.topology_completed_group_count is not null
             and header.topology_completed_group_fingerprint is not null
         ) then
@@ -1916,20 +1942,20 @@ begin
      selected_state.rebuild_epoch <> (selected_job.parameters ->> 'rebuild_epoch')::bigint then
     return;
   end if;
-    if p_builder_version = 2 and selected_state.build_revision is not null and (
+    if p_builder_version = 3 and selected_state.build_revision is not null and (
       selected_state.topology_completed_group_count is null or
       selected_state.topology_completed_group_fingerprint is null
     ) then
       raise exception 'problematic_projection_topology_unknown' using errcode = '55000';
     end if;
-    if p_builder_version = 2 and selected_state.build_revision is not null and
+    if p_builder_version = 3 and selected_state.build_revision is not null and
       not ops.problematic_projection_topology_proof_matches(
         p_job_id, selected_state.requested_attempt, selected_state.build_revision
       ) then
       raise exception 'projection topology certificates are inconsistent' using errcode = '55000';
     end if;
     if selected_state.build_revision is null then
-    if p_builder_version = 2 and (
+    if p_builder_version = 3 and (
       selected_state.group_kind is not null or selected_state.scan_kind is not null or
       selected_state.source_kind is not null or selected_state.child_kind is not null or
       exists (select 1 from ops.problematic_projection_source_staging where job_id = p_job_id) or
@@ -1941,8 +1967,8 @@ begin
     end if;
     update ops.problematic_projection_state as projection_state set
       build_revision = pg_catalog.gen_random_uuid(),
-      topology_completed_group_count = case when p_builder_version = 2 then 0 else null end,
-      topology_completed_group_fingerprint = case when p_builder_version = 2 then 0::bit(256) else null end,
+      topology_completed_group_count = case when p_builder_version = 3 then 0 else null end,
+      topology_completed_group_fingerprint = case when p_builder_version = 3 then 0::bit(256) else null end,
       requested_job_id = p_job_id,
       requested_attempt = p_attempt,
       requested_revision = null,
@@ -2051,11 +2077,11 @@ begin
   ) checked where checked.valid) then
     raise exception 'stale projection claim' using errcode = '55000';
   end if;
-  if selected_version = 2 and (p_group_kind not in ('album', 'missing_album', 'loose_source')
+  if selected_version = 3 and (p_group_kind not in ('album', 'missing_album', 'loose_source')
     or not ops.problematic_projection_topology_complete(
       p_job_id, p_attempt, p_revision, p_group_kind, p_group_identity
     )) then raise exception 'projection topology is incomplete' using errcode = '55000'; end if;
-  if selected_version = 2 and exists (
+  if selected_version = 3 and exists (
     select 1 from pg_catalog.jsonb_array_elements(p_items) item
     where pg_catalog.jsonb_typeof(item -> 'search_document_count') is distinct from 'number'
       or case when coalesce(item ->> 'search_document_count', '') ~ '^[1-9][0-9]{0,18}$'
@@ -2065,7 +2091,7 @@ begin
   ) then
     raise exception 'invalid projection search manifest' using errcode = '22023';
   end if;
-  if selected_version = 2 and exists (
+  if selected_version = 3 and exists (
     select 1 from pg_catalog.jsonb_array_elements(p_items) item
     join ops.problematic_projection_item_staging staged
       on staged.job_id = p_job_id and staged.attempt = p_attempt
@@ -2084,8 +2110,8 @@ begin
     item ->> 'sort_year', item ->> 'sort_album_key', item ->> 'search_text',
     array(select jsonb_array_elements_text(item -> 'reasons')),
     item -> 'summary', p_batch_index, p_observed_at,
-    case when selected_version = 2 then (item ->> 'search_document_count')::bigint end,
-    case when selected_version = 2 then item ->> 'search_document_digest' end
+    case when selected_version = 3 then (item ->> 'search_document_count')::bigint end,
+    case when selected_version = 3 then item ->> 'search_document_digest' end
   from jsonb_array_elements(p_items) item
   on conflict (job_id, attempt, revision, item_key) do update set
     sort_title = excluded.sort_title, sort_artist = excluded.sort_artist,
@@ -2120,7 +2146,7 @@ begin
   end if;
   if not exists (
     select 1 from ops.jobs job where job.id = p_job_id
-      and ops.problematic_projection_builder_version(job.parameters) = 2
+      and ops.problematic_projection_builder_version(job.parameters) = 3
   ) then
     raise exception 'incompatible projection search contract' using errcode = '22023';
   end if;
@@ -2435,12 +2461,12 @@ begin
     raise exception 'projection search facts are not fully staged'
       using errcode = '55000';
   end if;
-  if selected_version = 2 and not ops.problematic_projection_search_complete(
+  if selected_version = 3 and not ops.problematic_projection_search_complete(
     p_job_id, p_attempt, p_revision, p_group_kind, p_group_identity
   ) then
     raise exception 'projection main search document is incomplete' using errcode = '55000';
   end if;
-  if selected_version = 2 then
+  if selected_version = 3 then
     if not ops.problematic_projection_topology_complete(
       p_job_id, p_attempt, p_revision, p_group_kind, p_group_identity
     ) then
@@ -2550,10 +2576,10 @@ begin
        and ops.problematic_projection_claim_valid(
            p_job_id, p_attempt, p_worker_id, p_lease_token, p_observed_at
        ) then
-    if selected_version = 2 and not exists (
+    if selected_version = 3 and not exists (
       select 1 from ops.problematic_projection_headers header
       where header.library_id = p_library_id and header.revision = p_revision
-        and header.builder_version = 2 and header.topology_completed_group_count is not null
+        and header.builder_version = 3 and header.topology_completed_group_count is not null
         and header.topology_completed_group_fingerprint is not null
     ) then return query select false; return; end if;
     with replay_cleanup as (
@@ -2580,7 +2606,7 @@ begin
     p_job_id, p_attempt, p_worker_id, p_lease_token, p_library_id,
     p_source_generation, p_rebuild_epoch, p_revision, p_observed_at
   ) checked where checked.valid) then return query select false; return; end if;
-  if selected_version = 2 and not ops.problematic_projection_topology_proof_matches(
+  if selected_version = 3 and not ops.problematic_projection_topology_proof_matches(
     p_job_id, p_attempt, p_revision
   ) then return query select false; return; end if;
   select coalesce(
@@ -2594,7 +2620,7 @@ begin
   with cached_owners as materialized (
     select accumulator.group_kind, accumulator.group_identity
     from ops.problematic_projection_group_accumulators accumulator
-    where selected_version = 2 and accumulator.job_id = p_job_id
+    where selected_version = 3 and accumulator.job_id = p_job_id
       and accumulator.attempt = p_attempt and accumulator.revision = p_revision
       and accumulator.group_kind in ('topology_identity', 'topology_numeric_bucket', 'topology_address')
       and ops.problematic_projection_topology_owner_cached(
@@ -2632,10 +2658,10 @@ begin
     return query select false;
     return;
   end if;
-  if selected_version = 2 and not ops.problematic_projection_search_complete(
+  if selected_version = 3 and not ops.problematic_projection_search_complete(
     p_job_id, p_attempt, p_revision, null, null
   ) then return query select false; return; end if;
-  if selected_version = 2 and exists (
+  if selected_version = 3 and exists (
     select 1 from ops.problematic_projection_item_staging item
     where item.job_id = p_job_id and item.attempt = p_attempt and item.revision = p_revision
       and not exists (
@@ -2742,8 +2768,8 @@ begin
     projected_total, projected_total, projected_facets,
     projected_reason_fact_count, projected_reason_fingerprint,
     projected_search_fact_count, projected_search_fingerprint,
-    case when selected_version = 2 then locked_state.topology_completed_group_count else null end,
-    case when selected_version = 2 then locked_state.topology_completed_group_fingerprint else null end,
+    case when selected_version = 3 then locked_state.topology_completed_group_count else null end,
+    case when selected_version = 3 then locked_state.topology_completed_group_fingerprint else null end,
     true, p_observed_at
   );
   insert into ops.problematic_projection_items(
@@ -2840,7 +2866,7 @@ begin
   if ops.problematic_projection_claim_valid(
     p_job_id, p_attempt, p_worker_id, p_lease_token, p_observed_at
   ) then
-    if selected_version = 2 and p_reason_code = 'problematic_projection_topology_unknown' then
+    if selected_version = 3 and p_reason_code = 'problematic_projection_topology_unknown' then
       select state.* into selected_state
       from ops.problematic_projection_state state
       join ops.jobs job on job.id = p_job_id and job.library_id = state.library_id
@@ -2849,12 +2875,12 @@ begin
       where state.live_job_id is null and state.committed_job_id = p_job_id
         and state.source_generation = (job.parameters ->> 'source_generation')::bigint
         and state.rebuild_epoch = (job.parameters ->> 'rebuild_epoch')::bigint
-        and header.builder_version = 2
+        and header.builder_version = 3
         and (header.topology_completed_group_count is null or header.topology_completed_group_fingerprint is null)
       for update of state;
       if found then
         perform ops.enqueue_problematic_projection_rebuild(
-          selected_state.library_id, 'topology-recovery:' || p_job_id::text, 2
+          selected_state.library_id, 'topology-recovery:' || p_job_id::text, 3
         );
         return;
       end if;
@@ -2866,10 +2892,10 @@ begin
       and (
         projection_state.build_revision is null or
         projection_state.requested_attempt = p_attempt or
-        (selected_version = 2 and p_reason_code = 'problematic_projection_topology_unknown'
+        (selected_version = 3 and p_reason_code = 'problematic_projection_topology_unknown'
           and projection_state.requested_attempt < p_attempt)
       )
-      and (selected_version <> 2 or p_reason_code <> 'problematic_projection_topology_unknown' or (
+      and (selected_version <> 3 or p_reason_code <> 'problematic_projection_topology_unknown' or (
         projection_state.source_generation = (selected_parameters ->> 'source_generation')::bigint
         and projection_state.rebuild_epoch = (selected_parameters ->> 'rebuild_epoch')::bigint
       ))
@@ -2932,7 +2958,7 @@ begin
         selected_state.library_id, 'self_hosted', 'private_web',
         'problematic-files-projection:' || selected_state.library_id::text || ':' ||
           selected_state.source_generation::text || ':' || replacement_epoch::text ||
-          case when selected_version = 2 then ':v2' else '' end,
+          case when selected_version = 3 then ':v3' else '' end,
         p_observed_at, 3, 'retry_safe', selected_state.source_generation
       ) returning id into replacement_job_id;
       update ops.problematic_projection_state as projection_state set
@@ -2945,27 +2971,27 @@ begin
     end if;
     delete from ops.problematic_projection_source_staging as source_staging
     where source_staging.job_id = p_job_id
-      and (source_staging.attempt = p_attempt or (selected_version = 2
+      and (source_staging.attempt = p_attempt or (selected_version = 3
         and p_reason_code = 'problematic_projection_topology_unknown' and source_staging.attempt = selected_state.requested_attempt))
-      and (source_staging.revision = p_revision or (selected_version = 2 and p_revision is null
+      and (source_staging.revision = p_revision or (selected_version = 3 and p_revision is null
         and (selected_state.build_revision is null or source_staging.revision = selected_state.build_revision)));
     delete from ops.problematic_projection_search_fact_staging as search_staging
     where search_staging.job_id = p_job_id
-      and (search_staging.attempt = p_attempt or (selected_version = 2
+      and (search_staging.attempt = p_attempt or (selected_version = 3
         and p_reason_code = 'problematic_projection_topology_unknown' and search_staging.attempt = selected_state.requested_attempt))
-      and (search_staging.revision = p_revision or (selected_version = 2 and p_revision is null
+      and (search_staging.revision = p_revision or (selected_version = 3 and p_revision is null
         and (selected_state.build_revision is null or search_staging.revision = selected_state.build_revision)));
     delete from ops.problematic_projection_item_staging as item_staging
     where item_staging.job_id = p_job_id
-      and (item_staging.attempt = p_attempt or (selected_version = 2
+      and (item_staging.attempt = p_attempt or (selected_version = 3
         and p_reason_code = 'problematic_projection_topology_unknown' and item_staging.attempt = selected_state.requested_attempt))
-      and (item_staging.revision = p_revision or (selected_version = 2 and p_revision is null
+      and (item_staging.revision = p_revision or (selected_version = 3 and p_revision is null
         and (selected_state.build_revision is null or item_staging.revision = selected_state.build_revision)));
     delete from ops.problematic_projection_group_accumulators as accumulator
     where accumulator.job_id = p_job_id
-      and (accumulator.attempt = p_attempt or (selected_version = 2
+      and (accumulator.attempt = p_attempt or (selected_version = 3
         and p_reason_code = 'problematic_projection_topology_unknown' and accumulator.attempt = selected_state.requested_attempt))
-      and (accumulator.revision = p_revision or (selected_version = 2 and p_revision is null
+      and (accumulator.revision = p_revision or (selected_version = 3 and p_revision is null
         and (selected_state.build_revision is null or accumulator.revision = selected_state.build_revision)));
   end if;
 end;
@@ -2994,7 +3020,7 @@ begin
   delete from ops.problematic_projection_group_accumulators owner
   where owner.job_id = p_job_id and owner.attempt = p_attempt and owner.revision = p_revision;
   if exists (select 1 from ops.jobs job where job.id = p_job_id
-    and ops.problematic_projection_builder_version(job.parameters) = 2) then
+    and ops.problematic_projection_builder_version(job.parameters) = 3) then
     update ops.problematic_projection_state state set
       topology_completed_group_count = null, topology_completed_group_fingerprint = null,
       updated_at = p_observed_at
@@ -3025,6 +3051,7 @@ begin
   from ops.problematic_projection_state state
   join ops.jobs job on state.live_job_id = job.id
   where state.build_revision is not null
+    and ops.problematic_projection_builder_version(job.parameters) is not null
     and state.requested_job_id = job.id
     and state.requested_attempt = job.attempt_count
     and state.requested_revision = state.build_revision
@@ -3097,7 +3124,7 @@ begin
     'problematic-files-projection:' || selected_state.library_id::text || ':' ||
       selected_state.source_generation::text || ':' ||
       (selected_state.rebuild_epoch + 1)::text ||
-      case when selected_version = 2 then ':v2' else '' end,
+      case when selected_version = 3 then ':v3' else '' end,
     database_now, 3, 'retry_safe', selected_state.source_generation
   ) returning id into replacement_job_id;
   update ops.jobs as replacement_job
@@ -3236,6 +3263,9 @@ begin
   ) then
     return false;
   end if;
+  if pg_catalog.to_regprocedure('library.problematic_duplicate_identity_text(text)') is null then
+    return false;
+  end if;
   if exists (
     select 1
     from pg_catalog.unnest(required_functions) as required(signature)
@@ -3306,9 +3336,9 @@ begin
       from ops.problematic_projection_headers header
       where header.library_id = p_library_id and header.revision = p_revision;
     end if;
-    if selected_version in (1, 2) then
+    if selected_version in (1, 2, 3) then
       perform * from ops.enqueue_problematic_projection_rebuild(
-        p_library_id, 'integrity-reconciler', selected_version
+        p_library_id, 'integrity-reconciler', case when selected_version = 2 then 3 else selected_version end
       );
     end if;
   else
@@ -3533,7 +3563,7 @@ security definer
 set search_path = pg_catalog
 as $$
 begin
-  if p_builder_version is null or p_builder_version not in (1, 2) or not exists (
+  if p_builder_version is null or p_builder_version not in (1, 3) or not exists (
     select 1 from ops.jobs job where job.id = p_job_id
       and ops.problematic_projection_builder_version(job.parameters) = p_builder_version
   ) then raise exception 'invalid projection source contract' using errcode = '22023'; end if;
@@ -3545,9 +3575,9 @@ begin
     );
     return;
   end if;
-  if p_builder_version is distinct from 2 or not exists (
+  if p_builder_version is distinct from 3 or not exists (
     select 1 from ops.jobs job where job.id = p_job_id
-      and ops.problematic_projection_builder_version(job.parameters) = 2
+      and ops.problematic_projection_builder_version(job.parameters) = 3
   ) then raise exception 'invalid projection source contract' using errcode = '22023'; end if;
   if not exists (
     select 1 from ops.problematic_projection_state state where state.library_id = p_library_id
@@ -3980,9 +4010,9 @@ begin
         'duplicate_lookup_owner_file_id', file.id,
         'duplicate_lookup_owner_track_id', track.id,
         'duplicate_lookup_album_artist_identity',
-          library.duplicate_identity_text(file.scan_file_album_artist),
+          library.problematic_duplicate_identity_text(file.scan_file_album_artist),
         'duplicate_lookup_album_identity',
-          library.duplicate_identity_text(file.scan_file_album),
+          library.problematic_duplicate_identity_text(file.scan_file_album),
         'duplicate_lookup_year_identity',
           library.duplicate_identity_year(file.scan_file_year),
         'duplicate_lookup_physical_album_container',
@@ -4075,13 +4105,15 @@ begin
           and candidate_file.library_root_id = file.library_root_id
           and candidate_track.library_id = album.library_id
           and companion_album.id <> album.id
+          and pg_catalog.md5(library.problematic_physical_album_container(candidate_file.private_path)) =
+            pg_catalog.md5(library.problematic_physical_album_container(file.private_path))
           and library.problematic_physical_album_container(
             candidate_file.private_path
           ) = library.problematic_physical_album_container(file.private_path)
-          and library.duplicate_identity_text(candidate_file.scan_file_album_artist)
-            = library.duplicate_identity_text(file.scan_file_album_artist)
-          and library.duplicate_identity_text(candidate_file.scan_file_album)
-            = library.duplicate_identity_text(file.scan_file_album)
+          and library.problematic_duplicate_identity_text(candidate_file.scan_file_album_artist)
+            = library.problematic_duplicate_identity_text(file.scan_file_album_artist)
+          and library.problematic_duplicate_identity_text(candidate_file.scan_file_album)
+            = library.problematic_duplicate_identity_text(file.scan_file_album)
           and library.duplicate_identity_year(candidate_file.scan_file_year)
             = library.duplicate_identity_year(file.scan_file_year)
       ) as duplicate_candidate
@@ -4372,7 +4404,7 @@ declare
   source_fingerprint bit(256);
   receipt jsonb;
 begin
-  if p_builder_version is null or p_builder_version not in (1, 2) or not exists (
+  if p_builder_version is null or p_builder_version not in (1, 3) or not exists (
     select 1 from ops.jobs job where job.id = p_job_id
       and ops.problematic_projection_builder_version(job.parameters) = p_builder_version
   ) then raise exception 'invalid projection source stage contract' using errcode = '22023'; end if;
@@ -4380,7 +4412,7 @@ begin
     return query select * from ops.stage_claimed_problematic_projection_source(p_job_id, p_attempt, p_worker_id, p_lease_token, p_library_id, p_source_generation, p_rebuild_epoch, p_revision, p_group_kind, p_group_identity, p_source_kind, p_source_identity, p_child_kind, p_child_identity, p_rows, p_complete, p_observed_at);
     return;
   end if;
-  if p_builder_version is distinct from 2 or p_source_kind = 'topology_certificate'
+  if p_builder_version is distinct from 3 or p_source_kind = 'topology_certificate'
     or p_group_kind like 'topology_%' or p_complete is null
     or pg_catalog.jsonb_typeof(p_rows) is distinct from 'array' then
     raise exception 'invalid projection source stage contract' using errcode = '22023';

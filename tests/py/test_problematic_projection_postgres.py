@@ -807,7 +807,7 @@ def test_repository_guarded_enqueue_returns_existing_or_created_job(cursor_api):
     assert result == {"job_id": 91, "rebuild_epoch": 8, "created": False}
     sql, params = connections[0].calls[0]
     assert "ops.enqueue_problematic_projection_rebuild" in sql
-    assert params == {"library_id": 17, "requested_by": "projection-reader", "builder_version": 2}
+    assert params == {"library_id": 17, "requested_by": "projection-reader", "builder_version": 3}
 
 
 @pytest.mark.parametrize(
@@ -2462,7 +2462,7 @@ def test_repository_loads_bounded_source_page(cursor_api):
     _sql, params = connections[0].calls[0]
     assert params["limit"] == 32
     assert params["child_limit"] == 100
-    assert params["builder_version"] == 2
+    assert params["builder_version"] == 3
 
 
 @pytest.mark.parametrize(
@@ -2620,7 +2620,7 @@ def test_repository_stages_chunks_items_and_completes_group(cursor_api):
     completion_sql = connections[2].calls[0][0]
     assert "ops.stage_claimed_problematic_projection_source" in source_sql
     assert "%(rows)s" in source_sql and "%(complete)s" in source_sql
-    assert connections[0].calls[0][1]["builder_version"] == 2
+    assert connections[0].calls[0][1]["builder_version"] == 3
     assert "ops.stage_claimed_problematic_projection_items" in item_sql
     assert "%(items)s" in item_sql and "%(batch_index)s" in item_sql
     assert "ops.complete_claimed_problematic_projection_group" in completion_sql
@@ -6314,7 +6314,63 @@ def test_live_current_v1_snapshot_is_pending_instead_of_served(live_projection_d
 
 
 
+def test_live_problematic_identity_helper_is_not_a_worker_entrypoint(live_projection_database):
+    db = live_projection_database
+    signature = "library.problematic_duplicate_identity_text(text)"
+    for database_url, expected in ((db.app_url, True), (db.worker_url, False)):
+        with isolatedPostgres._connect(database_url) as connection:
+            allowed = connection.execute(
+                "select has_function_privilege(current_user,%s,'EXECUTE') as allowed",
+                (signature,),
+            ).fetchone()["allowed"]
+        assert allowed is expected
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select has_function_privilege('album_haven_readonly',%s,'EXECUTE') as allowed",
+            (signature,),
+        ).fetchone()["allowed"] is False
+        properties = connection.execute(
+            "select proisstrict,provolatile,proparallel from pg_proc where oid=%s::regprocedure",
+            (signature,),
+        ).fetchone()
+    assert properties == {"proisstrict": True, "provolatile": "i", "proparallel": "s"}
+
+
+def test_live_problematic_startup_requires_helper_presence_only_for_projection(live_projection_database):
+    from music_app.services.jobs.models import JobKind
+
+    db = live_projection_database
+    kinds = sorted(kind.value for kind in JobKind)
+    baseline_kinds = [kind for kind in kinds if kind != "problematic_files_projection"]
+
+    def startup(registered):
+        with isolatedPostgres._connect(db.worker_url) as connection:
+            return connection.execute(
+                "select ops.validate_durable_worker_startup(%s::text[]) as valid",
+                (registered,),
+            ).fetchone()["valid"]
+
+    assert startup(kinds) is True
+    assert startup(baseline_kinds) is True
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        connection.execute(
+            "alter function library.problematic_duplicate_identity_text(text) "
+            "rename to problematic_duplicate_identity_text_missing_test",
+        )
+    try:
+        assert startup(kinds) is False
+        assert startup(baseline_kinds) is True
+    finally:
+        with isolatedPostgres._connect(db.setup_url) as connection:
+            connection.execute(
+                "alter function library.problematic_duplicate_identity_text_missing_test(text) "
+                "rename to problematic_duplicate_identity_text",
+            )
+    assert startup(kinds) is True
+
+
 def _main_search_claimed_v2(db):
+    # Main-search semantics remain v2; the internal builder contract is v3.
     app = PostgresProblematicProjectionRepository(database_url=db.app_url)
     worker = PostgresProblematicProjectionRepository(database_url=db.worker_url)
     queued = app.enqueue_rebuild(library_id=db.library_id, requested_by="v2-sql-proof")
@@ -6324,7 +6380,7 @@ def _main_search_claimed_v2(db):
         kinds=("problematic_files_projection",),
     )
     assert claim is not None and claim.job_id == queued["job_id"]
-    assert claim.parameters["builder_version"] == 2
+    assert claim.parameters["builder_version"] == 3
     build = worker.prepare_claimed_build(claim=claim, now=now)
     return worker, claim, build, now
 
@@ -6372,14 +6428,14 @@ def _topology_unknown_claimed_build(db, *, retry=False):
 
 
 def _insert_unknown_topology_header(connection, db, revision, *, total=0,
-                                    source_generation=1, rebuild_epoch=1):
+                                    source_generation=1, rebuild_epoch=1, builder_version=3):
     connection.execute(
         "insert into ops.problematic_projection_headers("
         "library_id,revision,source_generation,rebuild_epoch,builder_version,"
         "total,item_count,reason_facets,reason_fact_count,reason_fingerprint,"
         "search_fact_count,search_fingerprint,verified,published_at) "
-        "values(%s,%s,%s,%s,2,%s,%s,'{}'::jsonb,0,0::bit(256),0,0::bit(256),true,now())",
-        (db.library_id, revision, source_generation, rebuild_epoch, total, total),
+        "values(%s,%s,%s,%s,%s,%s,%s,'{}'::jsonb,0,0::bit(256),0,0::bit(256),true,now())",
+        (db.library_id, revision, source_generation, rebuild_epoch, builder_version, total, total),
     )
     for ordinal in range(total):
         key = f"topology-unknown-item-{ordinal}"
@@ -6489,11 +6545,13 @@ def test_live_topology_unknown_committed_empty_header_cannot_replay(live_project
 
 
 @pytest.mark.parametrize("total", [0, 2], ids=["empty", "populated"])
-def test_live_topology_unknown_current_v2_header_is_pending(live_projection_database, total):
+@pytest.mark.parametrize("builder_version", [2, 3], ids=["historical-v2", "current-v3"])
+def test_live_topology_unknown_current_header_is_pending(live_projection_database, total, builder_version):
     db = live_projection_database
     revision = uuid4()
     with isolatedPostgres._connect(db.setup_url) as connection:
-        _insert_unknown_topology_header(connection, db, revision, total=total)
+        _insert_unknown_topology_header(connection, db, revision, total=total,
+                                        builder_version=builder_version)
         connection.execute(
             "insert into ops.problematic_projection_state("
             "library_id,source_generation,rebuild_epoch,committed_revision,committed_total,reason_facets,verified) "
@@ -6510,7 +6568,55 @@ def test_live_topology_unknown_current_v2_header_is_pending(live_projection_data
         browse.build_problematic_files_page(limit=50)
 
 
-def test_live_topology_unknown_retained_v2_header_expires_cursor(live_projection_database):
+def test_live_verified_v2_header_is_pending_and_expires_cursor(live_projection_database):
+    from music_app.services.problematic_projection_postgres import (
+        ProblematicProjectionCursorExpired, encode_problematic_projection_page_cursor,
+    )
+
+    db = live_projection_database
+    worker, claim, build, now = _main_search_claimed_v2(db)
+    assert worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    retained = uuid4()
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        connection.execute(
+            "insert into ops.problematic_projection_headers "
+            "select (jsonb_populate_record(null::ops.problematic_projection_headers, "
+            "to_jsonb(header) || jsonb_build_object('revision',%s::text))).* "
+            "from ops.problematic_projection_headers header where library_id=%s and revision=%s",
+            (str(retained), db.library_id, build.revision),
+        )
+        header = connection.execute(
+            "update ops.problematic_projection_headers set builder_version=2 "
+            "where library_id=%s and revision=%s returning verified, "
+            "topology_completed_group_count,topology_completed_group_fingerprint",
+            (db.library_id, build.revision),
+        ).fetchone()
+    assert header["verified"] is True
+    assert header["topology_completed_group_count"] == 0
+    assert header["topology_completed_group_fingerprint"] is not None
+
+    reader = PostgresProblematicProjectionRepository(database_url=db.app_url)
+    browse = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": db.app_url})
+    with pytest.raises(ProblematicProjectionIntegrityError, match="projection snapshot unavailable"):
+        reader.read_page(library_id=db.library_id, limit=1)
+    with pytest.raises(ProblematicProjectionPending):
+        browse.build_problematic_files_page(limit=1)
+    token = encode_problematic_projection_page_cursor(
+        library_id=db.library_id, revision=str(build.revision), query="", reasons=(),
+        sort="album", total=0, anchor_item_key="old-v2-item",
+    )
+    assert isinstance(reader.read_page(library_id=db.library_id, limit=1, cursor=token),
+                      ProblematicProjectionCursorExpired)
+    retained_token = encode_problematic_projection_page_cursor(
+        library_id=db.library_id, revision=str(retained), query="", reasons=(),
+        sort="album", total=0, anchor_item_key="retained-v3-item",
+    )
+    assert isinstance(reader.read_page(library_id=db.library_id, limit=1, cursor=retained_token),
+                      ProblematicProjectionCursorExpired)
+
+
+@pytest.mark.parametrize("builder_version", [2, 3], ids=["historical-v2", "current-v3"])
+def test_live_topology_unknown_retained_header_expires_cursor(live_projection_database, builder_version):
     from music_app.services.problematic_projection_postgres import (
         ProblematicProjectionCursorExpired, encode_problematic_projection_page_cursor,
     )
@@ -6522,7 +6628,8 @@ def test_live_topology_unknown_retained_v2_header_expires_cursor(live_projection
     with isolatedPostgres._connect(db.setup_url) as connection:
         _insert_unknown_topology_header(connection, db, retained, total=2,
                                         source_generation=build.source_generation,
-                                        rebuild_epoch=build.rebuild_epoch)
+                                        rebuild_epoch=build.rebuild_epoch,
+                                        builder_version=builder_version)
     token = encode_problematic_projection_page_cursor(
         library_id=db.library_id, revision=str(retained), query="", reasons=(),
         sort="album", total=2, anchor_item_key="topology-unknown-item-0",
@@ -6677,7 +6784,7 @@ def test_live_complete_empty_library_publishes_verified_v2_snapshot(live_project
             "select builder_version,total,item_count,search_fact_count,verified "
             "from ops.problematic_projection_headers where library_id=%s and revision=%s",
             (db.library_id, build.revision),
-        ).fetchone() == {"builder_version": 2, "total": 0, "item_count": 0,
+        ).fetchone() == {"builder_version": 3, "total": 0, "item_count": 0,
                          "search_fact_count": 0, "verified": True}
 
 

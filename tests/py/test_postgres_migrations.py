@@ -8677,6 +8677,15 @@ _MAIN_SEARCH_V2_WORKER_SIGNATURES = (
 )
 
 
+def test_main_search_v3_reclaimer_filters_unsupported_jobs_before_selection():
+    sql = _main_search_v2_sql()
+    reclaim = sql.split(
+        "create or replace function ops.reclaim_one_abandoned_problematic_projection(", 1,
+    )[1].split("$$;", 1)[0]
+    selection = reclaim.split("into selected_state", 1)[1].split("limit 1", 1)[0]
+    assert "ops.problematic_projection_builder_version(job.parameters) is not null" in selection
+
+
 def _main_search_v2_sql():
     sql = _normalized_sql((MIGRATIONS_DIR / "0266_version_problematic_main_search.sql").read_text(encoding="utf-8"))
     return re.sub(r"\s*,\s*", ",", sql.replace("timestamp with time zone", "timestamptz"))

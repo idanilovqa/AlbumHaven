@@ -914,7 +914,7 @@ class PostgresProblematicProjectionRepository:
         params = {
             "library_id": _positive_integer("library id", library_id),
             "requested_by": _nonempty_text("requested by", requested_by),
-            "builder_version": 2,
+            "builder_version": 3,
         }
         with self._connect() as connection:
             row = self._one(
@@ -936,7 +936,7 @@ class PostgresProblematicProjectionRepository:
         }
 
     def prepare_claimed_build(self, *, claim: object, now: object) -> ProblematicProjectionBuild:
-        params = {**_claim_parameters(claim), "observed_at": now, "builder_version": 2}
+        params = {**_claim_parameters(claim), "observed_at": now, "builder_version": 3}
         with self._connect() as connection:
             row = self._one(
                 connection,
@@ -1015,7 +1015,7 @@ class PostgresProblematicProjectionRepository:
         params = {
             **_claim_parameters(claim), **_build_parameters(build),
             "limit": limit, "child_limit": child_limit, "observed_at": now,
-            "builder_version": 2,
+            "builder_version": 3,
         }
         with self._connect() as connection:
             rows = self._all(
@@ -1074,7 +1074,7 @@ class PostgresProblematicProjectionRepository:
             **_group_cursor_parameters(group_key, source_cursor),
             "rows": json.dumps([dict(row) for row in rows], ensure_ascii=True),
             "complete": bool(complete), "observed_at": now,
-            "builder_version": 2,
+            "builder_version": 3,
         }
         self._require_accepted(
             "stage_claimed_problematic_projection_source",
@@ -2035,7 +2035,10 @@ def _read_page_sql() -> str:
               on committed_header.library_id = state.library_id
              and committed_header.revision = state.committed_revision
              and committed_header.verified
-             and (committed_header.builder_version = 2 or %(legacy_cursor)s)
+             -- Obsolete current metadata may emit expiry, never snapshot content.
+             and (committed_header.builder_version = 3 or
+                  (committed_header.builder_version = 1 and %(legacy_cursor)s) or
+                  (committed_header.builder_version = 2 and %(has_position)s))
              and (committed_header.builder_version = 1 or (
                  committed_header.topology_completed_group_count is not null
                  and committed_header.topology_completed_group_fingerprint is not null
@@ -2049,7 +2052,8 @@ def _read_page_sql() -> str:
              and projection_header.revision =
                  coalesce(%(revision)s, state.committed_revision)
              and projection_header.verified
-             and projection_header.builder_version = 2
+             and committed_header.builder_version = 3
+             and projection_header.builder_version = 3
              and projection_header.topology_completed_group_count is not null
              and projection_header.topology_completed_group_fingerprint is not null
              and not %(legacy_cursor)s

@@ -103,3 +103,12 @@ def test_the_album_attention_query_reads_only_automatic_missing_album_flags_of_p
     assert "flags.target_kind = 'album'" in sql and "flags.source = 'automatic'" in sql
     assert "flags.reason = 'missing_from_musicbrainz'" in sql
     assert "from library.local_tracks tracks" in sql
+
+
+def test_the_first_album_s_preloaded_detail_keeps_the_label_the_filter_reads():
+    # The client spreads initial_detail over the summary row, problem_reasons included.
+    payload = {**_payload(), "initial_detail": {"key": "wings::year::1995", "problem_reasons": ["Missing cover art"]}}
+
+    project_album_problems_into_problematic_files(_request([WINGS]), payload)
+
+    assert payload["initial_detail"]["problem_reasons"] == ["Missing cover art", LABEL]

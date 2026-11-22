@@ -15,7 +15,7 @@ const EXPECTED_SHARDS = Object.freeze([
   ['gallery-search-visual-2', 47],
   ['cover-providers-1', 27],
   ['cover-providers-2', 19],
-  ['metadata-mutations', 19],
+  ['metadata-mutations', 28],
   ['playback-utilities-1', 15],
   ['playback-utilities-2', 17],
   ['playback-utilities-3', 14],
@@ -210,7 +210,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 194) errors.push(`functional contract owns ${owned.length} cases; expected 194`);
+  if (owned.length !== 203) errors.push(`functional contract owns ${owned.length} cases; expected 203`);
   return errors;
 }
 

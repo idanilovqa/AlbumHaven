@@ -43,6 +43,7 @@ for (const identity of ['key', 'album_id']) {
     });
   }
 }
+const nextTurn = () => new Promise(resolve => setImmediate(resolve));
 const album = name => ({ name, cover_ref: `/${name}/cover.jpg`, cover_revision: `${name}-old`,
   tracks: [{ path: `/${name}/track.mp3`, cover_ref: `/${name}/cover.jpg` }] });
 
@@ -80,11 +81,16 @@ function harness() {
   vm.runInContext(fs.readFileSync(path.join(runtime, 'cover-lookup-modal-and-drawer.js'), 'utf8'), context);
   context.renderCoverLookupModal = () => context.syncCoverLookupSaveButton();
   context.ensureCoverLookupPolling = context.stopCoverLookupPollingIfIdle = () => {};
+  const loadTasks = context.loadCoverLookupTasks;
   context.loadCoverLookupTasks = async () => {};
   const markSeen = context.markCoverLookupAutomaticImprovementSeen;
   context.markCoverLookupAutomaticImprovementSeen = async () => {};
   context.syncCoverLookupSelectionUi = () => context.syncCoverLookupSaveButton();
-  context.refreshCoverLookupAlbumArtwork = (_original, updated) => updated.forEach(value => painted.set(value.name, value.cover_revision));
+  const shown = new Map();
+  context.refreshCoverLookupAlbumArtwork = (_original, updated) => updated.forEach((value) => {
+    painted.set(value.name, value.cover_revision);
+    shown.set(value.name, value.cover_ref || value.remote_cover_url || '');
+  });
   const setGallery = (value, suffix = 'fresh') => server.set(value.name, { ok: true,
     active_cover_ref: value.cover_ref, selected_source_cover_ref: value.cover_ref,
     local_covers: [{ candidate_cover_ref: value.cover_ref, is_active: true, cover_revision: value.cover_revision },
@@ -114,7 +120,7 @@ function harness() {
     return [m.pendingLocalRef, m.pendingPastedImageId, m.selectedRemoteId,
       m.remoteSelectionOverrideGeneration, m.remoteSelectionOverrideCandidateId, m.remoteSelectionOverrideUrl, m.manualUrlText];
   };
-  return { context, markSeen, open, settle, draft, selection, save, remove, overlay, confirm, requests, galleries, notifications, painted, server };
+  return { context, markSeen, loadTasks, open, settle, draft, selection, save, remove, overlay, confirm, requests, galleries, notifications, painted, shown, server };
 }
 
 test('lookup identity previews leave the caller hydrated album and its virtual release reference untouched', async () => {
@@ -181,7 +187,7 @@ for (const outcome of ['success', 'success without gallery', 'error']) {
 
 for (const mutation of ['save', 'delete']) {
   for (const outcome of ['success', 'error']) {
-    test(`${mutation} ${outcome} keeps reopened same-album mutations exclusive, then releases its draft`, async () => {
+    test(`${mutation} ${outcome} keeps reopened controls usable and the pending mutation single, then releases its draft`, async () => {
       const h = harness(), a = album('A');
       await h.open(a);
       const pending = mutation === 'save'
@@ -192,14 +198,19 @@ for (const mutation of ['save', 'delete']) {
       h.draft('A');
       h.context.syncCoverLookupSaveButton();
       const selected = h.selection();
-      assert.equal(h.save.disabled, true);
-      assert.equal(h.remove.disabled, true);
+      // BUGFIX-27 (owner approved 2026-11-15): reopening leaves Save and every delete button usable.
+      assert.equal(h.save.disabled, false);
+      assert.equal(h.remove.disabled, false);
       h.context.openCoverLookupDeleteConfirm('/A/source.jpg');
-      assert.equal(h.confirm.hidden, true, 'native delete confirmation is blocked while the claim is active');
-      const denied = [h.context.saveLocalCoverFromLookup('/A/newer.jpg'),
-        h.context.deleteLocalCoverFromLookup('/A/newer.jpg'), h.context.saveCoverFromLookup()];
+      assert.equal(h.confirm.hidden, false, 'BUGFIX-27: delete confirmation behaves like before after a reopen');
+      h.context.closeCoverLookupDeleteConfirm();
+      // The mutation in flight is still the album's only one: repeating it sends nothing.
+      const repeated = mutation === 'save'
+        ? h.context.saveLocalCoverFromLookup('/A/source.jpg')
+        : h.context.deleteLocalCoverFromLookup(a.cover_ref);
+      await nextTurn();
       assert.equal(h.requests.length, 1, 'no overlapping same-album mutation may reach the server');
-      await Promise.all(denied);
+      await repeated;
       const reads = h.galleries.length;
       await h.settle(0, outcome);
       await pending;
@@ -245,6 +256,329 @@ for (const outcome of ['success', 'error']) {
     assert.equal(h.painted.get('B'), 'B-settled');
   });
 }
+
+// An answer naming the saved file, as the save routes send it.
+function answerSave(h, index, coverRef) {
+  h.requests[index].resolve({ ok: true, json: async () => ({ ok: true, selected_cover_ref: coverRef,
+    updated_albums: [{ ...album('A'), cover_ref: coverRef, cover_revision: `saved:${coverRef}`,
+      tracks: [{ path: '/A/track.mp3', cover_ref: coverRef }] }] }) });
+}
+const failRequest = (h, index, message = 'Owned save failed') => h.requests[index].reject(new Error(message));
+const optimisticRef = h => h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3']?.coverRef;
+async function saveThenReopen(h, coverRef) {
+  const pending = h.context.saveLocalCoverFromLookup(coverRef);
+  h.context.closeCoverLookupModal();
+  await h.open(album('A'));
+  return { pending };
+}
+
+for (const outcome of ['success', 'error']) {
+  test(`a newer choice after reopening shows at once, is sent after a save that ends in ${outcome}, and wins`, async () => {
+    const h = harness();
+    await h.open(album('A'));
+    const first = await saveThenReopen(h, '/A/first.jpg');
+    const second = h.context.saveLocalCoverFromLookup('/A/second.jpg');
+    assert.equal(h.shown.get('A'), '/A/second.jpg', 'the newer choice shows at once');
+    assert.equal(h.overlay.hidden, true, 'Save still closes at once');
+    await nextTurn();
+    assert.equal(h.requests.length, 1, 'it waits for the save in flight');
+    if (outcome === 'success') answerSave(h, 0, '/A/first.jpg'); else failRequest(h, 0, 'First save failed');
+    await first.pending;
+    await nextTurn();
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.requests[1].body.source_cover_ref, '/A/second.jpg');
+    assert.equal(h.shown.get('A'), '/A/second.jpg', 'the older answer never replaces the newer choice');
+    assert.equal(optimisticRef(h), '/A/second.jpg');
+    answerSave(h, 1, '/A/second.jpg');
+    await second;
+    assert.equal(h.shown.get('A'), '/A/second.jpg');
+    assert.equal(h.painted.get('A'), 'saved:/A/second.jpg');
+    assert.deepEqual(h.notifications.map(([message]) => message), outcome === 'error' ? ['First save failed'] : []);
+    assert.equal(h.context.isCoverLookupMutationPending(album('A')), false);
+  });
+
+  test(`a failed newer choice rolls back only itself after an older save that ended in ${outcome}`, async () => {
+    const h = harness();
+    await h.open(album('A'));
+    const first = await saveThenReopen(h, '/A/first.jpg');
+    const second = h.context.saveLocalCoverFromLookup('/A/second.jpg');
+    if (outcome === 'success') answerSave(h, 0, '/A/first.jpg'); else failRequest(h, 0, 'First save failed');
+    await first.pending;
+    await nextTurn();
+    assert.equal(h.requests.length, 2);
+    failRequest(h, 1, 'Second save failed');
+    await second;
+    assert.equal(h.shown.get('A'), outcome === 'success' ? '/A/first.jpg' : '/A/cover.jpg');
+    assert.equal(optimisticRef(h), undefined);
+    assert.deepEqual(h.notifications.at(-1).slice(0, 2), ['Second save failed', 'error']);
+  });
+}
+
+test('only the last of several choices waiting on a save is sent', async () => {
+  const h = harness();
+  await h.open(album('A'));
+  const first = await saveThenReopen(h, '/A/first.jpg');
+  const second = await saveThenReopen(h, '/A/second.jpg');
+  const third = h.context.saveLocalCoverFromLookup('/A/third.jpg');
+  answerSave(h, 0, '/A/first.jpg');
+  await first.pending;
+  await nextTurn();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].body.source_cover_ref, '/A/third.jpg');
+  answerSave(h, 1, '/A/third.jpg');
+  await Promise.all([second.pending, third]);
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.shown.get('A'), '/A/third.jpg');
+});
+
+// The drawer as it is really rendered, for album A's finished lookup.
+function showDrawer(h, alreadyChosen) {
+  const { context } = h;
+  const element = () => ({ hidden: false, textContent: '', innerHTML: '', setAttribute() {},
+    classList: { contains: () => true, toggle() {} } });
+  const body = element();
+  const parts = { 'cover-lookup-drawer': element(), 'cover-lookup-drawer-body': body,
+    'cover-lookup-drawer-badge': element(), 'cover-lookup-drawer-button': element() };
+  const find = context.document.getElementById;
+  context.document.getElementById = id => parts[id] || find(id);
+  context.window.setInterval = () => 1;
+  context.window.clearInterval = () => {};
+  context.escapeHtml = value => String(value ?? '');
+  context.buildTrackPathSignature = value => value?.tracks?.map(track => track.path).join('\n') || '';
+  vm.runInContext(fs.readFileSync(path.join(runtime, 'alert-components.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(runtime, 'cover-lookup-notification-helpers.js'), 'utf8'), context);
+  const post = context.fetch;
+  context.fetch = (url, options) => (String(url).endsWith('/mark-action-taken')
+    ? Promise.resolve({ ok: true }) : post(url, options));
+  Object.assign(context.state.coverLookup, { drawerOpen: true, tasksHydrated: true, tasksLoadFailed: false,
+    appliedTaskUpdateSignatures: {}, tasks: [{ id: 'task-A', status: 'completed', album: 'A', album_payload: album('A'),
+      notification_action_taken: alreadyChosen }] });
+  context.renderCoverLookupDrawer();
+  return () => body.innerHTML.includes('>Art chosen<');
+}
+
+function startChoice(h, kind) {
+  const { modal } = h.context.state.coverLookup;
+  modal.taskId = 'task-A';
+  if (kind === 'pasted') {
+    modal.pastedImages = [{ id: 'pasted', data_url: 'data:image/jpeg;base64,AA==', filename: 'pasted.jpg' }];
+    return h.context.savePastedCoverFromLookup('pasted');
+  }
+  if (kind === 'remote') {
+    Object.assign(modal, { selectedRemoteId: 'candidate',
+      possibleMatches: [{ id: 'candidate', url: 'https://example.test/remote.jpg' }] });
+    return h.context.saveRemoteCoverFromLookup();
+  }
+  return h.context.saveLocalCoverFromLookup('/A/second.jpg');
+}
+
+// Owner rule: a save looks saved when the server accepts it. A waiting choice is lost if the page unloads.
+for (const kind of ['local', 'pasted', 'remote']) {
+  for (const outcome of ['accepted', 'refused']) {
+    for (const alreadyChosen of [false, true]) {
+      const card = alreadyChosen ? 'a card chosen earlier' : 'an unchosen card';
+      test(`a ${kind} choice waiting on a save never says Art chosen on ${card} before it is ${outcome}`, async () => {
+        const h = harness();
+        await h.open(album('A'));
+        const saysChosen = showDrawer(h, alreadyChosen);
+        assert.equal(saysChosen(), alreadyChosen, 'the drawer really renders');
+        h.context.state.coverLookup.modal.taskId = 'task-A';
+        const first = await saveThenReopen(h, '/A/first.jpg');
+        const second = startChoice(h, kind);
+        await nextTurn();
+        assert.equal(h.requests.length, 1, 'the choice waits');
+        assert.equal(saysChosen(), false, 'a waiting choice must not look saved');
+
+        answerSave(h, 0, '/A/first.jpg');
+        await first.pending;
+        await nextTurn();
+        assert.equal(h.requests.length, 2);
+        assert.equal(saysChosen(), false, 'the older acceptance must not vouch for the newer picture');
+
+        if (outcome === 'refused') failRequest(h, 1, 'Second save failed');
+        else {
+          h.requests[1].resolve({ ok: true, json: async () => ({ ok: true, selected_cover_ref: '/A/second.jpg',
+            notification_action_taken_task_ids: ['task-A'], task: { id: 'task-A', status: 'completed' },
+            updated_albums: [{ ...album('A'), cover_ref: '/A/second.jpg', cover_revision: 'second' }] }) });
+        }
+        await second;
+        assert.equal(saysChosen(), true, 'the last save the server accepted is shown without another event');
+      });
+    }
+  }
+}
+
+for (const kind of ['local', 'pasted', 'remote']) {
+  test(`a lone ${kind} save never says Art chosen before the server accepts it`, async () => {
+    const h = harness();
+    await h.open(album('A'));
+    const saysChosen = showDrawer(h, false);
+    const pending = startChoice(h, kind);
+    await nextTurn();
+    assert.equal(saysChosen(), false);
+    failRequest(h, 0, 'Save failed');
+    await pending;
+    assert.equal(saysChosen(), false);
+  });
+}
+
+for (const [kind, workerStatus] of [['local', ''], ['pasted', ''], ['remote', 'completed'], ['remote', 'running']]) {
+  test(`an accepted ${kind} save${workerStatus ? ` with a ${workerStatus} worker` : ''} gives every earlier Art chosen card of its album back`, async () => {
+    const h = harness();
+    await h.open(album('A'));
+    showDrawer(h, true);
+    const { context } = h;
+    context.state.coverLookup.tasks.push({ ...context.state.coverLookup.tasks[0], id: 'sibling-A' });
+    const chosenCards = () => context.document.getElementById('cover-lookup-drawer-body').innerHTML
+      .split('>Art chosen<').length - 1;
+    context.renderCoverLookupDrawer();
+    assert.equal(chosenCards(), 2);
+    const pending = startChoice(h, kind);
+    await nextTurn();
+    context.renderCoverLookupDrawer();
+    assert.equal(chosenCards(), 0, 'both cards show the picture that is not accepted yet');
+    // A drawer render replaces only the cards it names, as in the browser.
+    const named = new Set();
+    const render = context.renderCoverLookupDrawer;
+    context.renderCoverLookupDrawer = (options = {}) => {
+      if (options.taskIds?.length) options.taskIds.forEach(id => named.add(id));
+      else ['task-A', 'sibling-A'].forEach(id => named.add(id));
+      return render(options);
+    };
+    h.requests[0].resolve({ ok: true, json: async () => ({ ok: true, selected_cover_ref: '/A/second.jpg',
+      notification_action_taken_task_ids: ['task-A'],
+      task: { id: 'task-A', status: workerStatus || 'completed', save_generation: 'save-1' },
+      updated_albums: [] }) });
+    await pending;
+    assert.ok(named.has('sibling-A'), 'the sibling card must be rendered again');
+    assert.ok(chosenCards() >= 1, 'the earlier accepted choice is no longer withheld');
+  });
+}
+
+test('returning to the choice in flight never sends it twice', async () => {
+  const h = harness();
+  await h.open(album('A'));
+  const first = await saveThenReopen(h, '/A/first.jpg');
+  const second = await saveThenReopen(h, '/A/second.jpg');
+  const again = h.context.saveLocalCoverFromLookup('/A/first.jpg');
+  assert.equal(h.shown.get('A'), '/A/first.jpg');
+  answerSave(h, 0, '/A/first.jpg');
+  await nextTurn();
+  assert.equal(h.requests.length, 1);
+  await Promise.all([first.pending, second.pending, again]);
+  assert.equal(h.shown.get('A'), '/A/first.jpg');
+  assert.equal(h.context.isCoverLookupMutationPending(album('A')), false);
+});
+
+test('a save chosen during a reopened deletion waits for it and wins', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+  const deletion = h.context.deleteLocalCoverFromLookup(a.cover_ref);
+  h.context.closeCoverLookupModal();
+  await h.open(album('A'));
+  const save = h.context.saveLocalCoverFromLookup('/A/second.jpg');
+  await nextTurn();
+  assert.equal(h.requests.length, 1);
+  await h.settle(0);
+  await deletion;
+  await nextTurn();
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.shown.get('A'), '/A/second.jpg');
+  answerSave(h, 1, '/A/second.jpg');
+  await save;
+  assert.equal(h.shown.get('A'), '/A/second.jpg');
+});
+
+for (const outcome of ['success', 'error']) {
+  test(`a delete queued behind a save that ends in ${outcome} keeps only its own change`, async () => {
+    const h = harness();
+    await h.open(album('A'));
+    const first = await saveThenReopen(h, '/A/first.jpg');
+    h.context.state.coverLookup.modal.album.cover_ref = '/A/first.jpg';
+    h.context.state.coverLookup.modal.localCovers = [
+      { candidate_cover_ref: '/A/first.jpg' }, { candidate_cover_ref: '/A/fallback.jpg' },
+    ];
+    const deletion = h.context.deleteLocalCoverFromLookup('/A/first.jpg');
+    // The reopened album is the optimistic one, whose current cover is the file being deleted.
+    assert.equal(h.shown.get('A'), '/A/fallback.jpg');
+    if (outcome === 'success') answerSave(h, 0, '/A/first.jpg'); else failRequest(h, 0, 'First save failed');
+    await first.pending;
+    await nextTurn();
+    // A failed save never made that file current, so deleting it leaves the album's cover alone.
+    assert.equal(h.shown.get('A'), outcome === 'success' ? '/A/fallback.jpg' : '/A/cover.jpg');
+    assert.equal(h.requests[1].url, '/utilities/cover-lookup/local-delete');
+    await h.settle(1);
+    await deletion;
+    assert.equal(h.shown.get('A'), '/A/settled.jpg');
+  });
+}
+
+for (const status of ['completed', 'failed']) {
+  test(`a choice made during a remote save waits for its worker to be ${status}`, async () => {
+    const h = harness();
+    await h.open(album('A'));
+    const { context } = h;
+    context.state.coverLookup.tasks = [{ id: 'task-A', status: 'completed', album_payload: album('A') }];
+    context.state.coverLookup.appliedTaskUpdateSignatures = {};
+    context.markCoverLookupTaskActionTaken = () => {};
+    Object.assign(context.state.coverLookup.modal, {
+      taskId: 'task-A', selectedRemoteId: 'candidate',
+      possibleMatches: [{ id: 'candidate', url: 'https://example.test/remote.jpg' }],
+    });
+    const remote = context.saveRemoteCoverFromLookup();
+    h.requests[0].resolve({ ok: true, json: async () => ({ ok: true,
+      task: { id: 'task-A', status: 'running', save_generation: 'save-1' } }) });
+    await remote;
+    assert.deepEqual(h.notifications, [], 'the acceptance itself succeeds');
+    await h.open(album('A'));
+    const local = context.saveLocalCoverFromLookup('/A/second.jpg');
+    await nextTurn();
+    assert.equal(h.requests.length, 1, 'an accepted remote save can still overwrite a save sent now');
+    context.applyCoverLookupTaskUpdates({ id: 'task-A', status, save_generation: 'save-1', message: 'Remote save failed',
+      updated_albums: status === 'completed' ? [{ ...album('A'), cover_ref: '/A/remote.jpg' }] : [] });
+    await nextTurn();
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.shown.get('A'), '/A/second.jpg');
+    assert.equal(optimisticRef(h), '/A/second.jpg');
+    answerSave(h, 1, '/A/second.jpg');
+    await local;
+    assert.equal(h.shown.get('A'), '/A/second.jpg');
+    assert.deepEqual(h.notifications.map(([message]) => message), status === 'failed' ? ['Remote save failed'] : []);
+    assert.equal(context.isCoverLookupMutationPending(album('A')), false);
+  });
+}
+
+test('only a complete list requested after a remote save releases a task that is gone', async () => {
+  const h = harness();
+  await h.open(album('A'));
+  const { context } = h;
+  const lists = [];
+  const post = context.fetch;
+  context.fetch = (url, options) => (String(url).startsWith('/utilities/cover-lookup/tasks')
+    ? new Promise(resolve => lists.push(() => resolve({ ok: true, json: async () => ({ ok: true, tasks: [], next_cursor: null, total_count: 0 }) })))
+    : post(url, options));
+  Object.assign(context.state.coverLookup, { tasks: [], appliedTaskUpdateSignatures: {} });
+  for (const name of ['markCoverLookupTaskActionTaken', 'updateCoverLookupNotificationCounts', 'stopCoverLookupPollingIfIdle', 'renderCoverLookupDrawer']) {
+    context[name] = () => {};
+  }
+  context.mergeCoverLookupTasksWithNotifications = tasks => tasks;
+  Object.assign(context.state.coverLookup.modal, {
+    taskId: 'task-A', selectedRemoteId: 'candidate',
+    possibleMatches: [{ id: 'candidate', url: 'https://example.test/remote.jpg' }],
+  });
+  const requestedBefore = h.loadTasks({ toast: false });
+  const remote = context.saveRemoteCoverFromLookup();
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true,
+    task: { id: 'task-A', status: 'running', save_generation: 'save-1' } }) });
+  await remote;
+  lists.shift()();
+  await requestedBefore;
+  assert.equal(context.isCoverLookupMutationPending(album('A')), true, 'an older list cannot know the accepted task');
+  const requestedAfter = h.loadTasks({ toast: false });
+  lists.shift()();
+  await requestedAfter;
+  assert.equal(context.isCoverLookupMutationPending(album('A')), false, 'a task that is gone cannot hold the album');
+});
 
 test('local mutation claim spans image preload and releases after synchronous setup failure', async () => {
   const h = harness(), a = album('A');

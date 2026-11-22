@@ -87,17 +87,24 @@ _LIBRARY_SQL = """
 # The albums whose items can change with the marked ones: themselves and every
 # album sharing a duplicate identity with them now (0093 index) or when they
 # were last indexed. Also each scoped album's current identities.
+# Lateral subqueries with OFFSET 0 keep every read a lookup per track, identity or album. As
+# plain joins the planner hash-joined every active file once an album was a large share of it.
 _SCOPE_SQL = """
     with identities as materialized (
       select library.duplicate_identity_text(files.scan_file_album_artist) as artist_identity,
              library.duplicate_identity_text(files.scan_file_album) as album_identity,
              library.duplicate_identity_year(files.scan_file_year) as album_year
       from library.local_tracks tracks
-      join library.local_track_files files on files.track_id = tracks.id
+      cross join lateral (
+        select files.scan_file_album_artist, files.scan_file_album, files.scan_file_year
+        from library.local_track_files files
+        where files.track_id = tracks.id
+          and files.scan_cache_stale is false
+          and files.scan_file_entry_is_object is true
+        offset 0
+      ) files
       where tracks.library_id = %(library_id)s
         and tracks.album_id = any(%(album_ids)s::bigint[])
-        and files.scan_cache_stale is false
-        and files.scan_file_entry_is_object is true
       union
       select split_part(old, chr(31), 1), split_part(old, chr(31), 2),
              nullif(split_part(old, chr(31), 3), '')::integer
@@ -107,15 +114,24 @@ _SCOPE_SQL = """
       union
       select tracks.album_id
       from identities
-      join library.local_track_files files
-        on library.duplicate_identity_text(files.scan_file_album_artist) = identities.artist_identity
-       and library.duplicate_identity_text(files.scan_file_album) = identities.album_identity
-       and library.duplicate_identity_year(files.scan_file_year) = identities.album_year
-       and files.scan_cache_stale is false
-       and files.scan_file_entry_is_object is true
-      join library.local_tracks tracks on tracks.id = files.track_id
+      cross join lateral (
+        select files.track_id
+        from library.local_track_files files
+        where library.duplicate_identity_text(files.scan_file_album_artist) = identities.artist_identity
+          and library.duplicate_identity_text(files.scan_file_album) = identities.album_identity
+          and library.duplicate_identity_year(files.scan_file_year) = identities.album_year
+          and files.scan_cache_stale is false
+          and files.scan_file_entry_is_object is true
+        offset 0
+      ) files
+      cross join lateral (
+        select tracks.album_id
+        from library.local_tracks tracks
+        where tracks.id = files.track_id
+          and tracks.library_id = %(library_id)s and tracks.album_id is not null
+        offset 0
+      ) tracks
       where identities.artist_identity <> '' and identities.album_identity <> ''
-        and tracks.library_id = %(library_id)s and tracks.album_id is not null
     )
     select scoped.id as album_id, albums.album_key,
       coalesce(array(
@@ -124,13 +140,23 @@ _SCOPE_SQL = """
           library.duplicate_identity_text(files.scan_file_album),
           coalesce(library.duplicate_identity_year(files.scan_file_year)::text, ''))
         from library.local_tracks tracks
-        join library.local_track_files files on files.track_id = tracks.id
+        cross join lateral (
+          select files.scan_file_album_artist, files.scan_file_album, files.scan_file_year
+          from library.local_track_files files
+          where files.track_id = tracks.id
+            and files.scan_cache_stale is false
+            and files.scan_file_entry_is_object is true
+          offset 0
+        ) files
         where tracks.album_id = scoped.id
-          and files.scan_cache_stale is false
-          and files.scan_file_entry_is_object is true
       ), '{}'::text[]) as identities
     from scoped
-    left join library.local_albums albums on albums.id = scoped.id and albums.library_id = %(library_id)s
+    left join lateral (
+      select albums.album_key
+      from library.local_albums albums
+      where albums.id = scoped.id and albums.library_id = %(library_id)s
+      offset 0
+    ) albums on true
 """
 
 _DUPLICATE_RESULT_SQL = """

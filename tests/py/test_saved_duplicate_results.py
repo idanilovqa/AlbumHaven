@@ -4,6 +4,7 @@ right the moment the save commits, with no evaluator having run (owner, 2026-11-
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,11 +30,12 @@ def library(watcher_repair_inventory, monkeypatch):
 
     class Library:
         url = fixture.runtime_url
+        setup_url = fixture.setup_url
         repository = PostgresLibraryBrowseRepository(fixture.config)
         adapter = PostgresScanCacheAdapter(fixture.config, connect=isolatedPostgres._connect)
 
-        def album(self, folder, album, year=2001):
-            entry = fixture.entry(f"Pair/{folder}/01.flac", artist="Pair", album=album)
+        def album(self, folder, album, year=2001, track=1):
+            entry = fixture.entry(f"Pair/{folder}/{track:02d}.flac", artist="Pair", album=album)
             entry.update(album_artist="Pair", year=year)
             return entry
 
@@ -42,15 +44,20 @@ def library(watcher_repair_inventory, monkeypatch):
             problematic_index.prepare_for_serving(self.repository)
 
         def save(self, entry, *, before_commit=None, **changes):
-            updated = {**entry, **changes}
+            self.save_files([entry], before_commit=before_commit, **changes)
+
+        def save_files(self, entries, *, before_commit=None, **changes):
+            previous = {entry["path"]: dict(entry) for entry in entries}
+            updated = {path: {**entry, **changes} for path, entry in previous.items()}
             self.adapter.persist_structural_tag_edit(
-                changed_paths={entry["path"]}, previous_file_entries={entry["path"]: entry},
-                updated_file_entries={entry["path"]: updated}, changed_field_names=set(changes),
+                changed_paths=set(previous), previous_file_entries=previous,
+                updated_file_entries=updated, changed_field_names=set(changes),
                 # As Edit Tags saves an identity field: the patch moves stray ownership too.
                 rebuild_relation_projection=True,
                 before_commit=before_commit,
             )
-            entry.update(updated)
+            for entry in entries:
+                entry.update(changes)
 
         def sql(self, statement, params=None):
             with psycopg.connect(self.url) as connection:
@@ -200,3 +207,211 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
     assert library.sql("select count(*) from library.problematic_index_dirty_albums where album_id <> 0")[0][0] == 0, (
         "The pass retries what the save outran."
     )
+
+
+# Plan rows the write's reads produce for each track of an affected album: at most 48.6 as
+# measured (16 of them the scope query's, the rest mostly the source rows').
+ROWS_PER_AFFECTED_TRACK = 50
+
+
+def _assert_no_read_grew(small, large):
+    """Statement by statement: one read's fall must not hide another's growth."""
+    assert small.keys() == large.keys(), (small, large)
+    grown = {read: (small[read], rows) for read, rows in large.items() if rows > small[read] + 5}
+    assert not grown, f"The library's size costs nothing: {grown}"
+
+
+class _CountingReads:
+    """The save's connection: counts its statements, and the rows every plan node of its reads
+    produced. Sequential scans are off, as a planner leaves them at library size, so reading
+    a whole table or index shows as growth with the library."""
+
+    def __init__(self, connection, counts):
+        self._connection, self._counts = connection, counts
+
+    def execute(self, query, params=None, **options):
+        from psycopg.rows import tuple_row
+
+        from tests.py.bounded_interactions import explain_actual_rows
+
+        self._counts["statements"] += 1
+        if str(query).lstrip().lower().startswith(("select", "with")):
+            plans = SimpleNamespace(cursor=lambda: self._connection.cursor(row_factory=tuple_row))
+            rows = explain_actual_rows(plans, query, params)
+            self._counts["plan_rows"] += rows
+            # Which read grew, when one does.
+            self._counts[f"{self._counts['statements']}: {' '.join(str(query).split())[:70]}"] = rows
+        return self._connection.execute(query, params, **options)
+
+    def cursor(self, *arguments, **options):
+        self._counts["statements"] += 1
+        return self._connection.cursor(*arguments, **options)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+def test_live_a_saves_write_reads_the_same_rows_whatever_the_library_size(library, monkeypatch):
+    import psycopg
+
+    from music_app.services import saved_duplicate_results
+
+    first, second = library.album("One", "Same Release"), library.album("Two", "Other Release")
+    write, counts = saved_duplicate_results.write_saved_duplicate_results, {}
+
+    def counted(connection, config):
+        connection.execute("set local enable_seqscan = off")
+        write(_CountingReads(connection, counts), config)
+
+    monkeypatch.setattr(saved_duplicate_results, "write_saved_duplicate_results", counted)
+
+    def save_among(unrelated):
+        others = []
+        for number in range(unrelated):
+            entry = library.album(f"Unrelated {number}", f"Unrelated {number}")
+            entry["album_artist"] = entry["artist"] = f"Artist {number}"
+            others.append(entry)
+        library.seed(first, second, *others)
+        with psycopg.connect(library.setup_url, autocommit=True) as connection:
+            connection.execute("analyze")
+        counts.clear()
+        counts.update(statements=0, plan_rows=0)
+        library.save(second, album="Same Réléase")
+        measured = dict(counts)
+        library.save(second, album="Other Release")
+        return measured
+
+    small, large = save_among(50), save_among(1000)
+
+    assert large["statements"] == small["statements"] <= 12
+    _assert_no_read_grew(small, large)
+
+
+def test_live_a_save_neither_waits_for_nor_is_lost_to_a_running_backfill(library, monkeypatch):
+    from music_app.services import problematic_index
+
+    first, second = library.album("One", "Same Release"), library.album("Two", "Other Release")
+    library.seed(first, second)
+    evaluate, filling, release, failures = problematic_index._duplicate_result_rows, threading.Event(), threading.Event(), []
+
+    def paused(*arguments):
+        rows = evaluate(*arguments)
+        if not filling.is_set():
+            filling.set()
+            assert release.wait(60)
+        return rows
+
+    def fill():
+        try:
+            problematic_index.prepare_for_serving(library.repository, rebuild_duplicates=True)
+        except Exception as error:
+            failures.append(error)
+
+    monkeypatch.setattr(problematic_index, "_duplicate_result_rows", paused)
+    backfill = threading.Thread(target=fill)
+    backfill.start()
+    try:
+        assert filling.wait(30), "The backfill never evaluated."
+        saving = threading.Thread(target=library.save, args=(second,), kwargs={"album": "Same Réléase"})
+        saving.start()
+        saving.join(20)
+        assert not saving.is_alive(), "The save waited for the backfill."
+    finally:
+        release.set()
+        backfill.join(60)
+
+    assert failures == []
+    assert library.marked(first, second) == [True, True], "The backfill's older snapshot lost the save."
+
+
+@pytest.mark.parametrize("change", ["forms", "breaks"])
+def test_live_a_save_behind_an_evaluators_final_write_waits_only_for_its_commit(library, monkeypatch, change):
+    from music_app.services import problematic_index
+
+    first = library.album("One", "Same Release")
+    second = library.album("Two", "Other Release" if change == "forms" else "Same Réléase")
+    library.seed(first, second)
+    library.sql("select library.mark_problematic_album_dirty(library_id, id) from library.local_albums")
+    write, written, release, failures = problematic_index._write, threading.Event(), threading.Event(), []
+
+    def holding(*arguments, **options):
+        write(*arguments, **options)
+        if not written.is_set():
+            written.set()
+            assert release.wait(60)
+
+    def save():
+        try:
+            library.save(second, album="Same Réléase" if change == "forms" else "Other Release")
+        except Exception as error:
+            failures.append(error)
+
+    monkeypatch.setattr(problematic_index, "_write", holding)
+    evaluation = threading.Thread(target=problematic_index._maintain, args=(library.repository,))
+    saving = threading.Thread(target=save)
+    evaluation.start()
+    try:
+        assert written.wait(30), "The evaluation never wrote."
+        saving.start()
+        # Long enough to reach the rows the uncommitted evaluation holds.
+        saving.join(3)
+    finally:
+        release.set()
+        evaluation.join(60)
+    saving.join(30)
+
+    assert not saving.is_alive() and failures == [], "The save deadlocked or failed behind the evaluation."
+    assert library.marked(first, second) == [change == "forms"] * 2, "The later save's result stands."
+
+
+def test_live_a_five_file_edit_inside_a_pair_costs_its_albums_tracks_not_the_library(library, monkeypatch):
+    """Owner's budget case (2026-11-22): five files edited inside two copies of one album. The
+    write's reads grow linearly with the copies' tracks, and not at all with the library."""
+    import psycopg
+
+    from music_app.services import saved_duplicate_results
+
+    write, counts = saved_duplicate_results.write_saved_duplicate_results, {}
+
+    def counted(connection, config):
+        connection.execute("set local enable_seqscan = off")
+        write(_CountingReads(connection, counts), config)
+
+    monkeypatch.setattr(saved_duplicate_results, "write_saved_duplicate_results", counted)
+
+    def edit_five(tracks, unrelated):
+        copies, others = [], []
+        for folder in ("One", "Two"):
+            for number in range(1, tracks + 1):
+                entry = library.album(folder, "Same Release", track=number)
+                entry.update(track_number=number, title=f"Song {number}")
+                copies.append(entry)
+        for number in range(unrelated):
+            entry = library.album(f"Unrelated {number}", f"Unrelated {number}")
+            entry["album_artist"] = entry["artist"] = f"Artist {number}"
+            others.append(entry)
+        library.seed(*copies, *others)
+        with psycopg.connect(library.setup_url, autocommit=True) as connection:
+            connection.execute("analyze")
+        assert library.marked(copies[0]) == [True], "The copies start as one pair."
+        measured = []
+        # Copies with different track lists are no pair: the split breaks it.
+        for album, paired in (("Moved Away", False), ("Same Release", True)):
+            counts.clear()
+            counts.update(statements=0, plan_rows=0)
+            library.save_files(copies[-5:], album=album)
+            assert library.marked(copies[0]) == [paired]
+            measured.append(dict(counts))
+        return measured
+
+    small, middle, large = (edit_five(tracks, 50) for tracks in (20, 80, 247))
+    in_a_large_library = edit_five(247, 1000)
+
+    print("PAIR-CONTRACT", small, middle, large, in_a_large_library)
+    for low, mid, high, wide in zip(small, middle, large, in_a_large_library):
+        assert low["statements"] == mid["statements"] == high["statements"] == wide["statements"] <= 12
+        _assert_no_read_grew(high, wide)
+        per_track = (mid["plan_rows"] - low["plan_rows"]) / (2 * (80 - 20))
+        further = (high["plan_rows"] - mid["plan_rows"]) / (2 * (247 - 80))
+        assert further <= per_track * 1.1, "The reads grow linearly with the affected albums' tracks."
+        assert max(per_track, further) <= ROWS_PER_AFFECTED_TRACK, (per_track, further)

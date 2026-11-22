@@ -8350,6 +8350,7 @@ def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[o
     """The album's MusicBrainz release decision for album details: where the main album
     ends (as the last main disc number), the release type and the track artists shown for
     tags that lost them. Display only; tags never change here."""
+    from music_app.services.musicbrainz_correction_display import credited_artist_name
     from music_app.services.musicbrainz_release_identity import release_type_label
 
     if not album_id:
@@ -8358,7 +8359,7 @@ def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[o
         """
         select decision.state, decision.release_group_mbid::text, decision.release_mbid::text,
                decision.main_disc_count, decision.main_disc_source, decision.track_artists,
-               release_group.primary_type, release_group.secondary_types,
+               release_group.primary_type, release_group.secondary_types, release.artist_credit,
                album.title as local_title, release.title as release_title, release_group.title as group_title
         from library.local_albums album
         join library.local_album_musicbrainz_releases decision
@@ -8387,6 +8388,7 @@ def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[o
         # Absent keeps the local tag's type.
         "type_label": release_type_label(row.get("primary_type"), row.get("secondary_types")),
         "track_artists": [item for item in track_artists or [] if isinstance(item, Mapping) and item.get("artist")],
+        "credited_artist": credited_artist_name(row.get("artist_credit")) if row["state"] == "release" else None,
         "alternative_titles": _alternative_album_titles(
             row.get("local_title"), (row.get("release_title"), row.get("group_title"))),
     }

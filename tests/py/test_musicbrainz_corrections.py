@@ -313,10 +313,10 @@ def test_a_spelling_only_credit_takes_the_artists_main_name(credited, main):
     assert _album_artist_rows(credited, (credited, main, "")) == [(credited, main)]
 
 
-def test_each_name_of_a_joined_credit_follows_the_rule_by_itself():
+def test_a_joint_credit_keeps_its_names_as_written():
     credit = (("Shamaani Duo", "Korpiklaani", " & "), ("AC-DC", "AC/DC", ""))
 
-    assert _album_artist_rows("Shamaani Duo & AC/DC", *credit) == []
+    assert _album_artist_rows("Shamaani Duo & AC-DC", *credit) == []
 
 
 def test_a_credit_without_a_credited_name_proposes_no_album_artist():

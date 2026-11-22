@@ -6,15 +6,20 @@ cards, get ``display_title`` and ``display_artist`` beside the unchanged tag fie
 they differ. Album keys, sorting and the tag editor keep the real tags; search matches both
 (the corrected values are stored and indexed beside the tags, 0198).
 
+An album also keeps the name its release credits it to (owner 2026-11-22), shown as
+``display_artist`` unless a correction is applied: "Shamaani Duo", never "Korpiklaani".
+
 The same read gives gallery cards ``title_latin``, the stored Latin form of an album title in
 another script (0256), which phone album rows show under the title (approved b3-1d3); never
 beside a corrected title, which it was not made from.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, MutableMapping
 from typing import Any
 
+from music_app.services.musicbrainz_correction_kinds import credited_album_artist
 from music_app.services.musicbrainz_corrections_postgres import album_display_rows
 from music_app.services.musicbrainz_enrichment_postgres import _connect, _row_mapping
 
@@ -28,10 +33,32 @@ def _number(value: object, default: int = 0) -> int:
         return default
 
 
+def credited_artist_name(credit: object) -> str | None:
+    """The name to show for a release credited to one artist under another name than their main
+    one. None otherwise: a joint credit, or the main name itself, leaves the album as it is."""
+    if isinstance(credit, str):
+        credit = json.loads(credit)
+    if not isinstance(credit, list) or len(credit) != 1:
+        return None
+    name, main = (str(credit[0].get(key) or "").strip() for key in ("name", "artist_name"))
+    return credited_album_artist(credit) if name and main and name != main else None
+
+
+def _apply_credited_artist(album: MutableMapping[str, object]) -> None:
+    shown = (album.get("musicbrainz_release") or {}).get("credited_artist")
+    artist = album.get("musicbrainz_artist") or {}
+    # A split name's label ("Amarok (Poland)") gives way only to a really different credit.
+    if shown and not (artist.get("group_label") and shown == artist.get("canonical_name")):
+        album["display_artist"] = shown
+
+
 def apply_correction_display(connection: Any, album: MutableMapping[str, object], *, album_id: object) -> None:
-    """Add the applied corrections of the album (by its row id) to its details payload."""
+    """Add the credited name and the applied corrections of the album (by its row id) to its
+    details payload. The credited name is added even when it equals the tag: details would
+    otherwise show the main name of a tag that differs from it."""
     if not album_id:
         return
+    _apply_credited_artist(album)
     applied = album_display_rows(connection, album_id=album_id)
     if not applied:
         return
@@ -53,13 +80,19 @@ def apply_correction_display(connection: Any, album: MutableMapping[str, object]
 
 
 _PAYLOAD_SQL = """
-    select albums.album_key, albums.corrected_title, albums.corrected_album_artist, latin.latin as title_latin
+    select albums.album_key, albums.corrected_title, albums.corrected_album_artist, latin.latin as title_latin,
+           releases.artist_credit
     from library.local_albums albums
+    left join library.local_album_musicbrainz_releases decision
+      on decision.library_id = albums.library_id and decision.album_key = albums.album_key and decision.state = 'release'
+    left join integration.musicbrainz_releases releases
+      on releases.mbid = decision.release_mbid
+     and releases.artist_credit -> 0 ->> 'name' is distinct from releases.artist_credit -> 0 ->> 'artist_name'
     left join library.local_album_latin_titles latin
       on latin.album_id = albums.id and latin.source_title = albums.title and latin.latin is not null
     where albums.album_key = any(%(album_keys)s::text[])
       and (albums.corrected_title is not null or albums.corrected_album_artist is not null
-           or latin.album_id is not null);
+           or latin.album_id is not null or releases.mbid is not null);
 """
 
 
@@ -98,6 +131,7 @@ def project_correction_display(config: Mapping[str, object], payload: object, *,
             album["display_title"] = row["corrected_title"]
         elif row.get("title_latin"):
             album["title_latin"] = row["title_latin"]
-        if row.get("corrected_album_artist") and row["corrected_album_artist"] != album.get("album_artist"):
-            album["display_artist"] = row["corrected_album_artist"]
+        shown = row.get("corrected_album_artist") or credited_artist_name(row.get("artist_credit"))
+        if shown and shown != album.get("album_artist"):
+            album["display_artist"] = shown
     return payload

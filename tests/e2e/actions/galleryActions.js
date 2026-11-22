@@ -372,7 +372,7 @@ export class GalleryActions {
       : '';
     return {
       heading: String(await this.galleryPage.artistInfoHeading.textContent() || '').trim(),
-      credit: (await this.galleryPage.artistInfoCredit.allTextContents()).map((value) => value.trim()),
+      taggedAsLines: (await this.galleryPage.artistInfoTaggedAsLines.allTextContents()).map((value) => value.trim()),
       countries: (await this.galleryPage.artistInfoCountryPills.allTextContents()).map((value) => value.trim()),
       genres: (await this.galleryPage.artistInfoGenrePills.allTextContents()).map((value) => value.trim()),
       identities,

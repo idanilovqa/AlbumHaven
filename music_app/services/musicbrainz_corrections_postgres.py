@@ -21,7 +21,12 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from music_app.services.musicbrainz_correction_kinds import ARTIST_KINDS, REVIEW_KINDS, compare_album
+from music_app.services.musicbrainz_correction_kinds import (
+    ARTIST_KINDS,
+    REVIEW_KINDS,
+    compare_album,
+    credited_album_artist,
+)
 from music_app.services.musicbrainz_enrichment_postgres import (
     _active_library_cte,
     _aware_utc,
@@ -30,7 +35,6 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     _row_mapping,
     _transaction,
 )
-from music_app.services.musicbrainz_release_identity import album_artist_text
 from music_app.services.musicbrainz_release_identity_postgres import parse_track_pairing
 
 # The review group of albums the guard (or an ambiguous pairing) sends to review whole.
@@ -447,7 +451,7 @@ def compare_stored_album(row: Mapping[str, object]) -> dict[str, object]:
     return compare_album({
         "title": row.get("title"), "artist_name": row.get("artist_name"),
         "release_title": row.get("release_title"),
-        "release_credit": album_artist_text(_json(row.get("artist_credit")) or []),
+        "release_credit": credited_album_artist(_json(row.get("artist_credit")) or []) or None,
         "media": _json(row.get("media")) or [], "tracks": _json(row.get("tracks")) or [],
         "disc_position": row.get("disc_position"), "pairing": parse_track_pairing(row),
     })

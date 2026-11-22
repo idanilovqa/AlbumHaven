@@ -14,6 +14,7 @@ from tests.py.test_musicbrainz_series_postgres import NOW, _database
 GROUP = "00000000-0000-4000-8000-000000000252"
 JAPANESE = "b242128c-42fb-418d-afee-9f3980740fd2"
 LATIN = "678e22f8-c26f-4593-bb76-97971b593d40"
+ARTIST = "00000000-0000-4000-8000-000000000270"
 PSEUDO = "e196b170-d906-4f6c-9a8b-76baccde71dd"
 MEDIA = [{"position": 1, "tracks": [{"position": 1, "title": "Oukashou"}, {"position": 2, "title": "Kiss"}]}]
 
@@ -96,7 +97,7 @@ def test_a_release_musicbrainz_links_none_to_stores_none_and_shows_no_musicbrain
 
         # No MusicBrainz form to pair, but the release's language decides the fallback.
         stored = stored_transliteration(connection, albums["byousoku"])
-        assert (stored["media"], stored["language"]) == ([], "jpn")
+        assert (stored["media"], stored["evidence"]) == ([], "jpn")
 
 
 # Owner 2026-11-17: "Use MB language" and "exact pronunciation, but plain queries find them" -------
@@ -126,8 +127,23 @@ def _pinyin_only(monkeypatch):
     track_transliteration._cutlet.cache_clear()
 
 
-def _chinese_album(setup_url, title="天门"):
-    """An album with no MusicBrainz release, one Chinese track and its file on disk."""
+def _artist_country(setup_url, album_key, country):
+    """The album's decided artist and the country MusicBrainz gives them."""
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("insert into integration.musicbrainz_artists (mbid, canonical_name, refreshed_at)"
+                           " values (%s, '天門', %s) on conflict (mbid) do nothing", (ARTIST, NOW))
+        connection.execute("insert into library.local_album_artist_identities"
+                           " (library_id, album_key, artist_mbid, matcher_version)"
+                           " select library_id, album_key, %s, 1 from library.local_albums where album_key = %s"
+                           " on conflict do nothing", (ARTIST, album_key))
+        connection.execute("delete from integration.musicbrainz_artist_countries where artist_mbid = %s", (ARTIST,))
+        connection.execute("insert into integration.musicbrainz_artist_countries"
+                           " (artist_mbid, country_code, provenance, observed_at) values (%s, %s, 'test', %s)",
+                           (ARTIST, country, NOW))
+
+
+def _chinese_album(setup_url, title="天门", country="CN"):
+    """An album with no MusicBrainz release, a Chinese artist, one Chinese track and its file."""
     with isolatedPostgres._connect(setup_url) as connection:
         library_id, artist = (connection.execute("select library_id, id from library.local_artists limit 1")
                               .fetchone().values())
@@ -140,6 +156,8 @@ def _chinese_album(setup_url, title="天门"):
             " returning id", (library_id, album, artist, title)).fetchone()["id"]
         connection.execute("insert into library.local_track_files (track_id, private_path, metadata)"
                            " values (%s, 'C:/Music/cn-gate-1.flac', '{}'::jsonb)", (track,))
+    if country:
+        _artist_country(setup_url, "cn-gate", country)
     return track
 
 
@@ -352,12 +370,79 @@ def test_the_release_language_answer_redoes_the_album_title_in_romaji(monkeypatc
     _both_fallbacks(monkeypatch)
     _retitle(setup_url, albums["byousoku"], "天門")
     repository.refresh_latin_titles()
-    assert ("天門", "Tiān mén", "tianmen") in _album_latin_rows(setup_url), "no language yet: pinyin"
+    assert ("天門", None, None) in _album_latin_rows(setup_url), "no evidence yet: no romanized form"
     repository.claim_transliteration(now=NOW)
     repository.store_transliteration(release_mbid=JAPANESE, transliteration_mbid=None, media=[], language="jpn",
                                      observed_at=NOW + timedelta(days=36500))  # After the decision row.
     assert repository.refresh_latin_titles() >= 1, "the stored answer changed: the row is redone"
     assert ("天門", "Tenmon", "tenmon") in _album_latin_rows(setup_url)
+    assert repository.refresh_latin_titles() == 0
+
+
+# Owner 2026-11-22, "Album, artist, then MB": the evidence, and a row redone when it arrives -----
+
+def test_the_artists_country_redoes_the_stored_readings_when_it_arrives_or_changes(monkeypatch):
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _both_fallbacks(monkeypatch)
+    _chinese_album(setup_url, title="天門", country=None)
+    repository.refresh_latin_titles()
+    assert ("天門", None, None) in _latin_rows(setup_url), "no evidence: no romanized form"
+    assert repository.refresh_latin_titles() == 0
+    for country, latin, key in (("CN", "Tiān mén", "tianmen"), ("JP", "Tenmon", "tenmon"), ("FR", None, None)):
+        _artist_country(setup_url, "cn-gate", country)
+        assert repository.refresh_latin_titles() == 1, country
+        assert ("天門", latin, key) in _latin_rows(setup_url)
+        assert repository.refresh_latin_titles() == 0, country
+
+
+def test_kana_in_another_title_of_the_album_makes_its_ideographs_japanese(monkeypatch):
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _both_fallbacks(monkeypatch)
+    _chinese_album(setup_url, title="天門")
+    with isolatedPostgres._connect(setup_url) as connection:
+        # The katakana middle dot is punctuation that Chinese titles use too: no evidence.
+        connection.execute("update library.local_albums set title = '天門・天門' where album_key = 'cn-gate'")
+    repository.refresh_latin_titles()
+    assert ("天門", "Tiān mén", "tianmen") in _latin_rows(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        album = connection.execute("update library.local_albums set title = 'センチメートル' where album_key = 'cn-gate'"
+                                   " returning id").fetchone()["id"]
+        rows = [{"disc_number": 1, "track_number": 1, "title": "天門"}]
+        apply_track_transliterations(connection, {"track_rows": rows}, album_id=album)
+    assert rows[0]["title_transliteration"] == "Tenmon", "album details read it at once"
+    assert repository.refresh_latin_titles() == 1
+    assert ("天門", "Tenmon", "tenmon") in _latin_rows(setup_url)
+
+
+def test_a_matched_artists_country_counts_and_an_unsettled_matchs_never(monkeypatch):
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _both_fallbacks(monkeypatch)
+    _chinese_album(setup_url, title="天門", country="JP")
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("delete from library.local_album_artist_identities")
+        connection.execute("insert into library.local_artist_musicbrainz_matches"
+                           " (library_id, local_artist_id, state, artist_mbid, decision_source, evidence_summary)"
+                           " select library_id, id, 'matched', %s, 'automatic', 'test' from library.local_artists",
+                           (ARTIST,))
+    repository.refresh_latin_titles()
+    assert ("天門", "Tenmon", "tenmon") in _latin_rows(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_artist_musicbrainz_matches"
+                           " set state = 'ambiguous', artist_mbid = null")
+    assert repository.refresh_latin_titles() >= 1
+    assert ("天門", None, None) in _latin_rows(setup_url)
+
+
+def test_a_row_stored_before_the_evidence_was_kept_is_redone_once(monkeypatch):
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _both_fallbacks(monkeypatch)
+    _chinese_album(setup_url, title="天門", country="JP")
+    repository.refresh_latin_titles()
+    with isolatedPostgres._connect(setup_url) as connection:  # As stored before 0270.
+        connection.execute("update library.local_track_latin_titles set reading_evidence = null,"
+                           " latin = 'Tiān mén', search_key = 'tianmen' where source_title = '天門'")
+    assert repository.refresh_latin_titles() == 1
+    assert ("天門", "Tenmon", "tenmon") in _latin_rows(setup_url)
     assert repository.refresh_latin_titles() == 0
 
 

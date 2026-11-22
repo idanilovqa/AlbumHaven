@@ -563,7 +563,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0257_add_musicbrainz_artist_area.sql",
         "0258_invalidate_gallery_on_split_labels.sql",
         "0260_bound_musicbrainz_correction_reads.sql",
-        "0270_recompute_bracketed_latin_titles.sql",
+        "0270_add_latin_title_reading_evidence.sql",
     ]
 
 

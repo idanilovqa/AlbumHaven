@@ -3011,6 +3011,9 @@ test('the Interviews page lists only Interview loose tracks under the title Inte
   const key = context.LOOSE_TRACKS_INTERVIEWS_KEY ?? '@interviews';
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true, collectionName: key }), (track) => track.title), ['Talk']);
   assert.equal(context.looseTracksPageTitle(key), 'Interviews');
+  // Owner 2026-11-22: "Interviews table is empty": the table filtered the page's tracks again, as a collection.
+  const table = context.buildNonAlbumTrackSectionsConfig(tracks, { collectionName: key });
+  assert.deepEqual(Array.from(table.groups[0].tracks, (track) => track.path || track.trackPath), ['a.mp3']);
   assert.equal(context.looseTracksPageTitle('Night'), 'Night');
 });
 

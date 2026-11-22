@@ -16387,10 +16387,7 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
 function buildNonAlbumTrackSectionsConfig(items, options = {}) {
   const collectionName = String(options.collectionName || '').trim();
   const visibleItems = collectionName
-    ? items.filter((item) => (
-      String(item?.exception_type || '').trim() === 'Custom Collection'
-      && String(item?.custom_collection_name || '').trim() === collectionName
-    ))
+    ? items.filter((item) => trackBelongsToLooseTracksPage(item, collectionName))
     : items;
   const showPath = window.AlbumHavenCapabilities?.isCurrentLibraryOwner?.() === true;
   const exceptionType = (item) => String(

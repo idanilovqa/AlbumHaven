@@ -51,6 +51,7 @@ MAX_PLAYBACK_DECODERS = 8
 MAX_DECODERS_PER_CONNECTION = 2
 MAX_CONTROL_MESSAGE_BYTES = 16_384
 _HANDOVER_ANSWER_KEYS = {"type", "requestId", "claimToken", "track", "position"}
+_HANDOVER_SILENT_KEYS = {"type", "requestId"}
 MIN_PCM_SAMPLE_RATE = 8_000
 MAX_PCM_SAMPLE_RATE = 192_000
 MAX_CREDIT_FRAMES_PER_MESSAGE = MAX_PCM_SAMPLE_RATE
@@ -587,6 +588,9 @@ class _PlaybackPcmConnection:
         # The holder's reply to Play here elsewhere. One that came too late, or for another ask, is dropped.
         if command_type == "handover-answer" and set(control) == _HANDOVER_ANSWER_KEYS:
             self._registry.handover.answer(self.send_event, control)
+            return True
+        if command_type == "handover-silent" and set(control) == _HANDOVER_SILENT_KEYS:
+            self._registry.handover.silent(self.send_event, control["requestId"])
             return True
         await self.reject(CLOSE_INVALID_CONTROL)
         return False

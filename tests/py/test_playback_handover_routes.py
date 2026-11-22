@@ -108,6 +108,32 @@ def test_an_answer_with_another_token_is_ignored_and_the_saved_place_is_used(han
     asyncio.run(scenario())
 
 
+def test_a_holder_that_did_not_answer_is_told_at_once_that_the_press_is_over(handover_app):
+    async def scenario():
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}") as holder:
+            pressing = asyncio.create_task(press(handover_app))
+            asked = await holder.receive_json()
+            status, _, body = await pressing
+            assert status == 200 and decode_json(body)["confirmed"] is False
+            # It learns now that another client plays, not at its next renewal.
+            assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"]}
+
+    asyncio.run(scenario())
+
+
+def test_a_holder_with_nothing_sounding_gives_way_at_the_saved_place(handover_app):
+    async def scenario():
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}") as holder:
+            pressing = asyncio.create_task(press(handover_app))
+            asked = await holder.receive_json()
+            await holder.send_json({"type": "handover-silent", "requestId": asked["requestId"]})
+            status, _, body = await pressing
+            assert status == 200
+            assert (decode_json(body)["confirmed"], decode_json(body)["position"]) == (False, SAVED["position"])
+
+    asyncio.run(scenario())
+
+
 def test_a_claim_taken_by_a_third_client_meanwhile_is_refused(handover_app, monkeypatch):
     def lost(self, *_args, **_kwargs):
         raise PlaybackContractError(409)

@@ -1624,6 +1624,20 @@ test('a tab that just paused answers its paused place with the claim it gave bac
   assert.equal(order.includes('answer'), true);
 });
 
+test('a tab with no claim and nothing sounding says it is silent, so the press need not wait', async () => {
+  const { context, answers } = handoverHolder({ claim: null, paused: true });
+  await context.answerPlaybackHandover('request-9');
+  assert.equal(JSON.stringify(answers), JSON.stringify([{ type: 'handover-silent', requestId: 'request-9' }]));
+});
+
+test('a silent tab that cannot name its song says it is silent', async () => {
+  const unnamed = { src: '/track?path=other.flac', path: 'C:/Music/other.flac', title: 'Other', artist: 'A', album: 'B' };
+  const { context, answers } = handoverHolder({ sounding: { track: unnamed, seconds: 3, durationSeconds: 100 } });
+  context.fetch = async () => { throw new Error('offline'); };
+  await context.answerPlaybackHandover('request-10');
+  assert.equal(JSON.stringify(answers), JSON.stringify([{ type: 'handover-silent', requestId: 'request-10' }]));
+});
+
 // Owner, round 10: the two tabs never sound at once. In one browser they tell each other directly.
 test('a tab told by another tab of this browser that it took over stops without asking the server', async () => {
   const { context, stopStreamingPlaybackCalls } = loadHelper({

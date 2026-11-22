@@ -6564,6 +6564,12 @@ test('a paused tab that takes over starts once at that place, with none of the a
   assert.equal(harness.portMessages('play').length - playsBefore, 1);
 });
 
+test('with no node the handover has nothing to silence', async () => {
+  const harness = createEngineHarness();
+  const drained = await harness.context.silenceStreamingPlaybackForHandover();
+  assert.equal(await drained(), true);
+});
+
 test('music playback asks for large output buffers', async () => {
   const harness = createEngineHarness();
 

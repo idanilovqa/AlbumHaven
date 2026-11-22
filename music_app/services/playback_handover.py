@@ -30,7 +30,7 @@ class PlaybackHandoverHub:
         self._sockets: dict[tuple[int, str], list[Send]] = {}
         self._asks: dict[tuple[int, int, str], _Ask] = {}
         self._released: dict[tuple[int, int], tuple[float, str, bytes]] = {}
-        self._answered: dict[tuple[int, int, str], tuple[Send, str]] = {}
+        self._asked: dict[tuple[int, int, str], tuple[Send, str]] = {}
         self._telling: set[asyncio.Task] = set()
 
     def register(self, account_id: int, client_id: str, send: Send) -> None:
@@ -42,9 +42,9 @@ class PlaybackHandoverHub:
                 sockets.remove(send)
                 if not sockets:
                     del self._sockets[key]
-        for key, (answered_by, _request_id) in list(self._answered.items()):
-            if answered_by == send:
-                del self._answered[key]
+        for key, (asked, _request_id) in list(self._asked.items()):
+            if asked == send:
+                del self._asked[key]
         for ask in self._asks.values():
             if ask.send == send and not ask.answered.done():
                 ask.answered.set_result(None)
@@ -58,7 +58,9 @@ class PlaybackHandoverHub:
         accepts: Callable[[object], bool],
         timeout: float,
     ) -> dict | None:
-        """The holder's track and position, or None: no socket, no valid answer, or none within [timeout]."""
+        """The holder's track and position, or None: no socket, it said it is silent, no valid answer,
+        or none within [timeout].
+        """
         key = (account_id, library_id, client_id)
         ask = self._asks.get(key)
         sending = None
@@ -79,9 +81,12 @@ class PlaybackHandoverHub:
             if not ask.waiting:
                 del self._asks[key]
             if sending is not None and not sending.done():
+                # A press that is over stops nobody later. Cancelling leaves the socket whole: a frame is
+                # handed to the transport in one piece, and only the waits around that can be interrupted.
                 sending.cancel()
 
     async def _send(self, ask: _Ask) -> None:
+        self._asked[ask.key] = (ask.send, ask.request_id)
         try:
             await ask.send({"type": "handover", "requestId": ask.request_id})
         except Exception:  # A socket that cannot be written is a holder that cannot answer.
@@ -95,16 +100,23 @@ class PlaybackHandoverHub:
             if ask.answered.done() or not ask.accepts(message.get("claimToken")):
                 return False
             ask.answered.set_result({"track": message.get("track"), "position": message.get("position")})
-            self._answered[ask.key] = (send, ask.request_id)
             return True
         return False
 
+    def silent(self, send: Send, request_id: object) -> bool:
+        """The asked socket's client has nothing sounding and nothing to hand on."""
+        for ask in self._asks.values():
+            if ask.send == send and ask.request_id == request_id and not ask.answered.done():
+                ask.answered.set_result(None)
+                return True
+        return False
+
     async def settled(self, account_id: int, library_id: int, client_id: str) -> None:
-        """Tells a holder that answered that the press is over, so it shows who plays now."""
-        answered = self._answered.pop((account_id, library_id, client_id), None)
-        if answered is None:
+        """Tells a holder that was asked that the press is over, so it shows who plays now."""
+        asked = self._asked.pop((account_id, library_id, client_id), None)
+        if asked is None:
             return
-        send, request_id = answered
+        send, request_id = asked
         # Its socket may be busy with audio: the press never waits to tell it.
         telling = asyncio.create_task(self._tell(send, {"type": "handover-done", "requestId": request_id}))
         self._telling.add(telling)

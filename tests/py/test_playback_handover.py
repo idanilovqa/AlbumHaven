@@ -79,6 +79,7 @@ def test_only_the_socket_that_was_asked_can_answer():
         asking = asyncio.create_task(ask(hub, timeout=0.2))
         request_id = await holder.request_id()
         assert not hub.answer(other.send, answer(request_id))
+        assert not hub.silent(other.send, request_id)
         assert await asking is None
         assert other.sent == []
 
@@ -126,6 +127,49 @@ def test_a_socket_that_cannot_be_written_ends_the_wait_at_once():
         hub, holder = PlaybackHandoverHub(), Socket(fail=True)
         hub.register(ACCOUNT, HOLDER, holder.send)
         assert await asyncio.wait_for(ask(hub, timeout=30), 0.5) is None
+
+    asyncio.run(scenario())
+
+
+def test_a_holder_with_nothing_sounding_says_so_and_ends_the_wait_at_once():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send)
+        asking = asyncio.create_task(ask(hub, timeout=30))
+        assert hub.silent(holder.send, await holder.request_id())
+        assert await asyncio.wait_for(asking, 0.5) is None
+
+    asyncio.run(scenario())
+
+
+def test_a_holder_that_was_asked_and_did_not_answer_is_still_told_the_press_is_over():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send)
+        assert await ask(hub, timeout=0.05) is None
+        await hub.settled(ACCOUNT, LIBRARY, HOLDER)
+        await asyncio.sleep(0.05)
+        assert holder.sent[-1] == {"type": "handover-done", "requestId": holder.sent[0]["requestId"]}
+
+    asyncio.run(scenario())
+
+
+def test_an_ask_still_waiting_to_be_written_at_the_limit_leaves_the_socket_working_and_stops_nobody():
+    async def scenario():
+        hub, holder, writing = PlaybackHandoverHub(), Socket(), asyncio.Lock()
+
+        async def send(event):
+            async with writing:
+                await holder.send(event)
+
+        hub.register(ACCOUNT, HOLDER, send)
+        await writing.acquire()  # busy with audio
+        assert await ask(hub, timeout=0.05) is None
+        writing.release()
+        await asyncio.sleep(0.05)
+        assert holder.sent == [], "a press that is over stops nobody later"
+        await send({"type": "audio"})
+        assert holder.sent == [{"type": "audio"}]
 
     asyncio.run(scenario())
 

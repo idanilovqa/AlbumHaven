@@ -592,11 +592,15 @@ async function answerPlaybackHandover(requestId) {
   // A start's first claim may still be on its way.
   if (!ownership.activeClaim && !ownership.releasedClaim) await ownership.pendingOperation;
   const claim = ownership.activeClaim || ownership.releasedClaim;
-  if (!claim?.claimToken) return;
+  const answerSilent = () => sendStreamingHandoverAnswer({ type: 'handover-silent', requestId });
   // A first start has no stream yet: read it before the press is cancelled.
   const starting = { track: state.player.selectedTrack, seconds: state.player.selectedStartSeconds,
     durationSeconds: state.player.selectedTrack?.durationSeconds };
-  if (!playbackToHandOver(starting).track?.path) return;
+  if (!claim?.claimToken || !playbackToHandOver(starting).track?.path) {
+    // Nothing to hand on (a page just reloaded): with nothing sounding or starting the press need not wait.
+    if (!starting.track && !isPlaybackClaimRenewable()) answerSilent();
+    return;
+  }
   if (typeof cancelPendingPlayerSelection === 'function') cancelPendingPlayerSelection();
   const drained = typeof silenceStreamingPlaybackForHandover === 'function'
     ? await silenceStreamingPlaybackForHandover()
@@ -613,8 +617,13 @@ async function answerPlaybackHandover(requestId) {
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
   // Without proof of silence there is no answer.
   if (!drained) return;
-  const [silent, prepared] = await Promise.all([drained(), playbackOwnershipTrack(track, known)]);
+  const [silent, prepared] = await Promise.all([drained(),
+    playbackOwnershipTrack(track, known).catch(() => null)]);
   if (!silent) return;
+  if (!prepared) {
+    answerSilent();
+    return;
+  }
   const durationMs = Math.round((Number(sounding.durationSeconds) || 0) * 1000);
   const ms = Math.max(0, Math.round((Number(sounding.seconds) || 0) * 1000));
   sendStreamingHandoverAnswer({

@@ -1575,7 +1575,8 @@ function handoverHolder({ sounding, paused = false, claim } = {}) {
     getPlayerPlaybackSnapshot: () => ({ paused, ended: false, currentTime: 117.6, duration: 195, src: localTrack.src }),
     getSoundingStreamingPlayback: () => sounding || { track: localTrack, seconds: 117.6, durationSeconds: 195 },
     cancelPendingPlayerSelection: () => order.push('cancel'),
-    stopStreamingPlayback: () => { order.push('stop'); },
+    pauseStreamingPlayback: () => { order.push('stop'); },
+    stopStreamingPlayback: () => { order.push('socket closed'); },
     sendStreamingHandoverAnswer: (message) => { order.push('answer'); answers.push(message); return true; },
     fetch: async (url, init = {}) => {
       if (url !== '/playback/refs') throw new Error(`unexpected request ${url}`);

@@ -6403,6 +6403,35 @@ test('the socket names its client, hands a handover to the player and answers on
   assert.notEqual(harness.engine.mode, 'error', 'an answer that cannot be sent never fails playback');
 });
 
+// Review of the confirmed handover: the engine and the ownership code for real, not stand-ins for each
+// other. The holder stops, and its answer still goes out on the socket it was asked on.
+test('a playing tab asked by Play here falls silent and its answer reaches the socket it was asked on', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const track = makeTrack();
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: { claimToken: 'holder-claim', leaseDeadline: Infinity, path: track.path,
+      referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'holder-ref' } },
+  };
+  harness.context.state.player.current = track;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  await harness.api.start(track, { startSeconds: 87 });
+  const socket = harness.sockets[0];
+
+  await harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+
+  const answer = socket.sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(answer, 'the answer was sent');
+  assert.equal(answer.position.ms, 87000);
+  assert.equal(answer.track.playbackRef, 'holder-ref');
+  assert.equal(harness.api.snapshot().paused, true, 'and it is silent');
+  assert.equal(socket.readyState, 1, 'the socket stays for the end of the press');
+});
+
 test('music playback asks for large output buffers', async () => {
   const harness = createEngineHarness();
 

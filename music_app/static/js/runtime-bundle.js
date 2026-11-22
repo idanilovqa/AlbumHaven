@@ -13950,7 +13950,10 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   if (!state.player.listenSession?.paused_at_unix_ms && typeof markListenSessionPaused === 'function') {
     markListenSessionPaused(offset);
   }
-  if (typeof stopStreamingPlayback === 'function') {
+  if (reason === 'ownership-handover') {
+    // Asked by Play here elsewhere it only falls silent: stopping would close the socket it answers on.
+    void Promise.resolve(pauseStreamingPlayback()).catch(() => {});
+  } else if (typeof stopStreamingPlayback === 'function') {
     void Promise.resolve(stopStreamingPlayback(reason, { preserveSnapshot: true })).catch(() => {});
   }
   if (updateUi && typeof updatePlayerUi === 'function') updatePlayerUi();
@@ -14348,8 +14351,8 @@ async function answerPlaybackHandover(requestId) {
   if (!track?.path) return;
   const known = [claim, ownership.previousClaim].find((held) => held?.path === track.path) || null;
   if (typeof cancelPendingPlayerSelection === 'function') cancelPendingPlayerSelection();
-  // The stop of a claim taken over: no save and no release follows it with the token it hands on.
-  losePlaybackOwnership('ownership-takeover', false);
+  // As a claim taken over: no save and no release follows it with the token it hands on.
+  losePlaybackOwnership('ownership-handover', false);
   ownership.handedOverClaim = claim;
   ownership.blockedReason = 'playing_in_another_tab';
   ownership.mirroredTrack = normalizePlaybackOwnershipTrack(track);

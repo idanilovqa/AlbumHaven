@@ -840,34 +840,6 @@ class PostgresLibraryBrowseRepository:
                 "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             }
 
-    def _load_non_album_track_snapshot(self, connection: Any) -> list[dict[str, object]] | None:
-        row = connection.execute(_non_album_track_snapshot_load_sql()).fetchone()
-        payload = _row_mapping(row).get("payload")
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        if not isinstance(payload, Mapping):
-            return None
-        if payload.get(_SNAPSHOT_FINGERPRINT_KEY) != _problematic_inventory_fingerprint(connection):
-            return None
-        tracks = payload.get("tracks")
-        return [dict(track) for track in tracks] if isinstance(tracks, list) else None
-
-    def _store_non_album_track_snapshot(
-        self,
-        connection: Any,
-        tracks: list[dict[str, object]],
-        fingerprint: str,
-    ) -> None:
-        if self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
-            return
-        document = json.dumps(
-            {
-                _SNAPSHOT_FINGERPRINT_KEY: fingerprint,
-                "tracks": tracks,
-            },
-            default=str,
-        )
-        connection.execute(_non_album_track_snapshot_store_sql(), {"payload": document})
 
     def _load_non_album_entries(
         self,
@@ -7538,17 +7510,9 @@ def _problematic_summary_search_text(album: Mapping[str, object]) -> str:
     return "\n".join(haystack).lower()
 
 
-_SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
 # Cursors of pages read from the persisted index stay valid across its updates
 # (keyset by sort key); in-memory generations never reach this value.
 _PROBLEMATIC_INDEX_CURSOR_GENERATION = -1
-# A stored first page rather than the complete list; the store SQL names the same key.
-
-
-def _problematic_inventory_fingerprint(connection: Any) -> str:
-    """The inventory revision plus root and exception-override versions, as text."""
-    fingerprint = _duplicate_inventory_fingerprint(connection).get("fingerprint")
-    return json.dumps(fingerprint, default=str) if fingerprint else ""
 
 
 _LOCAL_LIBRARY_ID_SQL = """
@@ -7561,24 +7525,6 @@ _LOCAL_LIBRARY_ID_SQL = """
     where owners.owner_key = 'local-bootstrap-owner'
     limit 1
 """
-
-
-def _non_album_track_snapshot_load_sql() -> str:
-    return f"""
-        select snapshots.payload
-        from library.non_album_track_snapshots snapshots
-        where snapshots.library_id = ({_LOCAL_LIBRARY_ID_SQL})
-    """
-
-
-def _non_album_track_snapshot_store_sql() -> str:
-    return f"""
-        insert into library.non_album_track_snapshots (library_id, payload, built_at)
-        select ({_LOCAL_LIBRARY_ID_SQL}), %(payload)s::jsonb, now()
-        where ({_LOCAL_LIBRARY_ID_SQL}) is not null
-        on conflict (library_id) do update
-        set payload = excluded.payload, built_at = excluded.built_at
-    """
 
 
 def _path_file_type(path: object) -> str:

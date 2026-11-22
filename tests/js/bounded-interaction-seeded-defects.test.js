@@ -886,6 +886,21 @@ test('the guard rejects a test identity that is only a substring of the real tes
   ]);
 });
 
+test('the guard rejects forbidden work naming a function that no longer exists', () => {
+  const { loadRegistry, validateSchema } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const registry = loadRegistry();
+  const entry = registry.interactions.find(item => item.id === 'py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image_save');
+  const renamed = 'py:music_app/services/state.py#renamed_invalidator';
+  entry.forbiddenWork = ['library-state-scan', renamed];
+  const errors = validateSchema(registry, {
+    fileExists: file => fs.existsSync(path.join(ROOT, file)),
+    readFile: file => fs.readFileSync(path.join(ROOT, file), 'utf8'),
+  });
+  assert.deepEqual(errors, [
+    `${entry.id}: forbiddenWork ${renamed} must be library-state-scan or an existing py:<path>#<function>`,
+  ]);
+});
+
 // The repeated-request rule. Each case measures the registered Album Details
 // request-capture contract with a seeded interaction: opening an album wires a
 // click listener that GETs its details. A leaked listener (one more per open)

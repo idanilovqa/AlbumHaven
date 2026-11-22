@@ -2918,19 +2918,22 @@ class PostgresLibraryBrowseRepository:
             for item, _album in projected_items:
                 insort(items, item, key=_problematic_item_order)
             first_key = items[0]["key"] if items else None
-            first_album = next((album for album in albums if album["key"] == first_key), None)
+            first_album = next((album for item, album in projected_items if item["key"] == first_key), None)
             if first_key is None:
                 detail = None
             elif first_album is None and (detail or {}).get("key") != first_key:
                 # The album that led the list left it, so the list now opens on this one.
                 first_paths = set(items[0].get("track_paths") or [])
-                first_albums, _items = self._problematic_albums_of_tracks(connection, first_paths)
-                first_album = next((album for album in first_albums if album["key"] == first_key), None)
+                _albums, first_items = self._problematic_albums_of_tracks(connection, first_paths)
+                first_album = next((album for item, album in first_items if item["key"] == first_key), None)
             if first_album is not None:
                 detail = self._problematic_initial_detail(connection, first_album)
         if first_key is not None and (detail or {}).get("key") != first_key:
-            # A missing album or an unassigned source has no album rows to reload.
+            # A missing album or an unassigned source has no album rows to reload,
+            # and a cover saved during this read may have cleared the first album.
             detail = self.build_problematic_file_detail_payload(first_key)
+            if (detail or {}).get("key") != first_key:
+                detail = None  # the list must never open on another album's detail
         return {**payload, "items": items, "count": len(items), "initial_detail": detail}
 
     def build_problematic_album_payload_by_track_paths(

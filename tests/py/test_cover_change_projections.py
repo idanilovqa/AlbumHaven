@@ -110,6 +110,27 @@ def test_a_split_release_listed_from_two_album_rows_is_reloaded_whole(repository
     assert [item["track_paths"] for item in reloaded["items"]] == [["a", "b"]]
 
 
+def test_a_first_album_fixed_during_the_reload_opens_the_list_without_failing(repository, monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(execute=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repository, "_browse_connection_context", lambda: nullcontext(connection))
+    # Its rows are still there, but a save committed meanwhile left it without a problem.
+    albums = {path: [{"key": path, "name": path, "tracks": [{"path": path}]}] for path in ("a", "b")}
+    monkeypatch.setattr(
+        repository, "_problematic_albums_of_tracks", lambda _connection, paths: (albums[min(paths)], []),
+    )
+    monkeypatch.setattr(repository, "build_problematic_file_detail_payload", lambda _key: {"key": "another"})
+    items = [{"key": key, "name": key, "track_paths": [key]} for key in ("a", "b")]
+
+    reloaded = repository._problematic_files_with_reloaded_albums(
+        {"items": items, "initial_detail": {"key": "a"}}, {"a"},
+    )
+
+    assert reloaded["items"] == items[1:] and reloaded["initial_detail"] is None
+
+
 def test_a_full_invalidation_discards_the_noted_changes(repository):
     browse._UTILITY_PROJECTION_CACHE[KEY] = {"items": []}
     _save("a")

@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
 from tests.py.bounded_interactions import OperationCounts, assert_plateau, measure_scale_pair
 from tests.py.test_relation_projection_postgres import _config, _morse_rows, _ProjectionDatabase
 
@@ -113,9 +114,6 @@ def test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at
     measure_scale_pair(
         run=run, **_registered("py:services/state.py#_run_scheduled_relation_projection_rebuild"),
     )
-
-
-from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
 
 
 class _GalleryProjectionStore:

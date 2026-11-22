@@ -187,10 +187,9 @@ def merge_file_cache_entries(
     library_state: dict[str, object],
     entries: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
-    """Merge committed entries into the live file cache, under the caller's
-    state-mutation guard, and return the live cache.
+    """Merge committed entries into the live file cache and return the live cache.
 
-    Readers on other threads iterate the cache without that guard, so its keys
+    Readers on other threads iterate the cache without a lock, so its keys
     never change in place: entries that only replace existing tracks are merged
     in place, and any new track republishes a merged copy."""
     file_cache = library_state.get("file_cache")

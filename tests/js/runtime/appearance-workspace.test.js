@@ -983,6 +983,27 @@ for (const operation of ['load', 'save']) {
   });
 }
 
+// Owner 2026-11-22: "Why are settings not editable?"
+test('a live reload leaves Settings editable while the server has not answered', async () => {
+  let finish;
+  const { controller } = setup({ request: () => new Promise(resolve => { finish = resolve; }) });
+  const reload = controller.load({ background: true });
+  assert.equal(controller.getState().loading, false);
+  assert.equal(controller.getState().canEdit, true);
+
+  controller.setColor('main_surface_color', '#123456');
+  finish(initialAppearance());
+  assert.equal(await reload, false);
+  assert.equal(controller.getState().draft.main_surface_color, '#123456', 'an edit made meanwhile stays');
+});
+
+test('a failed live reload leaves Settings editable', async () => {
+  const { controller } = setup({ request: async () => { throw new Error('Appearance unavailable'); } });
+  assert.equal(await controller.load({ background: true }), false);
+  assert.equal(controller.getState().loadFailed, false);
+  assert.equal(controller.getState().canEdit, true);
+});
+
 test('TV seekbar mode rejects edits after an appearance load failure', async () => {
   const { controller } = setup({ request: async () => { throw new Error('Appearance unavailable'); } });
   controller.setActiveSection('seekbar');

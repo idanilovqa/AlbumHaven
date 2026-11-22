@@ -84,7 +84,7 @@ function flushLibraryLiveEvents() {
   if (kinds.has('appearance') || resync) {
     const controller = window.AlbumHavenAppearance?.instance?.controller;
     // Unsaved edits in this tab's Appearance editor stay; its Save reports the newer revision.
-    if (controller && !controller.getState().dirty) void window.AlbumHavenAppearance.instance.load();
+    if (controller && !controller.getState().dirty) void window.AlbumHavenAppearance.instance.load({ background: true });
   }
   if (kinds.has('library_settings') || resync) {
     const settings = state.utility?.librarySettings;

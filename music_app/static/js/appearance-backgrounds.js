@@ -872,18 +872,20 @@
       else throw new TypeError('Unknown Appearance section.');
       error = ''; syncInputs(true); notify();
     };
-    const load = async () => {
+    // A background load follows a change made elsewhere: the editor stays usable, and edits made meanwhile win.
+    const load = async ({ background = false } = {}) => {
       if (loading || saving) return false;
-      const ownGeneration = ++generation; loading = true; error = ''; notify();
+      const ownGeneration = ++generation;
+      if (!background) { loading = true; error = ''; notify(); }
       try {
         const response = await request('GET');
         const preference = normalizePreferences(response), history = normalizeRecentColors(response.waveform_recent_colors);
-        if (ownGeneration !== generation) return false;
+        if (ownGeneration !== generation || (background && getState().dirty)) return false;
         aggregate = isAggregate(response); revision = aggregate && Number.isInteger(response.revision) ? response.revision : revision;
         playerRecentSets = aggregate ? normalizePlayerSets(response.player_recent_sets) : [];
         saved = preference; draft = copy(saved); deviceProfiles = profileApi.normalize(response.device_profiles, appearancePreferenceSections(saved)); savedDeviceProfiles = copy(deviceProfiles); pendingPlayerSet = null; recentColors = history; waveformColorUpdates = []; errors = {}; loadFailed = false; applyActiveDeviceSection(); syncInputs(); apply(copy(saved)); return true;
       } catch (_failure) {
-        if (ownGeneration === generation) { error = 'Backgrounds could not be loaded. Try again.'; loadFailed = true; } return false;
+        if (ownGeneration === generation && !background) { error = 'Backgrounds could not be loaded. Try again.'; loadFailed = true; } return false;
       } finally { if (ownGeneration === generation) { loading = false; notify(); } }
     };
     const save = async () => {
@@ -1189,7 +1191,7 @@
     controller.setDeviceProfile(window.AlbumHavenDevicePreferences?.profile?.() || 'web_desktop');
     const applyEditorPreview = () => applySavedTheme(mounted ? controller.getMainPreview() : controller.getState().saved);
     controller.subscribe(applyEditorPreview);
-    const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
+    const load = async options => { const result = await controller.load(options); if (result) loaded = true; return result; };
     let footerDispose = null, mountedFooter = null, restoreFooterTheme = null;
     const mountSharedFooter = (localHost, options) => {
       footerDispose?.(); footerDispose = null;

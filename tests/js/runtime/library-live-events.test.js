@@ -53,7 +53,7 @@ function load({ locks = 'granted', allows = true, channel = true } = {}) {
       AlbumHavenAppearance: {
         instance: {
           controller: { dirty: false, getState() { return { dirty: this.dirty }; } },
-          load: async () => { calls.appearance += 1; },
+          load: async (options) => { calls.appearance += 1; calls.appearanceOptions = options; },
         },
       },
     },
@@ -156,6 +156,7 @@ test('each change kind goes to the owner of the surface that shows it', () => {
   assert.deepEqual(calls.artwork, ['Night'], 'only artwork this tab has loaded or shows');
   assert.equal(calls.loops, 1);
   assert.equal(calls.appearance, 1);
+  assert.equal(calls.appearanceOptions?.background, true, 'never disables the open editor');
   assert.equal(calls.settings, 1);
 });
 

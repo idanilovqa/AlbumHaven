@@ -146,6 +146,17 @@ function renderQuantum(fixture) {
   return { left: [...left], right: [...right] };
 }
 
+test('a relay port silences the next quantum without the page', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 1024 });
+  enqueue(fixture, { streamId: 1, role: 'current', sequence: 0, left: new Array(512).fill(0.25) });
+  fixture.send({ type: 'play', generation: 7 });
+  const relay = {};
+  fixture.send({ type: 'silence-port', port: relay });
+  assert.equal(renderQuantum(fixture).left[0], 0.25);
+  relay.onmessage({ data: 'silence' });
+  assert.ok(renderQuantum(fixture).left.every((sample) => sample === 0));
+});
+
 test('silence stops the next quantum whatever the generation and is answered after the last position', () => {
   const fixture = createProcessor({ currentCapacityFrames: 1024 });
   enqueue(fixture, { streamId: 1, role: 'current', sequence: 0, left: new Array(512).fill(0.25) });

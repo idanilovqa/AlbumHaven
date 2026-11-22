@@ -6570,6 +6570,41 @@ test('with no node the handover has nothing to silence', async () => {
   assert.equal(await drained(), true);
 });
 
+test('the audio thread gets a port from a Worker that only this tab\u2019s takeover can use', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => 'this-tab' });
+  const workers = [];
+  Object.assign(harness.context, {
+    PLAYBACK_OWNERSHIP_CHANNEL_NAME: 'albumhaven.playbackOwnership.v1',
+    Blob,
+    Worker: class {
+      constructor() { this.messages = []; workers.push(this); }
+      postMessage(message) { this.messages.push(message); }
+    },
+    MessageChannel: class { constructor() { this.port1 = { side: 1 }; this.port2 = { side: 2 }; } },
+    URL: { createObjectURL: () => 'blob:relay', revokeObjectURL: () => {} },
+  });
+  await harness.api.start(makeTrack());
+
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].messages[0].clientId, 'this-tab');
+  assert.equal(workers[0].messages[0].port.side, 2);
+  assert.equal(harness.portMessages('silence-port')[0].port.side, 1);
+
+  // The Worker's own script: it relays only a takeover of this very tab.
+  const source = vm.runInContext('STREAMING_SILENCE_RELAY_SOURCE', harness.context);
+  const channel = {};
+  const scope = { BroadcastChannel: class { constructor() { return channel; } } };
+  vm.createContext(scope);
+  vm.runInContext(source, scope);
+  const relayed = [];
+  scope.onmessage({ data: { channel: 'c', clientId: 'this-tab', port: { postMessage: (m) => relayed.push(m) } } });
+  channel.onmessage({ data: { type: 'changed', clientId: 'this-tab' } });
+  channel.onmessage({ data: { type: 'taken-over', clientId: 'another-tab' } });
+  assert.deepEqual(relayed, []);
+  channel.onmessage({ data: { type: 'taken-over', clientId: 'this-tab' } });
+  assert.deepEqual(relayed, ['silence']);
+});
+
 test('music playback asks for large output buffers', async () => {
   const harness = createEngineHarness();
 

@@ -11,6 +11,22 @@ const STREAMING_SILENCE_ACK_MS = 1000;
 // For a browser that does not report its output latency; the context asks for large playback buffers.
 const STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS = 0.2;
 const STREAMING_OUTPUT_DRAIN_MARGIN_MS = 20;
+// Play here in another tab of this browser must silence this one even while its main thread is busy
+// (owner, round 10: never both at once): a Worker hears that tab and holds a port to the audio thread.
+// It acts only on a takeover that names this tab's client, which the server gives only to its account.
+const STREAMING_SILENCE_RELAY_SOURCE = `let clientId = '';
+let port = null;
+let channel = null;
+onmessage = ({ data }) => {
+  clientId = data.clientId;
+  if (data.port) port = data.port;
+  if (channel) return;
+  channel = new BroadcastChannel(data.channel);
+  channel.onmessage = (event) => {
+    const message = event.data || {};
+    if (port && clientId && message.type === 'taken-over' && message.clientId === clientId) port.postMessage('silence');
+  };
+};`;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
@@ -622,6 +638,33 @@ async function silenceStreamingPlaybackForHandover() {
     });
     return engine.snapshot.paused !== false;
   };
+}
+
+// Tells the relay which client this tab is now and, given a new [node], hands it a port to that node.
+function connectStreamingSilenceRelay(node = null) {
+  const engine = streamingEngineState();
+  if (typeof Worker !== 'function' || typeof MessageChannel !== 'function'
+      || typeof PLAYBACK_OWNERSHIP_CHANNEL_NAME !== 'string'
+      || typeof getPlaybackOwnershipTabId !== 'function') return;
+  if (!node && !engine.silenceRelay) return;
+  try {
+    if (!engine.silenceRelay) {
+      const url = URL.createObjectURL(new Blob([STREAMING_SILENCE_RELAY_SOURCE], { type: 'text/javascript' }));
+      engine.silenceRelay = new Worker(url);
+      URL.revokeObjectURL(url);
+    }
+    const message = { channel: PLAYBACK_OWNERSHIP_CHANNEL_NAME, clientId: getPlaybackOwnershipTabId() };
+    if (!node) {
+      engine.silenceRelay.postMessage(message);
+      return;
+    }
+    const link = new MessageChannel();
+    node.port.postMessage({ type: 'silence-port', port: link.port1 }, [link.port1]);
+    engine.silenceRelay.postMessage({ ...message, port: link.port2 }, [link.port2]);
+  } catch (error) {
+    // Without it the page's own thread still silences this tab; playback never depends on the relay.
+    engine.diagnostics.silenceRelayError = String(error?.message || error);
+  }
 }
 
 // An answer that cannot be sent never fails playback.
@@ -2238,6 +2281,7 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
         });
         node.connect(context.destination);
         node.port.onmessage = ({ data }) => handleStreamingWorkletMessage(data);
+        connectStreamingSilenceRelay(node);
         node.onprocessorerror = (event) => {
           if (engine.node !== node) return;
           failStreamingEngine('processor', event, 'processor-error');

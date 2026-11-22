@@ -219,6 +219,8 @@ async def _confirmed_takeover(request, payload):
         finally:
             await hub.settled(*holder)
         timing["confirmed"] = result["confirmed"]
+        # A client of this same account and library: the one tab the taker may silence in its own browser.
+        result = {**result, "previousClientId": observed["client_id"]}
         scrobbling = await _scrobbling_status(request)
     return JSONResponse({**result, **scrobbling}, headers={"Cache-Control": "no-store"})
 

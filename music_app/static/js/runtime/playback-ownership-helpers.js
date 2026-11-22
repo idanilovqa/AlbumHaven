@@ -227,14 +227,18 @@ async function handlePlaybackOwnershipEvent() {
   }
 }
 
-function announcePlaybackOwnership(type = 'changed') {
-  getPlaybackOwnershipState().channel?.postMessage({ type });
+function announcePlaybackOwnership(type = 'changed', clientId = '') {
+  getPlaybackOwnershipState().channel?.postMessage(clientId ? { type, clientId } : { type });
 }
 
-/** Another tab of this browser says ownership changed, or that it took over: then this one stops at once. */
+/**
+ * Another tab of this browser says ownership changed, or that it took over a client: that one stops at
+ * once. The server names that client only to a taker of its own account.
+ */
 function receivePlaybackOwnershipMessage(event) {
   const ownership = getPlaybackOwnershipState();
-  if (event?.data?.type === 'taken-over' && ownership.activeClaim) {
+  if (event?.data?.type === 'taken-over' && ownership.activeClaim
+      && event.data.clientId === getPlaybackOwnershipTabId()) {
     losePlaybackOwnership('ownership-takeover', false);
     ownership.blockedReason = 'playing_in_another_tab';
   }
@@ -374,6 +378,8 @@ function acceptPlaybackClaim(result, prepared) {
   ownership.releasedClaim = null;
   ownership.handedOverClaim = null;
   ownership.activeClaim = claim;
+  // A page that was refused its previous page's claim is a new client.
+  if (typeof connectStreamingSilenceRelay === 'function') connectStreamingSilenceRelay();
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
@@ -697,7 +703,7 @@ async function takeOverAtConfirmedPlace() {
   acceptPlaybackClaim(result, { path: result.path, track: result.track,
     referenceExpiresAt: new Date(0).toISOString() });
   // Before this tab sounds, and without the server: for a tab of this browser that could not be asked.
-  announcePlaybackOwnership('taken-over');
+  if (result.previousClientId) announcePlaybackOwnership('taken-over', result.previousClientId);
   return playTrackFromPayload(payload, { startSeconds, ownershipClaimed: true });
 }
 

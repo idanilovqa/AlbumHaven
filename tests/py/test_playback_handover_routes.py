@@ -74,6 +74,7 @@ def test_play_here_starts_where_the_holder_says_not_where_it_last_saved(handover
             assert status == 200
             answer = decode_json(body)
             assert (answer["confirmed"], answer["track"], answer["position"]) == (True, SOUNDING, PLACE)
+            assert answer["previousClientId"] == HOLDER, "whom the taker may silence in its own browser"
             assert Claims.replaced[0]["observed"]["digest"] == b"held"
             assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"]}
 

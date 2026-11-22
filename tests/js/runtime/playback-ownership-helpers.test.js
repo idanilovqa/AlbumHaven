@@ -1649,9 +1649,39 @@ test('a tab told by another tab of this browser that it took over stops without 
     fetch: () => new Promise(() => {}),
   });
   context.state.player.ownership.activeClaim = { claimToken: 'mine', path: localTrack.path, leaseDeadline: Infinity };
-  context.receivePlaybackOwnershipMessage({ data: { type: 'taken-over' } });
+  context.receivePlaybackOwnershipMessage({
+    data: { type: 'taken-over', clientId: context.getPlaybackOwnershipTabId() },
+  });
   assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-takeover']);
   assert.equal(context.state.player.ownership.blockedReason, 'playing_in_another_tab');
+});
+
+test('a tab that is not the one taken over, as of another account, is not stopped by that', async () => {
+  const { context, stopStreamingPlaybackCalls } = loadHelper({
+    state: activeOwnershipState(),
+    fetch: () => new Promise(() => {}),
+  });
+  context.state.player.ownership.activeClaim = { claimToken: 'mine', path: localTrack.path, leaseDeadline: Infinity };
+  context.receivePlaybackOwnershipMessage({
+    data: { type: 'taken-over', clientId: '6b1f2e0a-9c4d-4e53-8a77-2f0d9e8c1b22' },
+  });
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+});
+
+test('Play here names the tab it took over to this browser, before it starts', async () => {
+  const order = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    playTrackFromPayload: async () => { order.push('start'); return true; },
+    fetch: async () => jsonResponse({ protocol: 1, claimToken: 'taker-claim', expiresAt: '2099-01-01T00:00:00Z',
+      leaseMs: 30000, confirmed: false, previousClientId: 'the-holder', path: 'C:/Music/their.flac',
+      track: { playbackRef: 'their-ref', title: 'Their Song', artist: 'Them', album: 'B', artworkUrl: null } }),
+  });
+  context.state.player.ownership.channel = { postMessage: (message) => {
+    if (message.type === 'taken-over') order.push(message.clientId);
+  } };
+  await context.takeOverPlaybackHere();
+  assert.deepEqual(order, ['the-holder', 'start']);
 });
 
 test('a tab that cannot prove its output silent pauses and does not answer', async () => {

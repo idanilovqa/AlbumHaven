@@ -190,6 +190,12 @@
         this.seekReset(message);
         return;
       }
+      if (message.type === 'silence-port') {
+        // A Worker's port: it reaches the audio thread while the page's own thread is busy.
+        this.silencePort = message.port;
+        this.silencePort.onmessage = () => { this.playing = false; };
+        return;
+      }
       if (message.type === 'silence') {
         // Whatever the generation: zeros from the next quantum on. Every position rendered before this
         // was posted before the answer, so the page then knows the last frame it sent out.

@@ -481,7 +481,7 @@
         "production": 1000
       },
       "budgets": {
-        "requests": 121
+        "requests": 120
       },
       "growth": {
         "metric": "requests",
@@ -1333,21 +1333,6 @@
       "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
-      "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick#2",
-      "action": "scheduleBrowserAnimationFrame timers installed by handleGalleryBootstrapClick",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick:timer:scheduleBrowserAnimationFrame"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState",
       "action": "Step back to Home, to a search, and to an anchored root gallery, each step repeated",
       "entrypoints": [
@@ -1613,6 +1598,21 @@
         "artist-tree-scroll-navigation"
       ],
       "rollback": "Revert the virtual grid artist-section index; each retry frame then scans every loaded section for the anchored artist again, with no data or API change."
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#showRememberedRootGallery",
+      "action": "Draw the remembered full gallery on the next frame after Home or a cleared search",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#showRememberedRootGallery:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#stabilizeRootGalleryArtistAlignment",

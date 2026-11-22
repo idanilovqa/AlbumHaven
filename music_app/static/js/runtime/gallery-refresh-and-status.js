@@ -14,6 +14,10 @@ function isPagedRootGallery(view = state.view) {
     && surface === 'albums');
 }
 
+function isRootGalleryPageRequestLoading() {
+  return Boolean(rootGalleryPageRequest);
+}
+
 function cancelRootGalleryPageRequest() {
   rootGalleryPageRequest?.controller.abort();
   rootGalleryPageRequest = null;

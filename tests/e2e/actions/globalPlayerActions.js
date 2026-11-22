@@ -225,6 +225,12 @@ export class GlobalPlayerActions {
     return this.globalPlayer.readPlaybackSummary();
   }
 
+  // After a play or pause, the player repaints its control from the playback
+  // snapshot asynchronously; wait for the visible summary to settle on `expected`.
+  async expectSettledPlaybackSummary(expected, options = {}) {
+    await expect.poll(() => this.readCurrentPlaybackSummary(), { timeout: options.timeout || 10000 }).toEqual(expected);
+  }
+
   async expectOwnershipBlocked({ artist, album, title }) {
     const player = this.globalPlayer;
     await expect(player.time).toHaveText('Playing in another tab');

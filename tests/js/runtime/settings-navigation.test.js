@@ -498,7 +498,7 @@ test('an untracked pop during rollback releases navigation after restoring the d
 
 // Request-capture contract (tests/ci/bounded-interactions.json): each accepted Settings
 // navigation fetches exactly its own page; every other route stays off the network.
-const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+const { measureInteractionContract } = require('../helpers/request-capture');
 
 test('request capture: Settings navigation fetches only its owned pages, once per navigation', async () => {
   const accepted = [
@@ -506,21 +506,22 @@ test('request capture: Settings navigation fetches only its owned pages, once pe
     ['/account/password', { method: 'POST', body: 'csrf_token=t' }, '/account'],
   ];
   const rejected = ['https://outside.example/account', '/logout', '/login', '/api/admin/members', '/view-data?surface=albums', '/home-data', '/news'];
-  await measureInteractionContract('js:settings-navigation.js#navigate', async (members) => {
-    const app = harness();
-    const roster = Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join('');
-    const paths = [];
-    for (const [target, options, landed = target] of accepted) {
-      app.respond(target === '/admin/members' ? roster : `Page ${target}`, `http://localhost:5000${landed}`);
+  await measureInteractionContract('js:settings-navigation.js#navigate', {
+    setup: members => ({ app: harness(), roster: Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join('') }),
+    async act({ app, roster }) {
+      const requests = [];
+      for (const [target, options, landed = target] of accepted) {
+        app.respond(target === '/admin/members' ? roster : `Page ${target}`, `http://localhost:5000${landed}`);
+        const before = app.requests.length;
+        assert.equal(await app.navigation.navigate(target, options), true, target);
+        assert.equal(app.requests.length - before, 1, `${target} issues one request`);
+        requests.push({ url: new URL(app.requests.at(-1).url).pathname, method: options?.method });
+      }
       const before = app.requests.length;
-      assert.equal(await app.navigation.navigate(target, options), true, target);
-      assert.equal(app.requests.length - before, 1, `${target} issues one request`);
-      paths.push(new URL(app.requests.at(-1).url).pathname);
-    }
-    for (const target of rejected) assert.equal(await app.navigation.navigate(target), false, target);
-    assert.deepEqual(paths, accepted.map(([target]) => target));
-    assert.equal(app.requests.length, accepted.length);
-    assertInteractionRequests('js:settings-navigation.js#navigate', paths);
-    return { requests: app.requests.length };
+      for (const target of rejected) assert.equal(await app.navigation.navigate(target), false, target);
+      assert.equal(app.requests.length, before, 'rejected routes stay off the network');
+      assert.deepEqual(requests.map(({ url }) => url), accepted.map(([target]) => target));
+      return { requests };
+    },
   });
 });

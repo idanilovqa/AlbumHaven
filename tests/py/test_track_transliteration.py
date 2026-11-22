@@ -33,7 +33,8 @@ CASES = _FIXTURE["cases"]
 JAPANESE_TITLES = ["桜花抄", "想い出は遠くの日々", "焦燥", "雪の駅", "Kiss", "カナエの気持ち", "夢", "空と海の詩",
                    "届かない気持ち", "End Theme", "One more time, One more chance (piano version)"]
 NOW = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
-JAPANESE = {"language": "jpn"}  # A stored answer: a Japanese release with no Latin pseudo-release.
+JAPANESE = {"evidence": "jpn"}  # A stored answer: a Japanese release with no Latin pseudo-release.
+CHINESE = {"evidence": "zho"}
 
 
 def _replay_client(asked=None):
@@ -62,8 +63,12 @@ def no_fallbacks(monkeypatch):
 def fallbacks(monkeypatch):
     """Stand-ins answering as cutlet 0.5.2 and pypinyin 0.55.0 do for these titles."""
     romaji = {"桜花抄": "Ouka shou", "焦燥": "Shousou", "天門": "Tenmon", "世界": "Sekai",
-              "カナエの気持ち": "Kanae no kimochi", "夢": "Yume", "自傷": "Jishou", "ジャイアニズム叱": "Jaianizumu ?"}
-    pinyin = {"天门": ["tiān", "mén"], "天門": ["tiān", "mén"], "桜花抄": ["yīng", "huā", "chāo"], "你好 Love": ["nǐ", "hǎo", " Love"], "你好，世界": ["nǐ", "hǎo", "，", "shì", "jiè"]}
+              "カナエの気持ち": "Kanae no kimochi", "夢": "Yume", "自傷": "Jishou", "ジャイアニズム叱": "Jaianizumu ?",
+              "華談": "Ka Dan", "東京傷年": "Tokyoshou nen", "零": "Rei"}
+    pinyin = {"天门": ["tiān", "mén"], "天門": ["tiān", "mén"], "桜花抄": ["yīng", "huā", "chāo"], "你好 Love": ["nǐ", "hǎo", " Love"], "你好，世界": ["nǐ", "hǎo", "，", "shì", "jiè"],
+              "華談": ["huá", "tán"], "東京傷年": ["dōng", "jīng", "shāng", "nián"],
+              "零-beyond the G.-": ["líng", "-beyond the G.-"], "直線移動": ["zhí", "xiàn", "yí", "dòng"],
+              "夢回唐朝": ["mèng", "huí", "táng", "cháo"], "太陽": ["tài", "yáng"]}
     monkeypatch.setitem(sys.modules, "cutlet", types.SimpleNamespace(
         Cutlet=lambda: types.SimpleNamespace(romaji=lambda text: romaji[text])))
     monkeypatch.setitem(sys.modules, "pypinyin", types.SimpleNamespace(
@@ -231,16 +236,46 @@ def test_without_musicbrainz_or_the_fallbacks_nothing_is_shown(no_fallbacks):
     assert track_transliterations(_tracks(["桜花抄", "Hello 世界", "天门"])) == {}
 
 
-def test_ideographs_are_japanese_only_when_the_musicbrainz_language_is_japanese(fallbacks):
-    """Owner 2026-11-17 ("Use MB language"): romaji for a Japanese release, pinyin otherwise."""
-    assert track_transliterations(_tracks(["天門"]), stored=JAPANESE) == {(1, 1): "Tenmon"}
-    for other in ({"language": "zho"}, {"language": ""}, None):
-        assert track_transliterations(_tracks(["天門"]), stored=other) == {(1, 1): "Tiān mén"}
-    # Kana elsewhere on the album no longer makes its ideographs Japanese; kana is always romaji.
-    assert track_transliterations(_tracks(["天門", "カナエの気持ち"])) == {(1, 1): "Tiān mén", (1, 2): "Kanae no kimochi"}
-    assert fallback_transliteration("天门", japanese=False) == "Tiān mén"
-    assert fallback_transliteration("你好 Love", japanese=False) == "Nǐ hǎo Love"
-    assert fallback_transliteration("你好，世界", japanese=False) == "Nǐ hǎo， shì jiè"
+def test_japanese_wins_chinese_needs_evidence_and_ideographs_alone_show_nothing(fallbacks):
+    """Owner 2026-11-22, "Album, artist, then MB": replaces the 11-17 fall back to pinyin."""
+    for evidence in ("jpn", "kana", "JP", "kana jpn JP", "zho JP", "kana CN"):
+        assert track_transliterations(_tracks(["天門"]), stored={"evidence": evidence}) == {(1, 1): "Tenmon"}
+    for evidence in ("zho", "cmn", "yue", "CN", "TW", "HK", "MO"):
+        assert track_transliterations(_tracks(["天門"]), stored={"evidence": evidence}) == {(1, 1): "Tiān mén"}
+    for stored in ({"evidence": ""}, {}, None):
+        assert track_transliterations(_tracks(["天門"]), stored=stored) == {}
+    # A title with kana is romaji whatever the album is.
+    assert track_transliterations(_tracks(["カナエの気持ち"]), stored=CHINESE) == {(1, 1): "Kanae no kimochi"}
+    assert fallback_transliteration("天门", reading="chinese") == "Tiān mén"
+    assert fallback_transliteration("你好 Love", reading="chinese") == "Nǐ hǎo Love"
+    assert fallback_transliteration("你好，世界", reading="chinese") == "Nǐ hǎo， shì jiè"
+
+
+# The owner's three cases, as stored on sandbox6's copy (albums 5297, 5300, 5302, 5315): the
+# artist, ナイトメア, is from Japan; all but the last album also have titles with kana.
+@pytest.mark.parametrize(("title", "evidence", "latin"), [
+    ("Kadan (華談)", "kana JP", None),  # It already reads in Latin: "Hide if title has Latin".
+    ("Tokyo Shounen (東京傷年)", "kana JP", None),
+    ("華談", "kana JP", "Ka Dan"),
+    ("東京傷年", "kana JP", "Tokyoshou nen"),
+    ("東京傷年", "kana", "Tokyoshou nen"),
+    ("零-beyond the G.-", "JP", "Rei-beyond the G.-"),
+])
+def test_japanese_titles_are_never_read_as_chinese(fallbacks, title, evidence, latin):
+    expected = {(1, 1): latin} if latin else {}
+    assert track_transliterations(_tracks([title]), stored={"evidence": evidence}) == expected
+
+
+def test_a_chinese_album_keeps_its_pinyin(fallbacks):
+    """唐朝's 夢回唐朝 (1992): a Chinese band's Chinese album."""
+    for evidence in ("zho CN", "CN", "zho"):
+        assert track_transliterations(_tracks(["夢回唐朝", "太陽"]), stored={"evidence": evidence}) == {
+            (1, 1): "Mèng huí táng cháo", (1, 2): "Tài yáng"}
+
+
+def test_ideographs_on_an_album_with_neither_evidence_show_no_romanized_form(fallbacks):
+    """Album 406739 on sandbox6's copy: a French artist's English release, shown in pinyin before."""
+    assert track_transliterations(_tracks(["直線移動"]), stored={"evidence": ""}) == {}
 
 
 def test_the_installed_libraries_give_the_approved_mockups_forms():
@@ -251,11 +286,11 @@ def test_the_installed_libraries_give_the_approved_mockups_forms():
     assert track_transliterations(_tracks(["桜花抄", "想い出は遠くの日々", "Kiss", "カナエの気持ち", "Кино", "사랑"]),
                                   stored=JAPANESE) == {
         (1, 1): "Ouka shou", (1, 2): "Omoide wa tooku no hibi", (1, 4): "Kanae no kimochi"}
-    assert fallback_transliteration("天门", japanese=False) == "Tiān mén"
+    assert fallback_transliteration("天门", reading="chinese") == "Tiān mén"
     # A sandbox6 title (2026-11-17): Latin letters cutlet does not know stay as written.
-    assert fallback_transliteration("Gianizm Tsū/Two (ジャイアニズム痛, Massacre)", japanese=True) == (
+    assert fallback_transliteration("Gianizm Tsū/Two (ジャイアニズム痛, Massacre)", reading="japanese") == (
         "Gianizm Tsū/Two (jaianizumutsuu, Massacre)")
-    assert fallback_transliteration("Gianizm Shichi (ジャイアニズム叱, Scold)", japanese=True) is None
+    assert fallback_transliteration("Gianizm Shichi (ジャイアニズム叱, Scold)", reading="japanese") is None
 
 
 def test_other_scripts_show_only_musicbrainz_and_cyrillic_never_shows_anything(fallbacks):
@@ -267,7 +302,7 @@ def test_other_scripts_show_only_musicbrainz_and_cyrillic_never_shows_anything(f
 
 
 def test_an_answer_still_not_in_latin_script_is_never_shown(fallbacks, monkeypatch):
-    unchanged = {"match_quality": "order_exact", "pairing": {}, "language": "jpn", "media": [{"position": 1, "tracks": [
+    unchanged = {"match_quality": "order_exact", "pairing": {}, "evidence": "jpn", "media": [{"position": 1, "tracks": [
         {"position": 1, "title": "Hello 世界"}]}]}
     # MusicBrainz's copy of the original title gives way to the fallback (a Japanese album).
     assert track_transliterations(_tracks(["Hello 世界"]), stored=unchanged) == {
@@ -275,7 +310,7 @@ def test_an_answer_still_not_in_latin_script_is_never_shown(fallbacks, monkeypat
     monkeypatch.setitem(sys.modules, "cutlet", types.SimpleNamespace(
         Cutlet=lambda: types.SimpleNamespace(romaji=lambda text: "桜花 shou")))
     module._cutlet.cache_clear()
-    assert fallback_transliteration("桜花抄", japanese=True) is None
+    assert fallback_transliteration("桜花抄", reading="japanese") is None
     assert track_transliterations(_tracks(["Hello 世界"]), stored=unchanged) == {}
 
 
@@ -298,12 +333,12 @@ def test_a_different_pronunciation_keeps_a_different_key():
 # cutlet reads only a title's Japanese runs ---------------------------------------------------
 
 def test_only_the_japanese_runs_are_romanized_and_the_latin_text_stays_as_written(fallbacks):
-    assert fallback_transliteration("Jishō (自傷)", japanese=True) == "Jishō (jishou)"
-    assert fallback_transliteration("Hello 世界", japanese=True) == "Hello sekai"
+    assert fallback_transliteration("Jishō (自傷)", reading="japanese") == "Jishō (jishou)"
+    assert fallback_transliteration("Hello 世界", reading="japanese") == "Hello sekai"
 
 
 def test_a_run_cutlet_cannot_read_shows_no_latin_form_rather_than_a_question_mark(fallbacks):
-    assert fallback_transliteration("Gianizm Shichi (ジャイアニズム叱, Scold)", japanese=True) is None
+    assert fallback_transliteration("Gianizm Shichi (ジャイアニズム叱, Scold)", reading="japanese") is None
 
 
 # Album details payload --------------------------------------------------------------------
@@ -319,7 +354,8 @@ class _Connection:
 
 def test_album_details_rows_carry_the_latin_form_only_where_one_is_shown(no_fallbacks):
     stored = _stored()
-    connection = _Connection({"release_mbid": CASES["release_with_transliteration"], "match_quality": "order_exact",
+    connection = _Connection({"evidence": "kana",
+                              "release_mbid": CASES["release_with_transliteration"], "match_quality": "order_exact",
                               "track_pairing": [], "track_order_differs": False, "disc_position": None,
                               "media": json.dumps(stored["media"])})
     album = {"name": "秒速5センチメートル", "track_rows": _tracks(JAPANESE_TITLES[:5])}

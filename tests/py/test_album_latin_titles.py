@@ -38,29 +38,31 @@ def fallbacks(monkeypatch):
 
 def test_an_album_title_with_kana_is_romaji_whatever_the_language(fallbacks):
     assert album_title_transliteration("センチメートル") == "Senchimeetoru"
-    assert album_title_transliteration("センチメートル", stored={"language": "zho"}) == "Senchimeetoru"
+    assert album_title_transliteration("センチメートル", stored={"evidence": "zho"}) == "Senchimeetoru"
 
 
-def test_ideographs_are_romaji_only_for_a_japanese_release_and_pinyin_otherwise(fallbacks):
-    assert album_title_transliteration("天門", stored={"language": "jpn"}) == "Tenmon"
-    for other in ({"language": "zho"}, {"language": ""}, None):
-        assert album_title_transliteration("天門", stored=other) == "Tiān mén"
+def test_an_album_title_of_ideographs_is_read_by_the_albums_evidence(fallbacks):
+    for evidence in ("jpn", "kana", "JP"):
+        assert album_title_transliteration("天門", stored={"evidence": evidence}) == "Tenmon"
+    assert album_title_transliteration("天門", stored={"evidence": "CN"}) == "Tiān mén"
+    for other in ({"evidence": ""}, None):
+        assert album_title_transliteration("天門", stored=other) is None
 
 
 def test_only_the_japanese_runs_are_read_and_a_run_cutlet_cannot_read_gives_none(fallbacks):
-    assert album_title_transliteration("Best of 天門", stored={"language": "jpn"}) == "Best of tenmon"
+    assert album_title_transliteration("Best of 天門", stored={"evidence": "jpn"}) == "Best of tenmon"
     # Owner 2026-11-21, "Hide if title has Latin": this title already gives its reading.
-    assert album_title_transliteration("Tenmon Best (天門)", stored={"language": "jpn"}) is None
-    assert album_title_transliteration("Gianizm (ジャイアニズム叱)", stored={"language": "jpn"}) is None
+    assert album_title_transliteration("Tenmon Best (天門)", stored={"evidence": "jpn"}) is None
+    assert album_title_transliteration("Gianizm (ジャイアニズム叱)", stored={"evidence": "jpn"}) is None
 
 
 @pytest.mark.parametrize("title", ["Hoshi no Koe", "Кино", "Album 2", "", None])
 def test_latin_and_cyrillic_album_titles_get_no_latin_form(fallbacks, title):
-    assert album_title_transliteration(title, stored={"language": "jpn"}) is None
+    assert album_title_transliteration(title, stored={"evidence": "jpn"}) is None
 
 
 def test_other_scripts_get_none_without_a_musicbrainz_form(fallbacks):
-    assert album_title_transliteration("사랑", stored={"language": "kor"}) is None
+    assert album_title_transliteration("사랑", stored={"evidence": ""}) is None
 
 
 # The refresh: one row per due album, compared as stored values -------------------------------
@@ -77,37 +79,38 @@ class _Result:
 
 
 class _Connection:
-    """Answers the due-albums read with ``due`` and the stored answer with ``language``."""
+    """Answers the due-albums read with ``due`` and the stored answer with ``evidence``."""
 
-    def __init__(self, due, language=None):
-        self.due, self.language, self.writes = due, language, []
+    def __init__(self, due, evidence=""):
+        self.due, self.evidence, self.writes = due, evidence, []
 
     def execute(self, sql, params):
         if sql == module._DUE_LATIN_ALBUM_TITLES_SQL:
             return _Result(self.due)
         if "musicbrainz_release_transliterations transliteration" in sql:
-            return _Result([] if self.language is None else [{
+            return _Result([{
                 "release_mbid": "r", "match_quality": "order_exact", "track_pairing": [], "track_order_differs": False,
-                "disc_position": None, "media": [], "language": self.language}])
+                "disc_position": None, "media": [], "evidence": self.evidence}])
         self.writes.append((" ".join(sql.split()), params))
         return _Result([])
 
 
 def _due(title, album_id=1):
-    return {"album_id": album_id, "library_id": 9, "album_key": f"k{album_id}", "title": title, "source_updated_at": NOW}
+    return {"album_id": album_id, "library_id": 9, "album_key": f"k{album_id}", "title": title, "source_updated_at": NOW,
+            "reading_evidence": "zho"}
 
 
 def test_a_due_album_stores_its_latin_title_and_folded_search_key(fallbacks):
-    connection = _Connection([_due("天門")], language="zho")
+    connection = _Connection([_due("天門")], evidence="zho")
     assert refresh_album_latin_titles(connection, library_ids=[9], limit=25) == ["k1"]
     [(sql, params)] = connection.writes
     assert sql.startswith("insert into library.local_album_latin_titles") and "on conflict (album_id) do update" in sql
     assert params == {"album_id": 1, "library_id": 9, "title": "天門", "latin": "Tiān mén", "key": "tianmen",
-                      "source": NOW}
+                      "source": NOW, "evidence": "zho"}
 
 
-def test_the_stored_language_decides_the_reading(fallbacks):
-    connection = _Connection([_due("天門")], language="jpn")
+def test_the_albums_evidence_decides_the_reading(fallbacks):
+    connection = _Connection([_due("天門")], evidence="jpn")
     refresh_album_latin_titles(connection, library_ids=[9], limit=25)
     assert (connection.writes[0][1]["latin"], connection.writes[0][1]["key"]) == ("Tenmon", "tenmon")
 
@@ -135,6 +138,8 @@ def test_a_row_is_due_when_its_title_or_source_changed_compared_as_stored_values
     assert "latin.source_title is distinct from albums.title" in sql
     assert ("latin.source_updated_at is distinct from greatest(decision.updated_at, transliteration.updated_at)"
             in sql)
+    assert "latin.reading_evidence is distinct from" in sql
+    assert "made.reading_evidence is distinct from" in " ".join(module._DUE_LATIN_ALBUMS_SQL.split())
     assert "now()" not in sql.lower() and "current_timestamp" not in sql.lower()
     # The same coarse script test as the tracks' due check (0255), shared with the Python side
     # and inlined so the planner can use the migrations' partial indexes.
@@ -177,12 +182,14 @@ def test_a_symbol_track_title_keeps_a_null_row_and_a_latin_one_none(fallbacks):
                                 {"id": 12, "disc_number": 1, "track_number": 2, "title": "Outro"}])
             return super().execute(sql, params)
 
-    connection = Tracks([{"album_id": 1, "library_id": 9, "album_key": "k1", "source_updated_at": NOW}])
+    connection = Tracks([{"album_id": 1, "library_id": 9, "album_key": "k1", "source_updated_at": NOW,
+                          "reading_evidence": ""}])
     assert module.refresh_latin_titles(connection, library_ids=[9], limit=25) == ["k1"]
     delete, insert = connection.writes
     assert delete[1] == {"track_ids": [11, 12], "kept": [11]}
     assert insert[0].startswith("insert into library.local_track_latin_titles")
     assert (insert[1]["track_id"], insert[1]["latin"], insert[1]["key"]) == (11, None, None)
+    assert insert[1]["evidence"] == "", "stored, so the row is not due again"
 
 
 def test_the_coarse_test_passes_over_latin_and_cyrillic_titles():

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.48 - 2026-11-22
+
+- One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.
+
 ## 0.11.47 - 2026-11-22
 
 - Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.

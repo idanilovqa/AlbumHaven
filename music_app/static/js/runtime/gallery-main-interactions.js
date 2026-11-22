@@ -1106,11 +1106,19 @@ function openGalleryArtistInfo(anchor) {
 // in the Series tree.
 function openSeriesGallery(mbid) {
   state.ui.navigationTree = 'series';
-  const navigate = () => fetchAndRender(buildUrl({
-    surface_request: 'albums',
-    visible_library_categories: state.view?.visible_library_categories || [],
-    selected_series: mbid,
-  }), true);
+  const navigate = () => {
+    const view = state.view || {};
+    // The series gallery already shown stays: only its tree is brought up (owner, 11-18).
+    if (resolveViewSurface(view) === 'albums' && resolveViewSeries(view) === mbid && isMountedViewSettled()) {
+      renderSidebar();
+      return;
+    }
+    fetchAndRender(buildUrl({
+      surface_request: 'albums',
+      visible_library_categories: view.visible_library_categories || [],
+      selected_series: mbid,
+    }), true);
+  };
   if (document.getElementById('track-modal')?.hidden === false) {
     closeTrackModal();
     // A phone's album page closes through history: open the series once it has.

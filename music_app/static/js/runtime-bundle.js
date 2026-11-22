@@ -8295,11 +8295,19 @@ function openGalleryArtistInfo(anchor) {
 // in the Series tree.
 function openSeriesGallery(mbid) {
   state.ui.navigationTree = 'series';
-  const navigate = () => fetchAndRender(buildUrl({
-    surface_request: 'albums',
-    visible_library_categories: state.view?.visible_library_categories || [],
-    selected_series: mbid,
-  }), true);
+  const navigate = () => {
+    const view = state.view || {};
+    // The series gallery already shown stays: only its tree is brought up (owner, 11-18).
+    if (resolveViewSurface(view) === 'albums' && resolveViewSeries(view) === mbid && isMountedViewSettled()) {
+      renderSidebar();
+      return;
+    }
+    fetchAndRender(buildUrl({
+      surface_request: 'albums',
+      visible_library_categories: view.visible_library_categories || [],
+      selected_series: mbid,
+    }), true);
+  };
   if (document.getElementById('track-modal')?.hidden === false) {
     closeTrackModal();
     // A phone's album page closes through history: open the series once it has.
@@ -53616,12 +53624,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// The view on screen can stand in for a navigation toward it: it is complete and none is replacing it.
+function isMountedViewSettled() {
+  if (state.ui?.activeViewRequestController || state.ui?.pendingViewRequest) return false;
+  if (state.view?.initial_view_partial) return false;
+  return String(state.view?.payload_tier || '').trim().toLowerCase() !== 'sidebar';
+}
+
 // A history step onto the address of the view already shown (a duplicate history entry) keeps
 // that view: reloading it is navigation that changes nothing (owner, 11-18).
 function historyStepShowsCurrentView(href) {
-  if (state.ui?.activeViewRequestController || state.ui?.pendingViewRequest) return false;
-  if (state.view?.initial_view_partial) return false;
-  if (String(state.view?.payload_tier || '').trim().toLowerCase() === 'sidebar') return false;
+  if (!isMountedViewSettled()) return false;
   return buildUrl(parseBrowserUrlState(href)) === buildUrl(state.view || {});
 }
 

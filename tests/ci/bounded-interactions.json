@@ -3182,7 +3182,7 @@
     },
     {
       "id": "js:runtime/gallery-main-interactions.js#openSeriesGallery",
-      "action": "popstate listeners, setTimeout timers installed by openSeriesGallery",
+      "action": "Press a series link repeatedly, also from a phone album page that closes through history; from a fresh page, press the series already shown",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-main-interactions.js#openSeriesGallery:event:popstate",
         "js:music_app/static/js/runtime/gallery-main-interactions.js#openSeriesGallery:timer:setTimeout"
@@ -3191,10 +3191,34 @@
         "music_app/static/js/runtime/gallery-main-interactions.js"
       ],
       "rules": [
-        "BI-03"
+        "BI-03",
+        "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a series link requests its gallery once, also after a phone album page closes, and never the series already shown",
+      "rollback": "A series link keeps the series gallery already on screen. Reverting that reloads it, which this contract's alreadyShown pass rejects; keep the contract.",
+      "alreadyShown": true
     },
     {
       "id": "js:runtime/gallery-main-interactions.js#saveSeriesKind",

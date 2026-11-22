@@ -7723,3 +7723,54 @@ test('a refreshed root window anchors on the section of the card on screen, not 
   // Without a known section the first group holding the album still anchors the window.
   assert.equal(context.rootGalleryViewportArtists(groups, { albumKey: 'joint-album' }, 900).artists[0], 'Compilation Signal Guest');
 });
+
+test('request capture: a series link requests its gallery once, also after a phone album page closes, and never the series already shown', async () => {
+  const id = 'js:runtime/gallery-main-interactions.js#openSeriesGallery';
+  const galleryMainPath = path.join(path.dirname(helperPath), 'gallery-main-interactions.js');
+  const galleryMainSource = fs.readFileSync(galleryMainPath, 'utf8');
+  const seriesView = {
+    surface_request: 'albums', surface: { active: 'albums' }, query: '', selected_artist: '', selected_series: 'series-a',
+    payload_tier: 'full', artist_groups: [],
+  };
+  const seriesPage = (view) => {
+    const gallery = capturedGallery(() => jsonResponse(seriesView));
+    const { context } = gallery;
+    vm.runInContext(galleryEventHandlersSource, context, { filename: galleryEventHandlersPath });
+    vm.runInContext(galleryMainSource, context, { filename: galleryMainPath });
+    context.state.view = { ...context.state.view, ...view };
+    const albumPage = { hidden: true };
+    const getElementById = context.document.getElementById;
+    context.document.getElementById = name => (name === 'track-modal' ? albumPage : getElementById(name));
+    context.closeTrackModal = () => { albumPage.hidden = true; };
+    context.hasActiveMobilePage = () => true;
+    const historySteps = [];
+    context.window.addEventListener = (type, listener) => { if (type === 'popstate') historySteps.push(listener); };
+    // A phone's album page closes through history; the link can also be pressed again with no page open.
+    const openRepeatedly = async (presses) => {
+      albumPage.hidden = false;
+      context.openSeriesGallery('series-a');
+      historySteps.splice(0).forEach(listener => listener());
+      gallery.timers.splice(0).forEach(callback => callback());
+      for (let press = 1; press < presses; press += 1) context.openSeriesGallery('series-a');
+      await settleRequests();
+    };
+    return { gallery, openRepeatedly };
+  };
+  await measureInteractionContract(id, {
+    async alreadyShown(presses) {
+      const { gallery, openRepeatedly } = seriesPage(seriesView);
+      await openRepeatedly(presses);
+      assert.equal(gallery.context.state.ui.navigationTree, 'series');
+      assert.ok(gallery.calls.renderSidebar > 0, 'the Series tree is shown without a request');
+      return { requests: gallery.capture.urls() };
+    },
+    setup: presses => ({ ...seriesPage({ surface_request: 'albums', selected_series: '', selected_artist: 'Broadcast' }), presses }),
+    async act({ gallery, openRepeatedly, presses }, pass) {
+      const captured = await capturedPass(gallery, () => openRepeatedly(presses));
+      if (pass === 1) {
+        assert.deepEqual(captured.requests.map(url => new URL(url, 'http://localhost').searchParams.get('series')), ['series-a']);
+      }
+      return captured;
+    },
+  });
+});

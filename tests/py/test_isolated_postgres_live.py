@@ -2908,8 +2908,19 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
     monkeypatch,
     tmp_path,
 ):
+    from music_app.services import gallery_projection_postgres
+
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     cleanup_complete = False
+    # The structural save queues a background gallery refresh after commit. Left running, it still
+    # read the library while teardown truncated it (DeadlockDetected, CI job 136952138736). The test
+    # publishes explicitly through _finish_live_reconciliation, so record the request instead.
+    scheduled_gallery_refreshes = []
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "schedule_gallery_projection_refresh",
+        lambda *args, **kwargs: scheduled_gallery_refreshes.append(kwargs),
+    )
     music_dir = (tmp_path / "Music").resolve()
     config = {
         "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
@@ -3350,6 +3361,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
             "destination",
             "owner",
         ]
+        assert scheduled_gallery_refreshes, "Each structural save must still request its gallery refresh."
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True

@@ -1,8 +1,13 @@
 # Changelog
 
-## 0.11.48 - 2026-11-23
+## 0.11.49 - 2026-11-23
 
-- Albums the watcher finds now appear in the Artist Tree without another navigation: a gallery answered before the library change was published is fetched again on the next idle status check, at most 40 times.
+- Albums the watcher finds now appear in the Artist Tree without another navigation: a gallery answered before the library change was published is fetched again after 3, 6, 12, 24, 48 and 96 seconds, six times at most.
+
+## 0.11.48 - 2026-11-22
+
+- Scrolling the gallery while its next page loads no longer leaves that scroll unfinished: the page added after the scroll settles now counts as rendered for it.
+- Test and CI only: three end-to-end and live database tests no longer race the app's own background work, and the required check reads the Python shards' results from every attempt of a run.
 
 ## 0.11.47 - 2026-11-22
 

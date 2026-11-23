@@ -101,6 +101,7 @@ from music_app.services.state import (
     start_background_refresh_for_state,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
+from music_app.services.postgres_connections import user_save_connections
 from music_app.services.utility_rule_mutations import (
     create_version_exception,
     clear_version_exceptions,
@@ -1895,7 +1896,21 @@ async def run_edit_tags_payload(
     media write, save task, History. The route and Library Data Corrections
     (with a request bound only to the app) both run it. ``text_correction_writes``
     is never taken from the payload: the intent carries it to the commit that
-    completes the save, recovery included."""
+    completes the save, recovery included.
+
+    Its connections come from the save workload, so a request pool held by
+    publications or reads never makes the save wait (6.5, row B3)."""
+    with user_save_connections():
+        return await _run_edit_tags_payload(
+            request, payload, history_scope=history_scope, started=started,
+            text_correction_writes=text_correction_writes,
+        )
+
+
+async def _run_edit_tags_payload(
+    request: Request, payload, *, history_scope, started: float | None = None,
+    text_correction_writes: Mapping[str, Mapping[str, object]] | None = None,
+) -> ResponseValue:
     request_started = perf_counter() if started is None else started
     if history_scope is not None:
         # Save-task finalizers record History from the request's scope.

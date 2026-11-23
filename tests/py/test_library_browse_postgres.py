@@ -20427,3 +20427,34 @@ def test_root_source_totals_keep_their_own_connection(monkeypatch):
         repository.build_root_source_totals_payload()
 
     assert opened == ["fresh"]
+
+
+def test_root_source_totals_never_reach_a_connection_open_per_scope(tmp_path):
+    """BI-05 (6.5, hosted run 45209596512): /home-data's source totals walk seven scopes on one connection, but
+    the per-scope fallback called readers that open a connection of their own when none is passed (the alias
+    maps on a browse lease, the sidebar rows on a fresh connection). The freeze guard cannot tell which branch
+    runs, so the loop reaches only readers that take the caller's connection."""
+    import importlib.util
+    import shutil
+    import sys
+
+    repo = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "bounded_interaction_discovery", repo / "scripts" / "ci" / "bounded_interaction_discovery.py",
+    )
+    discovery = sys.modules.get(spec.name) or importlib.util.module_from_spec(spec)
+    if spec.name not in sys.modules:
+        sys.modules[spec.name] = discovery
+        spec.loader.exec_module(discovery)
+    for name in ("music_app/routes/api_read_asgi_routes.py", "music_app/services/library_browse_postgres.py",
+                 "music_app/services/postgres_connections.py", "music_app/services/gallery_projection_postgres.py"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(repo / name, tmp_path / name)
+
+    hazards = [
+        (hazard["operation"], hazard["line"])
+        for hazard in discovery.analyze_python_repository(tmp_path)["hazards"]
+        if hazard["rule"] == "BI-05" and hazard["function"].endswith(".build_root_source_totals_payload")
+    ]
+
+    assert hazards == []

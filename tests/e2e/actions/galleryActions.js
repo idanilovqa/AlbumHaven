@@ -1548,6 +1548,15 @@ export class GalleryActions {
     };
   }
 
+  // An offline page's status poll fails, and the app schedules the next one 3 s later
+  // (pollStatus). A step that reconnects right after that failure acts before any poll can land.
+  async waitForFailedStatusPoll(options = {}) {
+    await this.galleryPage.page.waitForEvent('requestfailed', {
+      predicate: (request) => new URL(request.url()).pathname === '/status',
+      timeout: options.timeout || 15000,
+    });
+  }
+
   async selectAlbumDetailsByIdentity(expected, options = {}) {
     const artist = String(expected.artist || '').trim();
     const album = String(expected.album || '').trim();

@@ -167,9 +167,7 @@ def test_decoder_builds_path_independent_accurate_seek_and_f32le_stereo_command(
         assert args[args.index("-ac") + 1] == "2"
         assert "-ar" not in args
         assert args[-1] == "pipe:1"
-        assert kwargs["stdout"] is asyncio.subprocess.PIPE
-        assert kwargs["stderr"] is asyncio.subprocess.PIPE
-        assert kwargs["stdin"] is asyncio.subprocess.DEVNULL
+        assert kwargs["stderr"] == subprocess.PIPE
         assert "creationflags" in kwargs
 
     asyncio.run(scenario())

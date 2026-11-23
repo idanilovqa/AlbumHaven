@@ -359,18 +359,19 @@ def _catalog_columns(connection, table):
 
 def _seed_albums(fixture, count, *, tag="bulk", own_artist=True, analyse=True):
     """``count`` one-track albums in one INSERT per table (generate_series): clones of the saved album's
-    rows, every column but the identity and generated ones read from the catalog. ``tag`` keeps each
-    batch's keys and folders apart; ``own_artist=False`` keeps the saved album's artist (its component)."""
-    suffix = f"'::{tag}::'"
+    rows, every column but the identity and generated ones read from the catalog. Each clone has its own
+    key, title and folder that share no prefix with the saved album's, so (d) measures the save and not a
+    lookup that matches clones by prefix. ``tag`` keeps each batch apart; ``own_artist=False`` keeps the
+    saved album's artist (its relation component, which (e) measures) but still its own folder."""
+    artist_name = f"'{tag} artist ' || n"
+    album_title = f"'{tag} album ' || n"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         source = connection.execute(
             """select files.id as file_id, tracks.id as track_id, tracks.album_id from library.local_track_files files
                join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %s""",
             (fixture.tracks[0]["path"],)).fetchone()
-        # By default each clone has its own artist: a shared one puts every clone in the saved album's relation
-        # component, which is per-artist work ((e) measures it), not the library-wide reading (d) is about.
         if own_artist:
-            clone = {"artist_key": f"source.artist_key || {suffix} || n", "name": f"source.name || ' {tag} ' || n"}
+            clone = {"artist_key": artist_name, "name": artist_name}
             artists = _catalog_columns(connection, "local_artists")
             connection.execute(
                 f"""insert into library.local_artists ({", ".join(artists)})
@@ -378,41 +379,49 @@ def _seed_albums(fixture, count, *, tag="bulk", own_artist=True, analyse=True):
                     from library.local_artists source, generate_series(1, %(count)s) n
                     where source.id = (select artist_id from library.local_albums where id = %(album)s)""",
                 {"count": count, "album": source["album_id"]})
-        bulk_artist = f"""(select bulk.id from library.local_artists bulk where bulk.library_id = source.library_id
-                and bulk.artist_key = (select artist_key from library.local_artists where id = source.artist_id)
-                  || {suffix} || n)"""
-        clone = {"album_key": f"source.album_key || {suffix} || n", "title": f"source.title || ' {tag} ' || n"}
+            album_key = f"{artist_name} || '::' || {album_title}"
+        else:
+            album_key = f"split_part(source.album_key, '::', 1) || '::' || {album_title}"
+        clone = {"album_key": album_key, "title": album_title}
         if own_artist:
-            clone["artist_id"] = bulk_artist
-            clone["metadata"] = f"""case when source.metadata ? 'album_artist' then jsonb_set(source.metadata,
-                     '{{album_artist}}', to_jsonb((source.metadata ->> 'album_artist') || ' {tag} ' || n))
-                     else source.metadata end"""
+            clone["artist_id"] = f"""(select bulk.id from library.local_artists bulk
+                where bulk.library_id = source.library_id and bulk.artist_key = {artist_name})"""
+            clone["metadata"] = f"""case when source.metadata ? 'album_artist'
+                then jsonb_set(source.metadata, '{{album_artist}}', to_jsonb({artist_name}))
+                else source.metadata end"""
         albums = _catalog_columns(connection, "local_albums")
         connection.execute(
             f"""insert into library.local_albums ({", ".join(albums)})
                 select {", ".join(clone.get(column, f"source.{column}") for column in albums)}
                 from library.local_albums source, generate_series(1, %(count)s) n where source.id = %(album)s""",
             {"count": count, "album": source["album_id"]})
-        clone = {"track_key": f"source.track_key || {suffix} || n", "album_id": "albums.id",
+        track_key = f"'{tag} track ' || n"
+        clone = {"track_key": track_key, "album_id": "albums.id",
                  "artist_id": "coalesce(albums.artist_id, source.artist_id)"}
         tracks = _catalog_columns(connection, "local_tracks")
         connection.execute(
             f"""insert into library.local_tracks ({", ".join(tracks)})
                 select {", ".join(clone.get(column, f"source.{column}") for column in tracks)}
                 from library.local_tracks source cross join generate_series(1, %(count)s) n
-                join library.local_albums albums on albums.album_key = (
-                  select album_key from library.local_albums where id = source.album_id) || {suffix} || n
+                join library.local_albums albums on albums.library_id = source.library_id
+                 and albums.title = {album_title}
                 where source.id = %(track)s""", {"count": count, "track": source["track_id"]})
-        moved = f"'{ALBUM}', '{tag} ' || n"
-        clone = {"track_id": "tracks.id", "private_path": f"replace(source.private_path, {moved})",
-                 "relative_path": f"replace(source.relative_path, {moved})"}
+        # Its own artist folder and album folder: no folder prefix shared with the saved album.
+        folder = f"'{ALBUM}', '{tag} album ' || n"
+        if own_artist:
+            moved = f"replace(replace({{path}}, {folder}), 'Owner', '{tag} artist ' || n)"
+        else:
+            moved = f"replace({{path}}, {folder})"
+        clone = {"track_id": "tracks.id", "private_path": moved.format(path="source.private_path"),
+                 "relative_path": moved.format(path="source.relative_path")}
         files = _catalog_columns(connection, "local_track_files")
         connection.execute(
             f"""insert into library.local_track_files ({", ".join(files)})
                 select {", ".join(clone.get(column, f"source.{column}") for column in files)}
                 from library.local_track_files source cross join generate_series(1, %(count)s) n
-                join library.local_tracks tracks on tracks.track_key = (
-                  select track_key from library.local_tracks where id = source.track_id) || {suffix} || n
+                join library.local_tracks tracks on tracks.library_id = (
+                  select library_id from library.local_tracks where id = source.track_id)
+                 and tracks.track_key = {track_key}
                 where source.id = %(file)s""", {"count": count, "file": source["file_id"]})
         if analyse:
             # Statistics, as production's tables have after autovacuum; (d) also runs without them.

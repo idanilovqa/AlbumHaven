@@ -524,6 +524,39 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
         return future
 
     monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", record_refresh)
+
+    # Diagnostics (6.5, built-4 question): which publications run, at which source generation, and whether
+    # the relation rebuild republished the scopes in its own transaction. Written past pytest's capture.
+    import sys
+
+    def trace(event, **values):
+        print(f"[native-scan fail_first={fail_first}] {event} {values}", file=sys.__stderr__, flush=True)
+
+    publish_projection = gallery.publish_gallery_projection
+
+    def traced_publish(config, context, view_state, snapshot, **options):
+        published = publish_projection(config, context, view_state, snapshot, **options)
+        trace("outer publish", generation=context.get("generation"),
+              scope=gallery.gallery_projection_scope_key(view_state)[:8], published=published)
+        return published
+
+    finish_full = gallery.finish_full_relation_publication
+
+    def traced_finish_full(connection, config, relation_views):
+        before = gallery.gallery_projection_context(connection)
+        finish_full(connection, config, relation_views)
+        trace("relation in-transaction publish", generation=(before or {}).get("generation"))
+
+    patch_membership = gallery.patch_gallery_membership_in_transaction
+
+    def traced_patch(*args, **kwargs):
+        result = patch_membership(*args, **kwargs)
+        trace("scoped replay patch", result=result)
+        return result
+
+    monkeypatch.setattr(gallery, "publish_gallery_projection", traced_publish)
+    monkeypatch.setattr(gallery, "finish_full_relation_publication", traced_finish_full)
+    monkeypatch.setattr(gallery, "patch_gallery_membership_in_transaction", traced_patch)
     repository.build_root_startup_preview_payload()
     assert len(refreshes) == 1, "Stale root browse did not schedule recovery"
     assert refreshes[0] is not None
@@ -552,7 +585,14 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
     # scopes with the last families, rebuilds relations, then republishes both once the relation publication
     # moves the source generation, so 2 scopes x 2 publications. (Before 431e0375b relations were rebuilt
     # first and the refresh reused the replayed membership: built 0.)
-    assert refreshes[-1].result(timeout=10) == {"built": 4}
+    final = refreshes[-1].result(timeout=10)
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        context = gallery.gallery_projection_context(connection)
+        headers = connection.execute(
+            "select left(scope_key, 8) as scope, source_generation, builder_version from library.gallery_membership_headers"
+            " where library_id = %s", (context["library_id"],)).fetchall()
+    trace("after final refresh", result=final, generation=context["generation"], headers=[dict(row) for row in headers])
+    assert final == {"built": 4}
     assert len(attempts) == (2 if fail_first else 1)
     assert not repository._load_relation_alias_maps().get("projection_stale_reason")
     with isolatedPostgres._connect(fixture.runtime_url) as connection:

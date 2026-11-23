@@ -64,6 +64,87 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Mandatory bounded-interaction gate
+
+- Mandatory for every agent and chat (owner rule, 2026-11-18): after any
+  implementation or refactor of new or changed code, run
+  `npm run test:bounded-interactions` (or with `--changed-paths <file>`) and
+  get it green before calling the work done, reporting it complete, handing
+  it off, or opening a pull request. This is not optional and not deferred to
+  CI or feature completion. A skipped, failing, or not-yet-run guard means the
+  work is not done.
+- Every interaction entrypoint (listener, timer, observer, request, route,
+  watcher, poller, background loop) is declared in
+  `tests/ci/bounded-interactions.json`. After adding, moving, or removing one,
+  run `node scripts/ci/validate-bounded-interactions.cjs --sync`, review the
+  entries it registers (action, work class), then validate. `--sync` never
+  grants endpoints: fill `requestOwnership.allowed` (and `forbidden`) with the
+  reviewed endpoints yourself.
+- Discovery is static and lives in `scripts/ci/bounded-interaction-discovery.cjs`
+  (JavaScript) and `scripts/ci/bounded_interaction_discovery.py` (Python).
+  Their comments are the reference for which entrypoints are hot paths, how
+  calls and receivers are resolved, and which operations count as hazards.
+- A hot-path entry (high-frequency or repeating events, intervals, animation
+  loops and pollers, observers, workers, and every Python route and background
+  entrypoint) passes statically only while no hazard is reachable from it.
+  Otherwise it needs a deterministic contract that runs the real code at a
+  small and a production-calibration cardinality and asserts absolute
+  operation budgets and growth (`tests/js/helpers/bounded-interaction-counter.js`,
+  `tests/py/bounded_interactions.py`). The contract measures under the entry's
+  registered id, or each id in its `measures` list, and the entry's
+  `testIdentity` must name the real test that measured it; a helper-level test
+  never proves a route or worker it does not drive. There are no allowlists,
+  waivers, or baselines.
+- Any entry also fails for an unregistered or stale entrypoint, a listener
+  whose event name does not resolve, a request target outside
+  `requestOwnership.allowed` or inside `forbidden`, a dynamic request target
+  without a request-capture contract, or a dedicated surface routed through a
+  generic endpoint.
+- A request-capture contract (a contract entry with `requestOwnership`) is a
+  JavaScript test measured by `measureInteractionContract`
+  (`tests/js/helpers/request-capture.js`). It performs the interaction twice
+  in one state and fails when the repeat sends more requests than the first
+  pass or sends an identical GET more often than the first pass did.
+- Navigation never reloads the view already on screen. Discovery marks as
+  navigation a history step (`popstate`, `hashchange`) that reaches a request,
+  and a GET whose own function records its view in history
+  (`history.pushState`, directly or through a helper it calls). The registry
+  entry owning one is a request-capture contract with `alreadyShown: true`,
+  and its test passes `alreadyShown(cardinality)`: from a freshly loaded page
+  in the state the app starts in, navigate to the view that page already
+  shows; it must send no request. Decide "already shown" in the handler that
+  chooses the target, not in a shared loader such as `fetchAndRender`.
+- Rejected outright: direct broad work in a high-frequency JavaScript handler;
+  a route reaching registered library-scale work or enumerating a directory
+  directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
+  middleware; a database connection opened or leased per loop item (BI-05) in a
+  route or middleware; a new database connection (`psycopg.connect`) anywhere
+  a route, middleware, poller, scheduler, or watcher reaches, instead of a
+  lease from the shared pool (BI-15); and filesystem, media or database work per item of a
+  loop over the whole library state (`library-state-scan-io`) in a save,
+  finalize, watcher or reconciler entry narrower than `background-batch`. Fix BI-08 by making a route that awaits nothing a plain
+  `def`, or by handing the blocking part to `run_in_threadpool` after
+  authorization. Fix BI-05 at the owning boundary: load once and pass the
+  snapshot down, or write a batch in one transaction; do not add a
+  process-wide cache without an invalidation owner. Fix BI-15 by leasing from
+  `music_app/services/postgres_connections.py`: `pooled_connection` for new
+  code, `leased_connection` where a repository is written against a
+  `psycopg.connect()` connection. Session state (a session advisory lock,
+  `LISTEN`, `SET` without `LOCAL`, a temporary table not dropped on commit) is
+  rejected on a shared lease (BI-15): take the connection, in the function
+  that sets up that state, from `session_connection`, whose connections are
+  never reused, or in a background worker from a connection of its own.
+- The ASGI test client (`tests/py/asgi_testing.py`) fails any request that
+  blocks the event loop for more than 250 ms outside a module's first import,
+  and has no opt-out.
+- A functional pass, mocked helper, small fixture, or elapsed time alone does
+  not prove bounded work. With the guard result, report the interaction IDs, cardinalities, measured
+  operation counts and work class, the command and result, and any browser
+  performance target deferred to CI.
+- When unbounded work escapes the guard, first add it to
+  `tests/js/bounded-interaction-seeded-defects.test.js`, then change discovery
+  until that defect is reported.
+
 ## Where the mandatory regression gates run
 
 - Run the search, HTML reload, Edit Tags, Problematic Files, and
@@ -76,6 +157,23 @@ operate, or contribute to the application.
   with `gh run view --log-failed`, the job summary timing table, and the
   `heavy-gate-<gate>` artifact. Locally, `scripts/run-regression-gate.ps1
   -Gate <gate>` runs the same stages.
+- To reproduce, diagnose, or verify specific failures, run only those tests
+  (owner rule, 2026-11-17). If the machine-wide heavy-job lock is free, take it
+  and run them locally with `scripts/run-regression-gate.ps1 -Gate focused
+  -Cases <FTC ids or exact titles> -Targets <measured target names>`, then
+  release it. If another chat holds the lock, do not wait: run the same
+  selection on the hosted runner with `-f gates=focused -f cases=...` and/or
+  `-f targets=...` (comma-separated). A focused run never satisfies a gate;
+  the full gate must still pass on the handed-off commit.
+- Never poll CI in a tight loop (owner rule, 2026-11-21). Every agent shares
+  one GitHub API budget of 5,000 requests per hour. Start the run, estimate
+  when it will finish (the job's usual duration, its last few runs read once,
+  or a guess: about 10–15 minutes for focused cases, 30–90 minutes for a full
+  gate or pipeline), then check once at that time with a single
+  `gh run view`. If the run isn't finished, wait at least half the estimate
+  again, and never check more often than every 5 minutes. `gh run watch`
+  always takes `--interval 300` or more. Check `gh api rate_limit` (it is
+  free) before starting several runs or watchers.
 - A hosted run satisfies a gate only when that gate's job succeeded on the
   commit being handed off. It uses isolated PostgreSQL 17, released synthetic
   fixtures, and the `local` timing contract. It is not the pull-request
@@ -86,8 +184,10 @@ operate, or contribute to the application.
   measurements. Do not take the heavy-job lock for a gate the hosted workflow
   covers.
 - Hosted runs keep every budget, grace band, and hard ceiling. Do not switch
-  timing contracts, relax budgets, or rerun until green; diagnose a hosted
-  performance failure exactly like a local one.
+  timing contracts or relax budgets. Rerunning to diagnose a failure (with
+  added diagnostics if needed) or to verify a fix is expected; never rerun
+  unchanged code hoping for a lucky pass, and never accept an unexplained
+  pass. Diagnose a hosted performance failure exactly like a local one.
 
 ## Mandatory search regression gate
 
@@ -159,7 +259,8 @@ operate, or contribute to the application.
   satisfy the gate. Run Python, Node, and browser stages serially.
 - Keep the approved 1000 ms readiness target plus 200 ms grace. Retain cold
   and warm measurements, full response sizes, and populated visible detail
-  assertions. Do not relax budgets, remove cases, or rerun until green.
+  assertions. Do not relax budgets or remove cases. Rerun to diagnose or to
+  verify a fix, never just to reroll unchanged code until it passes.
 - Maintain `tests/ci/performance-change-impact.json` when ownership moves or
   new dependencies are introduced. Its tested mapping must select both PF
   targets; full CI remains mandatory before release.

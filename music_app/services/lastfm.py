@@ -44,6 +44,8 @@ class LastfmError(RuntimeError):
         reauthentication_required: bool = False,
         error_kind: str = "provider_error",
         retry_after_seconds: int | None = None,
+        http_status: int | None = None,
+        request_sent: bool = True,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -52,6 +54,9 @@ class LastfmError(RuntimeError):
         self.error_kind = error_kind
         # Set when Last.fm rate-limited the request: how long to wait before sending it again.
         self.retry_after_seconds = retry_after_seconds
+        self.http_status = http_status
+        # False only when the request failed before Last.fm could have received all of it.
+        self.request_sent = bool(request_sent)
 
 
 @dataclass(frozen=True)
@@ -136,7 +141,20 @@ def lastfm_scrobbling_available(config: dict[str, Any], *, account_id) -> bool:
 
 
 def get_saved_lastfm_session(config: dict[str, Any], *, account_id=None) -> LastfmSession | None:
-    settings = load_lastfm_settings(config, account_id=account_id)
+    return _session_from_settings(load_lastfm_settings(config, account_id=account_id))
+
+
+def load_saved_lastfm_sessions(connection, account_ids) -> dict[int, LastfmSession]:
+    """The connected session of each account, read in one query on the caller's connection."""
+    from music_app.services.lastfm_account_settings import load_settings_for_accounts
+    sessions = {
+        account_id: _session_from_settings(settings)
+        for account_id, settings in load_settings_for_accounts(connection, account_ids).items()
+    }
+    return {account_id: session for account_id, session in sessions.items() if session is not None}
+
+
+def _session_from_settings(settings: dict[str, Any]) -> LastfmSession | None:
     username = str(settings.get("username") or "").strip()
     session_key = str(settings.get("session_key") or "").strip()
     connected_at = str(settings.get("connected_at") or "").strip()
@@ -203,6 +221,7 @@ def _lastfm_error_from_body(
     retry_after: str | None = None,
 ) -> LastfmError:
     error = _lastfm_error_from_parsed_body(body, fallback=fallback, http_status=http_status)
+    error.http_status = http_status
     if error.code == _RATE_LIMIT_ERROR_CODE or http_status == 429:
         text = str(retry_after or "").strip()
         error.retry_after_seconds = int(text) if text.isdigit() else _RATE_LIMIT_RETRY_AFTER_SECONDS
@@ -286,11 +305,14 @@ def _post_lastfm(config: dict[str, Any], method: str, params: dict[str, Any]) ->
             retry_after=exc.headers.get("Retry-After") if exc.headers else None,
         ) from exc
     except URLError as exc:
+        # urlopen raises URLError only while connecting or sending, so Last.fm never
+        # received the complete request (a failure while reading the answer is below).
         reason = str(exc.reason or "Network error contacting Last.fm").strip()
         raise LastfmError(
             reason or "Network error contacting Last.fm",
             retryable=True,
             error_kind="network_error",
+            request_sent=False,
         ) from exc
     except (OSError, HTTPException) as exc:
         # A timeout or dropped connection while the answer is read.
@@ -446,6 +468,110 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         ignored_code=ignored_code,
         message=message,
     )
+
+
+LASTFM_SCROBBLE_BATCH_LIMIT = 50
+
+
+def scrobble_tracks(
+    config: dict[str, Any], payloads: list[dict[str, Any]], *, session: LastfmSession,
+) -> list[LastfmSubmissionOutcome]:
+    """Sends up to 50 validated scrobbles in one signed `track.scrobble` call.
+
+    Returns one outcome per payload, in order. Raises LastfmError when the call
+    as a whole fails, so no item has an outcome."""
+    if not 0 < len(payloads) <= LASTFM_SCROBBLE_BATCH_LIMIT:
+        raise ValueError(f"A Last.fm scrobble batch holds 1 to {LASTFM_SCROBBLE_BATCH_LIMIT} listens.")
+    params: dict[str, Any] = {"sk": session.session_key}
+    for index, payload in enumerate(payloads):
+        params.update({
+            f"artist[{index}]": str(payload.get("artist") or "").strip(),
+            f"track[{index}]": str(payload.get("track") or "").strip(),
+            f"timestamp[{index}]": int(payload.get("timestamp") or 0),
+            f"album[{index}]": str(payload.get("album") or "").strip(),
+            f"albumArtist[{index}]": str(payload.get("album_artist") or "").strip(),
+            f"duration[{index}]": int(payload.get("duration") or 0) or None,
+            f"trackNumber[{index}]": str(payload.get("track_number") or "").strip() or None,
+            f"chosenByUser[{index}]": 1,
+        })
+    root = _post_lastfm(config, "track.scrobble", params)
+    items = root.findall("./scrobbles/scrobble")
+    if len(items) != len(payloads):
+        raise LastfmError(
+            "Last.fm scrobble response did not include an outcome for every listen.",
+            retryable=True,
+            error_kind="malformed_response",
+        )
+    outcomes = []
+    for item in items:
+        ignored_message = item.find("ignoredmessage")
+        if ignored_message is None:
+            ignored_message = item.find("ignoredMessage")
+        raw_code = str(ignored_message.get("code") or "").strip() if ignored_message is not None else ""
+        try:
+            ignored_code = int(raw_code) if raw_code else 0
+        except ValueError as exc:
+            raise LastfmError(
+                "Last.fm scrobble response contained an invalid ignored code.",
+                retryable=True,
+                error_kind="malformed_response",
+            ) from exc
+        message = (ignored_message.text or "").strip() if ignored_message is not None else ""
+        if ignored_code:
+            outcomes.append(LastfmSubmissionOutcome(
+                sent=True, ignored=1, outcome="ignored", ignored_code=ignored_code,
+                message=message or "Last.fm ignored the scrobble.",
+            ))
+        else:
+            outcomes.append(LastfmSubmissionOutcome(sent=True, accepted=1, outcome="accepted"))
+    return outcomes
+
+
+@dataclass(frozen=True)
+class LastfmScrobble:
+    timestamp: int
+    artist: str
+    track: str
+
+
+LASTFM_RECENT_TRACKS_PAGE_LIMIT = 200
+
+
+def get_lastfm_scrobbles_between(
+    config: dict[str, Any], *, session: LastfmSession, after: int, before: int, page: int = 1,
+) -> tuple[list[LastfmScrobble], int]:
+    """One page, newest first, of the account's scrobbles timed strictly between ``after``
+    and ``before`` (Unix seconds), and how many pages the range holds.
+
+    Signed with the session, so an account that hides its recent listening is still read."""
+    root = _post_lastfm(config, "user.getRecentTracks", {
+        "sk": session.session_key,
+        "user": session.username,
+        "from": int(after),
+        "to": int(before),
+        "limit": LASTFM_RECENT_TRACKS_PAGE_LIMIT,
+        "page": int(page),
+    })
+    recent = root.find("recenttracks")
+    pages = str(recent.get("totalPages") or "").strip() if recent is not None else ""
+    if not pages.isdigit():
+        raise LastfmError(
+            "Last.fm recent tracks response did not include its page count.",
+            retryable=True,
+            error_kind="malformed_response",
+        )
+    scrobbles = []
+    for track in recent.findall("track"):
+        date = track.find("date")
+        uts = str(date.get("uts") or "").strip() if date is not None else ""
+        # The track playing now has no scrobble time and is not a scrobble yet.
+        if uts.isdigit():
+            scrobbles.append(LastfmScrobble(
+                timestamp=int(uts),
+                artist=(track.findtext("artist") or "").strip(),
+                track=(track.findtext("name") or "").strip(),
+            ))
+    return scrobbles, int(pages)
 
 
 def get_lastfm_total_scrobbles(

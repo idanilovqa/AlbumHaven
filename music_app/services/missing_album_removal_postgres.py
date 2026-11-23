@@ -6,12 +6,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-try:  # pragma: no cover - runtime-only optional dependency path.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 
 class MissingAlbumReappeared(RuntimeError):
@@ -120,9 +115,7 @@ def _row_mapping(row: object) -> dict[str, object]:
 
 
 def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for missing album removal")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _confirm_missing_album_removal_sql() -> str:

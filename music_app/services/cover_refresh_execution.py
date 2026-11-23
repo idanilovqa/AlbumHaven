@@ -1,22 +1,23 @@
 from __future__ import annotations
 
+import contextvars
 import logging
-import time
+import os
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from pathlib import Path
 
-from music_app.services.app_logging import flush_log_handlers, flush_log_handlers_debounced, log_app_event
+from music_app.services.app_logging import flush_log_handlers, flush_log_handlers_debounced
+# Cover jobs log per job and per candidate: application log only, never a
+# log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_job_event
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
 )
-from music_app.services.cache import (
-    persist_cover_selection_for_tracks_for_config,
-    save_cache_to_disk_for_config,
-)
+from music_app.services.cache import persist_cover_selection_in_shared_transaction
 from music_app.services.cover_workflow import (
     begin_external_cover_write_promotion,
     complete_local_image_promotion,
@@ -32,9 +33,11 @@ from music_app.services.cover_provider_candidates import (
     cover_candidate_to_lookup_match,
 )
 from music_app.services.cover_provider_outcomes_postgres import persist_cover_provider_outcomes
+from music_app.services.edit_state import rebuild_affected_albums_in_state
 from music_app.services.library import build_albums_from_file_cache
-from music_app.services.library_roots import library_root_cache_identity
-from music_app.services.scan_cache_persistence import select_scan_cache_adapter
+from music_app.services.library_album_index import publish_library_albums
+from music_app.services.library_roots import configured_library_root_paths_snapshot, library_category_label
+from music_app.services.scan_cache_persistence import shared_scan_cache_connection
 
 StateGetter = Callable[[], dict[str, object]]
 
@@ -52,6 +55,66 @@ _COVER_SELECTION_FIELDS = (
 
 def _cover_selection_values(entry: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(entry.get(field) for field in _COVER_SELECTION_FIELDS)
+
+
+_SELECTED_COVER_FILE_MISSING_MESSAGE = "Cover file missing; saved choice kept."
+
+
+def _library_root_unavailable_message(label: str | None) -> str:
+    where = f"{label} is offline" if label else "This album's drive or share is offline"
+    return f"{where}, so this album was skipped. Its saved cover was not changed."
+
+
+def _unreachable_album_roots(
+    config, jobs: list[dict[str, object]], file_cache: Mapping[str, object],
+) -> dict[int, str | None]:
+    """Maps each job whose library root cannot be reached to that root's
+    label (None when its tracks name no single root). The probe is the
+    configured root holding the album folder, else the folder's drive or
+    share. Each is probed once per run, before any search; an offline one
+    reads as missing, so none of its albums may be searched or changed."""
+    try:
+        roots = configured_library_root_paths_snapshot(config) if config else ()
+    except Exception as exc:
+        _LOGGER.warning("Library roots unavailable for the cover reachability probe error=%r", exc)
+        roots = ()
+
+    def probe_for(folder: Path) -> str:
+        holding = [root for root in roots if folder.is_relative_to(root)]
+        return str(max(holding, key=lambda root: len(root.parts))) if holding else folder.anchor
+
+    probes = {id(job): probe_for(Path(str(job["folder"]))) for job in jobs}
+    reachable = {probe: os.path.isdir(probe) for probe in set(probes.values()) if probe}
+    unreachable: dict[int, str | None] = {}
+    for job in jobs:
+        probe = probes[id(job)]
+        if not probe or reachable[probe]:
+            continue
+        categories = {
+            entry["library_root_category"] for path in job.get("track_paths") or []
+            if isinstance(entry := file_cache.get(str(path)), dict) and entry.get("library_root_category")
+        }
+        unreachable[id(job)] = library_category_label(categories.pop()) if len(categories) == 1 else None
+    return unreachable
+
+
+def _cover_run_summary(job_results: list[dict[str, object]]) -> str:
+    offline = [item for item in job_results if item.get("reason") == "library_root_unavailable"]
+    missing = sum(item.get("reason") == "selected_cover_file_missing" for item in job_results)
+    parts: list[str] = []
+    if offline:
+        labels = sorted({str(item["library_root_label"]) for item in offline if item.get("library_root_label")})
+        if any(not item.get("library_root_label") for item in offline):
+            labels.append("a library drive or share")
+        where = f"{' and '.join(labels)} {'is' if len(labels) == 1 else 'are'} offline"
+        parts.append(
+            f"Cover search skipped: {where}. Saved covers were not changed."
+            if len(offline) == len(job_results)
+            else f"{len(offline)} album(s) skipped because {where}; their saved covers were not changed."
+        )
+    if missing:
+        parts.append(f"{missing} album(s) have a missing cover file; saved choice kept.")
+    return " ".join(parts)
 
 
 def _recover_existing_cover_selection(
@@ -134,7 +197,7 @@ def _recover_existing_cover_selection(
                     current_entries[path].update(selection)
                 return result
 
-        result = persist_cover_selection_for_tracks_for_config(
+        result = persist_cover_selection_in_shared_transaction(
             config, paths, selected, cover_revision=revision,
             cover_selection_origin="automatic", reject_if_user_controlled=True,
             expected_cover_state=(expected_origin or None, expected_revision or None),
@@ -254,7 +317,7 @@ def _build_automatic_cover_write_guard(
                     return result
 
             persistence_origin = "user" if preserve_user_ownership else "automatic"
-            persistence_result = persist_cover_selection_for_tracks_for_config(
+            persistence_result = persist_cover_selection_in_shared_transaction(
                 config,
                 track_paths,
                 selected_cover_path,
@@ -285,7 +348,7 @@ def _build_automatic_cover_write_guard(
 
             exact_revision = cover_revision_for_path(written_path)
             if exact_revision != provisional_revision:
-                persist_cover_selection_for_tracks_for_config(
+                persist_cover_selection_in_shared_transaction(
                     config,
                     track_paths,
                     written_path,
@@ -436,13 +499,49 @@ def run_cover_jobs(
     allow_apple_web_fallback_when_has_cover: bool = True,
     negative_cache_ttl_seconds: float | None = None,
     job_workers: int = 1,
-    allow_full_snapshot_persistence: bool = True,
+    republish_changed_albums_only: bool = False,
+) -> dict[str, object]:
+    # Every album's cover commit in this run, from any job worker, shares one
+    # Postgres connection (one transaction each), not one connection per album.
+    with shared_scan_cache_connection(config):
+        return _run_cover_jobs(
+            get_state=get_state, config=config, logger=logger, cache_lock=cache_lock, jobs=jobs,
+            file_cache=file_cache, separate_release_keys=separate_release_keys,
+            image_extensions=image_extensions, user_agent=user_agent, cover_cache=cover_cache,
+            scan_generation=scan_generation, cover_generation=cover_generation,
+            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+            force_search=force_search, allow_apple_web_fallback=allow_apple_web_fallback,
+            allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
+            negative_cache_ttl_seconds=negative_cache_ttl_seconds, job_workers=job_workers,
+            republish_changed_albums_only=republish_changed_albums_only,
+        )
+
+
+def _run_cover_jobs(
+    *,
+    get_state: StateGetter,
+    config,
+    logger,
+    cache_lock,
+    jobs: list[dict[str, object]],
+    file_cache: dict[str, dict[str, object]],
+    separate_release_keys: set[str],
+    image_extensions: set[str],
+    user_agent: str,
+    cover_cache,
+    scan_generation: int | None,
+    cover_generation: int | None,
+    expected_inventory_mutation_revision: int | None,
+    force_search: bool,
+    allow_apple_web_fallback: bool,
+    allow_apple_web_fallback_when_has_cover: bool,
+    negative_cache_ttl_seconds: float | None,
+    job_workers: int,
+    republish_changed_albums_only: bool,
 ) -> dict[str, object]:
     library_state = get_state()
     changed = False
-    selection_conflict = False
     runtime_cover_updates: dict[str, tuple[tuple[object, ...], dict[str, object]]] = {}
-    needs_snapshot = False
     failed = 0
     skipped = 0
     downloaded_count = 0
@@ -459,6 +558,9 @@ def run_cover_jobs(
         "write_returned_no_file",
         "exception_during_cover_fetch",
     }
+    # An album on an offline drive or share is never searched, published or changed.
+    unreachable_roots = _unreachable_album_roots(config, jobs, file_cache)
+    reachable_jobs = [job for job in jobs if id(job) not in unreachable_roots]
 
     def owns_progress() -> bool:
         current = get_state()
@@ -481,31 +583,44 @@ def run_cover_jobs(
         id(job): {str(path): _cover_selection_values(entry)
                   for path in job.get("track_paths") or []
                   if isinstance(entry := file_cache.get(str(path)), dict)}
-        for job in jobs if job.get("selected_cover_path")
+        for job in reachable_jobs if job.get("selected_cover_path")
     }
 
     mixed_folder_jobs = {
-        id(job) for job in jobs
+        id(job) for job in reachable_jobs
         if len({
             entry["album_id"] for path in job.get("track_paths") or []
             if isinstance(entry := file_cache.get(str(path)), dict)
             and type(entry.get("album_id")) is int and entry["album_id"] > 0
         }) > 1
     }
-    for job in jobs:
+    # Jobs without a known album id are resolved together, over one connection,
+    # not with one query per job.
+    unresolved_jobs = [
+        job for job in reachable_jobs
+        if id(job) not in mixed_folder_jobs
+        and not (isinstance(job.get("album_id"), int) and job["album_id"] > 0)
+    ]
+    resolved_album_ids: dict[int, int | None] = {}
+    if unresolved_jobs:
+        try:
+            resolved_album_ids = dict(zip(
+                map(id, unresolved_jobs),
+                AlbumCoverCandidateSnapshotRepository(config).resolve_album_ids_for_track_path_sets([
+                    {str(track_path) for track_path in (job.get("track_paths") or []) if str(track_path).strip()}
+                    for job in unresolved_jobs
+                ]),
+            ))
+        except Exception as exc:
+            logger.warning("Automatic candidate snapshot album lookup failed error=%r", exc)
+    for job in reachable_jobs:
         if id(job) in mixed_folder_jobs:
             continue
         album_id = job.get("album_id")
         try:
             repository = AlbumCoverCandidateSnapshotRepository(config)
             if not isinstance(album_id, int) or album_id <= 0:
-                album_id = repository.resolve_album_id_for_track_paths(
-                    track_paths=[
-                        str(track_path)
-                        for track_path in (job.get("track_paths") or [])
-                        if str(track_path).strip()
-                    ]
-                )
+                album_id = resolved_album_ids.get(id(job))
             if not isinstance(album_id, int) or album_id <= 0:
                 continue
             publisher = AlbumCoverCandidatePublisher(
@@ -646,7 +761,7 @@ def run_cover_jobs(
         reason = str(detail.get("reason") or "")
         detail.update(downloaded=downloaded, has_cover=has_cover, cover_path=cover_value)
         job_results.append(detail)
-        if reason == "remote_provider_group_disabled":
+        if reason in {"remote_provider_group_disabled", "library_root_unavailable"}:
             terminal_category = "skipped"
             skipped += 1
         elif downloaded:
@@ -672,7 +787,7 @@ def run_cover_jobs(
                 library_state["covers_processed"] = max(
                     int(library_state.get("covers_processed") or 0), index,
                 )
-        log_app_event(
+        log_job_event(
             config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
             "Cover fetch outcome", level="info",
             album_id=job.get("album_id"), artist=str(job.get("artist") or ""),
@@ -685,7 +800,7 @@ def run_cover_jobs(
         )
 
     def apply_job_result(index: int, job: dict[str, object], cover_path: Path | None, downloaded: bool, detail: dict[str, object]) -> None:
-        nonlocal changed, selection_conflict, needs_snapshot
+        nonlocal changed
         folder = job["folder"]
         artist = str(job.get("artist") or "")
         album = str(job.get("album") or "")
@@ -694,8 +809,6 @@ def run_cover_jobs(
             and Path(str(job["selected_cover_path"])) == Path(cover_path)
         )
         selection_changed = bool(detail.get("selection_conflict"))
-        if selection_changed and id(job) not in mixed_folder_jobs:
-            selection_conflict = True
         if retained_selection:
             paths = {str(path) for path in job.get("track_paths") or []}
             current_entries = get_state().get("file_cache") or {}
@@ -709,7 +822,6 @@ def run_cover_jobs(
                 _cover_selection_values(current_entries[path]) != baseline[path] for path in paths
             ):
                 selection_changed = True
-                selection_conflict = True
                 cover_path = None
                 if owns_progress() and same_album:
                     current_paths = {str(current_entries[path].get("cover_path") or "") for path in paths}
@@ -745,7 +857,7 @@ def run_cover_jobs(
         reason = str(detail.get("reason") or "")
         if not downloaded and not has_cover and reason != "remote_provider_group_disabled":
             if reason in miss_reasons and callable(getattr(logger, "log", None)):
-                log_app_event(
+                log_job_event(
                     config,
                     logger,
                     "Cover art update failed",
@@ -764,7 +876,7 @@ def run_cover_jobs(
             elapsed_ms >= _SLOW_COVER_FETCH_LOG_THRESHOLD_MS
             and callable(getattr(logger, "log", None))
         ):
-            log_app_event(
+            log_job_event(
                 config,
                 logger,
                 "Cover fetch slow",
@@ -794,7 +906,7 @@ def run_cover_jobs(
                 origin = exc.__traceback__
                 while origin.tb_next is not None:
                     origin = origin.tb_next
-                log_app_event(
+                log_job_event(
                     config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
                     "Cover selection recovery failed", level="error",
                     stage="recover_existing_cover_selection",
@@ -808,15 +920,26 @@ def run_cover_jobs(
                 )
                 raise
             changed = changed or recovered
-            selection_conflict = selection_conflict or conflict
             if conflict:
                 detail["recovery_conflict"] = True
                 detail["reason"] = "recovered_cover_selection_conflict"
-                log_app_event(
+                log_job_event(
                     config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
                     "Existing cover metadata recovery skipped because selection could not be verified",
                     level="warning", reason="recovered_cover_selection_conflict",
                 )
+
+        if not downloaded and not cover_path and not selection_changed and reason != "remote_provider_group_disabled" and any(
+            isinstance(entry := file_cache.get(str(track_path)), dict) and entry.get("cover_path")
+            for track_path in job.get("track_paths") or []
+        ):
+            # A search that finds nothing never clears a saved cover, whatever
+            # its origin: the choice stays, flagged missing, until a real find
+            # replaces it or its file comes back.
+            detail.update(
+                search_reason=reason, reason="selected_cover_file_missing",
+                message=_SELECTED_COVER_FILE_MISSING_MESSAGE,
+            )
 
         for track_path in job.get("track_paths") or []:
             if recovering_selection or retained_selection or selection_changed:
@@ -858,12 +981,8 @@ def run_cover_jobs(
                         entry.get("remote_cover_height") is not None,
                     )
                 )
-            if local_cover_changed:
+            if local_cover_changed and (downloaded or cover_path):
                 previous_selection = _cover_selection_values(entry)
-                if not downloaded and not cover_path:
-                    # Keep legacy clearing private until its snapshot commits.
-                    entry = dict(entry)
-                    needs_snapshot = True
                 entry["cover_path"] = cover_value
                 entry["remote_cover_url"] = None
                 entry["remote_cover_thumbnail_url"] = None
@@ -903,6 +1022,20 @@ def run_cover_jobs(
 
     effective_job_workers = max(1, min(int(job_workers or 1), len(jobs) or 1))
     for index, job in enumerate(jobs, start=1):
+        if id(job) in unreachable_roots:
+            label = unreachable_roots[id(job)]
+            record_job_outcome(index, job, None, False, {
+                "artist": str(job.get("artist") or ""),
+                "album": str(job.get("album") or ""),
+                "year": job.get("year") if isinstance(job.get("year"), int) else None,
+                "folder": str(job["folder"]),
+                "reason": "library_root_unavailable",
+                "library_root_label": label,
+                "message": _library_root_unavailable_message(label),
+                "resolver_trace": [],
+            })
+    not_searched = mixed_folder_jobs | set(unreachable_roots)
+    for index, job in enumerate(jobs, start=1):
         if id(job) in mixed_folder_jobs:
             apply_job_result(index, job, None, False, {
                 "reason": "mixed_album_folder",
@@ -925,6 +1058,8 @@ def run_cover_jobs(
         with ThreadPoolExecutor(max_workers=effective_job_workers, thread_name_prefix="albumhaven-cover-job") as executor:
             future_map = {
                 executor.submit(
+                    # In the run's context, so the job's cover commits share its connection.
+                    contextvars.copy_context().run,
                     execute_cover_job,
                     job=job,
                     image_extensions=image_extensions,
@@ -943,7 +1078,7 @@ def run_cover_jobs(
                     search_run=search_run,
                 ): (index, job)
                 for index, job in enumerate(jobs, start=1)
-                if id(job) not in mixed_folder_jobs
+                if id(job) not in not_searched
             }
             for future in as_completed(future_map):
                 _index, job = future_map[future]
@@ -975,7 +1110,7 @@ def run_cover_jobs(
                 finish_job(_index, job, cover_path, downloaded, detail)
     else:
         for index, job in enumerate(jobs, start=1):
-            if id(job) in mixed_folder_jobs:
+            if id(job) in not_searched:
                 continue
             current_state = get_state()
             if scan_generation is not None and (
@@ -1055,14 +1190,13 @@ def run_cover_jobs(
     flush_log_handlers(logger)
 
     if changed:
-        snapshot = None
-        snapshot_options = {}
-        if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
-            adapter = select_scan_cache_adapter(config)
-            snapshot_options = {
-                "expected_cover_mutation_revision": adapter.load_cover_mutation_revision(),
-                "expected_inventory_mutation_revision": adapter.load_inventory_mutation_revision(),
-            }
+        def republish_albums(entries: dict[str, dict[str, object]]) -> None:
+            if republish_changed_albums_only:
+                # A selected-album refresh rebuilds only the albums its jobs hold.
+                job_paths = {str(path) for job in jobs for path in job.get("track_paths") or []}
+                rebuild_affected_albums_in_state(library_state, entries, entries, job_paths, separate_release_keys)
+            else:
+                publish_library_albums(library_state, build_albums_from_file_cache(entries, separate_release_keys))
 
         def publication_is_current() -> bool:
             current = get_state()
@@ -1078,53 +1212,18 @@ def run_cover_jobs(
         with cache_lock:
             if publication_is_current():
                 current_entries = library_state.get("file_cache") or {}
-                accepted_updates = {}
                 for path, (baseline, selection) in runtime_cover_updates.items():
                     entry = current_entries.get(path)
-                    if not isinstance(entry, dict):
-                        selection_conflict = True
-                        continue
-                    current_selection = _cover_selection_values(entry)
-                    if current_selection not in (baseline, _cover_selection_values(selection)):
-                        selection_conflict = True
-                        continue
-                    accepted_updates[path] = selection
-                    if selection.get("cover_path") is not None:
+                    # An entry another writer changed meanwhile keeps that change.
+                    if isinstance(entry, dict) and _cover_selection_values(entry) == baseline and selection.get("cover_path") is not None:
                         entry.update(selection)
-                if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
-                    baseline_entries = {path: dict(entry) for path, entry in current_entries.items()}
-                    snapshot = {path: dict(entry) for path, entry in current_entries.items()}
-                    for path, selection in accepted_updates.items():
-                        snapshot[path].update(selection)
-                library_state["albums"] = build_albums_from_file_cache(current_entries, separate_release_keys)
-
-        if snapshot is not None:
-            def commit_snapshot(commit_action):
-                with cache_lock:
-                    if not publication_is_current() or library_state.get("file_cache") != baseline_entries:
-                        raise RuntimeError("Cover snapshot publication changed before commit.")
-                    result = commit_action()
-                    for path, selection in accepted_updates.items():
-                        library_state["file_cache"][path].update(selection)
-                    library_state["albums"] = build_albums_from_file_cache(
-                        library_state["file_cache"], separate_release_keys,
-                    )
-                    return result
-
-            # Preserve the legacy clearing path. Revision guards reject concurrent
-            # DB changes; pre-existing DB/runtime divergence is not reconciled here.
-            save_cache_to_disk_for_config(
-                config, config["CACHE_PATH"], snapshot,
-                library_root_cache_identity(config),
-                float(library_state.get("last_scan") or time.time()),
-                publication_commit_guard=commit_snapshot, **snapshot_options,
-            )
+                republish_albums(current_entries)
 
     with cache_lock:
         if owns_progress():
             library_state["covers_current_folder"] = ""
             library_state["covers_in_progress"] = False
-    return {
+    result = {
         "changed": changed,
         "processed": len(job_results),
         "downloaded": downloaded_count,
@@ -1133,3 +1232,6 @@ def run_cover_jobs(
         "downloaded_paths": downloaded_paths,
         "job_results": job_results,
     }
+    if summary := _cover_run_summary(job_results):
+        result["summary"] = summary
+    return result

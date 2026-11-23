@@ -225,6 +225,30 @@ def test_move_planner_reuses_existing_artist_folder_before_preferred_write_root(
     assert payload["actions"]["move_to_library"]["target_root_id"] == "existing-main"
 
 
+def test_move_planner_reuses_artist_folder_under_its_on_disk_spelling(config):
+    arrivals_root = (Path(config["DATA_DIR"]) / "arrivals").resolve()
+    main_root = (Path(config["DATA_DIR"]) / "main").resolve()
+    existing_artist_folder = main_root / "BROADCAST"
+    existing_artist_folder.mkdir(parents=True)
+    track_path = arrivals_root / "Broadcast" / "Tender Buttons" / "01 - I Found the F.mp3"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    save_library_root_settings(config, {
+        "main_library_roots": [{"id": "main", "path": str(main_root), "layout_mode": "artist"}],
+        "hoarding_library_roots": [],
+        "new_arrivals_roots": [{"id": "arrivals-1", "path": str(arrivals_root)}],
+        "move_policy": {"preferred_main_write_root": "main"},
+    })
+
+    move = build_move_availability_payload(
+        _make_album(track_paths=[str(track_path)]),
+        config,
+    )["actions"]["move_to_library"]
+
+    assert move["reuses_existing_artist_folder"] is True
+    assert move["destination_path"] == str(existing_artist_folder / "2004 - Tender Buttons")
+
+
 def test_move_planner_blocks_missing_year_metadata(config):
     arrivals_root = (Path(config["DATA_DIR"]) / "arrivals").resolve()
     hoard_root = (Path(config["DATA_DIR"]) / "hoard").resolve()
@@ -357,3 +381,85 @@ def test_move_planner_blocks_new_artist_library_plan_when_preferred_root_require
     assert payload["actions"]["move_to_library"]["blocked_reasons"] == [
         "The preferred Main Library root requires a broad-genre match before creating a new artist destination.",
     ]
+
+
+def test_move_availability_contract_probes_one_artist_folder_at_production_artist_count(config, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(artist_count: int) -> OperationCounts:
+        scale_root = (Path(config["DATA_DIR"]) / f"scale-{artist_count}").resolve()
+        main_root = scale_root / "main"
+        arrivals_root = scale_root / "arrivals"
+        for index in range(artist_count):
+            (main_root / f"Artist {index:05d}").mkdir(parents=True)
+        (main_root / "Broadcast").mkdir()
+        track_path = arrivals_root / "Broadcast" / "Tender Buttons" / "01 - I Found the F.mp3"
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(b"track")
+        save_library_root_settings(config, {
+            "main_library_roots": [{"id": "main", "path": str(main_root), "layout_mode": "artist"}],
+            "hoarding_library_roots": [],
+            "new_arrivals_roots": [{"id": "arrivals-1", "path": str(arrivals_root)}],
+            "move_policy": {"preferred_main_write_root": "main"},
+        })
+        album = _make_album(track_paths=[str(track_path)])
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            payload = build_move_availability_payload(album, config)
+        move = payload["actions"]["move_to_library"]
+        assert move["reuses_existing_artist_folder"] is True
+        assert move["destination_path"] == str(main_root / "Broadcast" / "2004 - Tender Buttons")
+        return counts
+
+    # A helper check, not a registry contract: the routes that reach this
+    # planner are proved by their own route contracts.
+    small, production = run(20), run(14_000)
+    for counts in (small, production):
+        assert (counts.filesystem_enumerations, counts.open_calls, counts.media_parses) == (0, 0, 0)
+        assert counts.stat_calls <= 4
+    assert small.stat_calls == production.stat_calls
+
+
+def test_move_availability_contract_misses_a_new_artist_without_listing_artist_folders(config, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    genres = ("Electronic", "Jazz", "Rock")
+
+    def run(artist_count: int) -> OperationCounts:
+        scale_root = (Path(config["DATA_DIR"]) / f"miss-{artist_count}").resolve()
+        artist_root = scale_root / "artist-main"
+        genre_root = scale_root / "genre-main"
+        arrivals_root = scale_root / "arrivals"
+        for index in range(artist_count):
+            (artist_root / f"Artist {index:05d}").mkdir(parents=True)
+            (genre_root / genres[index % len(genres)] / f"Artist {index:05d}").mkdir(parents=True)
+        track_path = arrivals_root / "Broadcast" / "Tender Buttons" / "01 - I Found the F.mp3"
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(b"track")
+        save_library_root_settings(config, {
+            "main_library_roots": [
+                {"id": "genre-main", "path": str(genre_root), "layout_mode": "genre/artist"},
+                {"id": "artist-main", "path": str(artist_root), "layout_mode": "artist"},
+            ],
+            "hoarding_library_roots": [],
+            "new_arrivals_roots": [{"id": "arrivals-1", "path": str(arrivals_root)}],
+            "move_policy": {"preferred_main_write_root": "artist-main"},
+        })
+        album = _make_album(track_paths=[str(track_path)])
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            payload = build_move_availability_payload(album, config)
+        move = payload["actions"]["move_to_library"]
+        assert move["reuses_existing_artist_folder"] is False
+        assert move["destination_path"] == str(artist_root / "Broadcast" / "2004 - Tender Buttons")
+        return counts
+
+    # A helper check, not a registry contract: listing the genre root is the one
+    # enumeration; it never lists a genre's artists.
+    small, production = run(20), run(14_000)
+    for counts in (small, production):
+        assert (counts.filesystem_enumerations, counts.open_calls, counts.media_parses) == (1, 0, 0)
+        assert counts.stat_calls <= 21
+    assert small.stat_calls == production.stat_calls

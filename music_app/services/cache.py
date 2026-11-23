@@ -1,8 +1,10 @@
 from __future__ import annotations
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
+from dataclasses import dataclass
 import logging
 from pathlib import Path
+import threading
 
 from music_app.services.json_files import load_json_file
 from music_app.services.metadata import normalize_exception_value
@@ -346,130 +348,109 @@ def save_cache_to_disk_for_config(
     return result
 
 
+@dataclass(frozen=True)
+class _CacheUpdate:
+    """One caller's changed entries, the entries they were derived from (None:
+    the latest persisted entries), and its in-transaction completion hook."""
+
+    changed_entries: dict[str, dict[str, object]]
+    baseline_file_cache: dict[str, dict[str, object]] | None = None
+    before_commit: Callable[[object], object] | None = None
+
+
 def save_cache_updates_to_disk_for_config(
     config: dict[str, object],
-    cache_path: Path,
     changed_entries: dict[str, dict[str, object]],
     *,
-    expected_cover_mutation_revision: int | None = None,
-    expected_inventory_mutation_revision: int | None = None,
     baseline_file_cache: dict[str, dict[str, object]] | None = None,
-    rebuild_relation_projection: bool = False,
     before_commit: Callable[[object], object] | None = None,
 ) -> dict[str, object] | None:
     if not changed_entries:
-        return
+        return None
+    return _persist_cache_updates(
+        config,
+        (_CacheUpdate(dict(changed_entries), baseline_file_cache, before_commit),),
+    )
+
+
+def _persist_cache_updates(
+    config: dict[str, object],
+    updates: tuple[_CacheUpdate, ...],
+) -> dict[str, object] | None:
+    """Publish the albums of the changed tracks only, rebased onto their latest
+    persisted entries, in one revision-guarded targeted inventory mutation.
+
+    The mutation marks the relation projection stale; the queued gallery
+    refresh rebuilds it in the background. A cover or inventory commit between
+    loading the latest entries and publishing supersedes the attempt, which is
+    retried once against freshly loaded entries.
+    """
+    from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
+
+    paths = {str(path) for update in updates for path in update.changed_entries}
+    if not paths:
+        return None
     adapter = _select_runtime_scan_cache_adapter(config)
-    from music_app.services.library_roots import library_root_cache_identity
+    hooks = [update.before_commit for update in updates if update.before_commit is not None]
 
-    root_identity = library_root_cache_identity(config)
-    load_cover_mutation_revision = getattr(
-        adapter,
-        "load_cover_mutation_revision",
-        None,
-    )
-    if not callable(load_cover_mutation_revision):
-        raise RuntimeError(
-            "Scan-cache updates require a cover-mutation revision guard."
-        )
-    if expected_cover_mutation_revision is None:
-        expected_cover_mutation_revision = int(load_cover_mutation_revision())
-    load_inventory_mutation_revision = getattr(
-        adapter,
-        "load_inventory_mutation_revision",
-        None,
-    )
-    if (
-        expected_inventory_mutation_revision is None
-        and callable(load_inventory_mutation_revision)
-    ):
-        expected_inventory_mutation_revision = int(
-            load_inventory_mutation_revision()
-        )
-    file_cache, last_scan, relation_views, relations_last_built, error = adapter.load_snapshot(
-        cache_path,
-        root_identity,
-    )
-    if error:
-        raise RuntimeError(error)
-    intent_baseline_file_cache = (
-        baseline_file_cache
-        if isinstance(baseline_file_cache, dict)
-        else file_cache
-    )
-    merged_file_cache = _rebase_non_cover_cache_entry_changes(
-        baseline_file_cache=intent_baseline_file_cache,
-        changed_entries=changed_entries,
-        latest_file_cache=file_cache,
-    )
-    try:
-        snapshot_options: dict[str, object] = {
-            "relation_views": relation_views,
-            "relations_last_built": relations_last_built,
-            "expected_cover_mutation_revision": expected_cover_mutation_revision,
-        }
-        if expected_inventory_mutation_revision is not None:
-            snapshot_options["expected_inventory_mutation_revision"] = (
-                expected_inventory_mutation_revision
-            )
-        if rebuild_relation_projection:
-            snapshot_options["rebuild_relation_projection"] = True
-        if before_commit is not None:
-            snapshot_options["before_commit"] = before_commit
-        return adapter.save_snapshot(
-            cache_path,
-            merged_file_cache,
-            root_identity,
-            last_scan,
-            **snapshot_options,
-        )
-    except Exception as exc:
-        from music_app.services.scan_cache_persistence import (
-            ScanCachePublicationSuperseded,
-        )
+    def complete_in_transaction(connection: object) -> None:
+        for hook in hooks:
+            hook(connection)
 
-        if not isinstance(exc, ScanCachePublicationSuperseded):
-            raise
-        retry_cover_mutation_revision = int(load_cover_mutation_revision())
-        retry_inventory_mutation_revision = (
-            int(load_inventory_mutation_revision())
-            if callable(load_inventory_mutation_revision)
-            else None
-        )
-        (
-            latest_file_cache,
-            latest_last_scan,
-            latest_relation_views,
-            latest_relations_last_built,
-            latest_error,
-        ) = adapter.load_snapshot(cache_path, root_identity)
-        if latest_error:
-            raise RuntimeError(latest_error) from exc
-        rebased_file_cache = _rebase_non_cover_cache_entry_changes(
-            baseline_file_cache=intent_baseline_file_cache,
-            changed_entries=changed_entries,
-            latest_file_cache=latest_file_cache,
-        )
-        retry_snapshot_options: dict[str, object] = {
-            "relation_views": latest_relation_views,
-            "relations_last_built": latest_relations_last_built,
-            "expected_cover_mutation_revision": retry_cover_mutation_revision,
-        }
-        if retry_inventory_mutation_revision is not None:
-            retry_snapshot_options["expected_inventory_mutation_revision"] = (
-                retry_inventory_mutation_revision
+    intent_baselines: list[dict[str, dict[str, object]]] = []
+    for attempt in (1, 2):
+        expected_cover_mutation_revision = int(adapter.load_cover_mutation_revision())
+        expected_inventory_mutation_revision = int(adapter.load_inventory_mutation_revision())
+        latest_file_cache = adapter.load_file_entries(paths)
+        if not intent_baselines:
+            intent_baselines = [
+                latest_file_cache if update.baseline_file_cache is None else update.baseline_file_cache
+                for update in updates
+            ]
+        # Later updates apply on top of earlier ones, exactly as if each had
+        # been published in order.
+        rebased_file_cache = latest_file_cache
+        for update, intent_baseline in zip(updates, intent_baselines):
+            rebased_file_cache = _rebase_non_cover_cache_entry_changes(
+                baseline_file_cache=intent_baseline,
+                changed_entries=update.changed_entries,
+                latest_file_cache=rebased_file_cache,
             )
-        if rebuild_relation_projection:
-            retry_snapshot_options["rebuild_relation_projection"] = True
-        if before_commit is not None:
-            retry_snapshot_options["before_commit"] = before_commit
-        return adapter.save_snapshot(
-            cache_path,
-            rebased_file_cache,
-            root_identity,
-            latest_last_scan,
-            **retry_snapshot_options,
-        )
+        try:
+            result = adapter.persist_targeted_inventory_mutation(
+                root_id=_publication_root_id(config, rebased_file_cache),
+                active_file_entries=rebased_file_cache,
+                expected_cover_mutation_revision=expected_cover_mutation_revision,
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                before_commit=complete_in_transaction if hooks else None,
+            )
+            break
+        except ScanCachePublicationSuperseded:
+            if attempt == 2:
+                raise
+    from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+
+    schedule_gallery_projection_refresh(config, connect=getattr(adapter, "_connect", None))
+    return {**result, "projection_mode": "stale"}
+
+
+def _publication_root_id(
+    config: dict[str, object],
+    file_cache: dict[str, dict[str, object]],
+) -> str:
+    """The root a targeted mutation reports; with no deletions or moves it only
+    labels the publication, since each track file resolves its own root."""
+    for entry in file_cache.values():
+        root_id = str(entry.get("library_root_id") or "").strip()
+        if root_id:
+            return root_id
+    from music_app.services.library_roots import get_library_roots
+
+    for root in get_library_roots(config):
+        root_id = str(root.get("id") or "").strip()
+        if root_id:
+            return root_id
+    raise RuntimeError("Scan-cache updates require a configured library root.")
 
 
 def _rebase_non_cover_cache_entry_changes(
@@ -541,6 +522,28 @@ def persist_cover_selection_for_tracks_for_config(
     config: dict[str, object],
     track_paths: set[str],
     selected_cover_path: Path | None,
+    **options,
+) -> dict[str, object]:
+    """Commit one album's cover selection over its own connection."""
+    return _select_runtime_scan_cache_adapter(config).persist_cover_selection(
+        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+    )
+
+
+def persist_cover_selection_in_shared_transaction(
+    config: dict[str, object],
+    track_paths: set[str],
+    selected_cover_path: Path | None,
+    **options,
+) -> dict[str, object]:
+    """Commit one album's cover selection on the cover run's shared connection,
+    so a batch of albums costs one connection."""
+    return _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
+        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+    )
+
+
+def _cover_selection_options(
     *,
     cover_revision: str | None = None,
     remote_cover_url: str | None = None,
@@ -565,7 +568,6 @@ def persist_cover_selection_for_tracks_for_config(
     logger=None,
 ) -> dict[str, object]:
     del logger
-    adapter = _select_runtime_scan_cache_adapter(config)
     persistence_options: dict[str, object] = {}
     if cover_revision:
         persistence_options["cover_revision"] = cover_revision
@@ -601,11 +603,7 @@ def persist_cover_selection_for_tracks_for_config(
         )
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
-    return adapter.persist_cover_selection(
-        track_paths=track_paths,
-        selected_cover_path=selected_cover_path,
-        **persistence_options,
-    )
+    return persistence_options
 
 
 def persist_structural_tag_edit_for_config(
@@ -618,6 +616,7 @@ def persist_structural_tag_edit_for_config(
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
     before_commit: Callable[[object], object] | None = None,
     rebuild_relation_projection: bool = False,
+    blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None = None,
 ) -> dict[str, object]:
     adapter = _select_runtime_scan_cache_adapter(config)
     persistence_options: dict[str, object] = {}
@@ -627,6 +626,8 @@ def persist_structural_tag_edit_for_config(
         persistence_options["before_commit"] = before_commit
     if rebuild_relation_projection:
         persistence_options["rebuild_relation_projection"] = True
+    if blank_album_evidence is not None:
+        persistence_options["blank_album_evidence"] = blank_album_evidence
     result = adapter.persist_structural_tag_edit(
         changed_paths=set(changed_paths),
         previous_file_entries=previous_file_entries,
@@ -642,6 +643,20 @@ def persist_structural_tag_edit_for_config(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
     )
     return result
+
+
+def persist_moved_album_inventory_for_config(
+    config: dict[str, object],
+    *,
+    root_id: str,
+    active_file_entries: dict[str, dict[str, object]],
+    moves: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    return _select_runtime_scan_cache_adapter(config).persist_moved_album_inventory(
+        root_id=root_id,
+        active_file_entries=active_file_entries,
+        moves=moves,
+    )
 
 
 def validate_structural_tag_edit_for_config(
@@ -662,91 +677,95 @@ def validate_structural_tag_edit_for_config(
 
 def schedule_cache_updates_save_for_config(
     config: dict[str, object],
-    cache_path: Path,
     changed_entries: dict[str, dict[str, object]],
     *,
     baseline_file_cache: dict[str, dict[str, object]] | None = None,
-    rebuild_relation_projection: bool = False,
     before_commit: Callable[[object], object] | None = None,
 ) -> Future[dict[str, object] | None] | None:
-    if not changed_entries:
-        return
+    """Queue a targeted save; returns a future that completes when this call's
+    own entries are durably committed.
+
+    Saves coalesce per database: one publication runs while every save queued
+    meanwhile joins a single trailing publication.
+    """
     snapshot = {
         str(path_str): dict(entry)
         for path_str, entry in changed_entries.items()
         if isinstance(entry, dict)
     }
     if not snapshot:
-        return
-    adapter = _select_runtime_scan_cache_adapter(config)
-    from music_app.services.library_roots import library_root_cache_identity
-
-    root_identity = library_root_cache_identity(config)
+        return None
     if baseline_file_cache is None:
-        (
-            loaded_baseline_file_cache,
-            _baseline_last_scan,
-            _baseline_relation_views,
-            _baseline_relations_last_built,
-            baseline_error,
-        ) = adapter.load_snapshot(cache_path, root_identity)
-        if baseline_error:
-            raise RuntimeError(baseline_error)
-        baseline_file_cache = loaded_baseline_file_cache
+        baseline_file_cache = _select_runtime_scan_cache_adapter(config).load_file_entries(set(snapshot))
     else:
         baseline_file_cache = {
             str(path): dict(entry)
             for path, entry in baseline_file_cache.items()
             if isinstance(entry, dict)
         }
-    load_cover_mutation_revision = getattr(
-        adapter,
-        "load_cover_mutation_revision",
-        None,
-    )
-    if not callable(load_cover_mutation_revision):
-        raise RuntimeError(
-            "Queued scan-cache updates require a cover-mutation revision guard."
-        )
-    queued_cover_mutation_revision = int(load_cover_mutation_revision())
-    load_inventory_mutation_revision = getattr(
-        adapter,
-        "load_inventory_mutation_revision",
-        None,
-    )
-    queued_inventory_mutation_revision = (
-        int(load_inventory_mutation_revision())
-        if callable(load_inventory_mutation_revision)
-        else None
-    )
-    save_options: dict[str, object] = {
-        "expected_cover_mutation_revision": queued_cover_mutation_revision,
-    }
-    if queued_inventory_mutation_revision is not None:
-        save_options["expected_inventory_mutation_revision"] = (
-            queued_inventory_mutation_revision
-        )
-    if rebuild_relation_projection:
-        save_options["rebuild_relation_projection"] = True
-    if before_commit is not None:
-        save_options["before_commit"] = before_commit
-    future = _CACHE_WRITE_EXECUTOR.submit(
-        save_cache_updates_to_disk_for_config,
-        config,
-        cache_path,
-        snapshot,
-        baseline_file_cache=baseline_file_cache,
-        **save_options,
-    )
+    future: Future[dict[str, object] | None] = Future()
     future.add_done_callback(_log_cache_update_failure)
-    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
-    if isinstance(adapter, PostgresScanCacheAdapter):
-        def refresh_gallery_after_publication(completed):
-            if not completed.cancelled() and completed.exception() is None:
-                from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-                schedule_gallery_projection_refresh(config, connect=adapter._connect)
-        future.add_done_callback(refresh_gallery_after_publication)
+    key = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
+    with _CACHE_UPDATE_LOCK:
+        _TRAILING_CACHE_UPDATES.setdefault(key, []).append(
+            (config, _CacheUpdate(snapshot, baseline_file_cache, before_commit), future)
+        )
+        start = key not in _RUNNING_CACHE_UPDATES
+        _RUNNING_CACHE_UPDATES.add(key)
+    if start:
+        _submit_queued_cache_updates(key)
     return future
+
+
+_CACHE_UPDATE_LOCK = threading.Lock()
+_RUNNING_CACHE_UPDATES: set[str] = set()
+_TRAILING_CACHE_UPDATES: dict[str, list[tuple[dict[str, object], _CacheUpdate, Future]]] = {}
+
+
+def _submit_queued_cache_updates(key: str) -> None:
+    try:
+        _CACHE_WRITE_EXECUTOR.submit(_save_queued_cache_updates, key)
+    except Exception as exc:
+        with _CACHE_UPDATE_LOCK:
+            queued = _TRAILING_CACHE_UPDATES.pop(key, [])
+            _RUNNING_CACHE_UPDATES.discard(key)
+        for _config, _update, future in queued:
+            future.set_exception(exc)
+
+
+def _save_queued_cache_updates(key: str) -> None:
+    with _CACHE_UPDATE_LOCK:
+        queued = _TRAILING_CACHE_UPDATES.pop(key, [])
+    try:
+        if queued:
+            _save_cache_update_batch(queued)
+    finally:
+        with _CACHE_UPDATE_LOCK:
+            follow = bool(_TRAILING_CACHE_UPDATES.get(key))
+            if not follow:
+                _RUNNING_CACHE_UPDATES.discard(key)
+        if follow:
+            _submit_queued_cache_updates(key)
+
+
+def _save_cache_update_batch(queued: list[tuple[dict[str, object], _CacheUpdate, Future]]) -> None:
+    config = queued[-1][0]
+    try:
+        result = _persist_cache_updates(config, tuple(update for _config, update, _future in queued))
+    except Exception as exc:
+        if len(queued) == 1:
+            queued[0][2].set_exception(exc)
+            return
+        # The merged transaction rolled back. Publish each save alone so one
+        # save's conflict or failed hook never fails the others.
+        for _config, update, future in queued:
+            try:
+                future.set_result(_persist_cache_updates(config, (update,)))
+            except Exception as single_exc:
+                future.set_exception(single_exc)
+        return
+    for _config, _update, future in queued:
+        future.set_result(None if result is None else dict(result))
 
 
 def _log_cache_update_failure(future) -> None:

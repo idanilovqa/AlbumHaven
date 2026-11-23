@@ -149,3 +149,36 @@ def test_requests_from_an_actor_without_a_library_resolve_nothing():
     resolved = json.loads(resolve_cover_references(body, None, lambda *_args: {REFERENCES[COVER]: COVER}))
 
     assert resolved == {"cover_path": None}
+
+
+def test_a_request_body_resolves_every_uncached_reference_in_one_query():
+    from contextlib import contextmanager
+
+    from music_app.services.cover_references import CoverReferenceStore
+
+    statements = []
+    rows = [
+        {"library_id": 7, "private_path": f"C:/Music/{index}/cover.jpg", "kind": "cover", "reference": f"Reference{index:013d}"}
+        for index in range(50)
+    ] + [{"library_id": 8, "private_path": "C:/Other/cover.jpg", "kind": "cover", "reference": "ForeignReference000000"}]
+
+    class Connection:
+        def execute(self, query, params):
+            statements.append(params)
+            wanted = set(params[0])
+            return type("Result", (), {"fetchall": lambda _self: [row for row in rows if row["reference"] in wanted]})()
+
+    @contextmanager
+    def connect(_url, *, workload):
+        yield Connection()
+
+    store = CoverReferenceStore({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"}, connect=connect)
+    references = {row["reference"] for row in rows} | {"../../etc/passwd"}
+
+    resolved = store.paths_for(7, references)
+
+    assert resolved == {row["reference"]: row["private_path"] for row in rows[:50]}
+    assert len(statements) == 1
+    # A second body naming the same references is answered from the cache.
+    assert store.paths_for(7, references) == resolved
+    assert len(statements) == 1

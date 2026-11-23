@@ -216,7 +216,7 @@ function syncDockedCompactPresentation(els = compactPlayerElements()) {
 
 function positionFloatingCompactPlayer() {
   if (!compactPlayerPosition) return;
-  compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition,
+  compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerPosition.x, y: compactPlayerPosition.y,
     playerWidth: 105, playerHeight: 105, viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
     leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
@@ -306,6 +306,9 @@ function currentQueueIndex() {
   compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
+  // Every player update asks; the queue cursor answers without scanning a long queue.
+  const cursor = Number(queue.currentIndex) || 0;
+  if (String(queue.tracks[cursor]?.path || '') === path) return cursor;
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }
@@ -496,7 +499,8 @@ function initCompactPlayer() {
     if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
     if (!compactPlayerDrag.didDrag) {
       compactPlayerDrag.didDrag = didCompactPlayerDrag({
-        ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY,
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
       });
       if (compactPlayerDrag.didDrag) els.player.classList.add('is-compact-player-dragging');
     }
@@ -528,7 +532,12 @@ function initCompactPlayer() {
   });
   els.cover?.addEventListener('pointermove', event => {
     if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
-    if (!compactPlayerDrag.didDrag) compactPlayerDrag.didDrag = didCompactPlayerDrag({ ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY });
+    if (!compactPlayerDrag.didDrag) {
+      compactPlayerDrag.didDrag = didCompactPlayerDrag({
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
+      });
+    }
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
       y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 105, playerHeight: 105,
@@ -558,12 +567,8 @@ function initCompactPlayer() {
       let savedMode = 'expanded';
       try { savedMode = (window.AlbumHavenDevicePreferences?.enabled ? window.AlbumHavenDevicePreferences : window.localStorage).getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
       applyCompactPlayerMode(savedMode, { persist: false });
-    } else if (compactPlayerPresentation === 'floating' && compactPlayerPosition) {
-      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 105, playerHeight: 105,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
-        leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
-      els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
-      els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
+    } else if (compactPlayerPresentation === 'floating') {
+      positionFloatingCompactPlayer();
     } else if (compactPlayerStyle === 'docked') {
       syncDockedCompactPresentation();
     }

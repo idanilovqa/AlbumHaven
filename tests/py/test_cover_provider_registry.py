@@ -92,7 +92,7 @@ def _capture_service_events(monkeypatch) -> list[dict[str, object]]:
     captured_events: list[dict[str, object]] = []
     monkeypatch.setattr(
         cover_provider_runtime,
-        "log_app_event",
+        "log_provider_event",
         lambda config, logger, action, **fields: captured_events.append({"action": action, **fields}),
     )
     return captured_events

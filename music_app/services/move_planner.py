@@ -359,8 +359,25 @@ def _iter_child_directories(path: Path) -> list[Path]:
 
 
 def _find_child_directory(parent: Path, name: str) -> Path | None:
-    normalized_name = name.casefold()
-    for child in _iter_child_directories(parent):
-        if child.name.casefold() == normalized_name:
-            return child
+    # Probe a fixed set of spellings, never list the parent: a miss (the normal
+    # case for a new artist) would visit every artist folder. A case-insensitive
+    # filesystem matches the first probe under any casing; a case-sensitive one
+    # finds the name in its common casings and otherwise treats it as new.
+    for spelling in dict.fromkeys((name, name.lower(), name.upper(), name.title())):
+        candidate = parent / spelling
+        if candidate.is_dir():
+            return parent / _on_disk_child_name(candidate)
     return None
+
+
+def _on_disk_child_name(candidate: Path) -> str:
+    # A case-insensitive filesystem matches the probe under any spelling;
+    # resolving reports the stored one. A link resolves elsewhere, so it keeps
+    # the probed name and the result stays under its library root.
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        return candidate.name
+    if str(resolved.parent).casefold() != str(candidate.parent).casefold():
+        return candidate.name
+    return resolved.name

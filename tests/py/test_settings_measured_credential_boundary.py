@@ -21,9 +21,7 @@ def invoke(payload, monkeypatch, *, lastfm_session=None):
     monkeypatch.setattr(bridge, "measured_provider_guard", lambda *_args, **_kwargs: nullcontext())
     calls = []
     def forbidden(*args, **kwargs):
-        pytest.fail("measured completion touched configured host provider or legacy sync state")
-    monkeypatch.setattr(bridge, "clear_pending_scrobble", forbidden)
-    monkeypatch.setattr(bridge, "record_pending_scrobble", forbidden)
+        pytest.fail("measured completion touched the configured host provider")
     def append(config, entry, **scope):
         calls.append((dict(entry), scope))
         return {**entry, "id": "scoped-measured-row"}

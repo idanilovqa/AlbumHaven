@@ -159,3 +159,40 @@ def test_the_shared_splice_vectors_are_the_reference_whole_through_answers():
             frame = whole_through(table, initial_skip=section["initialSkip"], initial_total=section["initialTotal"],
                                   stream_start=section["streamStart"], received_bytes=case["receivedBytes"])
             assert frame == case["frame"], case
+
+def test_playback_refs_stream_preparation_contract_reads_only_the_issued_batch(tmp_path, monkeypatch):
+    import asyncio
+
+    from music_app.routes import playback_control_asgi
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    batch_size = 10
+
+    def run(library_tracks: int) -> OperationCounts:
+        folder = tmp_path / f"library-{library_tracks}"
+        folder.mkdir()
+        tracks = []
+        for index in range(library_tracks):
+            path = folder / f"{index:05d}.mp3"
+            path.write_bytes(b"not an mp3 frame")
+            tracks.append(path)
+        counts = OperationCounts()
+
+        async def prepare_batch() -> None:
+            playback_control_asgi._prepare_streams([*tracks[:batch_size], folder / "cover.flac"])
+            await asyncio.gather(*playback_control_asgi._preparing)
+
+        with count_filesystem_and_media(monkeypatch, counts):
+            asyncio.run(prepare_batch())
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/playback_control_asgi.py#playback_refs",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": batch_size, "open_calls": batch_size},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

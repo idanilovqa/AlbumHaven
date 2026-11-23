@@ -10,6 +10,7 @@ named by field below, and the list may only shrink.
 import json
 from pathlib import Path
 import re
+from time import monotonic, sleep
 from urllib.parse import unquote
 
 import pytest
@@ -60,6 +61,7 @@ def page_leaks(html: str, root: str) -> list[str]:
 @pytest.fixture
 def library_app(playback_inventory, tmp_path, monkeypatch):
     from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+    from music_app.services.state import request_library_hydration_for_state
 
     fixture = playback_inventory
     folder = Path(fixture.paths[0]).parent
@@ -77,6 +79,12 @@ def library_app(playback_inventory, tmp_path, monkeypatch):
     asgi_app.state.config.update(fixture.config)
     asgi_app.state.config["IMAGE_EXTENSIONS"] = image_extensions
     asgi_app.state.cover_reference_store = CoverReferenceStore(fixture.config, connect=connect)
+    # Inventory routes answer "still loading" until the background hydration
+    # owner publishes the library; every surface here is read once it has.
+    deadline = monotonic() + 30
+    while not request_library_hydration_for_state(asgi_app.state.library_state, asgi_app.state.config):
+        assert monotonic() < deadline, asgi_app.state.library_state.get("last_error")
+        sleep(0.05)
     root = str(Path(fixture.roots[0]["path"]))
     assert "Music" in root
     fixture.album_key = album_key

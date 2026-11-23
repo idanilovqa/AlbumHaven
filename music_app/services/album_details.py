@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from music_app.services.library import album_to_dict, strip_private_album_preference_overlays
+from music_app.services.library import album_detail_to_dict, strip_private_album_preference_overlays
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.non_album_view_payloads import (
     build_non_album_album_groups,
@@ -228,7 +228,7 @@ def build_album_detail_payload(
     for album in list(st.get("albums", []) or []):
         if str(getattr(album, "key", "") or "").strip() == normalized_album_key:
             return _attach_album_detail_track_rows(
-                album_to_dict(
+                album_detail_to_dict(
                     album,
                     public_safe=public_safe,
                     client_surface_class=client_surface_class,

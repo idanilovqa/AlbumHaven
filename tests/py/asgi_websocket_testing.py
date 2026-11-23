@@ -102,12 +102,12 @@ class AsgiWebSocketSession:
         assert self.close_code is not None
         return self.close_code
 
-    async def disconnect(self, *, code: int = 1000) -> None:
+    async def disconnect(self, *, code: int = 1000, timeout: float = 2) -> None:
         if self._task is None:
             return
         if not self._task.done():
             await self._incoming.put({"type": "websocket.disconnect", "code": code})
-        await asyncio.wait_for(self._task, timeout=2)
+        await asyncio.wait_for(self._task, timeout=timeout)
 
 
 @asynccontextmanager

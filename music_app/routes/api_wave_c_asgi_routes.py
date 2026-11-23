@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from music_app.services.discovery_center_read_seams import (
     build_discovery_center_entries_payload,
@@ -173,7 +174,7 @@ async def news_center_insights(request: Request) -> JSONResponse:
 
 
 @router.get("/news-center/preferences")
-async def news_center_preferences(request: Request) -> JSONResponse:
+def news_center_preferences(request: Request) -> JSONResponse:
     return JSONResponse(
         build_discovery_center_preferences_payload(_app_config(request))
     )
@@ -182,7 +183,8 @@ async def news_center_preferences(request: Request) -> JSONResponse:
 @router.post("/news-center/preferences")
 async def save_news_center_preferences(request: Request) -> JSONResponse:
     return JSONResponse(
-        save_discovery_center_preferences(
+        await run_in_threadpool(
+            save_discovery_center_preferences,
             _app_config(request),
             await _json_payload(request),
         )
@@ -192,7 +194,8 @@ async def save_news_center_preferences(request: Request) -> JSONResponse:
 @router.post("/discovery-lookups")
 async def create_discovery_lookup(request: Request) -> JSONResponse:
     return JSONResponse(
-        create_discovery_lookup_payload(
+        await run_in_threadpool(
+            create_discovery_lookup_payload,
             _app_config(request),
             await _json_payload(request),
         ),
@@ -201,12 +204,12 @@ async def create_discovery_lookup(request: Request) -> JSONResponse:
 
 
 @router.get("/discovery-lookups/recent")
-async def recent_discovery_lookups(request: Request) -> JSONResponse:
+def recent_discovery_lookups(request: Request) -> JSONResponse:
     return JSONResponse(build_recent_discovery_lookup_payload(_app_config(request)))
 
 
 @router.get("/discovery-lookups/{lookup_ref}")
-async def discovery_lookup_detail(request: Request, lookup_ref: str) -> JSONResponse:
+def discovery_lookup_detail(request: Request, lookup_ref: str) -> JSONResponse:
     payload = build_discovery_lookup_payload(_app_config(request), lookup_ref)
     if payload is None:
         return JSONResponse(
@@ -217,7 +220,7 @@ async def discovery_lookup_detail(request: Request, lookup_ref: str) -> JSONResp
 
 
 @router.get("/virtual-artists/search")
-async def virtual_artists_search(request: Request) -> JSONResponse:
+def virtual_artists_search(request: Request) -> JSONResponse:
     search_payload = search_virtual_artist_candidates(request.query_params.get("q"))
     response: JsonDict = {
         "transport": "remote_discovery",
@@ -239,7 +242,8 @@ async def virtual_artists_create(request: Request) -> JSONResponse:
         request,
         mint_if_missing=True,
     )
-    snapshot_payload = create_virtual_artist_snapshot(
+    snapshot_payload = await run_in_threadpool(
+        create_virtual_artist_snapshot,
         _app_config(request),
         await _json_payload(request),
         actor_key=actor_key,
@@ -295,7 +299,7 @@ async def virtual_artists_create(request: Request) -> JSONResponse:
 
 
 @router.get("/virtual-artists/recent")
-async def virtual_artists_recent(request: Request) -> JSONResponse:
+def virtual_artists_recent(request: Request) -> JSONResponse:
     actor_key, set_actor_cookie = _resolve_virtual_artist_recent_actor_key(
         request,
         mint_if_missing=True,
@@ -319,7 +323,7 @@ async def virtual_artists_recent(request: Request) -> JSONResponse:
 
 
 @router.get("/virtual-artists/{virtual_artist_ref}")
-async def virtual_artists_read(
+def virtual_artists_read(
     request: Request,
     virtual_artist_ref: str,
 ) -> JSONResponse:
@@ -401,7 +405,7 @@ async def virtual_artists_read(
 
 
 @router.get("/virtual-releases/{virtual_release_ref}")
-async def virtual_releases_read(
+def virtual_releases_read(
     request: Request,
     virtual_release_ref: str,
 ) -> JSONResponse:

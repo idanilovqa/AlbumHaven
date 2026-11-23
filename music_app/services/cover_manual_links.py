@@ -90,7 +90,7 @@ def _add_manual_cover_candidates_from_urls_sequential(
                 probe_match_candidates=cover_provider_runtime.probe_match_candidates,
                 extract_meta_content=cover_provider_apple.extract_apple_meta_content,
                 extract_album_page_metadata=cover_provider_fallback_web.extract_genius_album_page_metadata,
-                log_event=cover_provider_runtime.log_app_event,
+                log_event=cover_provider_runtime.log_provider_event,
                 logger=cover_provider_runtime.LOGGER,
             )
             if callable(should_cancel) and should_cancel():
@@ -110,7 +110,7 @@ def _add_manual_cover_candidates_from_urls_sequential(
                 match_score=cover_provider_matching.match_score,
                 parse_year=cover_provider_matching.parse_year,
                 probe_match_candidates=cover_provider_runtime.probe_match_candidates,
-                log_event=cover_provider_runtime.log_app_event,
+                log_event=cover_provider_runtime.log_provider_event,
                 logger=cover_provider_runtime.LOGGER,
             )
             if callable(should_cancel) and should_cancel():

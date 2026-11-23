@@ -11,8 +11,6 @@ from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
 from music_app.services.library_hydration import (
     find_cover_for_track_folder,
     hydrate_library_state_from_disk,
-    repair_cover_paths_in_cache,
-    refresh_cached_cover_paths_in_library_state,
     sanitize_hydrated_file_cache,
 )
 
@@ -64,32 +62,6 @@ def test_find_cover_for_track_folder_checks_parent_for_disc_subfolders(tmp_path:
     cover_path.write_bytes(b"cover")
 
     assert find_cover_for_track_folder(disc_root, {".jpg"}) == cover_path
-
-
-def test_repair_cover_paths_in_cache_updates_missing_cover_paths(tmp_path: Path):
-    album_root = tmp_path / "Artist" / "Album"
-    album_root.mkdir(parents=True)
-    track_path = album_root / "song.mp3"
-    cover_path = album_root / "folder.jpg"
-    track_path.write_bytes(b"track")
-    cover_path.write_bytes(b"cover")
-
-    file_cache = {
-        str(track_path): {
-            "path": str(track_path),
-            "cover_path": None,
-        }
-    }
-
-    changed_entries = repair_cover_paths_in_cache(file_cache, {".jpg"})
-
-    assert changed_entries == {
-        str(track_path): {
-            "path": str(track_path),
-            "cover_path": str(cover_path),
-        }
-    }
-    assert file_cache[str(track_path)]["cover_path"] == str(cover_path)
 
 
 def test_sanitize_hydrated_file_cache_filters_missing_files_and_applies_repairs(tmp_path: Path):
@@ -145,6 +117,35 @@ def test_sanitize_hydrated_file_cache_filters_missing_files_and_applies_repairs(
             "exception_type": "Non-album rarity",
         }
     }
+
+
+@pytest.mark.parametrize("choice", [
+    {"cover_selection_origin": "automatic", "cover_revision": "old-revision"},
+    {"cover_selection_origin": "user", "cover_revision": "old-revision", "cover_selection_provenance": "explicit"},
+    {"cover_selection_origin": None},
+    {"cover_path": None, "cover_selection_origin": "user", "remote_cover_url": "https://covers.example/1.jpg"},
+])
+def test_sanitize_hydrated_file_cache_keeps_a_recorded_cover_choice_whose_file_is_missing(tmp_path: Path, choice):
+    """Option 3: a present track whose recorded cover file is gone keeps that
+    choice, whatever its origin, dimensions included, and is not reported as
+    changed, so the saved snapshot persists nothing new for it. A cover beside
+    the track is not adopted in its place; the placeholder shows."""
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "song.mp3"
+    track_path.write_bytes(b"track")
+    (album_root / "cover.jpg").write_bytes(b"cover")
+    entry = {
+        "path": str(track_path), "album": "Album", "album_artist": "Artist", "artist": "Artist",
+        "title": "Song", "cover_path": str(album_root / "chosen.jpg"),
+        "local_cover_width": 1600, "local_cover_height": 1600, **choice,
+    }
+    saved = dict(entry)
+
+    sanitized, changed = sanitize_hydrated_file_cache({str(track_path): entry}, {}, {".jpg"})
+
+    assert sanitized[str(track_path)] == saved
+    assert changed == {}
 
 
 def test_sanitize_hydrated_file_cache_reports_directory_read_failure(
@@ -323,54 +324,6 @@ def test_sanitize_hydrated_file_cache_reuses_cover_dimension_and_root_resolution
     assert root_resolution_calls == 1
 
 
-def test_refresh_cached_cover_paths_in_library_state_rebuilds_albums_and_schedules_save(tmp_path: Path, monkeypatch):
-    album_root = tmp_path / "Artist" / "Album"
-    album_root.mkdir(parents=True)
-    track_path = album_root / "song.mp3"
-    cover_path = album_root / "cover.jpg"
-    track_path.write_bytes(b"track")
-    cover_path.write_bytes(b"cover")
-
-    scheduled = []
-    rebuilt = []
-    monkeypatch.setattr(
-        "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: scheduled.append((config, cache_path, changed_entries)),
-    )
-    monkeypatch.setattr(
-        "music_app.services.library_hydration.build_albums_from_file_cache",
-        lambda file_cache, separate_release_keys: rebuilt.append((dict(file_cache), set(separate_release_keys))) or [SimpleNamespace(key="album-1")],
-    )
-
-    library_state = {
-        "file_cache": {str(track_path): {"path": str(track_path), "cover_path": None}},
-        "separate_release_keys": {"separate"},
-        "scan_in_progress": False,
-        "covers_in_progress": False,
-        "cover_path_refresh_at": 0.0,
-    }
-    config = {"IMAGE_EXTENSIONS": {".jpg"}, "CACHE_PATH": tmp_path / "cache.json"}
-
-    changed = refresh_cached_cover_paths_in_library_state(
-        library_state,
-        config,
-        min_interval_seconds=5.0,
-        now=10.0,
-    )
-
-    assert changed is True
-    assert library_state["cover_path_refresh_at"] == 10.0
-    assert library_state["albums"][0].key == "album-1"
-    assert rebuilt and rebuilt[0][1] == {"separate"}
-    assert scheduled == [
-        (
-            config,
-            tmp_path / "cache.json",
-            {str(track_path): {"path": str(track_path), "cover_path": str(cover_path)}},
-        )
-    ]
-
-
 def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Path, monkeypatch):
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
@@ -417,7 +370,7 @@ def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Pat
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: scheduled.append((config, cache_path, changed_entries)),
+        lambda config, changed_entries: scheduled.append((config, changed_entries)),
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",
@@ -592,7 +545,7 @@ def test_hydrate_library_state_from_disk_skips_file_prewarm_when_library_browse_
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: None,
+        lambda config, changed_entries: None,
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",
@@ -675,7 +628,7 @@ def test_hydrate_library_state_from_disk_skips_relation_rebuild_when_relations_a
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: None,
+        lambda config, changed_entries: None,
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",
@@ -751,7 +704,7 @@ def test_hydrate_library_state_from_disk_reuses_persisted_relation_views(tmp_pat
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: None,
+        lambda config, changed_entries: None,
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",

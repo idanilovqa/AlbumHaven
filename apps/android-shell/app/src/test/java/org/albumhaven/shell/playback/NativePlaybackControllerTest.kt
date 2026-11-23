@@ -713,6 +713,13 @@ class NativePlaybackControllerTest {
     private fun yieldContract() =
         org.json.JSONObject(java.io.File("../../../tests/fixtures/playback-handover-yield-v1.json").readText())
 
+    // Android's org.json has no similar(): the same keys with the same values.
+    private fun assertSameMessage(expected: org.json.JSONObject, sent: String) {
+        val actual = org.json.JSONObject(sent)
+        assertEquals(expected.keys().asSequence().toSet(), actual.keys().asSequence().toSet())
+        expected.keys().forEach { key -> assertEquals(key, expected.get(key), actual.get(key)) }
+    }
+
     private fun pausedAfterASecond(long: SyntheticTrack): ControllerHarness {
         val harness = ControllerHarness(long)
         harness.load(1, long)
@@ -733,7 +740,7 @@ class NativePlaybackControllerTest {
         assertEquals("no word before the paused output drained", emptyList<String>(), harness.handoverAnswers)
         harness.runUntil { harness.handoverAnswers.isNotEmpty() }
 
-        assertTrue(contract.getJSONObject("silent").similar(org.json.JSONObject(harness.handoverAnswers.single())))
+        assertSameMessage(contract.getJSONObject("silent"), harness.handoverAnswers.single())
         assertEquals("no give-back follows the word it gave", listOf("acquire:null", "pause:token-1"), harness.claims.calls)
         assertEquals(written, harness.sinks.last().writtenFrames)
         assertEquals(NativePlaybackState.PAUSED, harness.state())
@@ -753,7 +760,7 @@ class NativePlaybackControllerTest {
         checkNotNull(harness.listener).onText(contract.getJSONObject("ask").toString())
         harness.step()
 
-        assertTrue(contract.getJSONObject("declined").similar(org.json.JSONObject(harness.handoverAnswers.single())))
+        assertSameMessage(contract.getJSONObject("declined"), harness.handoverAnswers.single())
         assertEquals(NativePlaybackState.PLAYING, harness.state())
         assertEquals(listOf("acquire:null"), harness.claims.calls)
     }
@@ -769,7 +776,7 @@ class NativePlaybackControllerTest {
         assertEquals(CommandResult.ACCEPTED, harness.controller.play(1))
         harness.runUntil { harness.handoverAnswers.isNotEmpty() }
 
-        assertTrue(contract.getJSONObject("declined").similar(org.json.JSONObject(harness.handoverAnswers.single())))
+        assertSameMessage(contract.getJSONObject("declined"), harness.handoverAnswers.single())
         harness.runUntil(maxSteps = 4) { harness.sinks.last().writtenFrames > written }
         assertEquals("only the pause said so: Play asked nothing", listOf("acquire:null", "pause:token-1"), harness.claims.calls)
     }

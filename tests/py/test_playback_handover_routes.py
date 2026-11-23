@@ -194,7 +194,7 @@ def test_a_socket_naming_no_valid_client_still_plays_and_is_never_asked(handover
 
 def test_play_here_on_a_tab_that_just_paused_starts_at_its_paused_place(handover_app, monkeypatch):
     def nobody(self, actor):
-        return {"account_id": actor.account_id, "library_id": 1, "client_id": None, "digest": None}
+        return {"account_id": actor.account_id, "library_id": 1, "client_id": None, "digest": None, "silent": False}
 
     def release(self, actor, *, client_id, claim_token):
         return {"account_id": actor.account_id, "library_id": 1, "client_id": client_id, "digest": b"held"}

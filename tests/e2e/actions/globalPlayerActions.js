@@ -388,6 +388,20 @@ export class GlobalPlayerActions {
     };
   }
 
+  // A pause keeps the claim for its 12 s hold and says so in one renewal; the heartbeat gives it back after.
+  // With the page clock paused the hold never ends, so this waits for the paused renewal instead.
+  async pauseHoldingPlaybackClaim() {
+    const player = this.globalPlayer;
+    if (player.page.isClosed() || !await player.playButton.isVisible()
+        || await player.playButton.getAttribute('aria-label') !== 'Pause') return;
+    const held = player.page.waitForResponse(response => (
+      response.request().method() === 'PUT' && new URL(response.url()).pathname === '/playback/state'
+      && response.request().postDataJSON()?.state === 'paused'
+    ));
+    await this.togglePlaybackWithSpace({ paused: true });
+    expect((await held).ok()).toBe(true);
+  }
+
   async pauseToReleasePlaybackClaim() {
     const player = this.globalPlayer;
     if (player.page.isClosed() || !await player.playButton.isVisible()

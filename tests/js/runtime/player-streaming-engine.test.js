@@ -346,6 +346,7 @@ function createEngineHarness(options = {}) {
     getPlaybackOwnershipTabId: options.getPlaybackOwnershipTabId,
     answerPlaybackHandover: options.answerPlaybackHandover,
     settlePlaybackHandover: options.settlePlaybackHandover,
+    yieldPausedPlaybackClaim: options.yieldPausedPlaybackClaim,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
   };

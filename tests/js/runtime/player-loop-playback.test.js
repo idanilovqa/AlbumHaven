@@ -543,16 +543,18 @@ test('pause silences streaming before pending listen effects finish', async () =
     pauseStreamingPlayback: () => { calls.push('pause'); snapshot.paused = true; },
     maybeScrobbleListenSession: () => { calls.push('effects'); return effects; },
     releasePlaybackOwnership: async () => { calls.push('release'); },
+    holdPlaybackClaimThroughPause: () => { calls.push('hold'); },
   });
   context.attachPlayerEvents();
   playButton.dispatch('click');
   assert.equal(snapshot.paused, true);
-  assert.deepEqual(calls, ['pause']);
+  assert.deepEqual(calls, ['hold', 'pause']);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ['pause', 'effects']);
+  assert.deepEqual(calls, ['hold', 'pause', 'effects']);
   finishEffects();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ['pause', 'effects', 'release']);
+  // The pause keeps the claim for its hold; the heartbeat gives it back after.
+  assert.deepEqual(calls, ['hold', 'pause', 'effects']);
 });
 
 test('streaming position updates the facade at the bounded callback cadence', async () => {
@@ -1476,7 +1478,7 @@ test('a refused resume is paused again', async () => {
   assert.deepEqual([resumeCalls, pauses], [1, 1]);
 });
 
-test('pause waits for authorized listen effects before releasing ownership', async () => {
+test('pause keeps the claim through its listen effects instead of releasing it', async () => {
   let resolveEffects;
   const pendingEffects = new Promise((resolve) => { resolveEffects = resolve; });
   const order = [];
@@ -1491,18 +1493,19 @@ test('pause waits for authorized listen effects before releasing ownership', asy
       order.push('listen-effects-finished');
     },
     releasePlaybackOwnership: async () => { order.push('claim-released'); },
+    holdPlaybackClaimThroughPause: () => { order.push('claim-held'); },
   });
 
   const pause = context.pausePlayerPlaybackForHandoff();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['audio-stopped', 'listen-effects-started']);
+  assert.deepEqual(order, ['claim-held', 'audio-stopped', 'listen-effects-started']);
   resolveEffects();
   assert.equal(await pause, true);
   assert.deepEqual(order, [
+    'claim-held',
     'audio-stopped',
     'listen-effects-started',
     'listen-effects-finished',
-    'claim-released',
   ]);
 });
 

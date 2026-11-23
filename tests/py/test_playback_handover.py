@@ -342,7 +342,7 @@ def test_a_paused_holder_that_says_it_is_silent_yields_and_is_asked_nothing_else
         assert hub.silent(holder.send, request_id)
         assert await asking is True
         await hub.settled(ACCOUNT, LIBRARY, HOLDER, taken=True)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         assert holder.sent[-1] == {"type": "handover-done", "requestId": request_id, "takenOver": True}
 
     asyncio.run(scenario())
@@ -419,7 +419,7 @@ def test_the_yield_messages_are_the_contract_the_web_and_the_phone_share():
         assert hub.silent(holder.send, request_id)
         assert await asking is True
         await hub.settled(ACCOUNT, LIBRARY, HOLDER, taken=True)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         assert set(holder.sent[-1]) == set(contract["done"])
 
     asyncio.run(scenario())

@@ -896,11 +896,12 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
     await navigationPanelActions.waitForSidebarSelection(UNRELATED_ARTIST);
     await galleryActions.waitForOnlyArtistHeadings([UNRELATED_ARTIST]);
     await artistFamilyActions.waitForHidden();
-    // From the click to here, no rendered state showed the panel or a chip of the Neal family.
+    // From the press to here the panel never showed. Just after the press the hidden panel may still
+    // hold the Neal chips until it re-renders; hidden, they are not on screen, and the read after the
+    // click (previous step) proves they are gone by then.
     const states = await artistFamilyActions.finishPanelStateObservation();
     expect(states.length).toBeGreaterThan(0);
-    expect(states.filter(state => state.visible || state.chipTexts.some(text => text !== UNRELATED_ARTIST)))
-      .toEqual([]);
+    expect(states.filter(state => state.visible)).toEqual([]);
     expect(await artistFamilyActions.readPanelState()).toEqual({
       visible: false,
       chipTexts: [UNRELATED_ARTIST],

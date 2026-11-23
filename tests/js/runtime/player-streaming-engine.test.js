@@ -1482,6 +1482,45 @@ test('drops stale generation, unknown stream, and non-monotonic PCM without pois
   assert.equal(harness.api.snapshot().diagnostics.staleMessages, 3);
 });
 
+test('a resume marks when its first audible frame renders, once, on the page clock', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('resume-mark.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const consumed = (nonZeroSamples) => harness.nodes[0].port.dispatch({
+    type: 'consumed',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    frames: 40,
+    bufferedFrames: 0,
+    audible: true,
+    finiteSamples: 80,
+    nonZeroSamples,
+    peakSample: nonZeroSamples ? 0.5 : 0,
+    samples: [],
+  });
+  const marks = () => {
+    const { resumedAtMs, resumeFirstFrameAtMs } = harness.api.snapshot().diagnostics;
+    return [resumedAtMs, resumeFirstFrameAtMs];
+  };
+  consumed(21);
+  assert.deepEqual(marks(), [0, 0], 'a start is no resume');
+
+  await harness.api.pause();
+  harness.setNow(2_000);
+  await harness.api.resume();
+  harness.setNow(2_010);
+  consumed(0);
+  assert.deepEqual(marks(), [2_000, 0], 'silence is no first audible frame');
+  harness.setNow(2_020);
+  consumed(21);
+  harness.setNow(2_030);
+  consumed(21);
+
+  assert.deepEqual(marks(), [2_000, 2_020]);
+});
+
 test('pause and explicit resume keep context, processor, and snapshot state aligned', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());

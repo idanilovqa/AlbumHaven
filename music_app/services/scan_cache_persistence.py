@@ -2204,18 +2204,18 @@ class PostgresScanCacheAdapter:
                                              updated_file_entries, apply=False)
             groups, _, _, delta_fields, _ = _structural_tag_edit_groups(connection, changed_paths,
                 previous_file_entries, updated_file_entries, changed_field_names)
-            scoped = PostgresScanCacheAdapter(self._config, connect=lambda _url: nullcontext(connection),
-                                             build_albums=self._build_albums)
             for paths in groups:
                 group_fields = (set(changed_field_names) & set().union(*(delta_fields[path] for path in paths))
                                 if len(groups) > 1 else changed_field_names)
-                scoped._validate_structural_tag_edit_group(changed_paths=set(paths),
+                # Every group validates on this one connection, never a lease of its own.
+                self._validate_structural_tag_edit_group(connection, changed_paths=set(paths),
                     previous_file_entries={path: previous_file_entries[path] for path in paths if path in previous_file_entries},
                     updated_file_entries={path: updated_file_entries[path] for path in paths if path in updated_file_entries},
                     changed_field_names=group_fields, unchanged_group=len(groups) > 1 and not group_fields)
 
     def _validate_structural_tag_edit_group(
         self,
+        connection: Any,
         *,
         changed_paths: set[str],
         previous_file_entries: dict[str, dict[str, object]],
@@ -2313,13 +2313,11 @@ class PostgresScanCacheAdapter:
             )
         )
         if uses_blank_album_persistence:
-            with self._connect_to_database() as connection:
-                connection.execute(_try_inventory_publication_advisory_lock_sql())
-                _ensure_bootstrap_context(connection)
-                result = _row_mapping(_first_row(connection.execute(
-                    _validate_blank_album_tag_edit_sql(),
-                    {"changed_paths": normalized_paths},
-                )))
+            _ensure_bootstrap_context(connection)
+            result = _row_mapping(_first_row(connection.execute(
+                _validate_blank_album_tag_edit_sql(),
+                {"changed_paths": normalized_paths},
+            )))
             input_path_count = int(result.get("input_path_count") or 0)
             resolved_path_count = int(result.get("resolved_path_count") or 0)
             source_album_count = int(result.get("source_album_count") or 0)
@@ -2348,20 +2346,18 @@ class PostgresScanCacheAdapter:
                 "Structural tag persistence could not derive the destination album key."
             )
 
-        with self._connect_to_database() as connection:
-            connection.execute(_try_inventory_publication_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
-            result = _row_mapping(
-                _first_row(
-                    connection.execute(
-                        _validate_structural_album_tag_edit_sql(),
-                        {
-                            "changed_paths": normalized_paths,
-                            "destination_album_key": destination_album_key,
-                        },
-                    )
+        _ensure_bootstrap_context(connection)
+        result = _row_mapping(
+            _first_row(
+                connection.execute(
+                    _validate_structural_album_tag_edit_sql(),
+                    {
+                        "changed_paths": normalized_paths,
+                        "destination_album_key": destination_album_key,
+                    },
                 )
             )
+        )
         input_path_count = int(result.get("input_path_count") or 0)
         resolved_path_count = int(result.get("resolved_path_count") or 0)
         source_album_count = int(result.get("source_album_count") or 0)

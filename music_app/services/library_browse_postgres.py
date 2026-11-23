@@ -984,7 +984,9 @@ class PostgresLibraryBrowseRepository:
             load_gallery_projection_sidebar,
         )
 
-        connection = self._connect_to_database()
+        # Published scope headers only: a short read on the browse pool.
+        connection_stack = ExitStack()
+        connection = connection_stack.enter_context(self._browse_connection_context())
         try:
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
@@ -1020,9 +1022,7 @@ class PostgresLibraryBrowseRepository:
                 if callable(rollback):
                     rollback()
             finally:
-                close = getattr(connection, "close", None)
-                if callable(close):
-                    close()
+                connection_stack.close()
         return {"source_totals_by_scope": totals, "pending_source_scopes": pending}
 
     def build_root_sidebar_payload(

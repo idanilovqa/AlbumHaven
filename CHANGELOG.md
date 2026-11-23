@@ -7,6 +7,11 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.48 - 2026-11-22
+
+- Scrolling the gallery while its next page loads no longer leaves that scroll unfinished: the page added after the scroll settles now counts as rendered for it.
+- Test and CI only: three end-to-end and live database tests no longer race the app's own background work, and the required check reads the Python shards' results from every attempt of a run.
+
 ## 0.11.47 - 2026-11-22
 
 - Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.

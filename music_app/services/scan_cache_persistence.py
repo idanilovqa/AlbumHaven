@@ -1929,7 +1929,9 @@ class PostgresScanCacheAdapter:
                 )
             )
             destination_metadata = _jsonb_compatible(destination_albums[0]["metadata"])
-            with persistence_stage("structural_sql"):
+            from music_app.services.keyed_plan import keyed_plan
+            # Keyed by the changed paths and the source album: index lookups even with no statistics yet.
+            with persistence_stage("structural_sql"), keyed_plan(connection):
                 result_row = _first_row(
                     connection.execute(
                         _persist_structural_album_tag_edit_sql(

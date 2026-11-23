@@ -519,19 +519,41 @@ def _non_album_candidates_sql(
     # A batch's override ranking runs once, over the batch's own files only (materialized, each file's overrides
     # looked up by its key); otherwise it was re-run per outer row of the main join.
     batch_materialized = "materialized " if membership_folders else ""
-    # A batch's tracks are read by their primary keys: the batch's own track ids as one array, so the main join
-    # can never reach local_tracks through an index on library_id (the whole library's tracks per batch).
-    batch_track_scope = (
-        "and library.local_tracks.id = any(array(select active_track_files.track_id from active_track_files))\n"
-        "        and library.local_track_files.id = any(array(select active_track_files.id from active_track_files))"
-        if membership_folders else ""
-    )
-    # Likewise the batch's files, by their primary keys.
-    batch_file_scope = (
-        "and library.local_track_files.id = any(array(select eligible_track_file_ids.track_file_id"
-        " from eligible_track_file_ids))"
-        if membership_folders else ""
-    )
+    active_track_files = """
+          select
+            batch_file.id,
+            batch_file.track_id,
+            batch_file.private_path,
+            batch_file.library_root_id
+          from eligible_track_file_ids
+          cross join lateral (
+            select files.id, files.track_id, files.private_path, files.library_root_id, files.scan_cache_stale
+            from library.local_track_files files
+            where files.id = eligible_track_file_ids.track_file_id
+            -- Fence, not redundant: offset 0 stops subquery pull-up, so each batch file is one primary-key
+            -- probe whatever the statistics.
+            offset 0
+          ) batch_file
+          where batch_file.scan_cache_stale is false
+            and (
+              %(private_path_count)s = 0
+              or batch_file.private_path = any(%(private_paths)s::text[])
+            )
+        """ if membership_folders else """
+          select
+            library.local_track_files.id,
+            library.local_track_files.track_id,
+            library.local_track_files.private_path,
+            library.local_track_files.library_root_id
+          from library.local_track_files
+          join eligible_track_file_ids
+            on eligible_track_file_ids.track_file_id = library.local_track_files.id
+          where library.local_track_files.scan_cache_stale is false
+            and (
+              %(private_path_count)s = 0
+              or library.local_track_files.private_path = any(%(private_paths)s::text[])
+            )
+        """
     exception_candidates = """
           select
             active_track_files.id as track_file_id,
@@ -664,7 +686,7 @@ def _non_album_candidates_sql(
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
     """
-    return f"""
+    sql = f"""
         with bootstrap_context as (
           {_bootstrap_context_sql()}
         ),{membership_folder_list}
@@ -681,24 +703,10 @@ def _non_album_candidates_sql(
             {membership_problem_predicate}
             {membership_unassigned_scope}
             {membership_group_scope}
+            {""}
           {other_eligibility_branches}
         ),
-        active_track_files as {batch_materialized}(
-          select
-            library.local_track_files.id,
-            library.local_track_files.track_id,
-            library.local_track_files.private_path,
-            library.local_track_files.library_root_id
-          from library.local_track_files
-          join eligible_track_file_ids
-            on eligible_track_file_ids.track_file_id = library.local_track_files.id
-          where library.local_track_files.scan_cache_stale is false
-            and (
-              %(private_path_count)s = 0
-              or library.local_track_files.private_path = any(%(private_paths)s::text[])
-            )
-            {batch_file_scope}
-        ),
+        active_track_files as {batch_materialized}({active_track_files}),
         exception_candidates as ({exception_candidates}),
         ranked_exception_overrides as {batch_materialized}(
           select
@@ -811,7 +819,6 @@ def _non_album_candidates_sql(
             or library.local_tracks.id = any(%(track_ids)s::bigint[])
         )
         {"and library.local_tracks.album_id is null" if unassigned_only else ""}
-        {batch_track_scope}
         {artist_scope}
         {query_scope}
         and ({candidate_scope})
@@ -822,3 +829,56 @@ def _non_album_candidates_sql(
           active_track_files.id
         {limit_clause};
     """
+    return _keyed_folder_batch_sql(sql, all_roots=all_roots) if membership_folders else sql
+
+
+# A drain batch's main select (case 55): every row is the batch's own file, and each relation it shows is
+# reached from that row by its primary key in a fenced lateral, so no plan can read the library's tables:
+# rows read are the batch's size times a constant, whatever the statistics.
+_MAIN_SELECT_MARKER = "        select\n          library.local_tracks.id as track_id,"
+_MAIN_FROM_START = "        from library.local_tracks\n"
+_MAIN_FROM_END = "        left join (\n          select\n            ranked_exception_overrides.track_file_id,"
+_BATCH_QUALIFIERS = (
+    ("library.local_track_files.", "batch_track_files."),
+    ("library.local_tracks.", "batch_tracks."),
+    ("library.local_artists.", "batch_artists."),
+    ("library.local_albums.", "batch_albums."),
+    ("library.library_roots.", "batch_roots."),
+)
+
+
+def _keyed_folder_batch_sql(sql: str, *, all_roots: bool) -> str:
+    head, marker, tail = sql.partition(_MAIN_SELECT_MARKER)
+    tail = marker + tail
+    start, end = tail.index(_MAIN_FROM_START), tail.index(_MAIN_FROM_END)
+    # The shared join block (tail[start:end]) is replaced for the batch; the rest reads the batch's rows.
+    selected = tail[:start] + "\0" + tail[end:]
+    for qualifier, batch_qualifier in _BATCH_QUALIFIERS:
+        selected = selected.replace(qualifier, batch_qualifier)
+    active_root = "" if all_roots else "\n         and batch_roots.is_active is true"
+    # Fence, not redundant: each offset 0 stops subquery pull-up, so every lookup below stays a per-row probe
+    # of its table's primary key whatever the statistics; joined freely, the planner read whole tables.
+    keyed_joins = f"""        from active_track_files
+        cross join bootstrap_context
+        join lateral (
+          select tracks.* from library.local_tracks tracks where tracks.id = active_track_files.track_id offset 0
+        ) batch_tracks
+          on batch_tracks.library_id = bootstrap_context.library_id
+        cross join lateral (
+          select files.* from library.local_track_files files where files.id = active_track_files.id offset 0
+        ) batch_track_files
+        left join lateral (
+          select artists.* from library.local_artists artists where artists.id = batch_tracks.artist_id offset 0
+        ) batch_artists
+          on batch_artists.library_id = batch_tracks.library_id
+        left join lateral (
+          select albums.* from library.local_albums albums where albums.id = batch_tracks.album_id offset 0
+        ) batch_albums
+          on batch_albums.library_id = batch_tracks.library_id
+        join lateral (
+          select roots.* from library.library_roots roots
+          where roots.id = active_track_files.library_root_id offset 0
+        ) batch_roots
+          on batch_roots.library_id = batch_tracks.library_id{active_root}
+"""
+    return head + selected.replace("\0", keyed_joins)

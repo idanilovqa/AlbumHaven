@@ -561,40 +561,30 @@ def _non_album_candidates_sql(
           select distinct active_track_files.private_path, active_track_files.track_id
           from active_track_files
         ),
+        -- The batch's overrides, as one set join of its keys to exception_overrides, run once (6.5): the
+        -- planner may hash-join one pass over the table or probe the (library_id, track_key) and track_id
+        -- indexes per key, but no lateral re-scans the table per key (a fenced lateral was seq-scanned per key
+        -- once the table had statistics: keys x table).
         override_hits as materialized (
           select batch_keys.private_path as key_path, null::bigint as key_track_id,
-            path_override.id, path_override.track_key, path_override.override_payload, path_override.updated_at,
+            overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at,
             0 as match_priority
           from batch_keys
-          cross join bootstrap_context
-          cross join lateral (
-            select overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at
-            from library.exception_overrides overrides
-            -- (library_id, track_key) together: exactly exception_overrides_library_track_key_idx.
-            where overrides.library_id = bootstrap_context.library_id
-              and overrides.track_key = batch_keys.private_path
-            -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays one probe per batch key.
-            offset 0
-          ) path_override
+          join library.exception_overrides overrides
+            on overrides.library_id = (select bootstrap_context.library_id from bootstrap_context)
+           and overrides.track_key = batch_keys.private_path
 
           union all
 
           select null::text as key_path, batch_keys.track_id as key_track_id,
-            track_override.id, track_override.track_key, track_override.override_payload,
-            track_override.updated_at, 1 as match_priority
+            overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at,
+            1 as match_priority
           from batch_keys
-          cross join bootstrap_context
-          cross join lateral (
-            select overrides.id, overrides.library_id, overrides.track_key, overrides.override_payload,
-              overrides.updated_at
-            from library.exception_overrides overrides
-            -- track_id alone: exactly exception_overrides_track_id_idx. The library check is applied to the
-            -- rows found, outside the fence: inside, library_id_idx tied with it without statistics.
-            where overrides.track_id = batch_keys.track_id
-            -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays one probe per batch key.
-            offset 0
-          ) track_override
-          where track_override.library_id = bootstrap_context.library_id
+          join library.exception_overrides overrides
+            on overrides.track_id = batch_keys.track_id
+          -- A filter on the rows found, never an index condition: without statistics library_id_idx tied with
+          -- track_id_idx and read every override of the library.
+          where overrides.library_id + 0 = (select bootstrap_context.library_id from bootstrap_context)
         ),
         """ if membership_folders else ""
     exception_candidates = """

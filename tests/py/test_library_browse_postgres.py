@@ -14120,7 +14120,9 @@ def test_index_evaluators_keep_no_session_state_on_a_pool_lease(monkeypatch, ent
 
     class Checks(Connection):
         def execute(self, sql, _params=None):
-            return SimpleNamespace(fetchall=lambda: [{"album_id": 1, "marked_xid": "9"}])
+            # One marked album and no marked loose group (case 55's second read).
+            marks = [] if "problematic_loose_groups" in str(sql) else [{"album_id": 1, "marked_xid": "9"}]
+            return SimpleNamespace(fetchall=lambda: marks)
 
     lease, own = Connection(False), Connection(True)
     repository = SimpleNamespace(

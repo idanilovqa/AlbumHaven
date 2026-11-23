@@ -126,8 +126,6 @@ class PostgresLibraryInventoryRepository:
         folders = sorted({(int(root_id), str(folder)) for root_id, folder in (membership_folders or ()) if folder})
         bounded_limit = max(1, min(int(limit), MAX_NON_ALBUM_CANDIDATE_LIMIT))
         params = {
-            "membership_folder_roots": [root_id for root_id, _folder in folders],
-            "membership_folder_parents": [folder for _root_id, folder in folders],
             "track_ids": normalized_track_ids,
             "track_id_count": len(normalized_track_ids),
             "private_paths": normalized_private_paths,
@@ -142,6 +140,9 @@ class PostgresLibraryInventoryRepository:
             })
         if normalized_query_terms:
             params["query_patterns"] = [f"%{term}%" for term in normalized_query_terms]
+        if folders:
+            params.update(membership_folder_roots=[root_id for root_id, _folder in folders],
+                          membership_folder_parents=[folder for _root_id, folder in folders])
         sql = _non_album_candidates_sql(
             unassigned_only=unassigned_only,
             membership_problems_only=membership_problems_only,

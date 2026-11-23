@@ -1136,6 +1136,7 @@ def test_live_deploy_step_fills_before_serving_and_reruns_without_redoing_it(wat
     assert ("Duplicate results", 1, 1) in progress
     assert problematic_index.serving_readiness(repository) == {
         "problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0,
+        "changed_loose_groups_waiting": 0,
     }
 
     backfilled = []

@@ -81,7 +81,8 @@ def main(
         return 1
 
     summary = " ".join(f"{name}={value}" for name, value in readiness.items())
-    if readiness != {"problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0}:
+    if readiness != {"problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0,
+                     "changed_loose_groups_waiting": 0}:
         print(f"NOT READY, do not start serving: {summary}", file=errors)
         return 1
     print(f"READY {summary} elapsed_s={monotonic() - started:.1f}", file=output, flush=True)

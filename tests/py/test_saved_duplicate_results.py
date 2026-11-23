@@ -190,6 +190,19 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
     monkeypatch.setattr(problematic_index, "_write", paused)
     queued = []
     monkeypatch.setattr(problematic_index, "queue_maintenance", queued.append)
+    drains = []  # per _drain call of the paused pass: the sqlstate it failed with, or None
+    drain = problematic_index._drain
+
+    def recorded_drain(*arguments, **options):
+        try:
+            result = drain(*arguments, **options)
+        except Exception as error:
+            drains.append(getattr(error, "sqlstate", None) or type(error).__name__)
+            raise
+        drains.append(None)
+        return result
+
+    monkeypatch.setattr(problematic_index, "_drain", recorded_drain)
     evaluation = threading.Thread(target=problematic_index._maintain, args=(library.repository,))
     evaluation.start()
     expected = [change == "forms"] * 2
@@ -215,8 +228,12 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
     if change == "breaks":
         # Breaking the pair, the save rewrites the rows this pass read, so the pass's write fails as outrun
         # (40001) and the same pass evaluates again from the save's commit: no mark left, no extra pass.
+        outruns = drains.count("40001")
+        assert 1 <= outruns <= problematic_index.OUTRUN_RETRIES, f"The pass was outrun and retried: {drains}"
+        assert drains[-1] is None and len(drains) > outruns, f"The same pass drained again after it: {drains}"
+        assert set(drains) <= {"40001", None}, f"Only outruns failed: {drains}"
         assert marks() == 0, "The pass evaluated the save's marks after it was outrun."
-        assert queued == [], "No extra pass is queued."
+        assert queued == [], "queue_maintenance is never called: no extra pass."
         return
     # Forming the pair, the pass's write goes through: the save's marks are left free for the next pass,
     # which is queued exactly once.

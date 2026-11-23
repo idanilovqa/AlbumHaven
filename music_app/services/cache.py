@@ -547,6 +547,12 @@ def persist_cover_selection_for_tracks_for_config(
         track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
     )
     _refresh_local_cover_inventory_after_selection(config, track_paths, options)
+    if any(int(result.get(field) or 0) for field in ("album_rows_updated", "track_rows_updated", "track_file_rows_updated")):
+        # The commit journaled the album for relations (migration 0108); its owner drains just those
+        # albums, queued off the response path.
+        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+
+        schedule_gallery_projection_refresh(config, incremental_membership=True)
     return result
 
 

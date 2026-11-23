@@ -377,13 +377,9 @@ const DEFECTS = [
     id: 'BI-04 status request that builds relation views from every source row',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
-    anchor: '    library_state = _library_state(request)
-    # Status is observational',
-    replacement: '    library_state = _library_state(request)
-    build_postgres_relation_views([])
-    # Status is observational',
-    prelude: 'from music_app.services.relation_projection_builder import build_postgres_relation_views
-',
+    anchor: '    library_state = _library_state(request)\n    # Status is observational',
+    replacement: '    library_state = _library_state(request)\n    build_postgres_relation_views([])\n    # Status is observational',
+    prelude: 'from music_app.services.relation_projection_builder import build_postgres_relation_views\n',
     expected: /^rejected BI-04 library-scale:py:music_app\/services\/relation_projection_builder\.py#build_postgres_relation_views at music_app\/services\/relation_projection_builder\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#status:route:GET \/status via build_postgres_relation_views$/,
   },
   {

@@ -562,7 +562,7 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
     return {int(row['id']) for row in rows}
 
 
-def publish_affected_relation_projection(connection, *, album_ids=(), album_keys=(), track_paths=(), reason='structural_tag_edit', config=None, cancel_requested=None, expected_gallery_generation=None, prepare_compatibility=False):
+def publish_affected_relation_projection(connection, *, album_ids=(), album_keys=(), track_paths=(), reason='structural_tag_edit', config=None, cancel_requested=None, expected_gallery_generation=None, prepare_compatibility=False, compatibility_preparer=None):
     from music_app.services import relation_projection_postgres as relations
     context = _first_row(connection.execute(_CONTEXT))
     if context is None or context.get('normalized_builder_version') != relations.RELATION_PROJECTION_BUILDER_VERSION:
@@ -684,7 +684,8 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     if expected_gallery_generation is not None:
         prior_generations.append(expected_gallery_generation)
     with persistence_stage('relation_publication.album_facts'):
-        rows = relations.load_scoped_relation_source_rows(connection, ids)
+        # A library-wide marker alone (album 0 or -1) names no album: nothing to load.
+        rows = relations.load_scoped_relation_source_rows(connection, ids) if ids else []
         current_keys = {row['id']: row['album_key'] for row in connection.execute(
             'select id,album_key from library.local_albums where library_id=%s and id=any(%s::bigint[])',
             (library_id, sorted(ids))).fetchall()}
@@ -708,7 +709,8 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
             'affected_relation_aliases': aliases,
         }
         return _finish_publication(connection, context, metadata, result, reason=reason, config=config,
-                                   copy_legacy_views=False, legacy_views=legacy_views, prepare_compatibility=prepare_compatibility)
+                                   copy_legacy_views=False, legacy_views=legacy_views, prepare_compatibility=prepare_compatibility,
+                                   compatibility_preparer=compatibility_preparer)
 
     with persistence_stage('relation_publication.component_load'):
         component, affected_names, _, views = _load_affected_component(
@@ -747,6 +749,7 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     }
     return _finish_publication(connection, context, metadata, result, reason=reason, config=config,
                                legacy_views=legacy_views, prepare_compatibility=prepare_compatibility,
+                               compatibility_preparer=compatibility_preparer,
                                legacy_touched_entries=legacy_touched_entries)
 
 
@@ -868,10 +871,14 @@ def _prepare_compatibility_in_transaction(connection, context, metadata, capture
     _store_compatibility_state(connection, library_id, metadata, stamp)
 
 
-def _finish_publication(connection, context, metadata, result, *, reason, config, copy_legacy_views=True, legacy_views=None, prepare_compatibility=False, legacy_touched_entries=None):
+def _finish_publication(connection, context, metadata, result, *, reason, config, copy_legacy_views=True, legacy_views=None, prepare_compatibility=False, compatibility_preparer=None, legacy_touched_entries=None):
     library_id = context['library_id']
     if prepare_compatibility:
-        _prepare_compatibility_in_transaction(connection, context, metadata, legacy_views)
+        # The library-wide compatibility build runs only for the explicit preparation that hands it in, never
+        # for a write's publication (6.5, BI-04): a write's path cannot reach it.
+        if compatibility_preparer is None:
+            raise RuntimeError('Compatibility preparation runs only from prepare_relation_compatibility.')
+        compatibility_preparer(connection, context, metadata, legacy_views)
     if legacy_views is not None:
         rebuilt = _first_row(connection.execute('select library.local_relation_compatibility_views(%s) as views', (library_id,)))
         if not rebuilt or not _relation_views_equal(rebuilt['views'], legacy_views):
@@ -1032,7 +1039,8 @@ def prepare_relation_compatibility(config, *, connect=None, cancel_requested=Non
         if pending:
             result = publish_affected_relation_projection(
                 connection, reason='pending_source_changes', config=config,
-                cancel_requested=cancel_requested, prepare_compatibility=True)
+                cancel_requested=cancel_requested, prepare_compatibility=True,
+                compatibility_preparer=_prepare_compatibility_in_transaction)
             result['compatibility_prepared'] = True
             return result
         snapshot = relations._relation_projection_scan_cache_from_row(

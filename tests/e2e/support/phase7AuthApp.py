@@ -534,7 +534,7 @@ def main() -> None:
             provider_service = ProviderFixtureService(
                 args.provider_port or args.port + 4,
                 prepare_settings_cover_specs(temp_root),
-                cover_cache_path=Path(os.environ["MUSIC_COVER_CACHE_PATH"]),
+                cover_cache_database_url=setup_database_url,
                 derivative_root=temp_root / "provider-artwork",
             )
             provider_service.start()

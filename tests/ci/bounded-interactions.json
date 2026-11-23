@@ -15967,6 +15967,135 @@
       ],
       "workClass": "background-batch",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/pending-tag-edits.js#<top-level>",
+      "action": "Show another tab's finishing tag edits over the loaded view when it writes the pending-edit store",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-tag-edits.js#<top-level>:event:storage"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-tag-edits.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/gallery_projection_postgres.py#_header_membership_publisher",
+      "action": "Patch a save's edited albums into each gallery membership header",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#_header_membership_publisher:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#publish_affected_relation_projection_or_defer",
+      "action": "Publish a write's affected relation component in a savepoint, or defer it to the journal owner",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#publish_affected_relation_projection_or_defer:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#_reconcile_intent",
+      "action": "Reconcile one verified save's intent from its files (case 56's per-intent path, run now)",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#_reconcile_intent:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 61,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 13
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest \"tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count\"",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count"
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#_run",
+      "action": "Catch the library up with one verified save on the single-flight catch-up worker",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#_run:background:executor"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 61,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 13
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest \"tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count\"",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count"
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#retry_waiting_catch_ups",
+      "action": "Retry the catch-ups whose back-off has run out (timer and the journal owner's drain)",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#retry_waiting_catch_ups:background:thread"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
     }
   ]
 }

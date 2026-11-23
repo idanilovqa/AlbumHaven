@@ -7,6 +7,10 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.47 - 2026-11-22
+
+- Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.
+
 ## 0.11.46 - 2026-11-22
 
 - Fixed a 0.11.45 regression: one failed attempt to open another database connection could make requests fail even though working connections were free. Requests now fail fast only when no working connection exists, a slow first connection is waited for, and the app reconnects within seconds after Postgres returns.

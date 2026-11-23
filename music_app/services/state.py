@@ -210,13 +210,21 @@ def queue_cover_lookup_for_added_albums_for_state(
     logger: object,
     albums: list[object],
 ) -> None:
-    """A scan's added albums get the watcher's bounded cover lookup: only their own tracks are queued and read."""
+    """A scan's added albums get the watcher's bounded cover lookup: only their own tracks are queued and read.
+    An album the watcher already queued (waiting or in flight) is skipped, so it is looked up once."""
+    with _CACHE_LOCK:
+        queued = set(library_state.get("_watcher_cover_refresh_token_by_track_path") or ())
+    paths_by_album = {
+        str(album.key): {str(track.path) for track in getattr(album, "tracks", None) or []} - queued
+        for album in albums
+    }
+    paths_by_album = {key: paths for key, paths in paths_by_album.items() if paths}
     queue_watcher_cover_refresh_for_track_paths_for_state(
         library_state,
         config,
         logger,
-        {str(track.path) for album in albums for track in getattr(album, "tracks", None) or []},
-        affected_album_keys=tuple(str(album.key) for album in albums),
+        set().union(*paths_by_album.values()),
+        affected_album_keys=tuple(paths_by_album),
     )
 
 

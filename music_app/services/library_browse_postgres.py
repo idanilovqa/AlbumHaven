@@ -9928,12 +9928,19 @@ def _build_artist_page_gallery_payload(artist_ref: str) -> dict[str, object]:
     }
 
 
-def _visible_album_clause(album_ref: str) -> str:
+def _visible_album_clause(
+    album_ref: str,
+    *,
+    category_count: str = "%(category_count)s",
+    visible_categories: str = "%(visible_categories)s::text[]",
+) -> str:
+    """The album visibility predicate. Its default text (bind parameters) is pinned; the gallery header
+    batch passes column references to decide every header's visibility in one statement."""
     return f"""
              not ({album_ref}.metadata ? 'stray_duplicate_of')
              and (
-             %(category_count)s = 0
-             or ({album_ref}.metadata #>> '{{root_provenance,primary_category}}') = any(%(visible_categories)s::text[])
+             {category_count} = 0
+             or ({album_ref}.metadata #>> '{{root_provenance,primary_category}}') = any({visible_categories})
              or exists (
                select 1
                from jsonb_array_elements_text(
@@ -9942,10 +9949,10 @@ def _visible_album_clause(album_ref: str) -> str:
                    '[]'::jsonb
                  )
                ) as root_categories(category)
-               where root_categories.category = any(%(visible_categories)s::text[])
+               where root_categories.category = any({visible_categories})
              )
              or (
-               'main_library' = any(%(visible_categories)s::text[])
+               'main_library' = any({visible_categories})
                and coalesce({album_ref}.metadata #>> '{{root_provenance,primary_category}}', '') = ''
                and coalesce(
                  jsonb_array_length(
@@ -9959,6 +9966,23 @@ def _visible_album_clause(album_ref: str) -> str:
              )
              )
     """.strip()
+
+
+def _headers_visible_albums_sql() -> str:
+    """For each gallery header's category set (%(headers)s: jsonb rows of scope_key, category_count and
+    visible_categories), the given albums it shows: one statement for every header of a publication."""
+    return f"""
+        select headers.scope_key, album.id as album_id
+        from jsonb_to_recordset(%(headers)s) as headers(
+          scope_key text, category_count integer, visible_categories text[])
+        cross join lateral (
+          select keyed.* from library.local_albums keyed
+          where keyed.id = any(%(gallery_album_ids)s::bigint[])
+          offset 0
+        ) album
+        where ({_visible_album_clause(
+            "album", category_count="headers.category_count", visible_categories="headers.visible_categories")})
+    """
 
 
 def _eligible_album_tracks_cte_sql(

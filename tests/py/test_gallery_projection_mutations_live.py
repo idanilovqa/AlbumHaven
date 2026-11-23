@@ -785,42 +785,91 @@ def test_targeted_inventory_preserves_shared_artist_identity(watcher_repair_inve
 
 
 def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery_inventory):
-    """CI run 44445861031: 5,332 rows estimated as 1 made artist bounds a 1.6 M-buffer nested loop."""
+    """CI run 44445861031 (main): 5,332 rows estimated as 1 made artist bounds a 1.6 M-buffer nested loop.
+
+    On #65 anchored and previous pages read the membership tables (7a7dd5933). 6.5: the bounds query's
+    target (an artist by name, or the entry at an ordinal) must be evaluated once whatever the statistics say;
+    an inlined target can rerun its offset scan for every artist row (~1.4k x 5.3k)."""
+    from music_app.services.utils import artist_collation_key
+
     fixture = gallery_inventory
     scope_key = gallery.gallery_projection_scope_key(fixture.view_state)
     revision = "f" * 64
-    rows = [{
+    payloads = [{
         "artist_id": f"artist-{index // 4:04d}", "artist_name": f"Artist {index // 4:04d}",
-        "album_id": index, "album_key": f"album-{index}", "album_title": f"Album {index}",
+        "album_id": index, "album_key": f"album-{index}", "album_title": f"Album {index:04d}",
         "album_release_year": 2000,
     } for index in range(5332)]
+    rows = [{
+        "artist_id": payload["artist_id"], "album_key": payload["album_key"],
+        "artist_sort": [*artist_collation_key(payload["artist_name"]), *artist_collation_key(payload["artist_name"])],
+        "artist_display": payload["artist_name"], "album_year": 2000,
+        "album_sort": payload["album_title"].casefold(), "payload": payload,
+    } for payload in payloads]
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        connection.execute("alter table library.gallery_projection_occurrences set (autovacuum_enabled = false)")
-        connection.execute("analyze library.gallery_projection_occurrences")
+        # Statistics are taken while the scope is empty and never refreshed after the republish.
+        for table in ("gallery_membership_entries", "gallery_membership_artists"):
+            connection.execute(f"delete from library.{table} where library_id = %s and scope_key = %s",
+                               (fixture.context["library_id"], scope_key))
+            connection.execute(f"alter table library.{table} set (autovacuum_enabled = false)")
+            connection.execute(f"analyze library.{table}")
+    state = {key: fixture.view_state.get(key) for key in ("gallery_scope", "visible_library_categories")}
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        assert publish(connection, fixture.context, fixture.view_state, revision=revision, rows=rows)
-    with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        estimate = connection.execute("""
-            explain (format json) select 1 from library.gallery_projection_occurrences
-            where library_id = %s and scope_key = %s and revision = %s
-        """, (fixture.context["library_id"], scope_key, revision)).fetchone()["QUERY PLAN"][0]["Plan"]
-        assert estimate["Plan Rows"] < 100, "statistics must still predate the republished revision"
+        assert connection.execute("""
+            select library.patch_gallery_membership(%s, %s, %s, %s, %s, %s, %s, null, %s) as published
+        """, (fixture.context["library_id"], scope_key, fixture.context["generation"], fixture.context["generation"],
+              gallery.BUILDER_VERSION, revision, Jsonb(state), Jsonb(rows))).fetchone()["published"]
+
+    class Recording:
+        """Records each bounds query the page runs, to explain it afterwards."""
+
+        def __init__(self, connection):
+            self.connection, self.bounds = connection, []
+
+        def execute(self, query, params=None):
+            if "join library.gallery_membership_artists artist" in str(query):
+                self.bounds.append((str(query), dict(params or {})))
+            return self.connection.execute(query, params)
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    with isolatedPostgres._connect(fixture.runtime_url) as raw:
+        estimate = raw.execute("""
+            explain (format json) select 1 from library.gallery_membership_entries
+            where library_id = %s and scope_key = %s
+        """, (fixture.context["library_id"], scope_key)).fetchone()["QUERY PLAN"][0]["Plan"]
+        assert estimate["Plan Rows"] < 100, "statistics must still predate the republished membership"
+        connection = Recording(raw)
 
         started = monotonic()
         page, _sidebar, count, metadata = gallery.load_gallery_projection_page(
             connection, fixture.view_state, {"gallery_page_size": "60", "gallery_anchor_artist": "Artist 0666"})
-        elapsed_ms = (monotonic() - started) * 1000
+        anchored_ms = (monotonic() - started) * 1000
+        assert metadata.get("previous_cursor"), "the anchored page has a previous page"
+        started = monotonic()
+        previous, _sidebar, _count, _metadata = gallery.load_gallery_projection_page(
+            connection, fixture.view_state,
+            {"gallery_page_size": "60", "gallery_cursor": metadata["previous_cursor"],
+             "gallery_page_direction": "previous"})
+        previous_ms = (monotonic() - started) * 1000
 
-        explained = connection.execute("explain (analyze, buffers, format json) " + gallery._ARTIST_BOUNDS_SQL, {
-            "library_id": fixture.context["library_id"], "scope_key": scope_key,
-            "revision": revision, "ordinal": 666 * 4,
-        }).fetchone()["QUERY PLAN"][0]
+        assert {"artist_name", "ordinal"} <= {key for _query, params in connection.bounds
+                                              for key, value in params.items() if value is not None}, (
+            "both bounds forms ran: by artist name and by ordinal"
+        )
+        explained = [raw.execute("explain (analyze, buffers, format json) " + query, params)
+                     .fetchone()["QUERY PLAN"][0] for query, params in connection.bounds]
 
     assert count == len(rows)
     assert metadata["revision"] == revision
     names = [row["artist_name"] for row in page]
-    assert names.count("Artist 0666") == 4
+    assert names.count("Artist 0666") == 4, "the requested artist's albums are on the page"
     assert all(names.count(name) == 4 for name in set(names)), "pages hold whole artist groups"
-    assert elapsed_ms < 1000, f"first anchored gallery request took {elapsed_ms:.0f} ms"
-    assert "Nested Loop" not in json.dumps(explained)
-    assert explained["Plan"]["Shared Hit Blocks"] + explained["Plan"]["Shared Read Blocks"] < 1000
+    assert previous and all([row["artist_name"] for row in previous].count(name) == 4
+                            for name in {row["artist_name"] for row in previous})
+    assert anchored_ms < 1000, f"first anchored gallery request took {anchored_ms:.0f} ms"
+    assert previous_ms < 1000, f"previous-page gallery request took {previous_ms:.0f} ms"
+    for plan in explained:
+        buffers = plan["Plan"]["Shared Hit Blocks"] + plan["Plan"]["Shared Read Blocks"]
+        assert buffers < 1000, f"a bounds query read {buffers} buffers: {json.dumps(plan)[:400]}"

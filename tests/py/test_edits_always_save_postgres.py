@@ -187,14 +187,26 @@ def test_live_a_save_with_the_baseline_not_ready_commits_with_no_full_prepare_an
 # (d) The save's statements and rows read are the same at 1 and 2,001 albums, with several custom gallery
 # scopes published, so the per-header membership patch is counted too (6.5's R4 condition).
 
-def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_with_custom_scopes(library):
+@pytest.mark.parametrize("analysed", [False, True], ids=["never-analysed", "analysed"])
+def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_with_custom_scopes(library, analysed):
+    """Both statistics states: a save right after a bulk change runs on missing statistics in production
+    (case 55), so the save's reads must stay flat without ANALYZE too, by keyed lookups, not by statistics."""
     fixture = library
     adapter, counted = _counting_adapter(fixture)
     # Several custom gallery scopes published, so the per-header membership patch is counted too (R4).
     _publish_custom_scopes(fixture)
+    if not analysed:
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            for table in INVENTORY_TABLES:
+                # The throwaway test database only: autovacuum must not analyse behind the measurement.
+                connection.execute(f"alter table {table} set (autovacuum_enabled = false)")
 
     small = _measure_save(fixture, "First Size", adapter, counted)
-    _seed_albums(fixture, 2000)
+    _seed_albums(fixture, 2000, analyse=analysed)
+    if not analysed:
+        never = _rows(fixture, """select relname, reltuples from pg_class
+            where oid = any(array[%s, %s, %s, %s]::regclass[])""", INVENTORY_TABLES)
+        assert all(row["reltuples"] == -1 for row in never), f"The tables were analysed: {never}."
     _gallery_state(fixture, "before the 2,001-album save")
     large = _measure_save(fixture, "Second Size", adapter, counted)
     _gallery_state(fixture, "after the 2,001-album save")
@@ -309,6 +321,10 @@ def _measure_save(fixture, title, adapter, counted):
     return len(statements), sum(tables.values()), seconds, {table: rows for table, rows in tables.items() if rows}
 
 
+INVENTORY_TABLES = ("library.local_artists", "library.local_albums", "library.local_tracks",
+                    "library.local_track_files")
+
+
 CUSTOM_SCOPES = (
     {"gallery_scope": "all", "visible_library_categories": ["main_library"]},
     {"gallery_scope": "all", "visible_library_categories": ["hoard"]},
@@ -332,7 +348,7 @@ def _catalog_columns(connection, table):
              and is_generated = 'NEVER' and is_identity = 'NO' order by ordinal_position""", (table,)).fetchall()]
 
 
-def _seed_albums(fixture, count, *, tag="bulk", own_artist=True):
+def _seed_albums(fixture, count, *, tag="bulk", own_artist=True, analyse=True):
     """``count`` one-track albums in one INSERT per table (generate_series): clones of the saved album's
     rows, every column but the identity and generated ones read from the catalog. ``tag`` keeps each
     batch's keys and folders apart; ``own_artist=False`` keeps the saved album's artist (its component)."""
@@ -389,10 +405,9 @@ def _seed_albums(fixture, count, *, tag="bulk", own_artist=True):
                 join library.local_tracks tracks on tracks.track_key = (
                   select track_key from library.local_tracks where id = source.track_id) || {suffix} || n
                 where source.id = %(file)s""", {"count": count, "file": source["file_id"]})
-        # Statistics, as production's tables have: without them the planner treats the seeded tables as
-        # tiny and scans them, which would read as a save's library-wide work.
-        connection.execute("analyze library.local_artists, library.local_albums, library.local_tracks, "
-                           "library.local_track_files")
+        if analyse:
+            # Statistics, as production's tables have after autovacuum; (d) also runs without them.
+            connection.execute("analyze " + ", ".join(INVENTORY_TABLES))
     _finish_live_reconciliation(fixture.config)
 
 

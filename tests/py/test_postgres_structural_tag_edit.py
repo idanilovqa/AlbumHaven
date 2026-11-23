@@ -2237,78 +2237,31 @@ def test_supported_media_field_combinations_select_targeted_finalizer(monkeypatc
     })
 
 
-def test_tag_edit_prevalidation_rejects_dirty_baseline_and_schedules_replay(monkeypatch):
-    from music_app.services import scoped_relation_projection, gallery_projection_postgres
+def test_tag_edit_prevalidation_never_waits_for_publishes_or_prepares_an_unready_baseline(monkeypatch):
+    """Owner (2026-11-22): any edit is saved despite background indexing. With the baseline not ready,
+    prevalidation validates the edit and nothing else: no refusal, inline publication, full preparation,
+    scheduled replay or wait (rows B1, R2). Replaces the gate that refused or published first."""
+    from music_app.services import gallery_projection_postgres, scan_cache_persistence, scoped_relation_projection
+
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
-    scheduled = []
-    published = []
+    library_wide = []
     monkeypatch.setattr(scoped_relation_projection, "tag_edit_baseline_ready", lambda *a, **k: False)
-    rebuilt = []
     monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
-                        lambda *a, **k: published.append(k) or {"initialized": True})
+                        lambda *a, **k: library_wide.append("inline publication"))
     monkeypatch.setattr(gallery_projection_postgres, "ensure_gallery_projection_ready",
-                        lambda *a, **k: rebuilt.append(k))
+                        lambda *a, **k: library_wide.append("full gallery preparation"))
     monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
-                        lambda *a, **k: scheduled.append(k))
-    paths, previous, updated = _entries()
-    with pytest.raises(RuntimeError, match="still being reconciled"):
-        adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
-            updated_file_entries=updated, changed_field_names={"album"})
-    # Pending changes are published and membership rebuilt first; only a
-    # baseline that stays dirty after both is refused.
-    assert len(published) == 1
-    assert len(rebuilt) == 1
-    assert scheduled == [{"incremental_membership": True}]
-    assert connection.executed == []
-
-
-def test_tag_edit_prevalidation_publishes_the_previous_save_instead_of_refusing(monkeypatch):
-    """Owner (11-18): a merge right after a split was refused with "still being reconciled"."""
-    from music_app.services import (
-        gallery_projection_postgres,
-        scan_cache_persistence,
-        scoped_relation_projection,
-    )
-
-    connection = StructuralTagEditConnection(_successful_result())
-    adapter = _adapter(monkeypatch, connection)
-    readiness = iter((False, True, True))
-    scheduled = []
-    published = []
-    monkeypatch.setattr(
-        scoped_relation_projection,
-        "tag_edit_baseline_ready",
-        lambda *a, **k: next(readiness),
-    )
-    monkeypatch.setattr(
-        scoped_relation_projection,
-        "ensure_pending_relation_projection_ready",
-        lambda *a, **k: published.append(k) or {"initialized": True},
-    )
-    monkeypatch.setattr(
-        gallery_projection_postgres,
-        "schedule_gallery_projection_refresh",
-        lambda *a, **k: scheduled.append(k),
-    )
-    monkeypatch.setattr(
-        scan_cache_persistence,
-        "sleep",
-        lambda _seconds: None,
-        raising=False,
-    )
+                        lambda *a, **k: library_wide.append("scheduled replay"))
+    monkeypatch.setattr(scan_cache_persistence, "sleep", lambda _seconds: library_wide.append("wait"),
+                        raising=False)
     paths, previous, updated = _entries()
 
-    adapter.validate_structural_tag_edit(
-        changed_paths=set(paths),
-        previous_file_entries=previous,
-        updated_file_entries=updated,
-        changed_field_names={"album"},
-    )
+    adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
+        updated_file_entries=updated, changed_field_names={"album"})
 
-    assert len(published) == 1
-    assert scheduled == []
-    assert connection.executed
+    assert library_wide == []
+    assert connection.executed, "The edit itself was not validated."
 
 
 @pytest.mark.parametrize("edits", [

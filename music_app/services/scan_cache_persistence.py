@@ -972,8 +972,8 @@ class PostgresScanCacheAdapter:
             revision = int(
                 _row_mapping(revision_row).get("inventory_mutation_revision") or 0
             )
-            from music_app.services.scoped_relation_projection import publish_affected_relation_projection
-            publish_affected_relation_projection(
+            from music_app.services.scoped_relation_projection import publish_affected_relation_projection_or_defer
+            publish_affected_relation_projection_or_defer(
                 connection, album_keys=affected_album_keys,
                 album_ids=prior_album_ids,
                 track_paths=context_seed_paths | set(file_cache), reason="targeted_reconciliation",
@@ -2115,43 +2115,10 @@ class PostgresScanCacheAdapter:
                                  if isinstance(previous_file_entries.get(path), dict)}
         updated_file_entries = {path: dict(updated_file_entries[path]) for path in changed_paths
                                 if isinstance(updated_file_entries.get(path), dict)}
-        from music_app.services.scoped_relation_projection import (
-            ensure_pending_relation_projection_ready,
-            tag_edit_baseline_ready,
-        )
+        # Owner (2026-11-22): any edit is saved despite background indexing. Validation checks the edit only:
+        # whether the gallery baseline or the relation journal is current is the publication's concern, never
+        # a reason to refuse, wait for, or prepare anything before a user's save (rows B1, R2).
         with self._connect_to_database() as connection:
-            baseline_ready = tag_edit_baseline_ready(
-                self._config, connect=lambda _url: nullcontext(connection), track_paths=changed_paths)
-            if not baseline_ready:
-                # The previous save's albums are still journaled (a split followed at
-                # once by a merge). Publish them now, waiting behind a publication
-                # already running, instead of refusing the owner's next save.
-                try:
-                    ensure_pending_relation_projection_ready(self._config, connect=self._connect)
-                    if not tag_edit_baseline_ready(self._config, connect=lambda _url: nullcontext(connection),
-                                                   track_paths=changed_paths):
-                        # Membership built at another generation (a restored database, an
-                        # interrupted startup) is rebuilt in full rather than refusing the save.
-                        from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
-                        ensure_gallery_projection_ready(self._config, connect=self._connect)
-                except Exception:
-                    _LOGGER.exception("Pending relation publication before a tag edit failed")
-                baseline_ready = tag_edit_baseline_ready(
-                    self._config, connect=lambda _url: nullcontext(connection), track_paths=changed_paths)
-            if not baseline_ready:
-                from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-                schedule_gallery_projection_refresh(self._config, incremental_membership=True)
-                deadline = perf_counter() + 1.0
-                while perf_counter() < deadline:
-                    sleep(0.05)
-                    if tag_edit_baseline_ready(
-                        self._config,
-                        connect=lambda _url: nullcontext(connection),
-                        track_paths=changed_paths,
-                    ):
-                        break
-                else:
-                    raise RuntimeError("Library changes are still being reconciled. Retry this edit when library preparation finishes.")
             connection.execute(_inventory_publication_advisory_lock_sql())
             _partition_edited_physical_copies(connection, changed_paths, previous_file_entries,
                                              updated_file_entries, apply=False)
@@ -3808,7 +3775,7 @@ def _patch_structural_relation_projection(
     expected_gallery_generation: int | None = None,
     affected_album_ids=(),
 ) -> dict[str, object]:
-    from music_app.services.scoped_relation_projection import publish_affected_relation_projection
+    from music_app.services.scoped_relation_projection import publish_affected_relation_projection_or_defer
 
     del source_album_vacated
     album_ids = {
@@ -3817,7 +3784,7 @@ def _patch_structural_relation_projection(
         if entry.get("album_id")
     }
     with persistence_stage("relation_publication"):
-        return publish_affected_relation_projection(
+        return publish_affected_relation_projection_or_defer(
             connection, album_ids=album_ids | {int(value) for value in affected_album_ids if value is not None},
             track_paths=set(previous_entries) | set(updated_entries), reason=reason, config=config,
             expected_gallery_generation=expected_gallery_generation,

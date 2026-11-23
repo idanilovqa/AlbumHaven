@@ -746,6 +746,34 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
                                legacy_touched_entries=legacy_touched_entries)
 
 
+def publish_affected_relation_projection_or_defer(connection, **options):
+    """A user's write publishes its own albums when it can, and is never lost because it can't (owner,
+    2026-11-22: "Any edits user makes should be saved despite any background indexing or rescanning").
+
+    The publication runs in a savepoint of the write's own transaction, on its own connection. An
+    indexing-state failure (another transaction's library-wide marker, an unready or changed baseline,
+    sources changed meanwhile) rolls back the savepoint only: the write's rows and the albums its triggers
+    journaled commit, and the journal's single owner publishes them afterwards (rows A1-A10, R1). Its drain
+    takes the inventory publication lock this transaction holds, so it runs after the commit.
+    """
+    import psycopg
+
+    try:
+        with connection.transaction():
+            return publish_affected_relation_projection(connection, **options)
+    except (psycopg.OperationalError, psycopg.errors.QueryCanceled):
+        raise  # the connection or the statement is gone: not an indexing state
+    except Exception as error:
+        logging.getLogger(__name__).warning(
+            'Relation publication deferred to the journal owner: reason=%s error=%s',
+            options.get('reason'), type(error).__name__, exc_info=True)
+        if options.get('config'):
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+            queue_journaled_relation_drain(options['config'])
+        return {'relation_publication_deferred': True}
+
+
 def _patch_entry_contract(connection, library_id, views, affected_names, *, compatibility=False):
     low_keys = {_normalize_key(name) for name in affected_names if _low_value(name)}
     entry_connections = {'low:' + key for key in low_keys}

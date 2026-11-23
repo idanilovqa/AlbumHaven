@@ -18,8 +18,6 @@ def loose_library(watcher_repair_inventory, monkeypatch):
     from music_app.services import problematic_index
 
     fixture = watcher_repair_inventory
-    # Marks stay where a test can read them: nothing drains in the background.
-    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: None)
 
     def stray(folder, *, root=0, title="01"):
         entry = fixture.entry(f"Owner/{folder}/{title}.flac", root=root, artist="")
@@ -31,7 +29,11 @@ def loose_library(watcher_repair_inventory, monkeypatch):
     fixture.seed(*(fixture.entry(f"Owner/Album/{track}.flac") for track in ("01", "02", "03")),
                  *fixture.strays.values())
     fixture.database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    # The first backfill runs in the background, so it may run before this; afterwards marks stay where a test
+    # can read them: nothing drains in the background.
     _ready_problematic_index(fixture.database_url)
+    problematic_index.wait_for_background_work()
+    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: None)
     return fixture
 
 
@@ -171,18 +173,18 @@ def test_live_a_page_reads_a_bounded_number_of_items_past_an_inactive_root(loose
 
 # 6.5's first condition: a key mismatch would leave marks that never clear an item.
 KEY_PATHS = [
-    pytest.param("C:\Music\Artist\Album\01 - Song.flac", id="windows-backslashes"),
-    pytest.param("c:\MUSIC\artist\ALBUM\01 - Song.flac", id="windows-mixed-case"),
+    pytest.param(r"C:\Music\Artist\Album\01 - Song.flac", id="windows-backslashes"),
+    pytest.param(r"c:\MUSIC\artist\ALBUM\01 - Song.flac", id="windows-mixed-case"),
     pytest.param("D:/Music/Artist/Album/01.flac", id="windows-forward-slashes"),
-    pytest.param("C:\Music/Mixed\Separators/01.flac", id="windows-mixed-separators"),
-    pytest.param("C:\Music\Artist\Album\\", id="windows-trailing-separator"),
-    pytest.param("C:\01.flac", id="windows-drive-root"),
+    pytest.param(r"C:\Music/Mixed\Separators/01.flac", id="windows-mixed-separators"),
+    pytest.param("C:\\Music\\Artist\\Album\\", id="windows-trailing-separator"),
+    pytest.param(r"C:\01.flac", id="windows-drive-root"),
     pytest.param("/music/artist/album/01.flac", id="posix"),
     pytest.param("/Music/Artist/Album/", id="posix-trailing-separator"),
     pytest.param("/01.flac", id="posix-root"),
     pytest.param("/music/Caf\u00e9/01.flac", id="non-ascii-nfc"),
     pytest.param("/music/Cafe\u0301/01.flac", id="non-ascii-nfd"),
-    pytest.param("C:\Музыка\ДДТ\Ремиксы\01.flac", id="cyrillic"),
+    pytest.param(r"C:\Музыка\ДДТ\Ремиксы\01.flac", id="cyrillic"),
     pytest.param("/music/天門/She and Her Cat/01.flac", id="cjk"),
 ]
 

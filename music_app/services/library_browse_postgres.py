@@ -10047,6 +10047,44 @@ def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
           where id = any(%(gallery_album_ids)s::bigint[])
         ),
     """ if candidate_albums_only else ""
+    if candidate_albums_only:
+        # A publication's affected albums: start from them and read each album, its featured artists and
+        # each artist by key in a lateral lookup (offset 0), so the read stays with those albums even on
+        # tables with no statistics yet (case 55's shape). Same rows as the library-wide form below.
+        return f"""
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library' and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1
+        ), {candidate_albums} {eligible_tracks}
+        select distinct artist.id as artist_id, artist.name as artist_name,
+          artist.sort_name as artist_sort_name, featured.featured_kind,
+          album.id as album_id, album.album_key,
+          album.title as album_title, album.release_year as album_release_year
+        from search_candidate_album_ids candidate
+        join bootstrap_context on bootstrap_context.library_id = candidate.library_id
+        join lateral (
+          select keyed.* from library.local_albums keyed
+          where keyed.id = candidate.album_id and keyed.library_id = bootstrap_context.library_id
+          offset 0
+        ) album on true
+        join lateral (
+          select keyed.* from library.local_album_featured_artists keyed
+          where keyed.library_id = album.library_id and keyed.album_id = album.id
+          offset 0
+        ) featured on true
+        join lateral (
+          select keyed.* from library.local_artists keyed
+          where keyed.id = featured.artist_id and keyed.library_id = album.library_id
+          offset 0
+        ) artist on true
+        where ({_visible_album_clause("album")}) and exists (
+          select 1 from eligible_album_tracks eligible
+          where eligible.library_id = album.library_id and eligible.album_id = album.id
+        );
+    """
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id

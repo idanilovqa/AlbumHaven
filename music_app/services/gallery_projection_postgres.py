@@ -152,6 +152,8 @@ def _header_membership_publisher(connection, config, context, keys, affected_alb
     repository = browse.PostgresLibraryBrowseRepository(config)
     aliases = browse._root_browse_alias_to_canonical(alias_to_canonical)
     album_ids = sorted(set(affected_album_ids))
+    # The affected albums' missing-album rows are the same for every header: loaded once per publication.
+    missing_rows = repository._load_missing_album_rows(album_keys=keys, connection=connection) if keys else []
 
     def publish(header, expected_generation):
         state = dict(header["view_state"])
@@ -159,7 +161,6 @@ def _header_membership_publisher(connection, config, context, keys, affected_alb
             browse._root_gallery_membership_sql(candidate_albums_only=True),
             {**browse._root_sidebar_params(state), "gallery_album_ids": album_ids},
         ).fetchall() if keys else []
-        missing_rows = repository._load_missing_album_rows(album_keys=keys, connection=connection) if keys else []
         missing_payloads = browse._missing_album_projection_payloads(missing_rows, view_state=state)
         row_aliases = _published_aliases(connection, context['library_id'], {
             *(str(row.get('artist_name') or '').strip() for row in rows),

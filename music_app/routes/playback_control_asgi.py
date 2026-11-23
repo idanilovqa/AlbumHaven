@@ -57,7 +57,8 @@ async def playback_call(function, *args, **kwargs):
     try:
         return await run_in_threadpool(function, *args, **kwargs)
     except PlaybackContractError as error:
-        raise HTTPException(error.status_code, str(error)) from None
+        headers = {"Retry-After": str(error.retry_after)} if error.retry_after else None
+        raise HTTPException(error.status_code, str(error), headers=headers) from None
 
 
 async def reference_call(request, call):

@@ -321,8 +321,9 @@ def test_another_client_sees_where_the_claims_song_is_and_how_to_open_it(playbac
     assert seen["track"] == track, "the track keeps its contract shape"
     assert seen["position"] == {"ms": 65_000, "durationMs": 300_000}, "the song played on since the renewal"
     assert "path" not in seen, "the shared state stays path-free for native clients"
-    # Only a browser asks for the path it opens the song by, as its library browse names it.
-    assert service.get(fixture.actor, laptop, include_path=True)["path"] == fixture.paths[0]
+    # Only a browser asks for the path it opens the song by, as its library browse names it. issue()
+    # lists the second file first, so the claim's song is fixture.paths[1].
+    assert service.get(fixture.actor, laptop, include_path=True)["path"] == fixture.paths[1]
     assert "path" not in service.get(fixture.actor, phone, include_path=True), "only another client's song"
 
     service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
@@ -758,8 +759,11 @@ def test_a_holder_that_stopped_renewing_is_never_replaced(playback_inventory, su
     claim = service.acquire(fixture.actor, client_id=holder, client_surface=surface, track=track)
 
     clock[0] = started_at + timedelta(seconds=quiet_for)
+    # The press names its song by a reference of its own time: the holder's lapses after 24 hours.
+    fresh = issue(reference_service(fixture, lambda: clock[0]), fixture)["tracks"][0]["playbackRef"]
+    pressed = {**track, "playbackRef": fresh}
     with pytest.raises(ValueError) as refused:
-        service.acquire(fixture.actor, client_id=press, client_surface="private_web", track=track)
+        service.acquire(fixture.actor, client_id=press, client_surface="private_web", track=pressed)
     assert getattr(refused.value, "status_code", None) == 409
     assert service.get(fixture.actor, press)["is_playing_elsewhere"] is True
     service.release(fixture.actor, client_id=holder, claim_token=claim["claimToken"])

@@ -155,6 +155,50 @@ def test_a_page_that_said_it_is_leaving_gives_way_once_its_output_drained(player
     assert player.start(taker)["playbackState"]["is_playing_here"] is True
 
 
+# A press in another browser right after the playing tab closed was refused for good, though the closed
+# page's output drains within a second: the refusal says when to ask again, and only while it drains.
+def test_a_press_while_a_leaving_page_drains_is_told_to_ask_again_once_it_has(player):
+    holder, taker = str(uuid4()), str(uuid4())
+    player.stage(holder, player.start(holder)["claimToken"])
+
+    with pytest.raises(PlaybackContractError) as draining:
+        player.start(taker)
+    assert (draining.value.status_code, draining.value.retry_after) == (409, 1)
+
+    player.pass_time(1)
+
+    assert player.start(taker)["playbackState"]["is_playing_here"] is True
+
+
+def test_a_holder_that_is_not_leaving_is_refused_with_no_time_to_ask_again(player):
+    player.start(str(uuid4()))
+
+    with pytest.raises(PlaybackContractError) as playing:
+        player.start(str(uuid4()))
+    assert (playing.value.status_code, playing.value.retry_after) == (409, None)
+
+
+def test_the_time_to_ask_again_reaches_the_browser_as_retry_after():
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from music_app.routes.playback_control_asgi import playback_call
+
+    def draining():
+        raise PlaybackContractError(409, retry_after=1)
+
+    def playing():
+        raise PlaybackContractError(409)
+
+    with pytest.raises(HTTPException) as told:
+        asyncio.run(playback_call(draining))
+    assert (told.value.status_code, told.value.headers) == (409, {"Retry-After": "1"})
+    with pytest.raises(HTTPException) as refused_for_now:
+        asyncio.run(playback_call(playing))
+    assert (refused_for_now.value.status_code, refused_for_now.value.headers) == (409, None)
+
+
 def test_a_leaving_pages_word_never_lapses(player):
     holder = str(uuid4())
     player.stage(holder, player.start(holder)["claimToken"])

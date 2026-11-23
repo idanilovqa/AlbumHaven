@@ -18,9 +18,12 @@ _RESUME_DOMAIN = "playback-resume-v1"
 
 
 class PlaybackContractError(ValueError):
-    def __init__(self, status_code=400):
+    """[retry_after], in seconds, names when a refusal ends by itself."""
+
+    def __init__(self, status_code=400, retry_after=None):
         super().__init__("Invalid or unavailable playback request.")
         self.status_code = status_code
+        self.retry_after = retry_after
 
 
 def playback_scope(actor):

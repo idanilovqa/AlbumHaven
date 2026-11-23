@@ -224,6 +224,13 @@ class PostgresPlaybackClaims:
                     returning client_id, client_surface, expires_at, track""",
                     (account_id, library_id, client_id, client_surface, digest, expires,
                      json.dumps(stored_track), *_silent_bounds(now))).fetchone()
+                if row is None:
+                    leaving = connection.execute("""select pending_handoff_expires_at from app.playback_claims
+                        where account_id = %s and library_id = %s""", (account_id, library_id)).fetchone()
+                    # Refused over a page that said it is leaving only while its output drains: the press
+                    # asks again once it has.
+                    if leaving and leaving["pending_handoff_expires_at"] and leaving["pending_handoff_expires_at"] > now:
+                        raise PlaybackContractError(409, retry_after=_LEAVING_DRAIN_SECONDS)
             else:
                 # The token renews its claim even past the lease, as for a client that played on
                 # without a network: nobody else can start until it says it is silent. The holder renewing

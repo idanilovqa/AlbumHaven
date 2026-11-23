@@ -170,6 +170,9 @@ async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBA
       error.status = response.status;
       // An overloaded server's answer says no more than no answer does.
       error.unanswered = response.status >= 500 || response.status === 429;
+      // A refusal that names when to ask again ends by itself: a leaving page's output still drains.
+      const retryAfterSeconds = Number(response.headers?.get?.('Retry-After'));
+      if (retryAfterSeconds > 0) error.retryAfterMs = retryAfterSeconds * 1000;
       throw error;
     }
     return await response.json().catch(markUnanswered);
@@ -273,9 +276,9 @@ function loadsSilentlyWhileAsking() {
 
 // An outage start waits and then starts by itself, with no second press. A newer press, a pause or a
 // takeover ends the wait.
-function waitToAskAgain() {
+function waitToAskAgain(delayMs = PLAYBACK_OWNERSHIP_RETRY_MS) {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, PLAYBACK_OWNERSHIP_RETRY_MS);
+    const timer = setTimeout(resolve, delayMs);
     getPlaybackOwnershipState().wakeClaimWait = () => {
       clearTimeout(timer);
       resolve();
@@ -675,6 +678,13 @@ async function claimPlaybackOwnership(track, options = {}) {
           // A held claim plays on inside its five minutes. Without one the audio thread holds the stream.
           if (claim && holdsPlaybackClaim()) return true;
           await waitToAskAgain();
+          if (version !== ownership.requestVersion) return false;
+          continue;
+        }
+        // The page that played said it is leaving: it is silent once its output drains, and the one
+        // press starts then. The server names the wait only while it drains.
+        if (error?.status === 409 && error.retryAfterMs && !claim && !handoff) {
+          await waitToAskAgain(error.retryAfterMs);
           if (version !== ownership.requestVersion) return false;
           continue;
         }

@@ -722,6 +722,47 @@ test('protocol fixture rejects unsupported responses and strips untrusted path m
   );
 });
 
+// A press in another browser right after the playing tab closed was refused for good, though the closed
+// page's output drains within a second. The refusal names when to ask again, and the one press does.
+test('a press refused while the playing page drains asks again when the server says, and starts', async () => {
+  const puts = [];
+  const waits = [];
+  const { context } = loadHelper({
+    setTimeout: (callback, delay) => {
+      waits.push(delay);
+      if (delay === 1000) queueMicrotask(callback);
+      return waits.length;
+    },
+    fetch: async (_url, options = {}) => {
+      if (options.method !== 'PUT') return jsonResponse({ protocol: 1, is_playing_elsewhere: true });
+      puts.push(JSON.parse(options.body));
+      if (puts.length === 1) {
+        return { ...jsonResponse({}, { ok: false, status: 409 }), headers: new Map([['Retry-After', '1']]) };
+      }
+      return jsonResponse({ ...protocolFixture.valid.claimResponse, expiresAt: '2099-10-23T23:00:30Z' });
+    },
+  });
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(puts.length, 2, 'the one press asked again');
+  assert.ok(waits.includes(1000), 'after the second the server named');
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, protocolFixture.valid.claimResponse.claimToken);
+});
+
+test('a press refused with no time to ask again stays refused', async () => {
+  let puts = 0;
+  const { context } = loadHelper({
+    fetch: async (_url, options = {}) => {
+      if (options.method !== 'PUT') return jsonResponse({ protocol: 1, is_playing_elsewhere: true });
+      puts += 1;
+      return { ...jsonResponse({}, { ok: false, status: 409 }), headers: new Map() };
+    },
+  });
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), false);
+  assert.equal(puts, 1, 'a holder that still plays is not asked about again');
+});
+
 test('late acquisition releases its stale token without replacing the newer claim', async () => {
   const acquisitions = [];
   const releases = [];

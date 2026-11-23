@@ -1913,10 +1913,12 @@ async def utilities_edit_tags_request_status(request: Request, client_request_id
 
 @router.post("/utilities/edit-tags")
 async def utilities_edit_tags(request: Request) -> JSONResponse:
-    history_scope = await history_scope_for_request(request, required=False)
-    request_started = perf_counter()
-    payload = await _json_payload(request)
-    return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
+    # The whole save request leases from the save workload (row B3), its History scope read included.
+    with user_save_connections():
+        history_scope = await history_scope_for_request(request, required=False)
+        request_started = perf_counter()
+        payload = await _json_payload(request)
+        return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
 
 
 async def run_edit_tags_payload(

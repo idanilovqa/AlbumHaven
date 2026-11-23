@@ -3020,6 +3020,54 @@ test('library Loose Tracks shows the rows already stored, keeps asking with the 
   assert.equal(page.live.size, 0, 'no retry once the store is ready');
 });
 
+// Owner approved (2026-11-22): when the bounded wait runs out with no stored row, the page says so.
+test('a Loose Tracks page with no stored row says it is still being prepared once the bounded wait runs out', async () => {
+  const { context } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  const live = new Map();
+  let nextTimer = 0;
+  context.scheduleBrowserTimeout = (callback) => { nextTimer += 1; live.set(nextTimer, callback); return nextTimer; };
+  context.clearBrowserTimeout = (id) => { live.delete(id); };
+  context.state.view = { library_non_album_tracks: [] };
+  context.state.ui = {};
+  const requests = [];
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: [], non_album_tracks_deferred: true }) };
+  };
+  const text = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
+  const settle = async () => { for (let turn = 0; turn < 20; turn += 1) await Promise.resolve(); };
+
+  context.openNonAlbumModal({ libraryWide: true });
+  await settle();
+  assert.equal(table.innerHTML.includes(text), false, 'loading while the wait lasts');
+  for (let fired = 0; live.size && fired < 50; fired += 1) {
+    const [id, callback] = live.entries().next().value;
+    live.delete(id);
+    await callback();
+    await settle();
+  }
+
+  assert.equal(requests.length, 9, 'the first ask and eight retries');
+  assert.equal(table.innerHTML.split(text).length - 1, 1, 'the exact text, once');
+  assert.equal(live.size, 0, 'nothing is asked after the wait ran out');
+});
+
 // Owner approved note A (2026-11-22): "Still indexing loose tracks, so more may appear."
 test('a partial Loose Tracks page notes under the table that more may appear, and a ready one does not', () => {
   const { context } = loadHelper();

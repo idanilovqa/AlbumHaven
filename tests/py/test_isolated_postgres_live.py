@@ -329,12 +329,14 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
                     "edition": "", "album_rating": 0, "library_root_id": roots[root]["id"],
                     "library_root_category": "main_library" if root == 0 else "hoard", "exception_type": exception}
 
-        def seed(*entries):
+        def seed(*entries, startup_baseline=True):
             adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
                                   "watcher-repair", 1.0, observed_library_root_ids={root["id"] for root in roots})
             # A full scan publishes its relation views; watcher publication
-            # requires that ready baseline, as after startup.
-            _finish_live_startup(config)
+            # requires that ready baseline, as after startup. A test that proves
+            # the gallery build itself seeds without it.
+            if startup_baseline:
+                _finish_live_startup(config)
 
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
     finally:

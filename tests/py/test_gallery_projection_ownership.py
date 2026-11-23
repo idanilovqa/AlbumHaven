@@ -102,7 +102,8 @@ def test_gallery_publishes_default_before_preparing_second_scope(monkeypatch, pu
 
     monkeypatch.setattr(browse, "PostgresLibraryBrowseRepository", Repository)
     monkeypatch.setattr(browse, "_prepare_root_gallery_snapshot", prepare_scope)
-    generations = iter([3, 4])
+    # The readiness check reads the generation first; then each scope reads its own.
+    generations = iter([3, 3, 4])
     monkeypatch.setattr(gallery, "gallery_projection_context",
                         lambda _: {"library_id": 1, "generation": next(generations)})
     monkeypatch.setattr(gallery, "_ready_header", lambda *_: None)

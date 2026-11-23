@@ -1049,7 +1049,7 @@ def test_watcher_cover_refresh_disables_full_snapshot_and_invalidates_after_comm
     )
     monkeypatch.setattr(
         state_module,
-        "invalidate_targeted_library_projections",
+        "invalidate_targeted_cover_projections",
         lambda *args, **kwargs: invalidations.append((args, kwargs)),
     )
 
@@ -1066,7 +1066,7 @@ def test_watcher_cover_refresh_disables_full_snapshot_and_invalidates_after_comm
         "marker": "targeted",
         "expected_inventory_mutation_revision": 11,
     }]
-    assert invalidations == [((library_state, config), {
+    assert invalidations == [((library_state,), {
         "revision": 11,
         "affected_album_keys": ("artist::album",),
     })]
@@ -1107,7 +1107,7 @@ def test_watcher_cover_refresh_invalidates_successful_commit_before_retrying_fai
     )
     monkeypatch.setattr(
         state_module,
-        "invalidate_targeted_library_projections",
+        "invalidate_targeted_cover_projections",
         lambda *args, **kwargs: invalidations.append((args, kwargs)),
     )
 
@@ -1120,7 +1120,7 @@ def test_watcher_cover_refresh_invalidates_successful_commit_before_retrying_fai
     )
     submissions[0]()
 
-    assert invalidations == [((library_state, config), {
+    assert invalidations == [((library_state,), {
         "revision": 11,
         "affected_album_keys": ("artist::album",),
     })]

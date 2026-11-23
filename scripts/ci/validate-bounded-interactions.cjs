@@ -29,7 +29,7 @@ const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryS
 const INTERACTION_KEYS = new Set([
   'id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof', 'requestOwnership',
   'cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'measures', 'performanceTargets', 'rollback',
-  'alreadyShown',
+  'alreadyShown', 'forbiddenWork',
 ]);
 const REQUIRED_KEYS = ['id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof'];
 const CONTRACT_KEYS = ['cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'rollback'];
@@ -167,6 +167,16 @@ function validateSchema(registry, { fileExists, readFile }) {
     for (const key of entry?.entrypoints || []) {
       const ownerPath = /^(?:js|py):([^#]+)#/.exec(key)?.[1];
       if (ownerPath && !(entry.owners || []).includes(ownerPath)) errors.push(`${label}: entrypoint ${key} is outside its owners`);
+    }
+    const forbidden = entry?.forbiddenWork;
+    if (forbidden !== undefined) {
+      if (!Array.isArray(forbidden) || !forbidden.length) errors.push(`${label}: forbiddenWork must be a nonempty list`);
+      for (const work of Array.isArray(forbidden) ? forbidden : []) {
+        // Discovery checks that the named definition exists, by its exact qualified name.
+        if (work !== 'library-state-scan' && !/^py:[^#]+#.+$/.test(String(work))) {
+          errors.push(`${label}: forbiddenWork ${work} must be library-state-scan or py:<path>#<qualified name>`);
+        }
+      }
     }
     const ownership = entry?.requestOwnership;
     if (ownership !== undefined) {

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 import base64
 import binascii
+from bisect import bisect_left, insort
 from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
@@ -109,6 +110,11 @@ _UTILITY_PROJECTION_CACHE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
+# The projections that show cover state. A cover change leaves them cached and
+# notes the changed track paths here, each with a token for that change; the
+# next read reloads only those albums.
+_COVER_DEPENDENT_KINDS = ("problematic-files", "rules")
+_UTILITY_COVER_CHANGES: dict[tuple[str, str], dict[str, object]] = {}
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
@@ -172,10 +178,35 @@ def invalidate_postgres_utility_projection_cache(
                 if key[1] in normalized_kinds
             }
         for cache_key in affected_keys:
+            _UTILITY_COVER_CHANGES.pop(cache_key, None)
             _UTILITY_PROJECTION_GENERATIONS[cache_key] = (
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
             _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+
+def record_cover_change_in_utility_projections(
+    *,
+    database_url: object,
+    track_paths: Iterable[str],
+) -> None:
+    """A committed cover change alters only its albums' rows of the projections
+    that show covers; every other projection keeps what it cached."""
+    normalized_database_url = str(database_url or "").strip()
+    if not normalized_database_url:
+        return
+    changes = dict.fromkeys(track_paths, object())
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        for kind in _COVER_DEPENDENT_KINDS:
+            cache_key = (normalized_database_url, kind)
+            # With nothing cached or being built, the next build reads this change itself.
+            if cache_key in _UTILITY_PROJECTION_CACHE or cache_key in _UTILITY_PROJECTION_SINGLEFLIGHT:
+                _UTILITY_COVER_CHANGES.setdefault(cache_key, {}).update(changes)
+        # A first page can't be patched (the album may leave it) and only stands
+        # in until the complete list is cached.
+        page_key = (normalized_database_url, _PROBLEMATIC_FILES_PAGE_KIND)
+        _UTILITY_PROJECTION_GENERATIONS[page_key] = _UTILITY_PROJECTION_GENERATIONS.get(page_key, 0) + 1
+        _UTILITY_PROJECTION_CACHE.pop(page_key, None)
 
 
 def _request_flag(value: object) -> bool:
@@ -2709,6 +2740,7 @@ class PostgresLibraryBrowseRepository:
         kind = "problematic-files"
 
         def cached() -> dict[str, object] | None:
+            self._apply_cover_changes(kind, self._problematic_files_with_reloaded_albums)
             payload = self._get_cached_utility_projection(kind)
             if payload is not None:
                 payload["projection_cache_status"] = "hit"
@@ -2724,9 +2756,7 @@ class PostgresLibraryBrowseRepository:
 
     def _build_problematic_files_payload_uncached(self) -> dict[str, object]:
         with self._connect_to_database() as connection:
-            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            connection.execute("SET LOCAL work_mem = '16MB'")
-            connection.execute("SET LOCAL jit = off")
+            _begin_problematic_files_read(connection)
             return self._build_problematic_files_payload_from_rows(
                 connection=connection,
                 rows=self._load_problematic_file_rows(connection=connection),
@@ -2737,6 +2767,7 @@ class PostgresLibraryBrowseRepository:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
 
         def cached() -> dict[str, object] | None:
+            self._apply_cover_changes("problematic-files", self._problematic_files_with_reloaded_albums)
             complete = self._get_cached_utility_projection("problematic-files", copy_payload=False)
             if complete is not None:
                 # Copy only the page: the complete payload is megabytes on a real library.
@@ -2760,9 +2791,7 @@ class PostgresLibraryBrowseRepository:
 
     def _build_problematic_files_first_page(self, *, limit: int, generation: int | None) -> dict[str, object]:
         with self._browse_connection_context() as connection:
-            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            connection.execute("SET LOCAL work_mem = '16MB'")
-            connection.execute("SET LOCAL jit = off")
+            _begin_problematic_files_read(connection)
             album_ids = self._load_problematic_candidate_ids(
                 connection=connection,
                 limit=limit,
@@ -2798,21 +2827,7 @@ class PostgresLibraryBrowseRepository:
         missing_rows: list[object] | None = None,
         limit: int | None = None,
     ) -> dict[str, object]:
-        albums = _problematic_album_projection_payloads(rows)
-        duplicate_candidates = [
-            album for album in albums if album.get("_duplicate_candidate")
-        ]
-        if duplicate_candidates:
-            self._attach_duplicate_sources(
-                duplicate_candidates,
-                connection=connection,
-                defer_source_payloads=True,
-            )
-        projected_items = [
-            (item, album)
-            for album in albums
-            if (item := _problematic_album_summary_payload(album)) is not None
-        ]
+        _albums, projected_items = self._project_problematic_albums(connection, rows)
         resolved_missing_rows = (
             self._load_missing_album_rows(connection=connection)
             if missing_rows is None
@@ -2822,30 +2837,13 @@ class PostgresLibraryBrowseRepository:
             item = _problematic_album_summary_payload(album)
             if item is not None:
                 projected_items.append((item, album))
-        projected_items.sort(
-            key=lambda projected_item: (
-                str(projected_item[0].get("name") or "").lower(),
-                str(projected_item[0].get("album_artist") or "").lower(),
-                str(projected_item[0].get("year") or ""),
-                str(projected_item[0].get("key") or "").lower(),
-            )
-        )
+        projected_items.sort(key=lambda projected_item: _problematic_item_order(projected_item[0]))
         if limit is not None:
             projected_items = projected_items[:limit]
         items = [item for item, _album in projected_items]
         initial_detail = None
         if projected_items:
-            first_album = projected_items[0][1]
-            first_key = str(first_album.get("key") or "")
-            first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
-                connection=connection
-            ).get("alias_to_canonical", {})
-            initial_detail = _problematic_album_detail_payload(first_album)
-            if initial_detail is None:
-                raise RuntimeError(
-                    "Problematic Files summary/detail snapshot invariant failed for "
-                    f"album {first_key!r}."
-                )
+            initial_detail = self._problematic_initial_detail(connection, projected_items[0][1])
         return {
             "items": items,
             "initial_detail": initial_detail,
@@ -2854,6 +2852,89 @@ class PostgresLibraryBrowseRepository:
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
         }
+
+    def _project_problematic_albums(
+        self,
+        connection: Any,
+        rows: list[object],
+    ) -> tuple[list[dict[str, object]], list[tuple[dict[str, object], dict[str, object]]]]:
+        """The albums of `rows`, and the list item of each that has a problem."""
+        albums = _problematic_album_projection_payloads(rows)
+        duplicate_candidates = [album for album in albums if album.get("_duplicate_candidate")]
+        if duplicate_candidates:
+            self._attach_duplicate_sources(
+                duplicate_candidates,
+                connection=connection,
+                defer_source_payloads=True,
+            )
+        return albums, [
+            (item, album)
+            for album in albums
+            if (item := _problematic_album_summary_payload(album)) is not None
+        ]
+
+    def _problematic_initial_detail(self, connection: Any, album: dict[str, object]) -> dict[str, object]:
+        album["_suggestion_aliases"] = self._load_relation_alias_maps(
+            connection=connection
+        ).get("alias_to_canonical", {})
+        detail = _problematic_album_detail_payload(album)
+        if detail is None:
+            raise RuntimeError(
+                "Problematic Files summary/detail snapshot invariant failed for "
+                f"album {str(album.get('key') or '')!r}."
+            )
+        return detail
+
+    def _problematic_albums_of_tracks(
+        self,
+        connection: Any,
+        track_paths: set[str],
+    ) -> tuple[list[dict[str, object]], list[tuple[dict[str, object], dict[str, object]]]]:
+        album_ids = [album["album_id"] for album in _load_cover_change_albums(connection, track_paths)]
+        rows = self._load_problematic_file_rows(connection=connection, album_ids=album_ids)
+        return self._project_problematic_albums(connection, rows)
+
+    def _problematic_files_with_reloaded_albums(
+        self,
+        payload: Mapping[str, object],
+        track_paths: set[str],
+    ) -> dict[str, object]:
+        """The cached list as a rebuild would show it, reading only the albums of `track_paths`."""
+        items = list(payload["items"])
+        detail = payload.get("initial_detail")
+        with self._browse_connection_context() as connection:
+            _begin_problematic_files_read(connection)
+            albums, projected_items = self._problematic_albums_of_tracks(connection, track_paths)
+            # A cover change never moves an album: its place follows name, artist, year and key.
+            positions = _listed_positions(items, albums)
+            listed_paths = {path for position in positions for path in items[position].get("track_paths") or []}
+            reloaded_paths = {track["path"] for album in albums for track in album["tracks"]}
+            if not listed_paths <= reloaded_paths:
+                # A separate release split by year can list two album rows as one album.
+                albums, projected_items = self._problematic_albums_of_tracks(connection, track_paths | listed_paths)
+                positions = _listed_positions(items, albums)
+            for position in sorted(positions, reverse=True):
+                del items[position]
+            for item, _album in projected_items:
+                insort(items, item, key=_problematic_item_order)
+            first_key = items[0]["key"] if items else None
+            first_album = next((album for item, album in projected_items if item["key"] == first_key), None)
+            if first_key is None:
+                detail = None
+            elif first_album is None and (detail or {}).get("key") != first_key:
+                # The album that led the list left it, so the list now opens on this one.
+                first_paths = set(items[0].get("track_paths") or [])
+                _albums, first_items = self._problematic_albums_of_tracks(connection, first_paths)
+                first_album = next((album for item, album in first_items if item["key"] == first_key), None)
+            if first_album is not None:
+                detail = self._problematic_initial_detail(connection, first_album)
+        if first_key is not None and (detail or {}).get("key") != first_key:
+            # A missing album or an unassigned source has no album rows to reload,
+            # and a cover saved during this read may have cleared the first album.
+            detail = self.build_problematic_file_detail_payload(first_key)
+            if (detail or {}).get("key") != first_key:
+                detail = None  # the list must never open on another album's detail
+        return {**payload, "items": items, "count": len(items), "initial_detail": detail}
 
     def build_problematic_album_payload_by_track_paths(
         self,
@@ -3044,19 +3125,38 @@ class PostgresLibraryBrowseRepository:
 
     def build_utility_rules_payload(self) -> dict[str, object]:
         kind = "rules"
-        cached_payload = self._get_cached_utility_projection(kind)
-        if cached_payload is not None:
-            return cached_payload
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            cache_key = self._utility_projection_cache_key(kind)
-            generation = (
-                _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
-                if cache_key is not None
-                else None
-            )
-        payload = _utility_rules_projection_payload(self._load_utility_rules_rows())
-        self._set_cached_utility_projection(kind, payload, expected_generation=generation)
-        return deepcopy(payload)
+
+        def cached() -> dict[str, object] | None:
+            self._apply_cover_changes(kind, self._utility_rules_with_reloaded_covers)
+            return self._get_cached_utility_projection(kind)
+
+        def build(generation: int | None) -> dict[str, object]:
+            payload = _utility_rules_projection_payload(self._load_utility_rules_rows())
+            self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+            return deepcopy(payload)
+
+        # One build at a time, so none can cache over a cover change applied meanwhile.
+        return self._build_utility_projection_once(kind, cached, build)
+
+    def _utility_rules_with_reloaded_covers(
+        self,
+        payload: Mapping[str, object],
+        track_paths: set[str],
+    ) -> dict[str, object]:
+        """The cached Rules with the current covers of those albums' version exceptions."""
+        with self._browse_connection_context() as connection:
+            covers = {
+                str(album["album_key"]): {
+                    "cover_path": album.get("album_cover_path"),
+                    "cover_revision": album.get("album_cover_revision"),
+                }
+                for album in _load_cover_change_albums(connection, track_paths)
+            }
+        return {**payload, "rules": [
+            {**rule, "albums": [{**album, **covers.get(album["key"], {})} for album in rule["albums"]]}
+            if "albums" in rule else rule
+            for rule in payload["rules"]
+        ]}
 
     def resolve_problem_exclusion_items(
         self,
@@ -3878,6 +3978,32 @@ class PostgresLibraryBrowseRepository:
             if payload is None:
                 return None
             return deepcopy(payload) if copy_payload else payload
+
+    def _apply_cover_changes(
+        self,
+        kind: str,
+        reload_albums: Callable[[Mapping[str, object], set[str]], dict[str, object]],
+    ) -> None:
+        """Bring the cached projection up to the cover changes noted since it was built."""
+        cache_key = self._utility_projection_cache_key(kind)
+        while True:
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                payload = _UTILITY_PROJECTION_CACHE.get(cache_key)
+                changes = dict(_UTILITY_COVER_CHANGES.get(cache_key) or {})
+            if payload is None or not changes:
+                return
+            updated = reload_albums(payload, set(changes))
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                # Another read or a rebuild replaced the payload: apply to that one.
+                if _UTILITY_PROJECTION_CACHE.get(cache_key) is not payload:
+                    continue
+                _UTILITY_PROJECTION_CACHE[cache_key] = updated
+                pending = _UTILITY_COVER_CHANGES.get(cache_key, {})
+                # A change noted during the reload waits for the next read.
+                for path, change in changes.items():
+                    if pending.get(path) is change:
+                        del pending[path]
+                return
 
     def _set_cached_utility_projection(
         self,
@@ -12260,6 +12386,55 @@ def _execute_problematic_sql(
         with _UTILITY_PROJECTION_CACHE_LOCK:
             _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES.add(database_url)
         return connection.execute(build_sql(False), params)
+
+
+def _begin_problematic_files_read(connection: Any) -> None:
+    connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+    connection.execute("SET LOCAL work_mem = '16MB'")
+    connection.execute("SET LOCAL jit = off")
+
+
+def _problematic_item_order(item: Mapping[str, object]) -> tuple[str, str, str, str]:
+    return (
+        str(item.get("name") or "").lower(),
+        str(item.get("album_artist") or "").lower(),
+        str(item.get("year") or ""),
+        str(item.get("key") or "").lower(),
+    )
+
+
+def _listed_positions(
+    items: list[dict[str, object]],
+    albums: list[dict[str, object]],
+) -> set[int]:
+    """Where `albums` are in the sorted Problematic Files `items`."""
+    positions = set()
+    for album in albums:
+        order = _problematic_item_order(album)
+        position = bisect_left(items, order, key=_problematic_item_order)
+        if position < len(items) and _problematic_item_order(items[position]) == order:
+            positions.add(position)
+    return positions
+
+
+def _load_cover_change_albums(connection: Any, track_paths: set[str]) -> list[Mapping[str, object]]:
+    rows = connection.execute("""
+        /* cover_change_albums */
+        select distinct albums.id as album_id, albums.album_key,
+          albums.cover_path as album_cover_path,
+          albums.metadata ->> 'cover_revision' as album_cover_revision
+        from app.bootstrap_owners owners
+        join library.libraries libraries on libraries.owner_account_id = owners.account_id
+          and libraries.name = 'Local Library' and libraries.library_kind = 'local'
+        join library.local_albums albums on albums.library_id = libraries.id
+        join library.local_tracks tracks on tracks.album_id = albums.id
+          and tracks.library_id = albums.library_id
+        join library.local_track_files files on files.track_id = tracks.id
+        where owners.owner_key = 'local-bootstrap-owner'
+          and files.private_path = any(%(track_paths)s::text[])
+          and files.scan_cache_stale is false
+    """, {"track_paths": sorted(track_paths)}).fetchall()
+    return [_row_mapping(row) for row in rows]
 
 
 def _utility_rules_sql() -> str:

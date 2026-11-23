@@ -5,7 +5,10 @@ owners found by name, and every thread or executor target. Direct filesystem
 enumeration in an interactive entrypoint is rejected outright; filesystem/media
 work reached through helpers is reported so the registry can demand a runtime
 contract; any interactive path that reaches a registered library-scale
-operation is rejected at any depth; an `async def` route, websocket or
+operation is rejected at any depth, as is work a registry entry forbids
+itself (`forbiddenWork`: named operations a scoped save must not reach, or
+`library-state-scan`, any walk or copy of the whole library state); an
+`async def` route, websocket or
 middleware whose event-loop call chain reaches blocking I/O is rejected
 (BI-08); a database connection opened per loop item is rejected in an
 interactive path and needs a contract elsewhere (BI-05); a new database
@@ -2008,6 +2011,7 @@ def analyze_python_repository(
     *,
     library_scale_operations: list[str] | tuple[str, ...] = (),
     library_state_collections: list[str] | tuple[str, ...] = (),
+    forbidden_work: dict[str, set[str]] | None = None,
     overrides: dict[str, str] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     _FACTS.clear()
@@ -2021,6 +2025,7 @@ def analyze_python_repository(
     _MODULES.update(index.modules)
     _compute_called_parameters(modules, index)
     library_scale = set(library_scale_operations)
+    definition_keys = {definition.key for definition in _all_definitions(modules)}
     collections = set(library_state_collections)
     entrypoints: list[dict[str, object]] = []
     hazards: list[dict[str, object]] = []
@@ -2034,6 +2039,20 @@ def analyze_python_repository(
         entrypoints.append(entry)
         interactive = entry["kind"] in {"route", "middleware"}
         pooled_entry = entry["kind"] in POOLED_ENTRY_KINDS
+        forbidden = (forbidden_work or {}).get(entry["key"], frozenset())
+        # The walk matches exact keys, so a misnamed target would forbid nothing.
+        for target in sorted(set(forbidden) - definition_keys - {"library-state-scan"}):
+            hazards.append({
+                "rule": "BI-04",
+                "operation": f"unknown-forbidden-work:{target}",
+                "path": entry["path"],
+                "function": entry["owner"],
+                "line": entry["line"],
+                "entrypoint": entry["key"],
+                "depth": "direct",
+                "via": [],
+                "reject": True,
+            })
         hazards.extend(event_loop.hazards(entry, definition))
         queue = deque([(definition, [], None, None, None)])
         seen = set()
@@ -2055,17 +2074,18 @@ def analyze_python_repository(
             # A route never reaches library-scale work; a background entrypoint
             # may, but only under a contract proving its batching, coalescing,
             # and convergence.
-            if current.key in library_scale:
+            if current.key in forbidden or current.key in library_scale:
+                family = "forbidden-work" if current.key in forbidden else "library-scale"
                 hazards.append({
                     "rule": "BI-04",
-                    "operation": f"library-scale:{current.key}",
+                    "operation": f"{family}:{current.key}",
                     "path": current.path,
                     "function": current.qualname,
                     "line": current.node.lineno,
                     "entrypoint": entry["key"],
                     "depth": depth,
                     "via": via,
-                    "reject": interactive,
+                    "reject": interactive or current.key in forbidden,
                 })
                 continue
             cache_key = (id(current.node), looped, bound)
@@ -2104,7 +2124,10 @@ def analyze_python_repository(
                     "entrypoint": entry["key"],
                     "depth": depth,
                     "via": via,
-                    "reject": interactive and rejected,
+                    "reject": (interactive and rejected) or (
+                        "library-state-scan" in forbidden
+                        and hazard["operation"].startswith("library-state-scan:")
+                    ),
                 })
             if (id(current.node), bound) not in scan_cache:
                 scan_cache[(id(current.node), bound)] = library_state.scan_calls(current, bound)
@@ -2189,6 +2212,26 @@ def _registry_names(registry_path: Path | None, key: str, field: str) -> list[st
     return [str(item[field]) for item in registry.get(key, [])]
 
 
+def _forbidden_work(registry_path: Path | None) -> dict[str, set[str]]:
+    """What each entry forbids itself, by entrypoint.
+
+    A list covers only what that entry's own static walk reaches. Work handed
+    to a thread or executor starts an entry of its own, and a callback the walk
+    cannot resolve is not followed: launched work needs its own entry's list,
+    as the watcher cover-refresh drain has. A target is the exact qualified
+    name of a definition; any other name is rejected.
+    """
+    if registry_path is None or not registry_path.exists():
+        return {}
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    return {
+        key: set(item["forbiddenWork"])
+        for item in registry.get("interactions", [])
+        if item.get("forbiddenWork")
+        for key in item["entrypoints"]
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
@@ -2202,6 +2245,7 @@ def main(argv: list[str] | None = None) -> int:
             args.root,
             library_scale_operations=_registry_names(args.registry, "libraryScaleOperations", "operation"),
             library_state_collections=_registry_names(args.registry, "libraryStateCollections", "collection"),
+            forbidden_work=_forbidden_work(args.registry),
             overrides=overrides,
         )
     except (OSError, SyntaxError, UnicodeDecodeError) as error:

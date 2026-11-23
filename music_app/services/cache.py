@@ -525,9 +525,12 @@ def persist_cover_selection_for_tracks_for_config(
     **options,
 ) -> dict[str, object]:
     """Commit one album's cover selection over its own connection."""
-    return _select_runtime_scan_cache_adapter(config).persist_cover_selection(
-        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
-    )
+    try:
+        return _select_runtime_scan_cache_adapter(config).persist_cover_selection(
+            track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+        )
+    finally:
+        _record_cover_change(config, track_paths)
 
 
 def persist_cover_selection_in_shared_transaction(
@@ -538,8 +541,22 @@ def persist_cover_selection_in_shared_transaction(
 ) -> dict[str, object]:
     """Commit one album's cover selection on the cover run's shared connection,
     so a batch of albums costs one connection."""
-    return _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
-        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+    try:
+        return _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
+            track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+        )
+    finally:
+        _record_cover_change(config, track_paths)
+
+
+def _record_cover_change(config: dict[str, object], track_paths: set[str]) -> None:
+    # Also after a failure, which can follow the commit: noting an album that
+    # did not change only reloads that album.
+    from music_app.services.library_browse_postgres import record_cover_change_in_utility_projections
+
+    record_cover_change_in_utility_projections(
+        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+        track_paths=track_paths,
     )
 
 

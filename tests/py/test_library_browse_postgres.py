@@ -20480,3 +20480,19 @@ def test_root_source_totals_keep_their_own_connection(monkeypatch):
         repository.build_root_source_totals_payload()
 
     assert opened == ["fresh"]
+
+
+def test_visible_album_clause_and_membership_sql_keep_their_exact_default_text():
+    """6.5 (11-23): the header batch passes column references to _visible_album_clause; its default text,
+    and the membership queries built from it, stay byte-identical."""
+    import hashlib
+
+    from music_app.services import library_browse_postgres as browse
+
+    def digest(text):
+        return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+    assert digest(browse._visible_album_clause("album")) == "97445fc2d17b87f4"
+    assert digest(browse._visible_album_clause("library.local_albums")) == "1bbd452d9d7a4220"
+    assert digest(browse._root_gallery_membership_sql())[:12] == "321e8df262c3"
+    assert digest(browse._root_gallery_membership_sql(candidate_albums_only=True))[:12] == "514c549b948a"

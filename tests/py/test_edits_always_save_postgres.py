@@ -725,3 +725,98 @@ def test_live_a_rolled_back_publication_leaves_the_edit_committed(library, monke
         join library.local_albums albums on albums.album_key = entries.album_key
         where albums.title = 'Committed Despite Publication'""")[0]["n"]
     assert shown >= 1, "The owner's drain did not publish the saved album to the gallery."
+
+
+# 6.5 (11-23): a save patches every gallery header in the same five statements at any header count; a header
+# whose patch the database refuses is left to the drain while the others are patched.
+
+def _all_header_view_states():
+    """Every distinct gallery header the app can publish: the default scope with each non-empty set of
+    library categories, and New Arrivals."""
+    from itertools import combinations
+
+    categories = ["main_library", "hoard", "new_arrivals"]
+    subsets = [list(combo) for size in (1, 2, 3) for combo in combinations(categories, size)]
+    return ([{"gallery_scope": "all", "visible_library_categories": subset} for subset in subsets]
+            + [{"gallery_scope": "new_arrivals", "visible_library_categories": ["new_arrivals"]}])
+
+
+def _publish_headers(fixture, view_states):
+    from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+
+    for view_state in view_states:
+        ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect, view_state=view_state)
+    return _rows(fixture, "select count(*) as n from library.gallery_membership_headers")[0]["n"]
+
+
+def _rows_written(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as reader:
+        reader.execute("select pg_stat_clear_snapshot()")
+        return int(reader.execute(
+            """select coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) as n
+               from pg_stat_user_tables where schemaname = 'library'""").fetchone()["n"])
+
+
+HEADER_ROWS_PER_ALBUM = 60
+
+
+def test_live_a_save_patches_every_gallery_header_in_the_same_statements_at_two_and_eight_headers(
+        library, monkeypatch):
+    fixture = library
+    _hold_background_owners(monkeypatch)
+    adapter, counted = _counting_adapter(fixture)
+    view_states = _all_header_view_states()
+    few = _publish_headers(fixture, view_states[:1])
+    written_before = _rows_written(fixture)
+    small = _measure_save(fixture, "Two Headers", adapter, counted)
+    small_written = _rows_written(fixture) - written_before
+    many = _publish_headers(fixture, view_states)
+    written_before = _rows_written(fixture)
+    large = _measure_save(fixture, "Eight Headers", adapter, counted)
+    large_written = _rows_written(fixture) - written_before
+
+    print(f"edits always save, header batch: {few} headers {small[:3]} written={small_written}; "
+          f"{many} headers {large[:3]} written={large_written}")
+    assert few < many, "The second measurement did not add headers."
+    assert small[0] == large[0], f"The save's statements grew with the headers: {small[:2]} vs {large[:2]}."
+    added = many - few
+    # One edited album: reads and writes may grow only with headers x edited albums.
+    assert large[1] - small[1] <= HEADER_ROWS_PER_ALBUM * added, (
+        f"Rows read grew more than {HEADER_ROWS_PER_ALBUM} per added header: {small} vs {large}.")
+    assert large_written - small_written <= HEADER_ROWS_PER_ALBUM * added, (
+        f"Rows written grew more than {HEADER_ROWS_PER_ALBUM} per added header: {small_written} vs {large_written}.")
+
+
+def test_live_a_header_whose_patch_is_refused_is_left_to_the_drain_while_the_others_are_patched(
+        library, monkeypatch):
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = library
+    _hold_background_owners(monkeypatch)
+    _publish_headers(fixture, _all_header_view_states()[:4])
+    _rename(fixture, "Patched Except One")
+    album = _rows(fixture, "select id, album_key from library.local_albums where title = %s",
+                  ("Patched Except One",))[0]
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        context = gallery.gallery_projection_context(connection)
+        headers = gallery._membership_headers(connection, {**context, "builder_version": gallery.BUILDER_VERSION})
+        holding = [header for header in headers if header["scope_key"] in _scopes_showing(fixture, ALBUM)]
+        assert len(holding) >= 2, "Too few headers hold the album to compare."
+        behind = holding[0]["scope_key"]
+        aliases = PostgresLibraryBrowseRepository(fixture.config)._load_relation_alias_maps(
+            connection=connection)["alias_to_canonical"]
+        publish_all = gallery._header_membership_publisher(
+            connection, fixture.config, context, [album["album_key"]], [album["id"]], aliases)
+        # One header's expected generation is behind its stored one, as if it changed meanwhile.
+        refused = publish_all([
+            (header, header["source_generation"] - 1 if header["scope_key"] == behind else header["source_generation"])
+            for header in holding])
+        connection.commit()
+
+    assert refused == [behind], f"Only the header behind should be refused: {refused}."
+    showing = _scopes_showing(fixture, "Patched Except One")
+    assert {header["scope_key"] for header in holding} - {behind} <= showing, (
+        "A refusal of one header stopped the others from being patched.")
+    assert behind not in showing, "The refused header was patched anyway."

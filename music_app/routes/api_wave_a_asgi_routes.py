@@ -582,8 +582,20 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
         before_persistence_commit=before_persistence_commit,
         complete_scoped_persistence=complete_scoped_persistence,
         record_scoped_persistence_failure=record_scoped_persistence_failure,
+        catch_up_verified_save=_verified_save_catch_up(config, tag_edit_intent_id if intent_repository else ""),
         **kwargs,
     )
+
+
+def _verified_save_catch_up(config, tag_edit_intent_id: str):
+    """Owner's rule (2026-11-23): a save with written, verified files has succeeded. A DB-step failure after
+    that queues the library's catch-up with only this save's files; nothing is restored. None without a
+    stored intent (nothing to catch up from)."""
+    if not tag_edit_intent_id:
+        return None
+    from music_app.services.tag_edit_catch_up import queue_tag_edit_catch_up
+
+    return lambda *, on_settled: queue_tag_edit_catch_up(config, tag_edit_intent_id, on_settled=on_settled)
 
 
 @router.get("/library-settings")
@@ -1090,42 +1102,6 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
     *, history_scope=None,
 ):
     history_scope = history_scope or getattr(request.state, 'history_scope', None)
-    def compensate_structural_tag_edit(
-        *,
-        changed_paths: set[str],
-        previous_file_entries: dict[str, dict[str, object]],
-        updated_file_entries: dict[str, dict[str, object]] | None = None,
-        changed_field_names: set[str],
-    ) -> None:
-        failures: list[str] = []
-        for path in sorted(changed_paths):
-            previous_entry = previous_file_entries.get(path)
-            if not isinstance(previous_entry, Mapping):
-                failures.append(f"{path}: previous metadata is unavailable")
-                continue
-            updated_entry = (updated_file_entries or {}).get(path)
-            path_field_names = {
-                field
-                for field in changed_field_names
-                if not isinstance(updated_entry, Mapping)
-                or previous_entry.get(field, "")
-                != updated_entry.get(field, "")
-            }
-            reverse_repairs = previous_tag_values(
-                previous_entry, path_field_names & _MEDIA_TAG_EDIT_FIELDS,
-            )
-            if not reverse_repairs:
-                continue
-            try:
-                restore_media_tag_values(_apply_repairs_worker, path, reverse_repairs)
-            except Exception as exc:
-                failures.append(f"{path}: {exc}")
-        if failures:
-            raise RuntimeError(
-                "Structural tag edit database commit failed and media compensation "
-                f"also failed: {'; '.join(failures)}"
-            )
-
     def queue_selected_postgres_structural_tag_edit(**kwargs: Any) -> None:
         config = kwargs["config"]
         tag_edit_intent_id = str(kwargs.pop("tag_edit_intent_id", "") or "").strip()
@@ -1180,7 +1156,7 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
                 else None
             ),
             record_scoped_persistence_failure=record_scoped_persistence_failure,
-            compensate_structural_tag_edit=compensate_structural_tag_edit,
+            catch_up_verified_save=_verified_save_catch_up(config, tag_edit_intent_id if intent_repository else ""),
             append_log_history=lambda app_config, entry: append_log_history(
                 app_config,
                 entry,

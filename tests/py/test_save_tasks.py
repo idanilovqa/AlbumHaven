@@ -219,13 +219,14 @@ def test_queue_finalize_save_task_inline_exposes_commit_failure_before_return(tm
     assert result["edit_outcome"] == "recovery_pending"
 
 
-def test_finalize_save_task_records_rolled_back_intent_after_verified_compensation(
-    tmp_path,
-):
+def test_finalize_save_task_with_verified_files_catches_up_instead_of_compensating(tmp_path):
+    """Rewritten for the owner's rule (2026-11-23, confirmed to 6.5): this pinned a restore of the files and
+    a rolled-back intent after a commit failure. With the files verified the save has succeeded: nothing is
+    restored, no rollback is recorded, the task is "finishing", and the catch-up completes it."""
     task_id = create_save_task("edit-tags")
     persistence = Future()
     persistence.set_exception(RuntimeError("postgres commit failed"))
-    outcomes: list[tuple[bool, str]] = []
+    compensated, recorded, settles = [], [], []
 
     finalize_save_task(
         task_id,
@@ -233,24 +234,27 @@ def test_finalize_save_task_records_rolled_back_intent_after_verified_compensati
             tmp_path,
             schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
         ),
-        compensate_save_task=lambda **_kwargs: None,
-        record_scoped_persistence_failure=(
-            lambda compensation_succeeded, error: outcomes.append(
-                (compensation_succeeded, str(error))
-            )
-        ),
+        compensate_save_task=lambda **kwargs: compensated.append(kwargs),
+        record_scoped_persistence_failure=lambda *args: recorded.append(args),
+        catch_up_verified_save=lambda *, on_settled: settles.append(on_settled),
     )
 
-    assert outcomes == [(True, "postgres commit failed")]
+    assert compensated == [] and recorded == [], "A save with verified files was rolled back."
+    assert save_task_result(task_id)["status"] == "finishing"
+    assert len(settles) == 1, "The library's catch-up was not queued once."
+    settles[0]("settled")
+    finished = save_task_result(task_id)
+    assert finished["status"] == "completed" and finished["requires_view_refresh"] is True
 
 
-def test_finalize_save_task_keeps_intent_recoverable_when_compensation_fails(
-    tmp_path,
-):
+def test_finalize_save_task_whose_catch_up_fails_says_the_tags_are_saved(tmp_path):
+    """Rewritten for the owner's rule: this pinned a recoverable intent after a failed media rollback. Now
+    nothing is rolled back; a failed catch-up answers with the owner's text (approved 2026-11-23 through
+    6.5) while it retries in the background, and a later success still completes the task."""
     task_id = create_save_task("edit-tags")
     persistence = Future()
     persistence.set_exception(RuntimeError("postgres commit failed"))
-    outcomes: list[tuple[bool, str]] = []
+    settles = []
 
     finalize_save_task(
         task_id,
@@ -258,17 +262,17 @@ def test_finalize_save_task_keeps_intent_recoverable_when_compensation_fails(
             tmp_path,
             schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
         ),
-        compensate_save_task=lambda **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("media rollback failed")
-        ),
-        record_scoped_persistence_failure=(
-            lambda compensation_succeeded, error: outcomes.append(
-                (compensation_succeeded, str(error))
-            )
-        ),
+        compensate_save_task=lambda **_kwargs: pytest.fail("A save with verified files was rolled back."),
+        catch_up_verified_save=lambda *, on_settled: settles.append(on_settled),
     )
+    settles[0]("failed")
 
-    assert outcomes == [(False, "media rollback failed")]
+    answered = save_task_result(task_id)
+    assert answered["status"] == "completed"
+    assert answered["warnings"] == ["Tags saved. The library will catch up shortly."]
+    assert answered["requires_view_refresh"] is False
+    settles[0]("settled")
+    assert save_task_result(task_id)["requires_view_refresh"] is True
 
 
 def test_finalize_save_task_marks_task_completed(tmp_path, monkeypatch):
@@ -1697,9 +1701,8 @@ def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(t
             _ for _ in ()
         ).throw(RuntimeError("memory refresh unavailable")),
         persist_structural_tag_edit=lambda **_kwargs: {"album_rows_updated": 1},
-        compensate_structural_tag_edit=lambda **kwargs: compensations.append(
-            dict(kwargs)
-        ),
+        # A committed save never needs the library's catch-up.
+        catch_up_verified_save=lambda **kwargs: compensations.append(dict(kwargs)),
         append_log_history=fail_history,
         log_app_event=fail_event,
         find_albums_by_track_paths=lambda _paths: [
@@ -1866,11 +1869,14 @@ def test_structural_tag_edit_save_task_fails_without_publishing_memory_on_commit
     assert app_events[0][1]["level"] == "error"
 
 
-def test_structural_tag_edit_commit_failure_compensates_media_before_reporting_failure(
+def test_structural_tag_edit_commit_failure_after_verified_files_catches_up_without_restoring(
     tmp_path,
 ):
+    """Rewritten for the owner's rule (2026-11-23, confirmed to 6.5): this pinned the media compensation
+    after a commit failure. The structural compensator is gone; the save is "finishing", no rollback is
+    recorded, and the library's catch-up completes it."""
     task_id = create_save_task("edit-tags")
-    compensations: list[dict[str, object]] = []
+    settles: list[object] = []
     outcomes: list[tuple[bool, str]] = []
 
     finalize_structural_tag_edit_save_task(
@@ -1882,9 +1888,7 @@ def test_structural_tag_edit_commit_failure_compensates_media_before_reporting_f
         persist_structural_tag_edit=lambda **_kwargs: (_ for _ in ()).throw(
             RuntimeError("commit failed")
         ),
-        compensate_structural_tag_edit=lambda **kwargs: compensations.append(
-            dict(kwargs)
-        ),
+        catch_up_verified_save=lambda *, on_settled: settles.append(on_settled),
         record_scoped_persistence_failure=(
             lambda compensation_succeeded, error: outcomes.append(
                 (compensation_succeeded, str(error))
@@ -1908,20 +1912,11 @@ def test_structural_tag_edit_commit_failure_compensates_media_before_reporting_f
         log_entry={"action": "Tags edited"},
     )
 
-    assert compensations == [
-        {
-            "changed_paths": {"track.mp3"},
-            "previous_file_entries": {
-                "track.mp3": {"path": "track.mp3", "album": "Old Album"}
-            },
-            "updated_file_entries": {
-                "track.mp3": {"path": "track.mp3", "album": "New Album"}
-            },
-            "changed_field_names": {"album"},
-        }
-    ]
-    assert outcomes == [(True, "commit failed")]
-    assert save_task_result(task_id)["status"] == "failed"
+    assert outcomes == [], "A save with verified files recorded a rollback."
+    assert save_task_result(task_id)["status"] == "finishing"
+    assert len(settles) == 1
+    settles[0]("settled")
+    assert save_task_result(task_id)["status"] == "completed"
 
 
 def test_structural_tag_edit_resource_keys_normalize_album_and_paths(

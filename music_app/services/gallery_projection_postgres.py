@@ -687,7 +687,11 @@ def _first_build_ready(config, connect=None) -> bool:
 
 def queue_journaled_relation_drain(config):
     """The owner of a committed write's journaled albums (library.local_relation_dirty_albums) outside a scan,
-    the watcher, a tag save and startup: the keyed incremental drain, queued off the response path."""
+    the watcher, a tag save and startup: the keyed incremental drain, queued off the response path. It also
+    retries the catch-up of any verified save whose back-off has run out (owner's rule, 2026-11-23)."""
+    from music_app.services.tag_edit_catch_up import retry_waiting_catch_ups
+
+    retry_waiting_catch_ups()
     return schedule_gallery_projection_refresh(config, incremental_membership=True)
 
 

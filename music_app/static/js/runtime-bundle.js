@@ -9066,7 +9066,9 @@ function detachStreamingTransport(code) {
   const current = engine.roles.current;
   const encoded = current?.encoded;
   const wire = encoded?.wire;
-  if (!wire || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error'
+  // A start on its way replaces this song: its received audio is not kept for a splice, which the
+  // next socket would reopen before the pressed song (hosted FTC-PLAYBACK-OFFLINE-002).
+  if (!wire || engine.pendingStart || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error'
       || engine.snapshot.ended || engine.pendingSeek
       || engine.pendingBufferedSeek || engine.loopContinuity || current.spliceFrame !== undefined) return false;
   const whole = Boolean(wire.serverless || wire.eos);

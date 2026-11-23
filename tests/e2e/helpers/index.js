@@ -88,6 +88,7 @@ export {
 export {
   MAX_PLAYBACK_START_DEGRADATION_MS,
   PLAYBACK_START_TIMING_BUDGET,
+  clickToSoundTiming,
   evaluatePlaybackStartBudget,
   measureAlbumTrackPlaybackStart,
   observePlaybackTrackTraffic,

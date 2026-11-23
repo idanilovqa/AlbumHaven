@@ -2254,3 +2254,28 @@ test('loop expiry E2E releases playback ownership before long clock advances', (
     /dragLoopBoundary\('end', 0\.8\)[\s\S]*?pauseToReleasePlaybackClaim\(\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)[\s\S]*?dragLoopBoundary\('end', 0\.75\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)/,
   );
 });
+
+test('click to sound ends at the pressed song\'s first rendered frame, never at a silent or other song\'s', async () => {
+  const helperUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/playbackStartPerformanceHelpers.js'),
+  ).href;
+  const { clickToSoundTiming } = await import(helperUrl);
+  const pressed = 'C:/Music/pressed.flac';
+  const heard = {
+    path: pressed, pcmFrames: 2, finiteSamples: 4, nonZeroSamples: 4, peakSample: 0.5,
+    firstFrameAtMs: 1_900, observedAtMs: 2_430,
+  };
+  const timing = (evidence, stateCompletedAtMs = 1_950) => clickToSoundTiming({
+    path: pressed, startedAtMs: 1_000, stateCompletedAtMs, evidence,
+  });
+
+  assert.deepEqual(timing(heard), { completedAtMs: 1_900, elapsedMs: 900, observedAtMs: 2_430 },
+    'the first frame decides; the later reading is only reported');
+  assert.throws(() => timing({ ...heard, nonZeroSamples: 0, peakSample: 0 }), /silent/);
+  assert.throws(() => timing({ ...heard, finiteSamples: 2 }), /not stereo/);
+  assert.throws(() => timing({ ...heard, path: 'C:/Music/previous.flac' }), /not the pressed song/);
+  assert.throws(() => timing(null), /not the pressed song/);
+  assert.throws(() => timing({ ...heard, firstFrameAtMs: 900 }), /no first frame after the click/);
+  assert.throws(() => timing({ ...heard, firstFrameAtMs: 0 }), /no first frame after the click/);
+  assert.throws(() => timing(heard, 0), /never showed the pressed song playing/);
+});

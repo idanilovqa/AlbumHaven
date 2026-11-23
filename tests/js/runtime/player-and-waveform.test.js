@@ -185,6 +185,38 @@ test('loaded track uses its resolved album cover when the track payload omits ar
   assert.equal(coverButton.hidden, false);
 });
 
+// Pressing another song while one plays keeps the player's title, time, cover and waveform until the
+// pressed song sounds, then they change together.
+test('a pressed song whose peaks load before it sounds leaves the playing song its waveform until then', async () => {
+  const canvas = { hidden: false };
+  const { context } = loadRuntime();
+  const old = { src: 'old', path: 'old.flac' };
+  const next = { src: 'new', path: 'new.flac' };
+  const oldPeaks = { left: [0.2], right: [0.2] };
+  const newPeaks = { left: [0.9], right: [0.9] };
+  const snapshot = { src: 'old', currentTime: 100, duration: 200, mode: 'playing' };
+  const drawn = [];
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.getPlayerPlaybackSnapshot = () => ({ ...snapshot });
+  context.setPlayerSeekbarPresentation = () => {};
+  context.drawWaveformOnCanvas = (_canvas, data, progress) => drawn.push({ data, progress });
+  context.state.player.appearance.seekbarMode = 'waveform';
+  context.state.player.current = old;
+  context.state.player.waveform.compactPeaks = { path: old.path, data: oldPeaks };
+  await context.updateWaveformAppearance();
+
+  context.state.player.current = next;
+  context.state.player.waveform.compactPeaks = { path: next.path, data: newPeaks };
+  Object.assign(snapshot, { src: 'new', currentTime: 0, duration: 180, mode: 'starting' });
+  await context.updateWaveformAppearance();
+  assert.deepEqual(drawn.slice(1), [{ data: oldPeaks, progress: 0.5 }],
+    'the playing song\'s, where it was');
+
+  snapshot.mode = 'playing';
+  await context.updateWaveformAppearance();
+  assert.deepEqual(drawn.at(-1), { data: newPeaks, progress: 0 }, 'the pressed song\'s once it sounds');
+});
+
 function loadRuntime(overrides = {}) {
   const context = {
     state: {

@@ -2088,16 +2088,17 @@ test('FTC-PLAYER-028/029 switch evidence rejects silence, a restart, a wrong son
     toBeNull: () => assert.equal(actual, null, message),
     toBeGreaterThan: (least) => assert.ok(actual > least, message),
     toBeGreaterThanOrEqual: (least) => assert.ok(actual >= least, message),
+    toBeLessThan: (most) => assert.ok(actual < most, message),
   });
   const pressed = { path: 'new.mp3', title: 'New Song' };
   const run = ({ waiting = {}, playsOn = true, last = {}, after = {} } = {}) => {
     const samples = Array.from({ length: 60 }, (_, index) => ({
-      currentPath: 'old.mp3', currentStreamId: 1, currentTime: playsOn ? index / 100 : 0, generation: 1,
-      mode: 'playing', paused: false, title: index ? 'Artist - New Song /' : 'Artist - Old Song /', ...waiting,
+      at: index * 10, currentPath: 'old.mp3', currentStreamId: 1, currentTime: playsOn ? index / 100 : 0,
+      generation: 1, mode: 'playing', paused: false, title: 'Artist - Old Song /', ...waiting,
     }));
     samples.push({
-      currentPath: pressed.path, currentStreamId: 2, currentTime: 0, generation: 1, mode: 'playing', paused: false,
-      title: 'Artist - New Song /', ...last,
+      at: 600, currentPath: pressed.path, currentStreamId: 2, currentTime: 0, generation: 1, mode: 'playing',
+      paused: false, title: 'Artist - New Song /', ...last,
     });
     assertSwitchKeepsSongSounding(expect, {
       before: { currentStreamId: 1, generation: 1, underruns: 0 },
@@ -2120,6 +2121,7 @@ test('FTC-PLAYER-028/029 switch evidence rejects silence, a restart, a wrong son
     'a place that stands still': { playsOn: false },
     'another song': { last: { currentPath: 'other.mp3' } },
     'the old title back': { last: { title: 'Artist - Old Song /' } },
+    'the pressed title before its song sounds': { waiting: { title: 'Artist - New Song /' } },
     'a title that only contains it': { last: { title: 'Artist - Brand New Song /' } },
     'an underrun': { after: { underruns: 1 } },
     'silence before the switch': { after: { seekCapture: { outgoing: { frames: 1, left: [0], right: [0] } } } },

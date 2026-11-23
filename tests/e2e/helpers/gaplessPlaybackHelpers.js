@@ -652,6 +652,7 @@ export async function observeSwitchPresentation(page, titleSelector) {
       const snapshot = getStreamingPlaybackSnapshot();
       const engine = state.player?.streaming;
       samples.push({
+        at: performance.now(),
         currentPath: String(engine?.roles?.current?.track?.path || ''),
         currentStreamId: Number(engine?.roles?.current?.streamId || 0),
         currentTime: Number(snapshot.currentTime || 0),
@@ -724,9 +725,12 @@ export function assertSwitchKeepsSongSounding(expect, { before, after, pressed, 
   // The desktop player reads "Artist - Title /", a phone's "Title".
   const showsPressed = ({ title }) => title === pressed.title
     || title.replace(/ \/$/, '').endsWith(` - ${pressed.title}`);
+  // The player keeps the playing song's title until the pressed song sounds, then shows the pressed
+  // one.
   const titled = samples.findIndex(showsPressed);
   expect(titled, 'the pressed title must be shown').toBeGreaterThanOrEqual(0);
-  expect(cut, 'the pressed title shows no later than its sound').toBeGreaterThanOrEqual(titled);
+  expect(titled, 'the pressed title shows only once its song sounds').toBeGreaterThanOrEqual(cut);
+  expect(samples[titled].at - samples[cut].at, 'the pressed title shows as its song sounds').toBeLessThan(250);
   for (const sample of samples.slice(titled)) {
     expect(showsPressed(sample), `the pressed title stays, not ${JSON.stringify(sample.title)}`).toBe(true);
   }

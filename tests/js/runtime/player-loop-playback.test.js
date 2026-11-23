@@ -360,31 +360,89 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   assert.equal(time.textContent, '10 - 20');
 });
 
-// While a switch waits for its audio, a redraw
-// of the player keeps the pressed song's title instead of flipping back; the waveform stays the
-// playing song's until the new one sounds.
-test('while a switch waits for its audio, the player shows the pressed song, not the old one', async () => {
+// Pressing another song while one plays keeps the player's title, time, cover and waveform until the
+// pressed song sounds, then they change together. For every song, playing or paused. The pressed row
+// shows the press at once: rows read the selection, and that is unchanged.
+for (const paused of [false, true]) {
+  test(`a press keeps the player's title, time and cover on the ${paused ? 'paused' : 'playing'} song until the pressed song sounds`, async () => {
+    const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A', coverRef: 'old.jpg' };
+    const newTrack = {
+      src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A', coverRef: 'new.jpg', durationSeconds: 180,
+    };
+    const title = new FakeElement();
+    const time = new FakeElement();
+    const timeline = new FakeElement();
+    const coverButton = new FakeElement();
+    coverButton.style = { backgroundImage: '' };
+    class LoadedImage {
+      set src(value) {
+        this.loaded = value;
+        this.onload?.();
+      }
+    }
+    const snapshot = { currentTime: 75, duration: 200, paused, ended: false, src: oldTrack.src, mode: paused ? 'paused' : 'playing' };
+    let finishStart;
+    const { context } = loadHelper({
+      Image: LoadedImage,
+      getPlayerElements: () => ({ title, time, timeline, coverButton }),
+      getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+      canStartPlaybackInThisTab: () => true,
+      startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    });
+    const shown = () => ({ title: title.textContent, time: time.textContent, cover: coverButton.style.backgroundImage });
+    context.state.player.current = oldTrack;
+    context.updatePlayerUi();
+    const before = shown();
+    assert.deepEqual(before, { title: 'A - Old', time: '75 / 200', cover: 'url("/cover/old.jpg")' });
+
+    const playing = context.playTrackFromPayload(newTrack);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.state.player.selectedTrack, newTrack, 'the pressed row shows the press at once');
+    assert.deepEqual(shown(), before, 'the press itself leaves the player as it was');
+
+    // The engine starts the pressed song: its clock at its start, nothing of it heard yet.
+    Object.assign(snapshot, { currentTime: 0, duration: 180, paused: false, src: newTrack.src, mode: 'starting' });
+    context.updatePlayerUi();
+    assert.deepEqual(shown(), before, 'never the pressed song\'s start under the old title');
+    assert.equal(timeline.value, '75', 'the seek bar stays where the shown song was');
+
+    finishStart({ role: 'current', streamId: 2, generation: 2, track: newTrack });
+    await playing;
+    assert.equal(context.state.player.current, newTrack);
+    assert.deepEqual(shown(), before, 'a start that returns has not sounded');
+
+    // Its first frame sounds: everything changes in that one redraw.
+    Object.assign(snapshot, { currentTime: 1, mode: 'playing' });
+    await context.handleStreamingPlaybackFirstFrame({ generation: 2, streamId: 2, trackPath: newTrack.path });
+    assert.deepEqual(shown(), { title: 'A - New', time: '1 / 180', cover: 'url("/cover/new.jpg")' });
+  });
+}
+
+// A switch that hands over at a boundary: the playing song sounds on after the press returns, and its
+// time keeps running under its own title until the pressed song takes over.
+test('while the playing song still sounds after a switch returns, the player runs on with it', () => {
   const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A' };
-  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A' };
+  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A', durationSeconds: 180 };
   const title = new FakeElement();
-  let finishStart;
+  const time = new FakeElement();
+  const snapshot = { currentTime: 75, duration: 200, paused: false, ended: false, src: oldTrack.src, mode: 'playing' };
   const { context } = loadHelper({
-    getPlayerElements: () => ({ title }),
-    canStartPlaybackInThisTab: () => true,
-    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    getPlayerElements: () => ({ title, time }),
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
   });
   context.state.player.current = oldTrack;
-
-  const playing = context.playTrackFromPayload(newTrack);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(title.textContent, 'A - New', 'the press shows the new song at once');
   context.updatePlayerUi();
-  assert.equal(title.textContent, 'A - New', 'a redraw while the switch waits does not show the old song again');
 
-  finishStart({ role: 'current', streamId: 2, generation: 2, track: newTrack });
-  await playing;
-  assert.equal(context.state.player.selectedTrack, null);
+  context.state.player.current = newTrack;
+  snapshot.currentTime = 77;
+  context.updatePlayerUi();
+  assert.equal(title.textContent, 'A - Old');
+  assert.equal(time.textContent, '77 / 200');
+
+  Object.assign(snapshot, { currentTime: 0, duration: 180, src: newTrack.src });
+  context.updatePlayerUi();
   assert.equal(title.textContent, 'A - New');
+  assert.equal(time.textContent, '0 / 180');
 });
 
 test('playback held by another tab or lost to the server disables the scissors for this tab', () => {

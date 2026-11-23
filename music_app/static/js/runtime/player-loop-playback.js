@@ -153,6 +153,47 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
+// The player shows the song that sounds: pressing another song while one plays keeps the player's
+// title, time, cover and waveform until the pressed song sounds, then they change together. The
+// pressed row shows the press at once; rows read the selection, not this.
+function playerTrackKey(track) {
+  return String(track?.path || track?.src || '');
+}
+
+// The snapshot is the playing engine's: in the Android app the web engine's mode never moves.
+function currentTrackAwaitsSound(playback, track) {
+  if ((playback.mode ?? state.player.streaming?.mode) === 'starting') return true;
+  return Boolean(playback.src && track.src && playback.src !== track.src);
+}
+
+// The current song once it sounds. Until then the song shown before it, at the time it last showed,
+// or running on while it still sounds (a switch that hands over at a boundary).
+function resolveShownPlayerTrack(playback) {
+  const current = state.player.current || null;
+  const shown = state.player.shown || null;
+  const track = shown && current && playerTrackKey(shown.track) !== playerTrackKey(current)
+    && currentTrackAwaitsSound(playback, current) ? shown.track : current;
+  if (!track) {
+    state.player.shown = null;
+    return null;
+  }
+  const sounds = !playback.src || !track.src || playback.src === track.src;
+  const live = sounds && track === current;
+  if (sounds) {
+    state.player.shown = {
+      track,
+      live,
+      currentTime: Number(playback.currentTime) || 0,
+      duration: Number(playback.duration) || Number(track.durationSeconds) || 0,
+    };
+  } else if (shown && playerTrackKey(shown.track) === playerTrackKey(track)) {
+    state.player.shown = { ...shown, track, live: false };
+  } else {
+    state.player.shown = { track, live: false, currentTime: 0, duration: Number(track.durationSeconds) || 0 };
+  }
+  return state.player.shown;
+}
+
 function resolvePlayerUiStatus(playback) {
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
@@ -160,22 +201,27 @@ function resolvePlayerUiStatus(playback) {
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
-  // A pressed song is shown from the press, through every redraw until its audio starts.
-  const displayTrack = mirroredTrack || state.player.selectedTrack || state.player.current;
+  const shownTrack = resolveShownPlayerTrack(playback)?.track || null;
+  const displayTrack = mirroredTrack || shownTrack;
   return {
     lockedByAnotherTab,
     playbackUnavailable,
     blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
     displayTrack,
+    shownTrack,
     hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
   };
 }
 
 // The seek position and its time label: all that a timeline drag preview changes.
 function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, blockedLabel }) {
-  const duration = getPlayerDuration();
+  // A song shown while another starts keeps its own time and length with its title: never the started
+  // song's clock under it.
+  const shown = resolveShownPlayerTrack(playback);
+  const held = !lockedByAnotherTab && shown && !shown.live ? shown : null;
+  const duration = held ? held.duration : getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
-  const current = state.player.timelineDragging && Number.isFinite(dragPreview)
+  const current = held ? held.currentTime : state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
     : Number(playback.currentTime) || 0;
   if (els.timeline) {
@@ -199,7 +245,7 @@ function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
   const status = resolvePlayerUiStatus(playback);
-  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, hasTrack } = status;
+  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, shownTrack, hasTrack } = status;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   els.player?.classList?.toggle('is-empty', !hasTrack);
   const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
@@ -231,6 +277,7 @@ function updatePlayerUi() {
   const loopRangeSurface = els.loopRange?.querySelector('[data-loop-range-surface]');
   if (loopRangeSurface) loopRangeSurface.hidden = !state.player.loopActive;
   renderGlobalPlayerMetadata(els, displayTrack);
+  renderGlobalPlayerCover(els, shownTrack);
   updateLoopInputsFromState();
   updateWaveformAppearance();
   const compactPeaks = state.player.waveform?.compactPeaks?.data;
@@ -244,7 +291,6 @@ function updatePlayerUi() {
 }
 
 function setCurrentPlayerTrack(track, options = {}) {
-  const els = getPlayerElements();
   const previousTrack = state.player.current;
   const previousTrackId = getTrackIdentity(previousTrack);
   const nextTrackId = getTrackIdentity(track);
@@ -280,40 +326,44 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.loopStart = 0;
   state.player.loopEnd = 30;
   state.player.loopEditDurationSeconds = 0;
-  renderGlobalPlayerMetadata(els, track);
-  if (els.coverButton) {
-    const coverRef = track?.coverRef || '';
-    const loadId = (state.player.coverLoadId || 0) + 1;
-    state.player.coverLoadId = loadId;
-    els.coverButton.hidden = false;
-    els.coverButton.classList.toggle('is-idle-placeholder', !track);
-    els.coverButton.style.backgroundImage = '';
-    els.coverButton.textContent = '';
-    if (!track) {
-      els.coverButton.textContent = '';
-    } else if (coverRef) {
-      const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
-      const probe = new Image();
-      probe.onload = () => {
-        if (state.player.coverLoadId !== loadId) return;
-        els.coverButton.classList.remove('is-idle-placeholder');
-        els.coverButton.style.backgroundImage = `url("${coverSrc}")`;
-        els.coverButton.hidden = false;
-      };
-      probe.onerror = () => {
-        if (state.player.coverLoadId !== loadId) return;
-        els.coverButton.style.backgroundImage = '';
-        els.coverButton.hidden = false;
-        els.coverButton.classList.remove('is-idle-placeholder');
-      };
-      probe.src = coverSrc;
-    } else {
-      els.coverButton.classList.remove('is-idle-placeholder');
-    }
-  }
+  // The player draws what it shows: the new song only once it sounds.
   updatePlayerUi();
   if (options.persist !== false) {
     persistPlayerState(true);
+  }
+}
+
+// Loads a cover only when the shown song or its artwork changes: redraws while it plays reuse it.
+function renderGlobalPlayerCover(els, track) {
+  if (!els.coverButton) return;
+  const coverRef = track?.coverRef || '';
+  const coverKey = track ? `${playerTrackKey(track)}\n${coverRef}` : '';
+  if (state.player.coverKey === coverKey) return;
+  state.player.coverKey = coverKey;
+  const loadId = (state.player.coverLoadId || 0) + 1;
+  state.player.coverLoadId = loadId;
+  els.coverButton.hidden = false;
+  els.coverButton.classList.toggle('is-idle-placeholder', !track);
+  els.coverButton.style.backgroundImage = '';
+  els.coverButton.textContent = '';
+  if (track && coverRef) {
+    const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
+    const probe = new Image();
+    probe.onload = () => {
+      if (state.player.coverLoadId !== loadId) return;
+      els.coverButton.classList.remove('is-idle-placeholder');
+      els.coverButton.style.backgroundImage = `url("${coverSrc}")`;
+      els.coverButton.hidden = false;
+    };
+    probe.onerror = () => {
+      if (state.player.coverLoadId !== loadId) return;
+      els.coverButton.style.backgroundImage = '';
+      els.coverButton.hidden = false;
+      els.coverButton.classList.remove('is-idle-placeholder');
+    };
+    probe.src = coverSrc;
+  } else if (track) {
+    els.coverButton.classList.remove('is-idle-placeholder');
   }
 }
 
@@ -343,11 +393,9 @@ function isPlayerStartPending(path) {
   return !playback.paused && !playback.ended && ['starting', 'buffering'].includes(playback.mode);
 }
 
-// A switch takes a moment to reach the listener; the click should not.
-function renderSelectedTrackState(track) {
-  if (track && typeof getPlayerElements === 'function') {
-    renderGlobalPlayerMetadata(getPlayerElements(), track);
-  }
+// A switch takes a moment to reach the listener; the click should not. The rows show the press at
+// once; the player stays on the sounding song.
+function renderSelectedTrackState() {
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }
@@ -355,13 +403,13 @@ function renderSelectedTrackState(track) {
 function showSelectedTrackImmediately(track, shouldAutoplay) {
   if (!shouldAutoplay) return;
   state.player.selectedTrack = track;
-  renderSelectedTrackState(track);
+  renderSelectedTrackState();
 }
 
 function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
-  renderSelectedTrackState(state.player.current);
+  renderSelectedTrackState();
 }
 
 async function playTrackFromPayload(track, options = {}) {
@@ -488,6 +536,8 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
   if (pendingPlayerStart?.path === selectedTrackPath) pendingPlayerStart = null;
+  // It sounds: the player's title, time, cover and waveform change to it together, now.
+  if (typeof getPlayerElements === 'function') updatePlayerUi();
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,

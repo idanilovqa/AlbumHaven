@@ -34,22 +34,37 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
-function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+function galleryArtistCountryPillHtml(artistMusicBrainz) {
   const country = galleryCountryName(artistMusicBrainz?.country);
-  return country
-    ? `<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span></span>`
-    : '';
+  return country ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>` : '';
+}
+
+function galleryArtistGenrePillsHtml(artistMusicBrainz) {
+  return (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean)
+    .map((genre) => (
+      genre === 'Genre unavailable'
+        ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
+        : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
+    ));
+}
+
+// The gallery bar wraps each pill for its header fit.
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+  const pill = galleryArtistCountryPillHtml(artistMusicBrainz);
+  return pill ? `<span class="gallery-bar__artist-country">${pill}</span>` : '';
 }
 
 function buildGalleryArtistGenresHtml(artistMusicBrainz = null) {
-  const genres = (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
-    .map((genre) => String(genre || '').trim())
-    .filter(Boolean);
-  return genres.map((genre) => (
-    genre === 'Genre unavailable'
-      ? '<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span></span>'
-      : `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span></span>`
-  )).join('');
+  return galleryArtistGenrePillsHtml(artistMusicBrainz)
+    .map((pill) => `<span class="gallery-bar__artist-genre">${pill}</span>`).join('');
+}
+
+// The Artist info panel shows bare pills: the country, then at most three genres.
+function buildGalleryArtistInfoMetadataHtml(artistMusicBrainz = null) {
+  return galleryArtistCountryPillHtml(artistMusicBrainz)
+    + galleryArtistGenrePillsHtml(artistMusicBrainz).slice(0, 3).join('');
 }
 
 function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {

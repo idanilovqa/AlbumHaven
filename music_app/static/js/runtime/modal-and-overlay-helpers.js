@@ -409,9 +409,10 @@ function hasPartialLibraryNonAlbumTracks() {
     && view.library_non_album_tracks_partial_scope === getLibraryNonAlbumScopeKey(view);
 }
 
-// The note under a partial list: its wording waits for the owner's approval, so it renders nothing yet.
+// The note under a partial list (owner-approved wording A, 2026-11-22).
 function buildLooseTracksPartialNoteHtml() {
-  return '';
+  return '<div class="utility-empty-state compact" data-loose-tracks-partial-note>'
+    + 'Still indexing loose tracks, so more may appear.</div>';
 }
 
 function rerenderOpenLibraryNonAlbumModal() {

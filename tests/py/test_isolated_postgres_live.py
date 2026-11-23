@@ -577,8 +577,9 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
     waiting = loose_track_store.INLINE_DRAIN_LIMIT
 
     def run(stored):
-        # A full seed replaces the library; preparing builds or drains it before anything is counted.
-        _entries, loose_entries = _loose_library(fixture, 5, loose=stored)
+        # A full seed replaces the library; preparing builds or drains it before anything is counted. ``stored``
+        # loose rows sit beside the INLINE_DRAIN_LIMIT marked ones, so 50 marks wait at both sizes.
+        _entries, loose_entries = _loose_library(fixture, 5, loose=stored + waiting)
         _prepare_store(fixture)
         before = _store_rows(fixture)
         changed = {
@@ -638,7 +639,9 @@ def test_live_real_changes_run_every_loose_track_trigger_function_with_overrides
 
     def setup_sql(sql, params=None):
         with isolatedPostgres._connect(fixture.setup_url) as connection:
-            return connection.execute(sql, params or {})
+            connection.execute(sql, params or {})
+        # A low-level change journals a relation publication that production finishes before the next edit.
+        _finish_live_reconciliation(fixture.config)
 
     def track_of(entry):
         with isolatedPostgres._connect(fixture.setup_url) as connection:
@@ -780,6 +783,8 @@ def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_
     def setup_sql(sql, params=None):
         with isolatedPostgres._connect(fixture.setup_url) as connection:
             connection.execute(sql, params or {})
+        # A low-level change journals a relation publication that production finishes before the next edit.
+        _finish_live_reconciliation(fixture.config)
 
     def rebuilt_equals_drained(step):
         drained = _loose_payload(repository)

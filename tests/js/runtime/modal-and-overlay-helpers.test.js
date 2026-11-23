@@ -3042,6 +3042,7 @@ test('a Loose Tracks page with no stored row says it is still being prepared onc
   const live = new Map();
   let nextTimer = 0;
   context.scheduleBrowserTimeout = (callback) => { nextTimer += 1; live.set(nextTimer, callback); return nextTimer; };
+  context.window = {}; // the loading table asks window.AlbumHavenCapabilities whether paths may show
   context.clearBrowserTimeout = (id) => { live.delete(id); };
   context.state.view = { library_non_album_tracks: [] };
   context.state.ui = {};
@@ -3125,6 +3126,7 @@ test('a Loose Tracks page that is still preparing does not ask again until its r
   context.URL = URL;
   context.updateGalleryMainControls = () => {};
   context.scheduleBrowserTimeout = () => 1;
+  context.window = {}; // the loading table asks window.AlbumHavenCapabilities whether paths may show
   context.clearBrowserTimeout = () => {};
   context.state.view = { library_non_album_tracks: [] };
   context.state.ui = {};

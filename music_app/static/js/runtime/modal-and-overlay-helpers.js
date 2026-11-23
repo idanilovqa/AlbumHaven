@@ -415,6 +415,14 @@ function buildLooseTracksPartialNoteHtml() {
     + 'Still indexing loose tracks, so more may appear.</div>';
 }
 
+// The bounded wait ran out with no stored row (owner-approved wording, 2026-11-22).
+const LOOSE_TRACKS_STILL_PREPARING = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
+
+function libraryNonAlbumWaitExhausted() {
+  const retry = deferredNonAlbumRetries.get('library');
+  return Boolean(retry?.exhausted) && retry.scopeKey === getLibraryNonAlbumScopeKey(state.view || {});
+}
+
 function rerenderOpenLibraryNonAlbumModal() {
   const overlay = getNonAlbumModalElements().overlay;
   if (overlay && !overlay.hidden && state.ui?.nonAlbumLibraryWide) {
@@ -466,6 +474,7 @@ function scheduleDeferredNonAlbumRetry(kind, scopeKey, isCurrentScope, retry) {
   const delay = DEFERRED_NON_ALBUM_RETRY_DELAYS_MS[attempt];
   if (delay === undefined) {
     deferredNonAlbumRetries.set(kind, { scopeKey, attempt, timer: 0, exhausted: true });
+    if (kind === 'library') rerenderOpenLibraryNonAlbumModal();
     return;
   }
   const entry = { scopeKey, attempt, timer: 0, retrying: false };
@@ -991,7 +1000,10 @@ function openNonAlbumModal(options = {}) {
   if (typeof presentMobilePage === 'function') {
     presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle });
   }
-  els.table.innerHTML = hydrationPending
+  const waitExhausted = hydrationPending && libraryWide && libraryNonAlbumWaitExhausted();
+  els.table.innerHTML = waitExhausted
+    ? `<div class="utility-empty-state">${escapeHtml(LOOSE_TRACKS_STILL_PREPARING)}</div>`
+    : hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
       ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial ? buildLooseTracksPartialNoteHtml() : ''}`
@@ -1020,7 +1032,8 @@ function openNonAlbumModal(options = {}) {
     });
   });
   // A partial list reopened after leaving (which cancelled its retry) asks once more, then backs off again.
-  if (hydrationPending || (partial && !deferredNonAlbumRetries.has('library'))) {
+  // A wait that ran out asks nothing more until the page is opened again (leaving clears it).
+  if ((hydrationPending && !waitExhausted) || (partial && !deferredNonAlbumRetries.has('library'))) {
     hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
         // Library-wide answers repaint through rerenderOpenLibraryNonAlbumModal; a still-preparing answer

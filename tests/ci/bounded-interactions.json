@@ -11816,22 +11816,6 @@
       "proof": "static"
     },
     {
-      "id": "py:services/child_process.py#_PipeWriter._write_all",
-      "action": "Write one child's stdin input off the event loop",
-      "entrypoints": [
-        "py:music_app/services/child_process.py#_PipeWriter._write_all:background:executor"
-      ],
-      "owners": [
-        "music_app/services/child_process.py"
-      ],
-      "rules": [
-        "BI-07",
-        "BI-08"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "py:services/child_process.py#_PipeReader.pump",
       "action": "Read one child pipe while its reader has room",
       "entrypoints": [

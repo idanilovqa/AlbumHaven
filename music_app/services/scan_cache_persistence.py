@@ -3479,16 +3479,21 @@ def _partition_edited_physical_copies(connection, paths, previous, updated, *, a
     changed = {str(Path(path)) for path, fields in _structural_changed_fields(previous, updated).items() if fields}
     if not changed:
         return
-    rows = connection.execute("""select tracks.id as track_id,tracks.library_id,tracks.track_key,
-        files.private_path from library.local_tracks tracks
-        join library.local_track_files files on files.track_id=tracks.id
+    # Keyed by construction (case 55's shape): the selected tracks first, then each track's files by its id,
+    # so the plan stays index lookups at any library size and with any statistics.
+    lock = ' for update' if apply else ''  # Each lookup locks its own rows when the split is applied.
+    rows = connection.execute("""with selected_tracks as materialized (
+          select distinct selected.track_id from library.local_track_files selected
+          where selected.private_path=any(%s::text[]))
+        select tracks.id as track_id,tracks.library_id,tracks.track_key,
+        files.private_path from selected_tracks
+        join lateral (select * from library.local_tracks where id=selected_tracks.track_id offset 0""" + lock + """) tracks on true
+        join lateral (select * from library.local_track_files where track_id=tracks.id offset 0""" + lock + """) files on true
         join library.libraries libraries on libraries.id=tracks.library_id
         join app.bootstrap_owners owners on owners.account_id=libraries.owner_account_id
         where owners.owner_key='local-bootstrap-owner' and libraries.name='Local Library'
-          and libraries.library_kind='local' and tracks.id in (
-            select selected.track_id from library.local_track_files selected
-            where selected.private_path=any(%s::text[]))
-        order by tracks.id,files.id""" + (' for update of tracks,files' if apply else ''),
+          and libraries.library_kind='local'
+        order by tracks.id,files.id""",
         (sorted({variant for path in paths for variant in (path, str(Path(path)))}),)).fetchall()
     tracks = {}
     for row in rows:
@@ -3579,17 +3584,21 @@ def _structural_tag_edit_groups(connection, paths, previous, updated, fields):
     if not paths or any(path not in previous or path not in updated for path in paths):
         return [paths], set(), set(), {}, {}
     rows = connection.execute("""
-        select files.private_path, tracks.id as track_id, tracks.album_id,
+        with edited_files as materialized (
+          select files.private_path, files.track_id from library.local_track_files files
+          where files.private_path=any(%s::text[]))
+        -- Keyed by construction: each file's track, album and owner by id (offset 0 keeps each a lookup).
+        select edited_files.private_path, tracks.id as track_id, tracks.album_id,
           tracks.metadata as track_metadata,
           albums.album_key, owner.name as album_owner
-        from library.local_track_files files
-        join library.local_tracks tracks on tracks.id=files.track_id
+        from edited_files
+        join lateral (select * from library.local_tracks where id=edited_files.track_id offset 0) tracks on true
         join library.libraries libraries on libraries.id=tracks.library_id
         join app.bootstrap_owners owners on owners.account_id=libraries.owner_account_id
-        left join library.local_albums albums on albums.id=tracks.album_id
-        left join library.local_artists owner on owner.id=albums.artist_id
+        left join lateral (select * from library.local_albums where id=tracks.album_id offset 0) albums on true
+        left join lateral (select * from library.local_artists where id=albums.artist_id offset 0) owner on true
         where owners.owner_key='local-bootstrap-owner' and libraries.name='Local Library'
-          and libraries.library_kind='local' and files.private_path=any(%s::text[])
+          and libraries.library_kind='local'
     """, (sorted({value for path in paths for value in (path, str(Path(path)))}),)).fetchall()
     by_path = {str(Path(row["private_path"])): row for row in rows}
     delta_fields = _structural_changed_fields(previous, updated)

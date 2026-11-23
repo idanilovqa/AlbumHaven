@@ -508,6 +508,24 @@ def test_an_owner_drain_releases_a_deferred_first_build_even_at_the_same_generat
     assert first_builds.builds == [first_builds.state]
 
 
+def test_a_non_incremental_custom_first_build_builds_its_scope_with_no_check(first_builds, monkeypatch):
+    """6.5: without incremental membership there is no relation journal to wait on. The first build runs
+    ensure_gallery_projection_ready once, for the requested scope alone, with no read-only check, and nothing is
+    recorded as failed or deferred (before, the check raised and the filtered view stayed "being prepared")."""
+    built = []
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda _config, **options: built.append(options) or {"built": 1})
+    database = _ReadOnlyDatabase(dirty=False, statements=first_builds.statements, initialized=False)
+
+    gallery.queue_gallery_scope_first_build(first_builds.config, connect=database, view_state=first_builds.state,
+                                            generation=2, incremental_membership=False)
+    key = (first_builds.config["ALBUM_HAVEN_APP_DATABASE_URL"], gallery.gallery_projection_scope_key(first_builds.state))
+
+    assert [options.get("view_state") for options in built] == [first_builds.state], "one build, of that scope"
+    assert first_builds.statements == [], "no readiness check on a non-incremental database"
+    assert key not in gallery._FAILED_FIRST_BUILDS and key not in gallery._DEFERRED_FIRST_BUILDS
+
+
 def test_a_first_build_before_relations_are_initialized_still_fails_at_its_generation(first_builds):
     """6.5: the read-only check keeps the raise when startup has not initialized relations, so the failure is
     recorded at its generation (and retried only when it moves)."""

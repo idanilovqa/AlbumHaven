@@ -8204,24 +8204,29 @@ test('a start whose silent socket is replaced while another song\'s rate is stil
 // A press whose song's rate is still asked is already switching to that song: the engine says which,
 // as it does once the switch waits for its audio, so a second press during it is seen as one.
 test('a press still asking its song\'s rate names the song it switches to', async () => {
-  const harness = encodedHarness({
-    holdSampleRateProbes: true,
-    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000]]),
-  });
-  await startEncoded(harness, makeTrack('01.mp3'));
+  const harness = encodedHarness({ holdSampleRateProbes: true, trackSampleRates: new Map() });
+  // A 320 kbps stream of a song not played before asks for its rate before it opens.
+  harness.engine.qualityPreference = '320';
+  const first = harness.api.start(makeTrack('01.flac'));
+  for (let turn = 0; turn < 20 && !harness.sockets[0]?.probes.length; turn += 1) await harness.settle();
+  harness.sockets[0].receive({ type: 'probe-result', requestId: harness.sockets[0].probes[0].requestId, sampleRate: 48_000 });
+  await first;
+  acceptMetadata(harness, harness.sent('open').at(-1), { codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000 });
+  await harness.settle();
+  const switchingTo = () => harness.context.streamingEngineState().pendingStart?.track?.path;
+  const opened = (name) => harness.sockets[0].sent.some(({ type, path }) => type === 'open' && path === makeTrack(name).path);
 
-  void harness.api.start(makeTrack('02.mp3'));
+  void harness.api.start(makeTrack('02.flac'));
   await settleTwice(harness);
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.flac').path, 'its rate is asked');
+  assert.equal(opened('02.flac'), false, 'nothing is opened before the rate is known');
+  assert.equal(switchingTo(), makeTrack('02.flac').path, 'the press names its song while the rate is asked');
 
-  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.mp3').path, 'its rate is asked');
-  assert.equal(harness.sockets[0].sent.some(({ type, path }) => type === 'open' && path === makeTrack('02.mp3').path),
-    false, 'nothing is opened before the rate is known');
-  assert.equal(harness.context.streamingEngineState().pendingStart?.track?.path, makeTrack('02.mp3').path);
-
-  void harness.api.start(makeTrack('03.mp3'));
+  void harness.api.start(makeTrack('03.flac'));
   await settleTwice(harness);
-  assert.equal(harness.context.streamingEngineState().pendingStart?.track?.path, makeTrack('03.mp3').path,
-    'a later press takes over');
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('03.flac').path);
+  assert.equal(opened('03.flac'), false);
+  assert.equal(switchingTo(), makeTrack('03.flac').path, 'a later press takes over');
 });
 
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {

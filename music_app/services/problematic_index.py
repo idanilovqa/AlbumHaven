@@ -619,10 +619,12 @@ def _backfill_duplicate_results(repository: Any, connection: Any, library_id: in
 
 
 def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebuild_duplicates: bool = False,
-                      report: Callable[[str, int, int], None] | None = None) -> int:
-    """Backfill what is not ready, then evaluate every marked album; how many marks are left after it.
+                      report: Callable[[str, int, int], None] | None = None, walks: int = 1) -> tuple[int, int]:
+    """Backfill what is not ready, then evaluate every marked album; (marks left, marks no writer holds).
 
-    The caller holds the lock. A held mark stays for a later pass instead of being waited for."""
+    The caller holds the lock. A held mark stays for a later pass instead of being waited for. With writers
+    live (background maintenance) one walk: a mark set meanwhile is the next pass's. The deploy step, with
+    writers stopped, walks again while a free mark is left, up to ``walks``."""
     if rebuild_duplicates:
         # Before anything slow: an app restarted during a rebuild must not find "ready".
         connection.execute(
@@ -640,10 +642,11 @@ def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebu
         _backfill_duplicate_results(repository, connection, library_id, report)
     _DUPLICATES_READY.add(repository._database_url)
     evaluated = outrun = 0
-    # Walks by key, each mark tried once per walk. A mark set again during a walk (by this pass's own writes
-    # or a late writer) is free to take afterwards, so another walk evaluates it; a mark a writer still
-    # holds is not, so it never makes the pass wait or spin.
-    for _walk in range(OUTRUN_RETRIES + 1):
+    # Walks by key, each mark tried once per walk. A drain's own writes set no mark; a writer's mark set
+    # during a walk is free to take afterwards, so another walk evaluates it; a mark a writer still holds is
+    # not, so it never makes the pass wait or spin.
+    free = 0
+    for _walk in range(max(1, walks)):
         after = -1  # from the lowest mark (0, the loose files, while it is still stored)
         while marks := connection.execute(
             """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
@@ -662,12 +665,14 @@ def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebu
             evaluated += len(marks)
             if report:
                 report("Changed albums", evaluated, evaluated)
-        if not _free_marks(connection, library_id):
+        free = _free_marks(connection, library_id)
+        if not free:
             break
-    return int(_value(connection.execute(
+    left = int(_value(connection.execute(
         "select count(*) as marks from library.problematic_index_dirty_albums where library_id = %s",
         (library_id,),
     ).fetchone(), "marks"))
+    return left, free
 
 
 def _free_marks(connection: Any, library_id: int) -> int:
@@ -694,8 +699,8 @@ def prepare_for_serving(repository: Any, *, rebuild_duplicates: bool = False,
         # restarted meanwhile waits outside. Closing the connection releases it.
         connection.execute("select pg_advisory_lock(%s, %s::integer)", (_STEP_LOCK_NAMESPACE, library_id))
         try:
-            held = _bring_up_to_date(repository, connection, library_id,
-                                     rebuild_duplicates=rebuild_duplicates, report=report)
+            held, _free = _bring_up_to_date(repository, connection, library_id, rebuild_duplicates=rebuild_duplicates,
+                                            report=report, walks=OUTRUN_RETRIES + 1)
         finally:
             _unlock(connection, library_id)
     if held:
@@ -842,13 +847,14 @@ def _maintain(repository: Any) -> None:
         # A request arriving from now on queues another pass for marks made meanwhile.
         _QUEUED.discard(repository._database_url)
         _RUNNING.add(repository._database_url)
+    free = 0
     try:
         with _worker_connection(repository) as connection:
             library_id = _library_id(connection)
             if library_id is None or not _locked(connection, library_id):
                 return
             try:
-                _bring_up_to_date(repository, connection, library_id)
+                _held, free = _bring_up_to_date(repository, connection, library_id)
                 first = connection.execute(
                     """select item_key from library.problematic_index_items where library_id = %s
                        order by sort_name, sort_artist, sort_year, sort_key limit 1""",
@@ -869,6 +875,9 @@ def _maintain(repository: Any) -> None:
     finally:
         with _QUEUED_LOCK:
             _RUNNING.discard(repository._database_url)
+    # A writer's mark set during this pass that no writer holds: the next pass evaluates it.
+    if free:
+        queue_maintenance(repository)
 
 
 def duplicate_results_readable(repository: Any) -> bool:

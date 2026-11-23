@@ -221,9 +221,64 @@ def test_prepare_for_serving_drains_a_mark_set_again_during_its_pass(index, monk
         return cleared
 
     monkeypatch.setattr(index.module, "_drain", mark_again_once)
+    walks = _count_walks(index, monkeypatch)
 
     index.module.prepare_for_serving(index.repository)
 
     assert marked_again == [first]
     assert index.marks() == []
     assert index.module.serving_readiness(index.repository)["changed_albums_waiting"] == 0
+    assert walks == [1, 2], "One late mark costs one more walk, not the whole bound."
+
+
+def _count_walks(index, monkeypatch):
+    """Each walk ends by asking whether a free mark is left; the list holds the walk numbers."""
+    free_marks = index.module._free_marks
+    walks = []
+
+    def counted(connection, library_id):
+        walks.append(len(walks) + 1)
+        return free_marks(connection, library_id)
+
+    monkeypatch.setattr(index.module, "_free_marks", counted)
+    return walks
+
+
+def test_background_maintenance_walks_once_and_queues_a_pass_for_a_mark_set_meanwhile(index, monkeypatch):
+    """With writers live, a re-set mark costs the background pass no extra walk: it queues the next pass."""
+    first, *rest = index.albums
+    index.committed_marks(first, *rest)
+    drain = index.module._drain
+    marked_again = []
+
+    def mark_again_once(repository, connection, library_id, marks, **options):
+        cleared = drain(repository, connection, library_id, marks, **options)
+        if not marked_again:
+            marked_again.append(first)
+            index.committed_marks(first)
+        return cleared
+
+    queued = []
+    monkeypatch.setattr(index.module, "_drain", mark_again_once)
+    monkeypatch.setattr(index.module, "queue_maintenance", lambda repository: queued.append(repository))
+    walks = _count_walks(index, monkeypatch)
+
+    index.module._maintain(index.repository)
+
+    assert walks == [1]
+    assert [row["album_id"] for row in index.marks()] == [first]
+    assert queued == [index.repository]
+
+
+def test_a_drain_never_marks_the_album_it_evaluates(index, monkeypatch):
+    """The drain's own writes set no mark, so a pass over unchanged albums ends clean and queues nothing."""
+    index.committed_marks(*index.albums)
+    queued = []
+    monkeypatch.setattr(index.module, "queue_maintenance", lambda repository: queued.append(repository))
+    walks = _count_walks(index, monkeypatch)
+
+    index.module._maintain(index.repository)
+
+    assert index.marks() == []
+    assert walks == [1]
+    assert queued == []

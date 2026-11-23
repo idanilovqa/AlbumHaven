@@ -272,7 +272,8 @@ def test_live_a_structural_save_reads_and_runs_the_same_at_three_library_sizes_w
     assert largest[1] - large[1] <= SIZE_GROWTH_ROWS, (
         f"The save's rows read grew from 2,001 to 6,001 albums: {large} vs {largest}.")
     if not analysed:
-        assert abs(large[1] - small[1]) <= SIZE_GROWTH_ROWS, (
+        # Growth is what (d) bounds: reading fewer rows at the larger size (a plan step) is not growth.
+        assert large[1] - small[1] <= SIZE_GROWTH_ROWS, (
             f"The save's rows read grew with the library: {small} vs {large}.")
 
 

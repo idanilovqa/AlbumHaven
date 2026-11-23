@@ -2120,7 +2120,7 @@ test('generated preview storage fails closed on a dirty prior relocation', () =>
   assert.doesNotMatch(helper, /authenticatedPagePost|\/retry|retryableStates/);
 });
 
-test('loop expiry E2E releases playback ownership before long clock advances', () => {
+test('loop expiry E2E pauses on the claim it holds before long clock advances', () => {
   const spec = readRepoFile('tests/e2e/specs/loop-edit-expiry.functional.spec.js');
   const savedLoopStart = spec.indexOf('await utilityLoopsActions.playLoopByName(SAVED_LOOP_NAME)');
   const savedLoopEnd = spec.indexOf('await globalPlayerActions.installLoopEditExpiryClock()');
@@ -2135,6 +2135,6 @@ test('loop expiry E2E releases playback ownership before long clock advances', (
   assert.doesNotMatch(savedLoopStep, /globalPlayerActions\.resumeIfPaused\(\)/);
   assert.match(
     renewalStep,
-    /dragLoopBoundary\('end', 0\.8\)[\s\S]*?pauseToReleasePlaybackClaim\(\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)[\s\S]*?dragLoopBoundary\('end', 0\.75\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)/,
+    /dragLoopBoundary\('end', 0\.8\)[\s\S]*?pauseHoldingPlaybackClaim\(\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)[\s\S]*?dragLoopBoundary\('end', 0\.75\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)/,
   );
 });

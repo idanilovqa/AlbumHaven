@@ -5843,7 +5843,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
   assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
-  assert.match(expirySpec, /dragLoopBoundary\('end', 0\.8\)[\s\S]*pauseToReleasePlaybackClaim\(\)[\s\S]*advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
+  assert.match(expirySpec, /dragLoopBoundary\('end', 0\.8\)[\s\S]*pauseHoldingPlaybackClaim\(\)[\s\S]*advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'end', 0\.75\)/);

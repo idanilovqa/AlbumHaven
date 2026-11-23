@@ -359,8 +359,9 @@ class NativePlaybackControllerTest {
         harness.step()
         harness.controller.play(1)
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.runUntil(maxSteps = 4) { harness.claims.calls.size > 2 }
 
-        assertEquals(listOf("acquire:null"), harness.claims.calls)
+        assertEquals("the pause and the resume renew the one claim", listOf("acquire:null", "pause:token-1", "acquire:token-1"), harness.claims.calls)
         assertEquals(listOf("owned"), harness.ownership())
     }
 
@@ -778,7 +779,8 @@ class NativePlaybackControllerTest {
 
         assertSameMessage(contract.getJSONObject("declined"), harness.handoverAnswers.single())
         harness.runUntil(maxSteps = 4) { harness.sinks.last().writtenFrames > written }
-        assertEquals("only the pause said so: Play asked nothing", listOf("acquire:null", "pause:token-1"), harness.claims.calls)
+        harness.step()
+        assertEquals("Play asked for no claim; once it sounds it says it plays", listOf("acquire:null", "pause:token-1", "acquire:token-1"), harness.claims.calls)
     }
 
     @Test

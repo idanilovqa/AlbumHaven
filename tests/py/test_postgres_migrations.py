@@ -586,6 +586,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0267_trust_relation_publication_marker.sql",
         "0268_create_album_duplicate_results.sql",
         "0269_index_stray_decision_lookups.sql",
+        "0294_mark_loose_groups_for_problematic_index.sql",
     ]
 
 

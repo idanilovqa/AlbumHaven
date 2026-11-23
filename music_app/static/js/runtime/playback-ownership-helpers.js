@@ -185,6 +185,19 @@ function isShellPlaybackUnavailable() {
   return typeof isAndroidPlaybackUnavailable === 'function' && isAndroidPlaybackUnavailable();
 }
 
+// The player shows only the lock, its reason and the mirrored track, so a heartbeat, broadcast or
+// renewal that leaves them as they were repaints nothing.
+function playbackOwnershipPresentation() {
+  const { lockStatus, blockedReason, mirroredTrack: track } = getPlaybackOwnershipState();
+  return [lockStatus, blockedReason, track?.title, track?.artist, track?.album, track?.artworkUrl].join('\0');
+}
+
+function updatePlayerUiIfOwnershipPresentationChanged(previousPresentation) {
+  if (playbackOwnershipPresentation() !== previousPresentation && typeof updatePlayerUi === 'function') {
+    updatePlayerUi();
+  }
+}
+
 function clearBlockedPlaybackState() {
   const ownership = getPlaybackOwnershipState();
   ownership.lockStatus = 'unlocked';
@@ -317,6 +330,7 @@ async function giveBackSilentClaim() {
 
 function syncMirroredPlaybackState(snapshot) {
   const ownership = getPlaybackOwnershipState();
+  const previousPresentation = playbackOwnershipPresentation();
   if (snapshot?.is_playing_elsewhere) {
     if (ownership.blockedReason !== 'playing_in_another_tab') losePlaybackOwnership('ownership-takeover', false);
     ownership.lockStatus = 'locked';
@@ -325,7 +339,7 @@ function syncMirroredPlaybackState(snapshot) {
   } else if (!ownership.activeClaim && !isShellPlaybackUnavailable()) {
     clearBlockedPlaybackState();
   }
-  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  updatePlayerUiIfOwnershipPresentationChanged(previousPresentation);
 }
 
 async function handlePlaybackOwnershipEvent() {
@@ -538,13 +552,14 @@ function acceptPlaybackClaim(result, prepared) {
   updatePlaybackSoundPermission();
   // A page that was refused its previous page's claim is a new client.
   if (typeof connectStreamingSilenceRelay === 'function') connectStreamingSilenceRelay();
+  const previousPresentation = playbackOwnershipPresentation();
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
     Math.max(0, leaseDeadline - performance.now()));
   startPlaybackOwnershipHeartbeat();
   announcePlaybackOwnership();
-  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  updatePlayerUiIfOwnershipPresentationChanged(previousPresentation);
 }
 
 async function expirePlaybackClaim(claim) {

@@ -20,9 +20,10 @@ from music_app.services.library import (
     _build_album_base_payload,
     _build_album_preview_gallery_list_block,
     _build_album_detail_gallery_list_block,
-    _build_album_detail_setup_payloads,
+    _album_move_availability,
     _build_album_detail_track_payloads,
     _finalize_album_payload_for_viewer,
+    album_detail_to_dict,
     album_preview_to_dict,
     album_to_dict,
     build_albums_from_file_cache,
@@ -1591,58 +1592,44 @@ def test_normalize_album_preview_payload_deduplicates_card_artist_without_changi
     )
 
 
-def test_build_album_detail_setup_payloads_uses_duplicate_sources_and_explicit_config_move_availability(
-    explicit_config,
-    monkeypatch,
-):
+def test_album_move_availability_needs_an_explicit_config(explicit_config, monkeypatch):
     album = SimpleNamespace(key="album-1")
-
-    def fake_get_album_duplicate_sources(target_album):
-        assert target_album is album
-        return [{"label": "1", "tracks": []}]
+    calls = []
 
     def fake_build_move_availability_payload(target_album, config):
-        assert target_album is album
-        assert config is explicit_config
+        calls.append((target_album, config))
         return {"can_move": True}
 
-    monkeypatch.setattr(
-        "music_app.services.library.get_album_duplicate_sources",
-        fake_get_album_duplicate_sources,
-    )
-    monkeypatch.setattr(
-        "music_app.services.library.build_move_availability_payload",
-        fake_build_move_availability_payload,
-    )
+    monkeypatch.setattr("music_app.services.library.build_move_availability_payload", fake_build_move_availability_payload)
 
-    duplicate_sources, move_availability = _build_album_detail_setup_payloads(album, config=explicit_config)
-
-    assert duplicate_sources == [{"label": "1", "tracks": []}]
-    assert move_availability == {"can_move": True}
+    assert _album_move_availability(album, explicit_config) == {"can_move": True}
+    assert _album_move_availability(album, None) is None
+    assert calls == [(album, explicit_config)]
 
 
-def test_build_album_detail_setup_payloads_omitted_config_leaves_move_availability_none_without_explicit_config(
-    monkeypatch,
-):
-    album = SimpleNamespace(key="album-1")
+def test_album_to_dict_never_probes_move_availability_and_the_detail_serializer_adds_it(explicit_config, monkeypatch):
+    """The folder probes behind move availability belong to the album details
+    and move surfaces (`album_detail_to_dict`); `album_to_dict`, used by the
+    rules, problematic-files and edit payloads, never runs them."""
+    probed = []
 
-    monkeypatch.setattr(
-        "music_app.services.library.get_album_duplicate_sources",
-        lambda target_album: [{"label": "1", "tracks": []}],
-    )
+    def fake_build_move_availability_payload(target_album, config):
+        probed.append(config)
+        return {"can_move": True}
 
-    def fail_if_called(target_album, config):
-        raise AssertionError("move availability should require explicit config")
+    monkeypatch.setattr("music_app.services.library.build_move_availability_payload", fake_build_move_availability_payload)
+    path = "/library/Artist/Album/01.mp3"
+    (album,) = build_albums_from_file_cache({path: {"path": path, "title": "One", "album": "Album", "album_artist": "Artist", "artist": "Artist"}})
 
-    monkeypatch.setattr(
-        "music_app.services.library.build_move_availability_payload",
-        fail_if_called,
-    )
+    plain = album_to_dict(album)
+    detail = album_detail_to_dict(album, config=explicit_config)
 
-    duplicate_sources, move_availability = _build_album_detail_setup_payloads(album)
-
-    assert duplicate_sources == [{"label": "1", "tracks": []}]
-    assert move_availability is None
+    assert probed == [explicit_config]
+    assert plain.get("move_availability") is None
+    assert detail["move_availability"] == {"can_move": True}
+    assert {key: value for key, value in detail.items() if key != "move_availability"} == {
+        key: value for key, value in plain.items() if key != "move_availability"
+    }
 
 
 def test_get_album_duplicate_sources_emits_sorted_folder_payloads(monkeypatch):

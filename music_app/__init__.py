@@ -279,6 +279,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.cover_reference_boundary import CoverReferenceBoundary
     from music_app.services.cover_references import CoverReferenceStore
     from music_app.services.private_route_boundary import install_private_route_boundary
+    from music_app.services.http_compression import JsonGzipMiddleware
     from music_app.services.compressed_static_files import (
         CompressedStaticFiles,
         static_gzip_cache,
@@ -386,6 +387,8 @@ def _configure_asgi_app(app, runtime) -> None:
             response.headers["Expires"] = "0"
         return response
 
+    # Outermost, so it compresses the final JSON body after every other middleware.
+    app.add_middleware(JsonGzipMiddleware)
     app.mount("/static", CompressedStaticFiles(directory=str(static_dir)), name="static")
     static_gzip_cache.warm_in_background(static_dir)
     app.include_router(auth_asgi_router)

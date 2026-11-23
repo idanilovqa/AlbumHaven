@@ -264,6 +264,14 @@ test('foundation validator enforces the approved portable and Windows gate contr
       replaceInJob(workflow, 'test_python', /runs-on:\s*windows-2025/, 'runs-on: ubuntu-latest'),
       /Windows Python.*windows-2025/i,
     ],
+    [
+      replaceInJob(workflow, 'test_js', /run: node scripts\/ci\/validate-bounded-interactions\.cjs/, 'run: node scripts/ci/validate-bounded-interactions.cjs --list'),
+      /bounded interaction inventory/i,
+    ],
+    [
+      replaceInJob(workflow, 'test_js', /run: node scripts\/run-bounded-interactions\.cjs --node-only/, 'run: node scripts/run-bounded-interactions.cjs --node-only --changed-paths none.txt'),
+      /skip-free bounded interaction JavaScript contracts/i,
+    ],
     [workflow.replaceAll('node-version: "22"', 'node-version: "20"'), /Node(?:\.js)? 22/i],
     [workflow.replaceAll('python-version: "3.11"', 'python-version: "3.12"'), /Python 3\.11/i],
     [workflow.replaceAll('151.0.7922.138', '151.0.7922.139'), /Chrome 151\.0\.7922\.138/i],

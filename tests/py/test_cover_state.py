@@ -15,12 +15,19 @@ from music_app.services.covers import Image, image_dimensions
 
 
 def test_authoritative_track_resolution_uses_album_key_without_scanning_unrelated_tracks():
+    from music_app.services.library_album_index import publish_library_albums
+
+    published = False
+
     class UnrelatedAlbum:
         key = "other::album"
 
         @property
         def tracks(self):
-            raise AssertionError("Unrelated album tracks must not be scanned")
+            # The publisher indexes every album; a request never walks them.
+            if published:
+                raise AssertionError("Unrelated album tracks must not be scanned")
+            return [SimpleNamespace(path="N:/Music/Other/Album/01.mp3")]
 
     target = SimpleNamespace(
         key="artist::target album",
@@ -29,9 +36,12 @@ def test_authoritative_track_resolution_uses_album_key_without_scanning_unrelate
             SimpleNamespace(path="N:/Music/Artist/Target/02.mp3"),
         ],
     )
+    library_state: dict[str, object] = {}
+    publish_library_albums(library_state, [UnrelatedAlbum(), target])
+    published = True
 
     assert resolve_authoritative_album_track_paths(
-        {"albums": [UnrelatedAlbum(), target]},
+        library_state,
         {"N:/Music/Artist/Target/01.mp3"},
         album_key="artist::target album",
     ) == {
@@ -443,13 +453,12 @@ def test_apply_cover_selection_for_tracks_updates_cache_and_media_state(tmp_path
             }
         },
     }
-    scheduled_updates: list[tuple[Path, dict[str, dict[str, object]]]] = []
+    scheduled_updates: list[dict[str, dict[str, object]]] = []
 
     updated_albums, updated_problematic = apply_cover_selection_for_tracks(
         library_state=library_state,
         track_paths={str(track_path)},
-        schedule_cache_updates_save=lambda cache_path, changed_entries: scheduled_updates.append((cache_path, changed_entries)),
-        cache_path=(tmp_path / "cache.json").resolve(),
+        schedule_cache_updates_save=scheduled_updates.append,
         find_updated_albums=lambda track_paths: [{"key": "album-1", "track_paths": sorted(track_paths)}],
         find_problematic_album=lambda track_paths: {"key": "problem-1", "track_paths": sorted(track_paths)},
         cover_path=next_cover,
@@ -471,12 +480,9 @@ def test_apply_cover_selection_for_tracks_updates_cache_and_media_state(tmp_path
     assert track.cover_path == str(next_cover)
     assert track.remote_cover_album_url == "https://music.example/album/1"
     assert scheduled_updates == [
-        (
-            (tmp_path / "cache.json").resolve(),
-            {
-                str(track_path): library_state["file_cache"][str(track_path)],
-            },
-        )
+        {
+            str(track_path): library_state["file_cache"][str(track_path)],
+        },
     ]
 
 
@@ -500,3 +506,49 @@ def test_image_dimensions_reuses_cached_result_for_unchanged_file(tmp_path: Path
     assert image_dimensions(cover_path) == (32, 32)
     assert image_dimensions(cover_path) == (32, 32)
     assert open_calls == 1
+
+
+def test_cover_gallery_contract_reads_only_the_selected_album_at_production_library_size(tmp_path: Path, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(album_count: int) -> OperationCounts:
+        library_root = tmp_path / f"library-{album_count}"
+        for index in range(album_count):
+            _write_jpeg(library_root / f"Artist {index:04d}" / "Album" / "cover.jpg", (index % 255, 40, 40))
+        album_root = (library_root / "Selected" / "Album").resolve()
+        track_path = album_root / "CD1" / "01.flac"
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(b"track")
+        (album_root / "CD2").mkdir()
+        active_cover = album_root / "CD1" / "folder.jpg"
+        _write_jpeg(active_cover, (220, 40, 40))
+        _write_jpeg(album_root / "CD1" / "back.jpg", (40, 220, 40))
+        _write_jpeg(album_root / "CD1" / "scans" / "booklet.jpg", (40, 40, 220))
+        file_cache = {
+            f"{library_root}/Other {index}/track.flac": {"cover_path": None}
+            for index in range(album_count * 160)
+        }
+        file_cache[str(track_path)] = {"cover_path": str(active_cover)}
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers_module,)):
+            payload = serialize_cover_gallery_payload(
+                album_root=album_root,
+                track_paths={str(track_path)},
+                file_cache=file_cache,
+                image_extensions={".jpg"},
+                image_dimensions=image_dimensions,
+                is_squareish_cover=lambda width, height: width == height,
+            )
+        assert sorted(item["filename"] for item in payload["local_covers"]) == ["back.jpg", "booklet.jpg", "folder.jpg"]
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_gallery",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 3, "stat_calls": 12, "open_calls": 3, "media_parses": 3},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

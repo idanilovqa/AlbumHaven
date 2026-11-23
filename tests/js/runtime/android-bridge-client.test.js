@@ -292,3 +292,47 @@ test('a shell without app.copy.v1 makes the page drop any copy it kept', async (
   assert.deepEqual(adopted, [{ info: null, port: undefined }]);
   assert.equal(context.api.androidBridge.commands.has('copy.forget'), false);
 });
+
+test('bounded interaction: a shell message reaches only its own handler among 1,000 registered and pending', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  await measureScalePair({
+    id: 'js:runtime/android-bridge-client.js#connectAndroidBridge',
+    small: 3,
+    large: 1000,
+    budgets: { itemsVisited: 9, outputEmissions: 3 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+    async run(registered) {
+      const counter = createInteractionCounter();
+      let connected = false;
+      const bridge = fakeBridge(() => (connected ? null : handshakePayload));
+      const { api } = loadRuntime({ bridge });
+      await api.connectAndroidBridge();
+      connected = true;
+      // The page's event handlers, command answers and unanswered requests, each counted when reached.
+      const reached = () => counter.count('itemsVisited');
+      for (let index = 0; index < registered; index += 1) {
+        api.androidBridge.events.set(`test.event${index}`, reached);
+        api.androidBridge.commands.set(`test.command${index}`, () => { reached(); return { index }; });
+        api.androidBridge.pending.set(`request-${index}`, { resolve: reached, reject: reached, timer: null });
+      }
+      const send = message => bridge.onmessage({ data: JSON.stringify({ protocol: 1, payload: {}, ...message }) });
+      const sentBefore = bridge.sent.length;
+      const work = await counter.measure(async () => {
+        for (const index of [0, 1, registered - 1]) {
+          send({ type: 'event', name: `test.event${index}` });
+          send({ type: 'command', id: `command-${index}`, name: `test.command${index}` });
+          send({ type: 'response', id: `request-${index}`, payload: { ok: true } });
+        }
+        send({ type: 'event', name: 'test.unregistered' });
+        send({ type: 'command', id: 'command-unregistered', name: 'test.unregistered' });
+        send({ type: 'response', id: 'request-unknown', payload: { ok: true } });
+        await new Promise(resolve => setImmediate(resolve));
+        counter.count('outputEmissions', bridge.sent.length - sentBefore);
+      });
+      assert.deepEqual(bridge.sent.slice(sentBefore).map(reply => [reply.id, reply.payload.ok, reply.payload.index]),
+        [0, 1, registered - 1].map(index => [`command-${index}`, true, index]));
+      assert.equal(api.androidBridge.pending.size, registered - 3);
+      return work;
+    },
+  });
+});

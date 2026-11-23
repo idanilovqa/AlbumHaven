@@ -80,3 +80,48 @@ test('startup completion releases the usable app within two paint frames', () =>
   assert.equal(ui.root.hidden, true);
   assert.equal(ui.content.inert, false);
 });
+
+test('bounded interaction: startup progress animation frames stay constant beside 200 page regions', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('./helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('./helpers/counted-dom.js');
+  const run = async (regions) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const frames = [];
+    const fill = new CountedElement('DIV');
+    const percentLabel = new CountedElement('SPAN');
+    const bar = new CountedElement('DIV');
+    const elements = { '.progress-fill': fill, '[role="progressbar"]': bar, '[data-startup-percent]': percentLabel,
+      '[data-startup-error]': new CountedElement('DIV'), '[data-startup-retry]': new CountedElement('BUTTON') };
+    const root = new CountedElement('DIV', { dataset: { startupProgress: '50' } });
+    root.querySelector = selector => { counter.count('domQueries'); return elements[selector]; };
+    const window = {
+      addEventListener() {},
+      cancelAnimationFrame() {},
+      location: { reload() {} },
+      matchMedia: () => ({ matches: false }),
+      requestAnimationFrame(callback) { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+    };
+    const document = {
+      addEventListener() {},
+      body: { children: countedCollection([root, ...Array.from({ length: regions }, () => ({ inert: false }))], counter) },
+      querySelector: () => root,
+    };
+    vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../../music_app/static/js/startup-progress.js'), 'utf8'), { document, window });
+    frames.shift()(0);
+    const work = await counter.measure(() => {
+      for (let frame = 1; frame <= 10; frame += 1) frames.shift()(frame * 16);
+    });
+    assert.equal(root.hidden, false);
+    assert.ok(Number(bar.getAttribute('aria-valuenow')) > 25, 'the bar advances toward 50%');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:startup-progress.js#animate',
+    small: 2,
+    large: 200,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 10, domMutations: 20, animationFrames: 10 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

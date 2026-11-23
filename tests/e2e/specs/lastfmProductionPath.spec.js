@@ -432,20 +432,20 @@ test('FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submi
   });
 
   await stepLogger.step('Fail manual submission with a bottom-right error and persist the safe failure in Logs', async () => {
+    // Submit only queues the background run; its failure reaches the page through the progress poll.
     const failed = await utilityIntegrationsActions.submitPendingScrobbles();
-    expect(failed.response.status()).toBe(502);
+    expect(failed.response.status()).toBe(200);
     expect(failed.payload).toMatchObject({
-      ok: false,
+      ok: true,
       pending_before: 1,
-      attempted: 1,
-      succeeded: 0,
-      failed: 1,
+      attempted: 0,
       pending_after: 1,
       pending: 1,
+      queued: 1,
       scrobbled: baseline.scrobbled,
-      lastfm_total: 12000,
-      error: 'Some pending scrobbles could not be submitted to Last.fm.',
+      submission: { state: 'queued', error: '' },
     });
+    expect(failed.payload).not.toHaveProperty('lastfm_total');
     await utilityIntegrationsActions.waitForSubmitError(
       'Some pending scrobbles could not be submitted to Last.fm.',
     );
@@ -511,13 +511,10 @@ test('FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submi
     expect(submitted.payload).toMatchObject({
       ok: true,
       pending_before: 1,
-      attempted: 1,
-      succeeded: 1,
-      failed: 0,
-      pending_after: 0,
-      pending: 0,
-      scrobbled: baseline.scrobbled + 1,
-      lastfm_total: 12001,
+      pending: 1,
+      queued: 1,
+      scrobbled: baseline.scrobbled,
+      submission: { state: 'queued', error: '' },
     });
     await utilityIntegrationsActions.waitForLastfmSummary({
       scrobbled: baseline.scrobbled + 1,

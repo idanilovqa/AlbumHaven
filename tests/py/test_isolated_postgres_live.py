@@ -5634,6 +5634,13 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             1.0,
             observed_library_root_ids={"multi-disc-root"},
         )
+        # Startup publishes the relation projection before watcher events
+        # arrive; the event then leaves its rebuild to the background refresh.
+        from music_app.services.relation_projection_postgres import (
+            ensure_relation_projection_ready,
+        )
+
+        ensure_relation_projection_ready(config, connect=isolatedPostgres._connect)
 
         changed.write_bytes(b"disc-one-updated")
         result = TargetedLibraryReconciler(
@@ -6675,3 +6682,39 @@ def test_live_problematic_files_flags_an_app_rating_that_differs_from_the_file_t
     assert "File rating mismatch" in next(
         item for item in page["items"] if item["name"] == "Differs"
     )["problem_reasons"]
+
+
+def test_live_pool_hands_no_session_state_to_the_next_borrower(monkeypatch):
+    """0.11.45 left one borrower's autocommit, and could leave its session lock, for the next one."""
+    from time import monotonic, sleep
+
+    from music_app.services import postgres_connections
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    lock_key = 611_450_045
+    postgres_connections.close_pools()
+    try:
+        with postgres_connections.leased_connection(runtime_url) as first:
+            first.autocommit = True
+            first_backend = first.execute("select pg_backend_pid() as pid").fetchone()["pid"]
+
+        with postgres_connections.leased_connection(runtime_url) as following:
+            assert following.execute("select pg_backend_pid() as pid").fetchone()["pid"] == first_backend
+            assert following.autocommit is False
+            statement = "select pg_current_xact_id()::text as xact"
+            transaction = following.execute(statement).fetchone()["xact"]
+            assert following.execute(statement).fetchone()["xact"] == transaction, "one transaction, not autocommit"
+
+        with postgres_connections.session_connection(runtime_url) as holder:
+            holder.execute("select pg_advisory_lock(%s)", (lock_key,))
+            # Returned without unlocking, as a failed unlock does.
+
+        with isolatedPostgres._connect(setup_url) as observer:
+            released_by = monotonic() + 5
+            while not observer.execute(
+                "select pg_try_advisory_lock(%s) as acquired", (lock_key,)
+            ).fetchone()["acquired"]:
+                assert monotonic() < released_by, "the session lock outlived its lease"
+                sleep(0.05)
+    finally:
+        postgres_connections.close_pools()

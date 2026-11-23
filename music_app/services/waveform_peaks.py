@@ -11,6 +11,7 @@ import subprocess
 import sys
 from typing import Awaitable, Callable
 
+from music_app.services.child_process import ChildProcess, start_child_process
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
 
 
@@ -160,7 +161,7 @@ async def _discard_stream(stream: object | None) -> None:
         pass
 
 
-async def _terminate_and_wait(process: asyncio.subprocess.Process) -> int:
+async def _terminate_and_wait(process: ChildProcess) -> int:
     if process.returncode is None:
         with suppress(ProcessLookupError):
             process.terminate()
@@ -168,7 +169,7 @@ async def _terminate_and_wait(process: asyncio.subprocess.Process) -> int:
 
 
 async def _stop_and_drain_process(
-    process: asyncio.subprocess.Process,
+    process: ChildProcess,
     *,
     stdout: object | None,
     stderr_task: asyncio.Task[bytes],
@@ -181,7 +182,7 @@ async def _stop_and_drain_process(
 
 
 async def _finish_process_cleanup(
-    process: asyncio.subprocess.Process,
+    process: ChildProcess,
     *,
     stdout: object | None,
     stderr_task: asyncio.Task[bytes],
@@ -278,10 +279,9 @@ async def build_waveform_peaks(
     else:
         command = ["nice", "-n", "10", *command]
 
-    process = await asyncio.create_subprocess_exec(
+    process = await start_child_process(
         *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=subprocess.PIPE,
         creationflags=creationflags,
     )
     stderr_task = asyncio.create_task(_read_stream_tail(process.stderr))
@@ -431,13 +431,13 @@ class WaveformPeaksRegistry:
             if self._shutting_down:
                 raise WaveformPeaksBusyError("waveform peak job already active")
         try:
-            cache_identity = self._cache_identity(path, bins=bins)
+            cache_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
         except OSError as error:
             _LOGGER.warning("Waveform peak cache identity failed: %s", error)
             return None
         cached = await self._get_cached(cache_identity)
         try:
-            current_cache_identity = self._cache_identity(path, bins=bins)
+            current_cache_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
         except OSError as error:
             _LOGGER.warning("Waveform peak cache identity failed: %s", error)
             current_cache_identity = None
@@ -459,7 +459,7 @@ class WaveformPeaksRegistry:
         if repository is None or cache_identity is None or cancel_event.is_set():
             return peaks
         try:
-            if self._cache_identity(path, bins=bins) != cache_identity:
+            if await asyncio.to_thread(self._cache_identity, path, bins=bins) != cache_identity:
                 return peaks
             await asyncio.to_thread(
                 repository.put_for_path,  # type: ignore[attr-defined]
@@ -477,14 +477,14 @@ class WaveformPeaksRegistry:
         cache_identity: dict[str, object] | None = None
         if self._cache_repository is not None:
             try:
-                cache_identity = self._cache_identity(path, bins=bins)
+                cache_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
             except OSError as error:
                 _LOGGER.warning("Waveform peak cache identity failed: %s", error)
             if cache_identity is not None:
                 cached = await self._get_cached(cache_identity)
                 if cached is not None:
                     try:
-                        current_cache_identity = self._cache_identity(path, bins=bins)
+                        current_cache_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
                     except OSError as error:
                         _LOGGER.warning("Waveform peak cache identity failed: %s", error)
                         cache_identity = None

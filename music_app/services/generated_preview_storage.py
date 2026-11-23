@@ -162,12 +162,13 @@ def validate_custom_root(
     *,
     probe: Callable[[Path], bool] | None = None,
 ) -> Path:
+    """`library_roots` is the configured roots snapshot, already resolved."""
     candidate = Path(root)
     if not candidate.is_absolute():
         raise ValueError("Preview storage path must be absolute on the server.")
     resolved = candidate.resolve(strict=False)
     for library_root in library_roots:
-        library = Path(library_root).resolve(strict=False)
+        library = Path(library_root)
         if _is_relative_to(resolved, library) or _is_relative_to(library, resolved):
             raise ValueError("Preview storage path may not overlap a music root.")
     if not (probe or _probe_writable)(resolved):

@@ -621,6 +621,55 @@ def test_gallery_status_says_metadata_pending_while_problematic_files_keeps_the_
     assert all("problem_reason_code" not in artist for artist in payload["artists"])
 
 
+def _attention_rows(count, state="pending"):
+    return [{"local_artist_id": index, "local_artist_name": f"Artist {index}", "gallery_artist": f"Artist {index}",
+             "match_state": state, "problem_occurrence_id": None, "problem_reason_code": None, "unresolved_reason": None}
+            for index in range(count)]
+
+
+class _AttentionRows(Service):
+    def __init__(self, rows):
+        self.rows = rows
+
+    def list_artist_attention(self):
+        return self.rows
+
+
+@pytest.mark.parametrize("artist_count", [20, 14_000])
+def test_artist_status_revision_answers_an_unchanged_poll_without_per_artist_payload(artist_count):
+    service = _AttentionRows(_attention_rows(artist_count))
+    app = app_for(actor_with("library.problems.read"), service)
+    path = "/api/musicbrainz/artists/status"
+
+    status, headers, body = run_asgi_request(app, "GET", path)
+    revision = headers["etag"]
+    assert status == 200
+    assert headers["cache-control"] == "private, no-store"
+    assert len(decode_json(body)["artists"]) == artist_count
+
+    status, headers, body = run_asgi_request(app, "GET", path, headers={"If-None-Match": revision})
+    assert (status, headers["etag"], body) == (304, revision, b""), "an unchanged poll transfers no artists"
+    status, _headers, _body = run_asgi_request(app, "GET", path, headers={"If-None-Match": f'W/{revision}, "other"'})
+    assert status == 304
+
+    service.rows = [*service.rows[:-1], {**service.rows[-1], "match_state": "matched"}]
+    status, headers, body = run_asgi_request(app, "GET", path, headers={"If-None-Match": revision})
+    assert status == 200 and headers["etag"] != revision, "a changed status returns its new revision and payload"
+    assert decode_json(body)["artists"][-1]["match_state"] == "matched"
+
+
+def test_artist_status_revision_never_bypasses_owner_authorization():
+    owner_app = app_for(actor_with("library.problems.read"), _AttentionRows(_attention_rows(2)))
+    _status, headers, _body = run_asgi_request(owner_app, "GET", "/api/musicbrainz/artists/status")
+    member_app = app_for(actor_with("library.problems.read", owner=False), _AttentionRows(_attention_rows(2)))
+
+    status, _headers, _body = run_asgi_request(
+        member_app, "GET", "/api/musicbrainz/artists/status", headers={"If-None-Match": headers["etag"]},
+    )
+
+    assert status == 403
+
+
 @pytest.mark.parametrize("owner", [True, False])
 def test_owner_shell_status_and_artist_status_together_enable_gallery_warnings(owner):
     """The Gallery shows artist warnings only when /status grants the action and the artist status lists the problem."""

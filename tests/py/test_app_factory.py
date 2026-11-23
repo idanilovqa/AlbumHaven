@@ -946,7 +946,9 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     assert retry_calls == ["started"]
 
 
-def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch):
+def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
+    monkeypatch, unreachable_postgres_pool,
+):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
         lambda _runtime: None,
@@ -1198,7 +1200,7 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     from config import Config
     from music_app import create_asgi_app
     from music_app.routes import web_asgi
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
     from music_app.services.library_roots import normalize_persisted_library_root_settings
 
     class MissingSnapshotAdapter:
@@ -1241,6 +1243,8 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         "postgresql://album_haven_app@localhost/app",
     )
     monkeypatch.setattr("music_app.services.library_roots_postgres.psycopg", FakePsycopg())
+    # The placeholder database is unreachable, so prewarming would wait out the pool timeout.
+    monkeypatch.setattr(postgres_connections, "prewarm_connection_pool", lambda _database_url: None)
     monkeypatch.setattr(
         "music_app.services.library_roots.PostgresLibraryRootSettingsStore",
         FakePostgresLibraryRootSettingsStore,
@@ -1405,6 +1409,21 @@ def test_create_asgi_app_lifespan_reports_background_hydration_exception_without
     assert scan_calls == []
 
 
+def _fake_lastfm_retry_pass(lastfm_retry, monkeypatch, retry):
+    """Makes the worker see waiting listens and run ``retry`` as its pass."""
+    monkeypatch.setattr(lastfm_retry, "lastfm_api_enabled", lambda _config: True)
+    monkeypatch.setattr(lastfm_retry, "has_sendable_scrobbles", lambda _config: True)
+    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", retry)
+
+
+def _empty_lastfm_retry_pass():
+    from music_app.services.lastfm_retry import LastfmRetryPass
+
+    return LastfmRetryPass(summary={
+        "pending_before": 0, "attempted": 0, "succeeded": 0, "failed": 0, "pending_after": 0,
+    })
+
+
 def test_lastfm_retry_worker_stops_on_request(app, monkeypatch):
     from music_app.services import lastfm_retry
 
@@ -1415,16 +1434,10 @@ def test_lastfm_retry_worker_stops_on_request(app, monkeypatch):
         nonlocal attempts
         attempts += 1
         attempted.set()
-        return {
-            "pending_before": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "pending_after": 0,
-        }
+        return _empty_lastfm_retry_pass()
 
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
+    monkeypatch.setattr(lastfm_retry, "_IDLE_CHECK_SECONDS", 0.01)
+    _fake_lastfm_retry_pass(lastfm_retry, monkeypatch, fake_retry)
     app.config["TESTING"] = False
 
     try:
@@ -1448,16 +1461,10 @@ def test_lastfm_retry_worker_restarts_after_signal_only_stop(app, monkeypatch):
         nonlocal attempts
         attempts += 1
         attempted.set()
-        return {
-            "pending_before": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "pending_after": 0,
-        }
+        return _empty_lastfm_retry_pass()
 
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 1)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
+    monkeypatch.setattr(lastfm_retry, "_IDLE_CHECK_SECONDS", 1)
+    _fake_lastfm_retry_pass(lastfm_retry, monkeypatch, fake_retry)
     app.config["TESTING"] = False
 
     try:
@@ -1476,74 +1483,70 @@ def test_lastfm_retry_worker_restarts_after_signal_only_stop(app, monkeypatch):
         lastfm_retry.stop_lastfm_retry_worker(wait=True, timeout=1)
 
 
+class _OnePassEvent:
+    """Stands in for both worker events: the first wait ends the worker."""
+
+    def __init__(self) -> None:
+        self.stopped = False
+        self.waited: float | None = None
+
+    def is_set(self) -> bool:
+        return self.stopped
+
+    def set(self) -> None:
+        self.stopped = True
+
+    def clear(self) -> None:
+        pass
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waited = timeout
+        self.stopped = True
+        return True
+
+
+class _SynchronousThread:
+    def __init__(self, *, target, name: str, daemon: bool) -> None:
+        self.target = target
+        self.name = name
+        self.daemon = daemon
+
+    def is_alive(self) -> bool:
+        return False
+
+    def start(self) -> None:
+        self.target()
+
+    def join(self, timeout: float | None = None) -> None:
+        return None
+
+
 def test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, monkeypatch):
     from music_app.services import lastfm_retry
 
-    class OnePassStopEvent:
-        def __init__(self) -> None:
-            self.stopped = False
-            self.waited_interval: float | None = None
-
-        def is_set(self) -> bool:
-            return self.stopped
-
-        def set(self) -> None:
-            self.stopped = True
-
-        def wait(self, interval: float) -> bool:
-            self.waited_interval = interval
-            self.stopped = True
-            return True
-
-    class SynchronousThread:
-        def __init__(self, *, target, name: str, daemon: bool) -> None:
-            self.target = target
-            self.name = name
-            self.daemon = daemon
-            self.started = False
-
-        def is_alive(self) -> bool:
-            return False
-
-        def start(self) -> None:
-            self.started = True
-            self.target()
-
-        def join(self, timeout: float | None = None) -> None:
-            return None
-
     retry_calls: list[object] = []
     log_calls: list[dict[str, object]] = []
-    threads: list[SynchronousThread] = []
-    stop_event = OnePassStopEvent()
+    threads: list[_SynchronousThread] = []
+    event = _OnePassEvent()
 
     def fake_retry(config):
         retry_calls.append(config)
-        return {
-            "pending_before": 1,
-            "attempted": 1,
-            "succeeded": 1,
-            "failed": 0,
-            "pending_after": 0,
-        }
+        result = _empty_lastfm_retry_pass()
+        result.summary.update({"pending_before": 1, "attempted": 1, "succeeded": 1})
+        return result
 
     def fake_log_app_event(config, logger, action, **kwargs):
-        log_calls.append({
-            "config": config,
-            "logger": logger,
-            "action": action,
-            **kwargs,
-        })
+        log_calls.append({"config": config, "logger": logger, "action": action, **kwargs})
 
-    def make_thread(*, target, name: str, daemon: bool) -> SynchronousThread:
-        thread = SynchronousThread(target=target, name=name, daemon=daemon)
+    def make_thread(*, target, name: str, daemon: bool) -> _SynchronousThread:
+        thread = _SynchronousThread(target=target, name=name, daemon=daemon)
         threads.append(thread)
         return thread
 
-    monkeypatch.setattr(lastfm_retry.threading, "Event", lambda: stop_event)
+    monkeypatch.setattr(lastfm_retry.threading, "Event", lambda: event)
     monkeypatch.setattr(lastfm_retry.threading, "Thread", make_thread)
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 12.5)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
+    monkeypatch.setattr(lastfm_retry, "_IDLE_CHECK_SECONDS", 12.5)
+    _fake_lastfm_retry_pass(lastfm_retry, monkeypatch, fake_retry)
     monkeypatch.setattr(lastfm_retry, "log_app_event", fake_log_app_event)
     app.config["TESTING"] = False
     guarded_app = _FatalFlaskContextAccess(app)
@@ -1565,7 +1568,8 @@ def test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, 
             "pending_after": 0,
         }
     ]
-    assert stop_event.waited_interval == 12.5
+    # Nothing is left waiting, so the worker sleeps until woken or its idle check.
+    assert event.waited == pytest.approx(12.5, abs=1)
     assert threads[0].name == "albumhaven-lastfm-retry"
     assert threads[0].daemon is True
 
@@ -1573,51 +1577,18 @@ def test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, 
 def test_lastfm_retry_worker_exception_logging_uses_captured_config_without_app_context(app, monkeypatch):
     from music_app.services import lastfm_retry
 
-    class OnePassStopEvent:
-        def __init__(self) -> None:
-            self.stopped = False
-
-        def is_set(self) -> bool:
-            return self.stopped
-
-        def set(self) -> None:
-            self.stopped = True
-
-        def wait(self, _interval: float) -> bool:
-            self.stopped = True
-            return True
-
-    class SynchronousThread:
-        def __init__(self, *, target, name: str, daemon: bool) -> None:
-            self.target = target
-            self.name = name
-            self.daemon = daemon
-
-        def is_alive(self) -> bool:
-            return False
-
-        def start(self) -> None:
-            self.target()
-
-        def join(self, timeout: float | None = None) -> None:
-            return None
-
     log_calls: list[dict[str, object]] = []
 
     def fail_retry(_config):
         raise RuntimeError("retry exploded")
 
     def fake_log_app_event(config, logger, action, **kwargs):
-        log_calls.append({
-            "config": config,
-            "logger": logger,
-            "action": action,
-            **kwargs,
-        })
+        log_calls.append({"config": config, "logger": logger, "action": action, **kwargs})
 
-    monkeypatch.setattr(lastfm_retry.threading, "Event", OnePassStopEvent)
-    monkeypatch.setattr(lastfm_retry.threading, "Thread", SynchronousThread)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fail_retry)
+    event = _OnePassEvent()
+    monkeypatch.setattr(lastfm_retry.threading, "Event", lambda: event)
+    monkeypatch.setattr(lastfm_retry.threading, "Thread", _SynchronousThread)
+    _fake_lastfm_retry_pass(lastfm_retry, monkeypatch, fail_retry)
     monkeypatch.setattr(lastfm_retry, "log_app_event", fake_log_app_event)
     app.config["TESTING"] = False
     guarded_app = _FatalFlaskContextAccess(app)

@@ -1017,19 +1017,10 @@ def _build_album_preview_gallery_list_block(
         preview_gallery_list_block["summary"] = normalized_summary
     return preview_gallery_list_block
 
-def _build_album_detail_setup_payloads(
-    album: Album,
-    *,
-    config: object = None,
-) -> tuple[list[dict[str, object]], dict[str, object] | None]:
-    duplicate_sources = get_album_duplicate_sources(album)
-    resolved_config = config
-    move_availability = (
-        build_move_availability_payload(album, resolved_config)
-        if resolved_config is not None
-        else None
-    )
-    return duplicate_sources, move_availability
+def _album_move_availability(album: Album, config: object) -> dict[str, object] | None:
+    """Where the album could move; this probes the library folders, so only
+    `album_detail_to_dict` asks for it, and only with a config."""
+    return build_move_availability_payload(album, config) if config is not None else None
 
 
 def _build_album_base_payload(
@@ -1186,12 +1177,7 @@ def album_preview_to_dict(
     if include_album_note_seams:
         album_note_payload = build_album_note_payload(album, album_ref=getattr(album, "key", None))
         visible_album_notes_payload = build_visible_album_notes_payload(album, album_ref=getattr(album, "key", None))
-    resolved_config = config
-    move_availability = (
-        build_move_availability_payload(album, resolved_config)
-        if resolved_config is not None
-        else None
-    )
+    move_availability = _album_move_availability(album, config)
     payload_signature = _album_preview_payload_signature(
         album,
         viewer_opinion_preferences=viewer_opinion_preferences,
@@ -2123,17 +2109,24 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
     return album_list
 
 
+def album_detail_to_dict(album: Album, *, config: object, **options) -> dict[str, object]:
+    """`album_to_dict` with the album's move availability, for the album
+    details and move surfaces. It probes the library folders; every other
+    serializer uses `album_to_dict`, which never does."""
+    return album_to_dict(album, move_availability=_album_move_availability(album, config), **options)
+
+
 def album_to_dict(
     album: Album,
     *,
     public_safe: bool = False,
     client_surface_class: object = None,
-    config: object = None,
     viewer_opinion_preferences: object = None,
+    move_availability: dict[str, object] | None = None,
 ) -> dict[str, object]:
     client_surface_class = resolve_client_surface_class(client_surface_class)
     viewer_opinion_preferences = resolve_viewer_opinion_preferences(viewer_opinion_preferences)
-    duplicate_sources, move_availability = _build_album_detail_setup_payloads(album, config=config)
+    duplicate_sources = get_album_duplicate_sources(album)
     cached_signature = getattr(album, "_cached_album_payload_signature", None)
     cached_payload = getattr(album, "_cached_album_payload", None)
     album_note_payload = build_album_note_payload(album, album_ref=getattr(album, "key", None))

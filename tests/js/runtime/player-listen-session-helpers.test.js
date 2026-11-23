@@ -1144,3 +1144,44 @@ run().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): one listen sends now-playing,
+// its scrobble and its completion once each, however many progress events it receives.
+const { createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: one listen posts each session write once on listen-session endpoints', async () => {
+  const id = 'js:runtime/player-listen-session-helpers.js#postPlaybackSession';
+  const track = { path: 'signal.flac', title: 'Signal', artist: 'Artist' };
+  await measureInteractionContract(id, {
+    setup(progressEvents) {
+      const capture = createRequestCapture(async () => ({ ok: true, json: async () => ({ ok: true }) }));
+      const { context } = loadHelper({
+        fetch: capture.fetch,
+        crypto: require('node:crypto'),
+        getPlayerPlaybackSnapshot: () => ({ currentTime: 120, duration: 120 }),
+        canEmitPlaybackSessionSideEffects: () => true,
+      });
+      context.state.player.current = track;
+      return { capture, context, progressEvents };
+    },
+    act: ({ capture, context, progressEvents }) => listenOnce(capture, context, progressEvents),
+  });
+
+  async function listenOnce(capture, context, progressEvents) {
+    const before = capture.requests.length;
+    context.startListenSession(track);
+    context.beginListenSegment(0);
+    const session = context.state.player.listenSession;
+    session.duration_seconds = 120;
+    const frames = Math.ceil((70 * 48000) / progressEvents);
+    for (let event = 0; event < progressEvents; event += 1) {
+      await context.maybeSendNowPlaying(track, session);
+      context.recordMeasuredStreamingFrames({ role: 'current', track }, { frames }, 48000);
+      await context.maybeScrobbleListenSession(session);
+    }
+    await context.finalizeListenSession('ended', { session, finishedFully: true, currentTime: 120, duration: 120 });
+    const requests = capture.requests.slice(before).map(({ url, options }) => ({ url, method: options.method }));
+    assert.deepEqual(requests.map(({ url }) => url), ['/playback/session/now-playing', '/playback/session/scrobble', '/playback/session/complete']);
+    return { requests };
+  }
+});

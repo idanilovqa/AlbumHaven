@@ -14,6 +14,7 @@ from music_app.services.cover_workflow import cover_revision_for_path
 from music_app.services.library_hydration import find_cover_for_track_folder
 from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.library import build_albums_from_file_cache
+from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_roots import library_category_slug, root_definition_for_path
 from music_app.services.metadata import (
     file_metadata_schema_is_current,
@@ -648,7 +649,7 @@ def _publish_partial_scan_albums(
     separate_release_keys = set(library_state.get("separate_release_keys") or set())
     effective_file_cache = published_file_cache if isinstance(published_file_cache, dict) else updated_file_cache
     library_state["file_cache"] = dict(effective_file_cache)
-    library_state["albums"] = build_albums_from_file_cache(effective_file_cache, separate_release_keys)
+    publish_library_albums(library_state, build_albums_from_file_cache(effective_file_cache, separate_release_keys))
 
 
 def _should_publish_partial_scan(*, processed: int, total: int) -> bool:

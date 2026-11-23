@@ -569,6 +569,18 @@ def test_a_paused_holders_place_stays_where_it_paused(handing):
     assert taken["position"] == {"ms": 31_000, "durationMs": 195_000}
 
 
+def test_a_page_that_leaves_paused_in_its_hold_frees_playback_at_once_with_its_release(player):
+    # What the leaving page sends: its own release of the claim its pause kept. No press waits for it.
+    holder, other = str(uuid4()), str(uuid4())
+    token = player.start(holder, silences_itself=True)["claimToken"]
+    player.start(holder, claim_token=token, silences_itself=True, paused=True)
+
+    player.service.release(None, client_id=holder, claim_token=token)
+
+    assert player.claims() == 0
+    assert player.start(other)["playbackState"]["is_playing_here"] is True
+
+
 def test_a_paused_holder_that_died_in_its_hold_blocks_only_until_its_promise_lapses(player):
     # Its socket is gone, so no press can ask it: nothing starts before the time it promised to fall silent by.
     holder, other = str(uuid4()), str(uuid4())

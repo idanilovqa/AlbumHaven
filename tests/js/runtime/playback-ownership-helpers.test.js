@@ -208,6 +208,43 @@ test('a playing tab renews every 4 s, and a tab without a claim reads the shared
   assert.equal(renewals, 2, 'holding playback: a renewal on every 4 s tick');
 });
 
+// A page closed within the pause hold sent nothing: its paused claim held every other device off for minutes.
+test('a page leaving paused on the claim its pause keeps gives that claim back once, as it goes', () => {
+  const requests = [];
+  let beacons = 0;
+  const state = activeOwnershipState();
+  state.player.ownership.pausedAtMs = 1;
+  const { context } = loadHelper({
+    state,
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false, currentTime: 19 }),
+    navigator: { sendBeacon: () => { beacons += 1; return true; } },
+    fetch: (url, options = {}) => {
+      requests.push({ url, method: options.method, keepalive: options.keepalive, body: JSON.parse(options.body) });
+      return new Promise(() => {});
+    },
+  });
+
+  assert.equal(context.stagePlaybackOwnershipHandoff(null), false, 'nothing is handed on');
+  assert.equal(context.stagePlaybackOwnershipHandoff(null), false);
+
+  assert.deepEqual(requests, [{ url: '/playback/state', method: 'DELETE', keepalive: true,
+    body: { protocol: 1, clientId: 'departing-client', claimToken: 'departing-claim' } }]);
+  assert.equal(beacons, 0);
+  assert.equal(context.state.player.ownership.activeClaim, null, 'back from the page cache it holds no claim');
+});
+
+test('a page leaving paused without a claim of its own sends nothing', () => {
+  const requests = [];
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false, currentTime: 19 }),
+    navigator: { sendBeacon: () => { requests.push('beacon'); return true; } },
+    fetch: (url) => { requests.push(url); return new Promise(() => {}); },
+  });
+
+  assert.equal(context.stagePlaybackOwnershipHandoff(null), false);
+  assert.deepEqual(requests, []);
+});
+
 test('rejected handoff beacon removes the unusable session envelope', () => {
   const storage = new Map();
   const removed = [];

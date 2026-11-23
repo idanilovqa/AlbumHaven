@@ -11,6 +11,7 @@ import subprocess
 import sys
 from typing import Awaitable, Callable
 
+from music_app.services.child_process import ChildProcess, start_child_process
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
 
 
@@ -160,7 +161,7 @@ async def _discard_stream(stream: object | None) -> None:
         pass
 
 
-async def _terminate_and_wait(process: asyncio.subprocess.Process) -> int:
+async def _terminate_and_wait(process: ChildProcess) -> int:
     if process.returncode is None:
         with suppress(ProcessLookupError):
             process.terminate()
@@ -168,7 +169,7 @@ async def _terminate_and_wait(process: asyncio.subprocess.Process) -> int:
 
 
 async def _stop_and_drain_process(
-    process: asyncio.subprocess.Process,
+    process: ChildProcess,
     *,
     stdout: object | None,
     stderr_task: asyncio.Task[bytes],
@@ -181,7 +182,7 @@ async def _stop_and_drain_process(
 
 
 async def _finish_process_cleanup(
-    process: asyncio.subprocess.Process,
+    process: ChildProcess,
     *,
     stdout: object | None,
     stderr_task: asyncio.Task[bytes],
@@ -278,10 +279,9 @@ async def build_waveform_peaks(
     else:
         command = ["nice", "-n", "10", *command]
 
-    process = await asyncio.create_subprocess_exec(
+    process = await start_child_process(
         *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=subprocess.PIPE,
         creationflags=creationflags,
     )
     stderr_task = asyncio.create_task(_read_stream_tail(process.stderr))

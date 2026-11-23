@@ -12,7 +12,7 @@ import time
 
 from psycopg.types.json import Jsonb
 
-from music_app.services.postgres_connections import pooled_connection
+from music_app.services.postgres_connections import pooled_connection, session_connection
 
 
 _LIBRARY = """select libraries.id from library.libraries as libraries
@@ -277,8 +277,13 @@ class LocalCoverInventoryRepository:
 
     @contextmanager
     def work_slot(self):
-        # One filesystem reader across all servers sharing this database.
-        with self._connection() as connection:
+        # One filesystem reader across all servers sharing this database: a session advisory lock, so it is
+        # held on a session lease nobody borrows next (BI-15), never a pooled one. Closing the lease ends
+        # the session, which releases the lock even where the unlock below could not run.
+        if not self._database_url:
+            raise RuntimeError("Postgres is required for local cover inventory.")
+        lease = self._connect(self._database_url) if self._connect else session_connection(self._database_url)
+        with lease as connection:
             acquired = bool(connection.execute(
                 "select pg_try_advisory_lock(hashtextextended('albumhaven-local-cover-inventory', 0)) as acquired"
             ).fetchone()["acquired"])

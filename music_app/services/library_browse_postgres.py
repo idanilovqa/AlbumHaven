@@ -736,7 +736,8 @@ class PostgresLibraryBrowseRepository:
         # INLINE_DRAIN_LIMIT marked tracks (each by key). More wait for the background drain.
         with self._browse_connection_context() as connection:
             state = loose_track_store.load_state(connection)
-            if loose_track_store.is_ready(state) and not browse_only:
+            ready = loose_track_store.is_ready(state)
+            if ready and not browse_only:
                 waiting = loose_track_store.waiting_marks(
                     connection, at_most=loose_track_store.INLINE_DRAIN_LIMIT + 1,
                 )
@@ -747,10 +748,18 @@ class PostgresLibraryBrowseRepository:
                     connection.commit()
                 elif waiting:
                     self.queue_utility_projection_prewarm("loose-tracks")  # the background drain, never a build
-            relation_alias_maps = None
-            if not loose_track_store.is_ready(state):
+            # Root activity, the loader's cap and order, and the alias maps apply here, at read. While the store
+            # builds (or waits to retry), the rows stored so far are shown as partial (owner, 2026-11-22).
+            candidates = loose_track_store.read_candidates(
+                connection, limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+            ) if state else []
+            failed = bool(state) and state.get("status") == "failed"
+            not_ready_flags = (
+                {} if ready
+                else {"non_album_tracks_partial": True, **({"non_album_tracks_failed": True} if failed else {})}
+            )
+            if not ready and not candidates:
                 # Preparing, or a failed build with its own retry: never built or queued by a read.
-                failed = bool(state) and state.get("status") == "failed"
                 if _request_flag(params.get("availability")):
                     return {
                         "non_album_track_count": 0,
@@ -766,10 +775,6 @@ class PostgresLibraryBrowseRepository:
                     **({"non_album_tracks_failed": True} if failed else {}),
                     "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
                 }
-            # Root activity, the loader's cap and order, and the alias maps apply here, at read.
-            candidates = loose_track_store.read_candidates(
-                connection, limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
-            )
             relation_alias_maps = self._load_relation_alias_maps(connection=connection)
             loaded = _non_album_entries_from_inventory_candidates(
                 candidates,
@@ -819,10 +824,11 @@ class PostgresLibraryBrowseRepository:
                     canonical_to_aliases=family_context["canonical_to_aliases"],
                 )
                 if _request_flag(params.get("availability")):
-                    return {"non_album_track_count": len(tracks)}
+                    return {"non_album_track_count": len(tracks), **not_ready_flags}
                 return {
                     "non_album_tracks": tracks,
                     "non_album_tracks_deferred": False,
+                    **not_ready_flags,
                     "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
                 }
             tracks = _filter_non_album_snapshot_tracks(
@@ -837,6 +843,7 @@ class PostgresLibraryBrowseRepository:
             return {
                 "library_non_album_tracks": tracks,
                 "non_album_tracks_deferred": False,
+                **not_ready_flags,
                 "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             }
 

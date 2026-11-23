@@ -7,6 +7,9 @@ start-up preparation, a builder change or an owner rebuild builds it whole.
 A row stores the loader's raw candidate rows for the track's files, for every root and uncapped. The read
 applies what may change without a mark: root activity, the loader's cap in its exact order, and the relation
 alias maps (canonical artist names).
+
+The build commits its rows in keyed batches while its state stays "building", so a read can show the rows
+stored so far (owner, 2026-11-22: "If at least one loose track is already indexed let that page show it").
 """
 from __future__ import annotations
 
@@ -19,6 +22,8 @@ BUILDER_VERSION = 1
 # A read drains inline only while this few tracks wait; more wait for the background drain.
 INLINE_DRAIN_LIMIT = 50
 DRAIN_BATCH = 500
+# Tracks a build loads and commits at a time (keyed, like a drain).
+BUILD_BATCH = 500
 FAILED_BUILD_RETRY_SECONDS = 300
 
 _LOGGER = logging.getLogger("music_app")
@@ -117,6 +122,21 @@ def _write_rows(connection: Any, rows: Mapping[int, Mapping[str, object]]) -> No
     )
 
 
+def _delete_rows(connection: Any, track_ids: list[int]) -> None:
+    """Delete the rows of tracks that are no longer loose (or gone)."""
+    if not track_ids:
+        return
+    # Locked in track_id order, as rows are written, so two writers never wait on each other in a cycle.
+    connection.execute(
+        f"""delete from library.non_album_track_rows track_rows
+            using (select library_id, track_id from library.non_album_track_rows
+                   where library_id = {_LIBRARY_SQL} and track_id = any(%(track_ids)s::bigint[])
+                   order by track_id for update) locked
+            where track_rows.library_id = locked.library_id and track_rows.track_id = locked.track_id""",
+        {"track_ids": track_ids},
+    )
+
+
 def drain(inventory: Any, connection: Any, *, limit: int = DRAIN_BATCH) -> int:
     """Rebuild the rows of up to ``limit`` marked tracks; return how many marks were cleared."""
     # Claimed in this transaction; a concurrent drain skips them and takes others.
@@ -131,17 +151,7 @@ def drain(inventory: Any, connection: Any, *, limit: int = DRAIN_BATCH) -> int:
     track_ids = [int(mark["track_id"]) for mark in marks]
     rows = _rows_by_track(_load_candidates(inventory, connection, track_ids))
     _write_rows(connection, rows)
-    gone = sorted(set(track_ids) - set(rows))
-    if gone:
-        # Locked in track_id order, as rows are written, so two drains never wait on each other in a cycle.
-        connection.execute(
-            f"""delete from library.non_album_track_rows track_rows
-                using (select library_id, track_id from library.non_album_track_rows
-                       where library_id = {_LIBRARY_SQL} and track_id = any(%(track_ids)s::bigint[])
-                       order by track_id for update) locked
-                where track_rows.library_id = locked.library_id and track_rows.track_id = locked.track_id""",
-            {"track_ids": gone},
-        )
+    _delete_rows(connection, sorted(set(track_ids) - set(rows)))
     # Only the marks read here: a track marked again meanwhile keeps its newer mark.
     cleared = connection.execute(
         f"""delete from library.non_album_track_marks marks
@@ -199,15 +209,42 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int:
         connection.commit()
     try:
         with connect() as connection:
-            # Marks committed before this snapshot are covered by the build; later ones stay for the drain.
-            horizon = dict(connection.execute(
-                "select pg_snapshot_xmin(pg_current_snapshot())::text as horizon"
-            ).fetchone())["horizon"]
-            report("reading")
-            rows = _rows_by_track(_load_candidates(inventory, connection))
-            report("writing", tracks=len(rows))
-            connection.execute(f"delete from library.non_album_track_rows where library_id = {_LIBRARY_SQL}")
-            _write_rows(connection, rows)
+            # Marks committed before this snapshot are covered by the batches; later ones stay for the drain.
+            # Rows a batch does not touch keep their older updated_at and are removed at the end, so readers
+            # see the earlier list replaced gradually, never emptied (6.5). A retry builds over what is there.
+            started_row = dict(connection.execute(
+                f"""select pg_snapshot_xmin(pg_current_snapshot())::text as horizon,
+                      clock_timestamp() as build_started,
+                      (select count(*) from library.local_tracks where library_id = {_LIBRARY_SQL}) as tracks"""
+            ).fetchone())
+            horizon, build_started, total = (
+                started_row["horizon"], started_row["build_started"], int(started_row["tracks"]),
+            )
+            connection.commit()
+            report("reading", total=total)
+            written = done = 0
+            after = 0
+            while True:
+                # Keyed batches in track id order: each loads and commits only its own tracks.
+                track_ids = [int(dict(row)["id"]) for row in connection.execute(
+                    f"""select id from library.local_tracks
+                        where library_id = {_LIBRARY_SQL} and id > %(after)s order by id limit %(batch)s""",
+                    {"after": after, "batch": BUILD_BATCH},
+                ).fetchall()]
+                if not track_ids:
+                    break
+                rows = _rows_by_track(_load_candidates(inventory, connection, track_ids))
+                _write_rows(connection, rows)
+                _delete_rows(connection, sorted(set(track_ids) - set(rows)))
+                connection.commit()
+                after, done, written = track_ids[-1], done + len(track_ids), written + len(rows)
+                report("batch", done=done, total=max(total, done), tracks=written)
+            # Rows no batch touched belong to tracks that are gone.
+            connection.execute(
+                f"""delete from library.non_album_track_rows
+                    where library_id = {_LIBRARY_SQL} and updated_at < %(build_started)s""",
+                {"build_started": build_started},
+            )
             connection.execute(
                 f"""delete from library.non_album_track_marks
                     where library_id = {_LIBRARY_SQL} and marked_xid < %(horizon)s::xid8""",
@@ -216,8 +253,8 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int:
             _set_state(connection, "ready")
             connection.commit()
         # The phase 2 dry run reads this duration to decide whether "preparing" needs a progress line.
-        report("ready", tracks=len(rows), seconds=round(time.monotonic() - started, 1))
-        return len(rows)
+        report("ready", tracks=written, seconds=round(time.monotonic() - started, 1))
+        return written
     except Exception as error:
         _LOGGER.exception("Loose Tracks store build failed; it is retried after its own backoff.")
         with connect() as connection:

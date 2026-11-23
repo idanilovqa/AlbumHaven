@@ -270,7 +270,8 @@ function getVisibleNonAlbumTracks(options = {}) {
   // whole library's loose tracks for the active sources (and search, when the
   // search matched loose tracks). The hydrated scope key already encodes both.
   if (options.libraryWide) {
-    return hasHydratedLibraryNonAlbumTracks() && Array.isArray(view.library_non_album_tracks)
+    return (hasHydratedLibraryNonAlbumTracks() || hasPartialLibraryNonAlbumTracks())
+      && Array.isArray(view.library_non_album_tracks)
       ? view.library_non_album_tracks
       : [];
   }
@@ -399,6 +400,25 @@ function hasHydratedLibraryNonAlbumTracks() {
   const view = state.view || {};
   return Boolean(view.library_non_album_tracks_hydrated_scope)
     && view.library_non_album_tracks_hydrated_scope === getLibraryNonAlbumScopeKey(view);
+}
+
+// While the server still builds Loose Tracks, the rows it stored so far are shown (owner, 2026-11-22).
+function hasPartialLibraryNonAlbumTracks() {
+  const view = state.view || {};
+  return Boolean(view.library_non_album_tracks_partial_scope)
+    && view.library_non_album_tracks_partial_scope === getLibraryNonAlbumScopeKey(view);
+}
+
+// The note under a partial list: its wording waits for the owner's approval, so it renders nothing yet.
+function buildLooseTracksPartialNoteHtml() {
+  return '';
+}
+
+function rerenderOpenLibraryNonAlbumModal() {
+  const overlay = getNonAlbumModalElements().overlay;
+  if (overlay && !overlay.hidden && state.ui?.nonAlbumLibraryWide) {
+    openNonAlbumModal({ libraryWide: true, syncNavigation: false });
+  }
 }
 
 function hasNonAlbumSearchMatches(options = {}) {
@@ -563,6 +583,15 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
       request.deferred = true;
       return tracks;
     }
+    if (payload?.non_album_tracks_partial) {
+      // Shown now; the same bounded back-off keeps asking until more rows or the ready list replace them.
+      state.view.library_non_album_tracks = tracks;
+      state.view.library_non_album_tracks_partial_scope = scopeKey;
+      request.deferred = true;
+      if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+      rerenderOpenLibraryNonAlbumModal();
+      return tracks;
+    }
     if (searching && !searchMatched) {
       state.view.library_non_album_search_probe_scope = scopeKey;
       if (!resolveLibrary) {
@@ -580,8 +609,10 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    delete state.view.library_non_album_tracks_partial_scope;
     settleDeferredNonAlbumRetry('library');
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+    rerenderOpenLibraryNonAlbumModal();
     return tracks;
   })().finally(() => {
     if (libraryNonAlbumHydrationRequest !== request) return;
@@ -931,8 +962,9 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   state.ui.nonAlbumLibraryWide = libraryWide;
+  const partial = libraryWide && hasPartialLibraryNonAlbumTracks();
   const hydrationPending = libraryWide
-    ? !hasHydratedLibraryNonAlbumTracks()
+    ? !hasHydratedLibraryNonAlbumTracks() && !partial
     : Boolean(state.view?.non_album_tracks_deferred);
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
   const scope = !libraryWide && state.view.selected_artist ? ` · ${state.view.selected_artist} and family` : '';
@@ -961,7 +993,7 @@ function openNonAlbumModal(options = {}) {
   els.table.innerHTML = hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
-      ? buildNonAlbumTrackSectionsMarkup(looseTracks)
+      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial ? buildLooseTracksPartialNoteHtml() : ''}`
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
@@ -986,10 +1018,13 @@ function openNonAlbumModal(options = {}) {
       attachSharedPlayer();
     });
   });
-  if (hydrationPending) {
+  // A partial list reopened after leaving (which cancelled its retry) asks once more, then backs off again.
+  if (hydrationPending || (partial && !deferredNonAlbumRetries.has('library'))) {
     hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
-        if (!els.overlay.hidden) openNonAlbumModal({ ...options, syncNavigation: false });
+        // Library-wide answers repaint through rerenderOpenLibraryNonAlbumModal; a still-preparing answer
+        // waits for its armed retry instead of asking again at once.
+        if (!els.overlay.hidden && !libraryWide) openNonAlbumModal({ ...options, syncNavigation: false });
       })
       .catch((error) => {
         if (!els.overlay.hidden) {

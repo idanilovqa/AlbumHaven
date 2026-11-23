@@ -8134,6 +8134,73 @@ test('a guessed-rate start asked of a socket that hears nothing opens the song o
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
+// Hosted FTC-PLAYBACK-OFFLINE-001: back online, a seek past the received audio waited on a socket
+// that fell silent while another song's rate was still asked. The new socket asked that rate again,
+// but the seek's open never went on it, and the head waited at its place for ever.
+test('a seek whose silent socket is replaced while another song\'s rate is still asked opens at its place on the new socket, once', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    holdSampleRateProbes: true,
+    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000]]),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  void harness.context.requestStreamingSampleRate(makeTrack('02.mp3'));
+  await harness.settle();
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.mp3').path, 'the next song asks its rate');
+
+  harness.setNow(1_000);
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  assert.ok(harness.engine.pendingSeek, 'past the received audio, the seek asks the server');
+  harness.setNow(1_800);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 200 });
+  await settleTwice(harness);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
+  assert.equal(harness.sockets.length, 2);
+  assert.deepEqual(
+    harness.sockets[1].sent.filter(({ type }) => type === 'open').map(({ path, startFrame }) => [path, startFrame]),
+    [[makeTrack('01.mp3').path, 2_880_000]],
+    'one open, at the seek\'s place, on the new socket',
+  );
+  assert.equal(harness.sockets[1].probes.at(-1)?.path, makeTrack('02.mp3').path, 'the rate is asked again too');
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+test('a start whose silent socket is replaced while another song\'s rate is still asked opens on the new socket, once', async () => {
+  const harness = encodedHarness({
+    holdSampleRateProbes: true,
+    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000], [makeTrack('02.mp3').path, 48_000]]),
+  });
+  await startEncoded(harness, makeTrack('01.mp3'));
+  await harness.api.pause();
+  await harness.settle();
+  void harness.context.requestStreamingSampleRate(makeTrack('03.mp3'));
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  const first = harness.sockets[0].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(first?.path, makeTrack('02.mp3').path, 'the press opens its song');
+  checkLivenessUntil(harness, 1_500, 6_500);
+  await settleTwice(harness);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
+  const opens = harness.sockets[1].sent.filter(({ type }) => type === 'open');
+  assert.deepEqual(opens.map(({ path }) => path), [makeTrack('02.mp3').path], 'one open of the pressed song on the new socket');
+  assert.notEqual(opens[0].streamId, first.streamId, 'a fresh stream, never one named on the old socket');
+  assert.equal(harness.sockets[1].probes.at(-1)?.path, makeTrack('03.mp3').path, 'the rate is asked again too');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);

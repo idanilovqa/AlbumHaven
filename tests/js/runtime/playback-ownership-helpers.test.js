@@ -2410,6 +2410,45 @@ test('bounded interaction: ownership broadcasts from other tabs repaint the play
   });
 });
 
+// A seek, a start's first frame or a gapless move publishes the claim's place at once; a burst of them sends
+// one request at its start and one when it settles, however long it is.
+test('bounded interaction: a burst of seeks publishes the claim\'s place at most twice', async () => {
+  const run = async (seeks) => {
+    const counter = createInteractionCounter();
+    const publishTimers = new Map();
+    let nextTimer = 100;
+    const holder = loadCountedOwnership(counter, {
+      fetch: countedOwnershipFetch(counter),
+      setTimeout: (callback, delay) => {
+        if (delay !== 200) return 1;
+        nextTimer += 1;
+        publishTimers.set(nextTimer, callback);
+        return nextTimer;
+      },
+      clearTimeout: (timer) => { publishTimers.delete(timer); },
+    });
+    assert.equal(await holder.context.claimPlaybackOwnership(localTrack), true);
+    const work = await counter.measure(async () => {
+      for (let seek = 0; seek < seeks; seek += 1) {
+        holder.context.publishPlaybackPositionSoon();
+        await flushOwnershipTick();
+      }
+      for (const settle of [...publishTimers.values()]) await settle();
+      await flushOwnershipTick();
+    });
+    assert.equal(holder.context.isActivePlaybackOwner(), true);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/playback-ownership-helpers.js#publishPlaybackPositionSoon',
+    small: 6,
+    large: 2160,
+    run,
+    budgets: { requests: 2, renderCommits: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
 test('bounded interaction: playing lease renewals keep the claim without repainting the player', async () => {
   const run = async (leases) => {
     const counter = createInteractionCounter();

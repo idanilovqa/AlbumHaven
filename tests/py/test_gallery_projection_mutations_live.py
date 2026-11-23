@@ -785,11 +785,13 @@ def test_targeted_inventory_preserves_shared_artist_identity(watcher_repair_inve
 
 
 def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery_inventory):
-    """CI run 44445861031 (main): 5,332 rows estimated as 1 made artist bounds a 1.6 M-buffer nested loop.
+    """A performance bound on #65's own anchored and previous-page path, which reads the membership tables
+    (7a7dd5933), after a republish whose statistics predate it.
 
-    On #65 anchored and previous pages read the membership tables (7a7dd5933). 6.5: the bounds query's
-    target (an artist by name, or the entry at an ordinal) must be evaluated once whatever the statistics say;
-    an inlined target can rerun its offset scan for every artist row (~1.4k x 5.3k)."""
+    Main's failure (CI run 44445861031: 5,332 rows estimated as 1 made its occurrence self-join a 1.6 M-buffer
+    nested loop) has no counterpart here: #65's bounds target is a one-row LIMIT 1 subquery on the outer side.
+    Measured on #65 with stale statistics at 5.3k entries, every bounds plan read 152-437 buffers with and
+    without the materialized target; this test keeps that bound."""
     from music_app.services.utils import artist_collation_key
 
     fixture = gallery_inventory

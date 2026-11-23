@@ -489,12 +489,16 @@ async function releasePlaybackOwnership() {
   const operation = (async () => {
     await previousOperation;
     if (version !== ownership.requestVersion) return false;
+    // A token whose give-back went unanswered, and that the press before this one offered with no
+    // answer either, may still be held there: it is given back as well.
+    const held = claim || ownership.unansweredRelease;
     ownership.activeClaim = null;
+    ownership.unansweredRelease = null;
     if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
     clearBlockedPlaybackState();
-    const unanswered = await deletePlaybackClaim(claim).then(() => false, error => Boolean(error?.unanswered));
+    const unanswered = await deletePlaybackClaim(held).then(() => false, error => Boolean(error?.unanswered));
     // Its lease may still run there, as when a pause goes offline: the next play offers its token.
-    if (unanswered && claim && !ownership.activeClaim) ownership.unansweredRelease = { ...claim, releaseUnanswered: true };
+    if (unanswered && held && !ownership.activeClaim) ownership.unansweredRelease = { ...held, releaseUnanswered: true };
     announcePlaybackOwnership();
     return Boolean(claim);
   })();

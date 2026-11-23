@@ -37,7 +37,10 @@ async function mountWaveformPlayer(page) {
         waveform: { renderToken: 0, compactPeaks: null },
       },
     };
-    window.getStreamingPlaybackSnapshot = () => ({ generation: 7, duration: 200, currentTime: 0 });
+    // As in the app, the engine's snapshot carries the playing generation.
+    window.getStreamingPlaybackSnapshot = () => ({
+      generation: window.state.player.streaming.generation, duration: 200, currentTime: 0,
+    });
   }, { current: trackPath });
   for (const file of ['player-waveform-peaks.js', 'player-and-waveform.js']) {
     await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });

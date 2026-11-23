@@ -806,60 +806,70 @@ def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery
         "artist_display": payload["artist_name"], "album_year": 2000,
         "album_sort": payload["album_title"].casefold(), "payload": payload,
     } for payload in payloads]
+    tables = ("gallery_membership_entries", "gallery_membership_artists")
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         # Statistics are taken while the scope is empty and never refreshed after the republish.
-        for table in ("gallery_membership_entries", "gallery_membership_artists"):
+        for table in tables:
             connection.execute(f"delete from library.{table} where library_id = %s and scope_key = %s",
                                (fixture.context["library_id"], scope_key))
             connection.execute(f"alter table library.{table} set (autovacuum_enabled = false)")
             connection.execute(f"analyze library.{table}")
-    state = {key: fixture.view_state.get(key) for key in ("gallery_scope", "visible_library_categories")}
-    with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        assert connection.execute("""
-            select library.patch_gallery_membership(%s, %s, %s, %s, %s, %s, %s, null, %s) as published
-        """, (fixture.context["library_id"], scope_key, fixture.context["generation"], fixture.context["generation"],
-              gallery.BUILDER_VERSION, revision, Jsonb(state), Jsonb(rows))).fetchone()["published"]
+    try:
+        state = {key: fixture.view_state.get(key) for key in ("gallery_scope", "visible_library_categories")}
+        with isolatedPostgres._connect(fixture.runtime_url) as connection:
+            assert connection.execute("""
+                select library.patch_gallery_membership(%s, %s, %s, %s, %s, %s, %s, null, %s) as published
+            """, (fixture.context["library_id"], scope_key, fixture.context["generation"],
+                  fixture.context["generation"], gallery.BUILDER_VERSION, revision, Jsonb(state),
+                  Jsonb(rows))).fetchone()["published"]
 
-    class Recording:
-        """Records each bounds query the page runs, to explain it afterwards."""
+        class Recording:
+            """Records each bounds query the page runs, to explain it afterwards."""
 
-        def __init__(self, connection):
-            self.connection, self.bounds = connection, []
+            def __init__(self, connection):
+                self.connection, self.bounds = connection, []
 
-        def execute(self, query, params=None):
-            if "join library.gallery_membership_artists artist" in str(query):
-                self.bounds.append((str(query), dict(params or {})))
-            return self.connection.execute(query, params)
+            def execute(self, query, params=None):
+                if "join library.gallery_membership_artists artist" in str(query):
+                    self.bounds.append((str(query), dict(params or {})))
+                return self.connection.execute(query, params)
 
-        def __getattr__(self, name):
-            return getattr(self.connection, name)
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
 
-    with isolatedPostgres._connect(fixture.runtime_url) as raw:
-        estimate = raw.execute("""
-            explain (format json) select 1 from library.gallery_membership_entries
-            where library_id = %s and scope_key = %s
-        """, (fixture.context["library_id"], scope_key)).fetchone()["QUERY PLAN"][0]["Plan"]
-        assert estimate["Plan Rows"] < 100, "statistics must still predate the republished membership"
-        connection = Recording(raw)
+        with isolatedPostgres._connect(fixture.runtime_url) as raw:
+            # Both sides of the bounds join still look empty to the planner: the artists table is the outer
+            # side whose underestimate lets an inlined target rerun per artist row.
+            for table in tables:
+                estimate = raw.execute(f"""
+                    explain (format json) select 1 from library.{table}
+                    where library_id = %s and scope_key = %s
+                """, (fixture.context["library_id"], scope_key)).fetchone()["QUERY PLAN"][0]["Plan"]
+                assert estimate["Plan Rows"] < 100, f"statistics for {table} must still predate the republish"
+            connection = Recording(raw)
 
-        started = monotonic()
-        page, _sidebar, count, metadata = gallery.load_gallery_projection_page(
-            connection, fixture.view_state, {"gallery_page_size": "60", "gallery_anchor_artist": "Artist 0666"})
-        anchored_ms = (monotonic() - started) * 1000
-        assert metadata.get("previous_cursor"), "the anchored page has a previous page"
-        started = monotonic()
-        previous, _sidebar, _count, _metadata = gallery.load_gallery_projection_page(
-            connection, fixture.view_state,
-            {"gallery_page_size": "60", "gallery_cursor": metadata["previous_cursor"],
-             "gallery_page_direction": "previous"})
-        previous_ms = (monotonic() - started) * 1000
+            started = monotonic()
+            page, _sidebar, count, metadata = gallery.load_gallery_projection_page(
+                connection, fixture.view_state, {"gallery_page_size": "60", "gallery_anchor_artist": "Artist 0666"})
+            anchored_ms = (monotonic() - started) * 1000
+            assert metadata.get("previous_cursor"), "the anchored page has a previous page"
+            started = monotonic()
+            previous, _sidebar, _count, _metadata = gallery.load_gallery_projection_page(
+                connection, fixture.view_state,
+                {"gallery_page_size": "60", "gallery_cursor": metadata["previous_cursor"],
+                 "gallery_page_direction": "previous"})
+            previous_ms = (monotonic() - started) * 1000
 
-        assert {"artist_name", "ordinal"} <= {key for _query, params in connection.bounds
-                                              for key, value in params.items() if value is not None}, (
-            "both bounds forms ran: by artist name and by ordinal"
-        )
-        explained = [raw.execute("explain (analyze, buffers, format json) " + query, params)
-                     .fetchone()["QUERY PLAN"][0] for query, params in connection.bounds]
+            assert {"artist_name", "ordinal"} <= {key for _query, params in connection.bounds
+                                                  for key, value in params.items() if value is not None}, (
+                "both bounds forms ran: by artist name and by ordinal"
+            )
+            explained = [raw.execute("explain (analyze, buffers, format json) " + query, params)
+                         .fetchone()["QUERY PLAN"][0] for query, params in connection.bounds]
+    finally:
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            for table in tables:
+                connection.execute(f"alter table library.{table} reset (autovacuum_enabled)")
 
     assert count == len(rows)
     assert metadata["revision"] == revision

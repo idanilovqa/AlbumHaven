@@ -284,10 +284,8 @@ def _read_membership_page(connection, context, view_state, params, header, *, st
                 where library_id = %(library_id)s and scope_key = %(scope_key)s
                 order by artist_sort, artist_id collate "C", album_year, album_sort, album_key collate "C"
                 offset %(ordinal)s limit 1"""
-        # Materialized: the target runs once even when stale statistics make the planner expect one row
-        # and rescan an inlined target (its ordinal offset scan) for every artist row (6.5).
         row = _first(connection.execute(f"""
-            with target as materialized ({target})
+            with target as ({target})
             select coalesce(sum(artist.occurrence_count) filter (
                 where (artist.artist_sort, artist.artist_id collate "C") <
                       (target.artist_sort, target.artist_id collate "C")), 0) as first_ordinal,

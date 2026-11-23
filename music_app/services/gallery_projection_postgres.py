@@ -560,25 +560,21 @@ def queue_gallery_scope_first_build(config, *, connect=None, view_state, generat
     if is_common_gallery_scope(view_state):
         return None
     database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
-    scope_key = gallery_projection_scope_key(view_state)
     with _PENDING_LOCK:
-        if (_FAILED_FIRST_BUILDS.get((database_url, scope_key)) == generation
-                or (database_url, ("refresh", scope_key)) in _PENDING):
-            return None  # failed at this generation, or already building (no trailing rebuild behind it)
-    future = schedule_gallery_projection_refresh(
+        if _FAILED_FIRST_BUILDS.get((database_url, gallery_projection_scope_key(view_state))) == generation:
+            return None
+    # Single-flight without a trailing rebuild: _queue decides under its own lock.
+    return schedule_gallery_projection_refresh(
         config, connect=connect, view_state=view_state, incremental_membership=incremental_membership,
+        first_build_generation=generation,
     )
-    if future is not None:
-        def remember_failure(completed):
-            if completed.exception() is not None:
-                with _PENDING_LOCK:
-                    _FAILED_FIRST_BUILDS[(database_url, scope_key)] = generation
-
-        future.add_done_callback(remember_failure)
-    return future
 
 
-def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None, incremental_membership=False):
+def schedule_gallery_projection_refresh(
+    config, *, connect=None, view_state=None, incremental_membership=False, first_build_generation=None,
+):
+    """``first_build_generation``: a request's first build of a custom scope (queue_gallery_scope_first_build)."""
+    first_build = first_build_generation is not None
     key = "refresh"
     options = {"connect": connect}
     if view_state is not None:
@@ -587,7 +583,23 @@ def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None
         if not is_common_gallery_scope(scope):
             key = ("refresh", scope_key)
             options["view_state"] = scope
+
     def refresh():
+        if not first_build:
+            return build()
+        failure_key = (str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""), scope_key)
+        try:
+            result = build()
+        except Exception:
+            # Recorded before _queue releases the single-flight slot, so no request slips in between.
+            with _PENDING_LOCK:
+                _FAILED_FIRST_BUILDS[failure_key] = first_build_generation
+            raise
+        with _PENDING_LOCK:
+            _FAILED_FIRST_BUILDS.pop(failure_key, None)
+        return result
+
+    def build():
         from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
 
         result = ensure_pending_relation_projection_ready(config, connect=connect) if incremental_membership else {}
@@ -595,6 +607,10 @@ def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None
             if not result.get("initialized"):
                 raise RuntimeError("Incremental gallery membership requires startup initialization.")
             if result.get("gallery_rebuild_required"):
+                if first_build:
+                    # A whole-library rebuild belongs to the owners; it moves the generation, and the custom
+                    # scope is built by a later request. Nothing failed here.
+                    return {"built": 0, "deferred": "gallery_rebuild_required"}
                 # The relations are published; membership is rebuilt from them in full.
                 return ensure_gallery_projection_ready(config, connect=connect)
             if "view_state" in options:
@@ -613,7 +629,7 @@ def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None
             return result
         return ensure_gallery_projection_ready(config, **options)
 
-    return _queue(config, key, refresh, trailing=True, allow_shared=incremental_membership)
+    return _queue(config, key, refresh, trailing=not first_build, allow_shared=incremental_membership)
 
 
 def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None, view_state=None):

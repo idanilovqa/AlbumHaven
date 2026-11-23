@@ -7,7 +7,9 @@ from __future__ import annotations
 import pytest
 
 from tests.e2e.support import isolatedPostgres
-from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (live fixture)
+from tests.py.test_isolated_postgres_live import (  # noqa: F401 (live fixture)
+    _finish_live_reconciliation, watcher_repair_inventory,
+)
 from tests.py.test_problematic_albums import (
     _as_served, _evaluated_problematic_items, _indexed_problematic_items, _ready_problematic_index, _watcher_pass,
 )
@@ -84,6 +86,7 @@ def test_live_a_group_whose_last_loose_file_joins_an_album_loses_its_item_and_ke
     # which the scan keeps loose.
     tagged = {**fixture.strays["B"], "artist": "Owner", "album_artist": "Owner", "album": "Strays B Album"}
     _watcher_pass(fixture, active=[tagged])
+    _finish_live_reconciliation(fixture.config)  # the new album's relations publish, as production queues them
 
     after = _loose_items(fixture)
     assert len(after) == len(before) - 1, "The group with no loose file left keeps no item."
@@ -275,10 +278,13 @@ def _event_root_deleted(fixture):
 
 def _event_stale_and_back(fixture):
     path = fixture.strays["A"]["path"]
-    _rows(fixture, "update library.local_track_files set scan_cache_stale = true where private_path = %s", (path,))
+    stale = """update library.local_track_files
+               set metadata = jsonb_set(metadata, '{scan_cache,stale}', to_jsonb(%s::boolean))
+               where private_path = %s"""
+    _rows(fixture, stale, (True, path))  # scan_cache_stale is generated from metadata.scan_cache.stale
     assert _marked_groups(fixture) <= _named("Strays A")
     _assert_read_is_a_full_rebuild(fixture)
-    _rows(fixture, "update library.local_track_files set scan_cache_stale = false where private_path = %s", (path,))
+    _rows(fixture, stale, (False, path))
     return {"Strays A"}
 
 
@@ -316,6 +322,7 @@ def test_live_each_event_marks_only_its_groups_and_a_read_equals_a_full_rebuild(
     affected = _named(*event(fixture))
 
     assert _marked_groups(fixture) <= affected, f"Unaffected groups marked: {_marked_groups(fixture) - affected}."
+    _finish_live_reconciliation(fixture.config)  # what production publishes after the event's writes
     _assert_read_is_a_full_rebuild(fixture)
     assert _marked_groups(fixture) == set()
 
@@ -453,6 +460,7 @@ def _seed_loose_files(fixture, prefix, count):
                   select track_key from library.local_tracks where id = source.track_id) || '::{prefix}::' || n
                 where source.id = %(file)s""",
             {"count": count, "file": source["id"]})
+    _finish_live_reconciliation(fixture.config)  # what production publishes after such a write
 
 
 def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(loose_library):

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.48 - 2026-11-22
+
+- Scrolling the gallery while its next page loads no longer leaves that scroll unfinished: the page added after the scroll settles now counts as rendered for it.
+- Test and CI only: three end-to-end and live database tests no longer race the app's own background work, and the required check reads the Python shards' results from every attempt of a run.
+
 ## 0.11.47 - 2026-11-22
 
 - Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.

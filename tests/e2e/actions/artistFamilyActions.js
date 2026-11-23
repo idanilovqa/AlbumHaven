@@ -75,6 +75,55 @@ export class ArtistFamilyActions {
     };
   }
 
+  // Records every state the panel renders from the next press until finishPanelStateObservation(). A
+  // single read can land after a fast load has already replaced the loading state; the observer sees
+  // each rendered state. States before the press (hover, scrolling the row into view) are not recorded.
+  async startPanelStateObservation() {
+    await this.finishPanelStateObservation();
+    this.panelStateObservation = await this.artistFamily.page.evaluateHandle((selectors) => {
+      const states = [];
+      let pressed = false;
+      document.addEventListener('pointerdown', () => { pressed = true; }, { capture: true, once: true });
+      const read = () => {
+        if (!pressed) return;
+        const box = document.querySelector(selectors.boxSelector);
+        const rect = box?.getBoundingClientRect();
+        const state = {
+          visible: Boolean(box && rect.width > 0 && rect.height > 0
+            && getComputedStyle(box).visibility !== 'hidden'),
+          chipTexts: Array.from(document.querySelectorAll(selectors.chipLabelSelector))
+            .map((label) => String(label.textContent || '').trim())
+            .filter(Boolean),
+        };
+        if (JSON.stringify(states.at(-1)) !== JSON.stringify(state)) states.push(state);
+      };
+      const observer = new MutationObserver(read);
+      observer.observe(document.body, { attributes: true, characterData: true, childList: true, subtree: true });
+      return { states, read, observer };
+    }, {
+      boxSelector: this.artistFamily.boxSelector,
+      chipLabelSelector: `${this.artistFamily.chipSelector} ${this.artistFamily.chipLabelSelector}`,
+    });
+  }
+
+  async recordPanelState() {
+    // parity-check: allow-read-only-measurement-evaluate -- record the panel's current state without changing it
+    await this.panelStateObservation.evaluate((observation) => observation.read());
+  }
+
+  async finishPanelStateObservation() {
+    if (!this.panelStateObservation) return [];
+    // parity-check: allow-read-only-measurement-evaluate -- end the read-only MutationObserver capture
+    const states = await this.panelStateObservation.evaluate((observation) => {
+      observation.observer.disconnect();
+      observation.read();
+      return observation.states;
+    });
+    await this.panelStateObservation.dispose();
+    this.panelStateObservation = null;
+    return states;
+  }
+
   async waitForHidden(options = {}) {
     await this.artistFamily.box.waitFor({
       state: 'hidden',

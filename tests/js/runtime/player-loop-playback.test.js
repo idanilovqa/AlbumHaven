@@ -358,8 +358,9 @@ test('while a switch waits for its audio, the time and seek bar show the pressed
 
 // Mockup playback-elsewhere-status v003: "Playing in another tab" sits over the
 // dimmed player, and Play stays pressable above the dimming: it takes playback over here.
-// An installed phone without the takeover capability fails closed, as main does (blocker, 2026-11-22).
-test('where playback cannot be taken over, a player locked by another device has no Play here', () => {
+// Without takeover Play stays locked, and the overlay still says where it plays: only Play here
+// depends on takeover.
+test('where playback cannot be taken over, the overlay shows and Play stays locked', () => {
   const player = new FakeElement();
   const elsewhere = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: new FakeElement() });
@@ -375,13 +376,12 @@ test('where playback cannot be taken over, a player locked by another device has
 
   context.updatePlayerUi();
 
-  assert.equal(elsewhere.hidden, true);
-  assert.equal(player.classList.contains('is-playing-elsewhere'), false);
+  assert.equal(elsewhere.hidden, false);
+  assert.equal(player.classList.contains('is-playing-elsewhere'), true);
   assert.equal(play.disabled, true);
   assert.equal(play.getAttribute('aria-label'), 'Playback locked in another tab');
   assert.equal(play.title, '');
-  assert.equal(time.hidden, false);
-  assert.equal(time.textContent, 'Playing in another tab');
+  assert.equal(time.hidden, true, 'the small text never stands in for the overlay');
 });
 
 test('playback on another device shows the elsewhere overlay over the player and keeps Play pressable', () => {

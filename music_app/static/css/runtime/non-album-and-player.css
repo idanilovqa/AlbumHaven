@@ -935,7 +935,7 @@ pointer-events: none;
 }
 /* Playback on another device (mockup playback-elsewhere-status v003): the idle label's text over
    the whole player, the dimming deepest behind it and spreading to every side. Only Play stays
-   above it, pressable: it takes playback over here. */
+   above it: pressable where it takes playback over here, disabled where it cannot. */
 .player-elsewhere-overlay {
 position: absolute;
 inset: 0;

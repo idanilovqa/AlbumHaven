@@ -46603,13 +46603,14 @@ function resolvePlayerUiStatus(playback) {
   // A song just pressed shows until it plays or fails: a refresh while it starts never repaints the
   // song it replaces, so the title never blinks back to it.
   const displayTrack = mirroredTrack || state.player.selectedTrack || state.player.current;
+  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable;
   return {
     lockedByAnotherTab,
     playbackUnavailable,
-    // The overlay dims the other device's song under its status; Play stays pressable above it. Where
-    // playback cannot be taken over there is no overlay and Play is locked.
-    playingElsewhere: lockedByAnotherTab && !playbackUnavailable
-      && (typeof canTakePlaybackOverHere !== 'function' || canTakePlaybackOverHere()),
+    // The overlay dims the other device's song under its status, whether or not it can be taken over.
+    playingElsewhere,
+    // Only where it can be taken over is Play pressable above the overlay.
+    canPlayHere: playingElsewhere && (typeof canTakePlaybackOverHere !== 'function' || canTakePlaybackOverHere()),
     blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
     displayTrack,
     hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
@@ -46649,7 +46650,7 @@ function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
   const status = resolvePlayerUiStatus(playback);
-  const { lockedByAnotherTab, playbackUnavailable, playingElsewhere, blockedLabel, displayTrack, hasTrack } = status;
+  const { lockedByAnotherTab, playbackUnavailable, playingElsewhere, canPlayHere, blockedLabel, displayTrack, hasTrack } = status;
   els.player?.classList?.toggle('is-playing-elsewhere', playingElsewhere);
   if (els.elsewhere) els.elsewhere.hidden = !playingElsewhere;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
@@ -46666,11 +46667,11 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', playingElsewhere ? 'Play here'
+    els.play.setAttribute('aria-label', canPlayHere ? 'Play here'
       : lockedByAnotherTab ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
       : (playback.paused ? 'Play' : 'Pause'));
-    els.play.title = playingElsewhere ? 'Play in this tab instead' : '';
-    els.play.disabled = (lockedByAnotherTab && !playingElsewhere) || !hasTrack;
+    els.play.title = canPlayHere ? 'Play in this tab instead' : '';
+    els.play.disabled = (lockedByAnotherTab && !canPlayHere) || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);

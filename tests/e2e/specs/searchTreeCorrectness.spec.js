@@ -882,17 +882,25 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
   });
 
   await stepLogger.step('Hide the Neal-family panel immediately when an unrelated artist starts loading', async () => {
-    await navigationPanelActions.selectSidebarArtistByName(UNRELATED_ARTIST);
-    expect(await artistFamilyActions.readPanelState()).toEqual({
-      visible: false,
-      chipTexts: [],
-    });
+    await navigationPanelActions.openArtistTree();
+    await artistFamilyActions.startPanelStateObservation();
+    await navigationPanelActions.clickVisibleSidebarArtistByName(UNRELATED_ARTIST);
+    await artistFamilyActions.recordPanelState();
+    // The unrelated artist may finish loading before this read, so its own chip may already be there.
+    const panelState = await artistFamilyActions.readPanelState();
+    expect(panelState.visible).toBe(false);
+    expect(panelState.chipTexts.every(text => text === UNRELATED_ARTIST)).toBe(true);
   });
 
   await stepLogger.step('Settle on the unrelated artist without restoring the stale family panel', async () => {
     await navigationPanelActions.waitForSidebarSelection(UNRELATED_ARTIST);
     await galleryActions.waitForOnlyArtistHeadings([UNRELATED_ARTIST]);
     await artistFamilyActions.waitForHidden();
+    // From the click to here, no rendered state showed the panel or a chip of the Neal family.
+    const states = await artistFamilyActions.finishPanelStateObservation();
+    expect(states.length).toBeGreaterThan(0);
+    expect(states.filter(state => state.visible || state.chipTexts.some(text => text !== UNRELATED_ARTIST)))
+      .toEqual([]);
     expect(await artistFamilyActions.readPanelState()).toEqual({
       visible: false,
       chipTexts: [UNRELATED_ARTIST],

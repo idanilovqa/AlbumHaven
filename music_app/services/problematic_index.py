@@ -192,12 +192,12 @@ _LINKED_ALBUMS_SQL = """
 
 _UPSERT_SQL = """
     insert into library.problematic_index_items
-      (library_id, item_key, album_id, sort_name, sort_artist, sort_year, sort_key,
+      (library_id, item_key, album_id, root_id, sort_name, sort_artist, sort_year, sort_key,
        search_text, duplicate_identities, item)
-    values (%(library_id)s, %(item_key)s, %(album_id)s, %(sort_name)s, %(sort_artist)s,
+    values (%(library_id)s, %(item_key)s, %(album_id)s, %(root_id)s, %(sort_name)s, %(sort_artist)s,
             %(sort_year)s, %(sort_key)s, %(search_text)s, %(duplicate_identities)s, %(item)s::jsonb)
     on conflict (library_id, item_key) do update set
-      album_id = excluded.album_id, sort_name = excluded.sort_name,
+      album_id = excluded.album_id, root_id = excluded.root_id, sort_name = excluded.sort_name,
       sort_artist = excluded.sort_artist, sort_year = excluded.sort_year,
       sort_key = excluded.sort_key, search_text = excluded.search_text,
       duplicate_identities = excluded.duplicate_identities, item = excluded.item
@@ -243,9 +243,11 @@ def _duplicate_result_rows(repository: Any, connection: Any, library_id: int,
 
 def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: list[int],
                 include_loose: bool, *, duplicates: bool = True,
+                loose_folders: list[tuple[int, str]] | None = None,
                 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[int]]:
     """Fresh items and duplicate results of ``album_ids`` (plus duplicate peers), and the
-    loose-track items when asked.
+    loose-track items of ``loose_folders`` (root id, folder), or of every loose group with
+    ``include_loose``. Loose groups are read under every root: a read applies root activity.
 
     Returns the item rows, the duplicate result rows (none without ``duplicates``) and
     every album id whose old rows they replace. A pair a save formed or broke is in scope
@@ -287,7 +289,16 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
         if _value(row, "track_id") is not None
     ]
     if include_loose:
-        rows = [*rows, *repository._load_problematic_loose_file_rows(connection=connection, limit=None)]
+        loose_folders = [(int(_value(row, "root_id")), str(_value(row, "folder"))) for row in connection.execute(
+            "select root_id, folder from library.problematic_loose_groups where library_id = %s", (library_id,),
+        ).fetchall()]
+    loose_rows = repository._load_problematic_loose_file_rows(
+        connection=connection, limit=None, membership_folders=set(loose_folders), all_roots=True,
+    ) if loose_folders else []
+    rows = [*rows, *loose_rows]
+    root_by_loose_key = {
+        str(_value(row, "album_key")): _value(row, "file_library_root_id") for row in loose_rows
+    }
     missing_rows = (
         repository._load_missing_album_rows(connection=connection, album_keys=album_keys)
         if album_keys else []
@@ -330,6 +341,7 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
             "library_id": library_id,
             "item_key": key,
             "album_id": album_id,
+            "root_id": root_by_loose_key.get(key) if album_id is None else None,
             "sort_name": sort_name,
             "sort_artist": sort_artist,
             "sort_year": sort_year,
@@ -343,12 +355,16 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
 
 def _write(connection: Any, library_id: int, index_rows: list[dict[str, object]],
            duplicate_rows: list[dict[str, object]], replaced_album_ids: list[int], *,
-           replace_loose: bool) -> None:
+           replace_loose: bool, loose_keys: list[str] = ()) -> None:
+    """``loose_keys`` names the loose groups re-evaluated: their items are replaced by key, and a group
+    with no loose file left loses its item."""
     connection.execute(
         """delete from library.problematic_index_items
            where library_id = %(library_id)s
-             and (album_id = any(%(album_ids)s::bigint[]) or (%(loose)s and album_id is null))""",
-        {"library_id": library_id, "album_ids": replaced_album_ids, "loose": replace_loose},
+             and (album_id = any(%(album_ids)s::bigint[]) or (%(loose)s and album_id is null)
+                  or item_key = any(%(loose_keys)s::text[]))""",
+        {"library_id": library_id, "album_ids": replaced_album_ids, "loose": replace_loose,
+         "loose_keys": list(loose_keys)},
     )
     if index_rows:
         connection.cursor().executemany(_UPSERT_SQL, index_rows)

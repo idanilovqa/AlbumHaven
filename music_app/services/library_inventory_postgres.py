@@ -83,11 +83,13 @@ class PostgresLibraryInventoryRepository:
         membership_group_ids: Iterable[object] | None = None,
         all_roots: bool = False,
         unlimited: bool = False,
+        membership_folders: Iterable[tuple[int, str]] | None = None,
     ) -> list[dict[str, object]]:
         """Load bounded raw inventory candidates without shaping browse payloads.
 
         ``all_roots`` and ``unlimited`` are for the Loose Tracks store only: it keeps every root's candidates,
-        uncapped, and applies root activity and the cap when it is read (case 64)."""
+        uncapped, and applies root activity and the cap when it is read (case 64). ``membership_folders``
+        names loose groups by (root id, physical parent folder), the columns of 0294's index (case 55)."""
         normalized_track_ids = sorted(
             {
                 int(track_id)
@@ -121,8 +123,11 @@ class PostgresLibraryInventoryRepository:
             for group_id in (membership_group_ids or ())
             if str(group_id or "")
         })
+        folders = sorted({(int(root_id), str(folder)) for root_id, folder in (membership_folders or ()) if folder})
         bounded_limit = max(1, min(int(limit), MAX_NON_ALBUM_CANDIDATE_LIMIT))
         params = {
+            "membership_folder_roots": [root_id for root_id, _folder in folders],
+            "membership_folder_parents": [folder for _root_id, folder in folders],
             "track_ids": normalized_track_ids,
             "track_id_count": len(normalized_track_ids),
             "private_paths": normalized_private_paths,
@@ -145,6 +150,7 @@ class PostgresLibraryInventoryRepository:
             filter_query=bool(normalized_query_terms),
             all_roots=all_roots,
             unlimited=unlimited,
+            membership_folders=bool(folders),
         )
         if connection is None:
             with self._connect_to_database() as owned_connection:
@@ -387,6 +393,7 @@ def _non_album_candidates_sql(
     filter_query: bool = False,
     all_roots: bool = False,
     unlimited: bool = False,
+    membership_folders: bool = False,
 ) -> str:
     stored_file_album = "coalesce(library.local_track_files.scan_file_album, '')"
     stored_non_album_predicate = _non_album_value_predicate_sql(stored_file_album)
@@ -462,7 +469,12 @@ def _non_album_candidates_sql(
             and {_membership_problem_group_identity_sql("roots.id", "files.private_path")}
               = any(%(membership_group_ids)s::text[])
     """ if membership_groups else ""
-    limit_clause = "" if membership_groups or unlimited else "limit %(limit)s"
+    # Case 55: a drain names its groups by 0294's index columns, never the path expression.
+    membership_folder_scope = """
+            and (files.library_root_id, files.scan_physical_parent) in (
+              select * from unnest(%(membership_folder_roots)s::bigint[], %(membership_folder_parents)s::text[]))
+    """ if membership_folders else ""
+    limit_clause = "" if membership_groups or membership_folders or unlimited else "limit %(limit)s"
     other_eligibility_branches = "" if membership_problems_only else f"""
           union
           select library.local_track_files.id as track_file_id
@@ -529,6 +541,7 @@ def _non_album_candidates_sql(
             and nullif(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
             {membership_unassigned_scope}
             {membership_group_scope}
+            {membership_folder_scope}
           {other_eligibility_branches}
         ),
         active_track_files as (

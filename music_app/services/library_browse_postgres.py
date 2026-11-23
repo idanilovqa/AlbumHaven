@@ -4525,9 +4525,14 @@ class PostgresLibraryBrowseRepository:
         album_key: str | None = None,
         album_keys: set[str] | None = None,
         after: tuple[str, str, str, str] | None = None,
+        membership_folders: set[tuple[int, str]] | None = None,
+        all_roots: bool = False,
     ) -> list[object]:
+        """Loose files with a membership problem, by group. ``membership_folders`` (root id, folder) and
+        ``all_roots`` are the Problematic Files drain's (case 55): it stores every root's groups and the read
+        applies root activity."""
         selected_group_ids = sorted(membership_group_ids or ())
-        if private_paths is None and not selected_group_ids:
+        if private_paths is None and not selected_group_ids and not membership_folders:
             headers = self._inventory_repository.load_membership_problem_group_headers(
                 # The SQL prefix excludes earlier owners; Python applies the
                 # hash-derived public key boundary exactly before slicing.
@@ -4582,6 +4587,8 @@ class PostgresLibraryBrowseRepository:
             unassigned_only=True,
             membership_problems_only=True,
             membership_group_ids=selected_group_ids,
+            membership_folders=membership_folders,
+            all_roots=all_roots,
         )
         rows = []
         for raw in candidates:

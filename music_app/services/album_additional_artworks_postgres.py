@@ -7,13 +7,6 @@ from typing import Any
 
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
 
-try:  # pragma: no cover - exercised only when the optional runtime driver exists.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
-    psycopg = None
-    dict_row = None
-
 
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 ADDITIONAL_ARTWORK_SLOTS = frozenset({1})
@@ -28,8 +21,8 @@ class AlbumAdditionalArtworkRepository:
         connect: Callable[[str], Any] | None = None,
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
-        self._use_shared_connection_pool = connect is None
-        self._connect = connect or _connect
+        # Requests lease the shared pool; ``connect`` is a test's own connection.
+        self._connect = connect
 
     def list_for_album(self, *, album_id: int) -> list[dict[str, object]]:
         with self._connect_to_database() as connection:
@@ -73,7 +66,7 @@ class AlbumAdditionalArtworkRepository:
     def _connect_to_database(self) -> Any:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for additional artworks.")
-        if self._use_shared_connection_pool:
+        if self._connect is None:
             return _pooled_connection(self._database_url, workload="default")
         return self._connect(self._database_url)
 
@@ -87,12 +80,6 @@ def artwork_payload(row: Mapping[str, object]) -> dict[str, object]:
     else:
         payload["remote_cover_url"] = str(row.get("remote_url") or "")
     return payload
-
-
-def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for additional artworks.")
-    return psycopg.connect(database_url, row_factory=dict_row)
 
 
 _LIST_SQL = """

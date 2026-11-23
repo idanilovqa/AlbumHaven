@@ -77,6 +77,49 @@ async def home_data(request):
     assert hazard["via"] == ["ensure_views", "build_relation_views"]
 
 
+def test_a_callback_inside_unpacked_options_is_followed_through_every_hand_off(tmp_path: Path):
+    _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
+    _write(tmp_path, "music_app/services/saves.py", """
+def handle_save(*, reservation=None, **options):
+    return _handle_reserved(reservation=reservation, **options)
+
+def _handle_reserved(*, reservation=None, prevalidate=None, albums=()):
+    if prevalidate is not None:
+        prevalidate(albums=albums)
+""")
+    _write(tmp_path, "music_app/routes/write.py", """
+from fastapi.concurrency import run_in_threadpool
+from music_app.services.relations import build_relation_views
+from music_app.services.saves import handle_save
+
+async def _run_reserved(handler_options, reservation):
+    reserved_options = {**handler_options, "reservation": reservation}
+
+    def run_handler():
+        return handle_save(**reserved_options)
+
+    return await run_in_threadpool(run_handler)
+
+@router.post("/save")
+async def save(request):
+    handler_options = {
+        "albums": request.albums,
+        "prevalidate": (lambda **options: build_relation_views(**options)) if request.structural else None,
+    }
+    return await _run_reserved(handler_options, None)
+
+@router.post("/save-without-check")
+async def save_without_check(request):
+    return await _run_reserved({"albums": request.albums}, None)
+""")
+    analysis = discovery.analyze_python_repository(
+        tmp_path,
+        library_scale_operations=["py:music_app/services/relations.py#build_relation_views"],
+    )
+    rejected = {item["entrypoint"] for item in analysis["hazards"] if item["reject"] and item["rule"] == "BI-04"}
+    assert rejected == {"py:music_app/routes/write.py#save:route:POST /save"}
+
+
 def test_background_closures_are_not_followed_until_called(tmp_path: Path):
     _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
     _write(tmp_path, "music_app/routes/read.py", """

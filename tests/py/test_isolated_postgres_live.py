@@ -466,6 +466,12 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
 
 
 _CASE64_DRAFT_ENV = "ALBUM_HAVEN_CASE64_DRAFT_SQL"
+# Rows a Loose Tracks read returns beside its stored list: state, mark count, the marks it drains, their
+# candidate rows, alias maps and roots (about 155 measured at both sizes in helper 1's run at fdecfdb59).
+_LOOSE_READ_FIXED_ROWS = 200
+# The read at 20,000 stored rows took about 2.0 s on the hosted runner (expand, sort, 5,000 track entries);
+# 3.0 s leaves 50% headroom for runner variance while still catching a read that scans the store twice.
+_LOOSE_READ_SECONDS_AT_SCALE = 3.0
 
 
 def _apply_case64_draft(fixture):
@@ -575,11 +581,14 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
     import sys
     from time import monotonic
 
+    from music_app.services.library_inventory_postgres import MAX_NON_ALBUM_CANDIDATE_LIMIT
+
     fixture = watcher_repair_inventory
     _apply_case64_draft(fixture)
     waiting = loose_track_store.INLINE_DRAIN_LIMIT
     synthetic_base = 9_000_000_000
     started = monotonic()
+    drains = []
 
     def phase(name, stored):
         # Written past pytest's capture, so a run that times out still shows where its time went.
@@ -610,6 +619,9 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
         phase("seed done", stored)
         before = _store_rows(fixture)
         assert len(before) == stored + waiting
+        # Warm the read once (no marks wait yet), so both sizes are measured warm: the relation alias maps
+        # are cached per process, and a cold first size ran one more statement (10 vs 9).
+        _loose_payload(browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect))
         changed = {
             entry["path"]: {**entry, "title": f"Changed {index}", "mtime": entry["mtime"] + 1}
             for index, entry in enumerate(loose_entries[:waiting])
@@ -630,13 +642,41 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
             return rows
 
         monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted_load)
-        phase("drain start", stored)
-        _loose_payload(repository)  # the read request drains inline
-        phase("drain done", stored)
+        drain = loose_track_store.drain
+
+        def measured_drain(*args, **kwargs):
+            # The drain on its own: what it adds to the read's shared counters.
+            statements, rows = counts.sql_statements, counts.returned_rows
+            cleared = drain(*args, **kwargs)
+            drains.append((stored, counts.sql_statements - statements, counts.returned_rows - rows))
+            return cleared
+
+        read_candidates = loose_track_store.read_candidates
+        stored_read = []
+        # Patched for the measured read only, so the next size's preparation drains unmeasured.
+        with monkeypatch.context() as measured:
+            measured.setattr(loose_track_store, "drain", measured_drain)
+            measured.setattr(loose_track_store, "read_candidates", lambda *args, **kwargs: stored_read.append(
+                read_candidates(*args, **kwargs)) or stored_read[-1])
+            phase("drain start", stored)
+            read_started = monotonic()
+            _loose_payload(repository)  # the read request drains inline
+            read_seconds = monotonic() - read_started
+            phase("drain done", stored)
+        assert len(stored_read) == 1
+        assert len(stored_read[0]) == min(stored + waiting, MAX_NON_ALBUM_CANDIDATE_LIMIT), (
+            "the read returns the stored list up to the cap, so the cap is reached at scale"
+        )
+        assert read_seconds < _LOOSE_READ_SECONDS_AT_SCALE, f"the read took {read_seconds:.2f} s at {stored} stored"
         after = _store_rows(fixture)
         assert _marks(fixture) == 0, "the read drained every waiting mark"
         assert len(loads) == 1 and len(loads[0]) == waiting, "one candidate load, keyed by the marked tracks"
         assert sum(1 for track_id in after if before.get(track_id) != after[track_id]) == waiting
+        # The read returns the whole stored list up to the loader's cap (paging is a later item), plus a fixed
+        # number of rows for its state, marks, drain and alias maps.
+        assert counts.returned_rows <= MAX_NON_ALBUM_CANDIDATE_LIMIT + _LOOSE_READ_FIXED_ROWS, (
+            f"the read returned {counts.returned_rows} rows at {stored} stored"
+        )
         return counts
 
     interaction = "py:routes/api_read_asgi_routes.py#library_loose_tracks"
@@ -652,6 +692,12 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
     # The registry's growth metric is candidate_rows; a statement per stored track must fail here too.
     assert small.sql_statements == large.sql_statements, (
         f"statements grew from {small.sql_statements} at 20 stored rows to {large.sql_statements} at 20,000"
+    )
+    # The drain alone is keyed by its marks: the same statements and returned rows at both store sizes.
+    assert len(drains) == 2, f"one inline drain per size: {drains}"
+    (_small, small_statements, small_rows), (_large, large_statements, large_rows) = drains
+    assert (small_statements, small_rows) == (large_statements, large_rows), (
+        f"the drain grew with the store: {drains}"
     )
 
 

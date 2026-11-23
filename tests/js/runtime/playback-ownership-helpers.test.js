@@ -1365,6 +1365,39 @@ test('a token whose unanswered give-back did arrive is refused, and play acquire
   assert.deepEqual(stopStreamingPlaybackCalls, []);
 });
 
+// Back online, Play offered the kept token on a connection that never answered, and Pause followed
+// before it gave up: the pause had no claim of its own, so the token the server may still hold was
+// never given back. A pause gives back that token once the press before it has settled.
+test('a pause while Play offers a token whose give-back went unanswered gives that token back', async () => {
+  let offline = false;
+  const sent = [];
+  const offered = deferred();
+  const harness = leaseHarness({ renew: (answer, _signal, options) => {
+    sent.push(`${options.method} ${JSON.parse(options.body).claimToken}`);
+    if (offline) return Promise.reject(new TypeError('Failed to fetch'));
+    if (options.method === 'DELETE') return jsonResponse({ protocol: 1 });
+    return offered.promise;
+  } });
+  const { context } = harness;
+  const ownership = context.state.player.ownership;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  offline = true;
+  await context.releasePlaybackOwnership('paused', localTrack);
+  offline = false;
+
+  const play = context.claimPlaybackOwnership(localTrack);
+  await new Promise((resolve) => setImmediate(resolve));
+  context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: false, currentTime: 0 });
+  const pause = context.releasePlaybackOwnership('paused', localTrack);
+  offered.resolve(Promise.reject(new TypeError('Failed to fetch')));
+  assert.equal(await play, false);
+  await pause;
+
+  assert.deepEqual(sent, ['DELETE claim-1', 'PUT claim-1', 'DELETE claim-1']);
+  assert.equal(ownership.activeClaim, null);
+  assert.equal(ownership.unansweredRelease, null, 'its give-back was answered');
+});
+
 test('a paused lapsed claim ends when the heartbeat sees another client playing', async () => {
   const stateReads = [];
   const harness = leaseHarness({});

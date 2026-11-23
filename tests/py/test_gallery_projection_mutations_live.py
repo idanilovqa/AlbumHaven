@@ -33,13 +33,18 @@ def gallery_inventory(watcher_repair_inventory):
         """, (first["path"],))
     from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
     ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
-    result = gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
-    assert result["built"] > 0
+    # Setup needs the published state, not who built it: since c72277e26 the seed's startup baseline already
+    # publishes both root scopes, so this call may build nothing.
+    gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     fixture.first = first
     fixture.second = second
     fixture.view_state = browse._root_sidebar_view_state({})
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
         fixture.context = gallery.gallery_projection_context(connection)
+        for params in ({}, {"gallery_scope": "new_arrivals"}):
+            assert gallery._ready_header(connection, fixture.context, browse._root_sidebar_view_state(params)), (
+                f"root scope {params or 'all'} has a ready header"
+            )
         assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is not None
     return fixture
 

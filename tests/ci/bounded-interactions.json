@@ -10052,7 +10052,8 @@
       },
       "budgets": {
         "filesystem_enumerations": 5,
-        "stat_calls": 6
+        "stat_calls": 4,
+        "sql_statements": 0
       },
       "growth": {
         "metric": "filesystem_enumerations",

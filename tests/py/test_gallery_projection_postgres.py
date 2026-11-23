@@ -720,7 +720,9 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
                 query_params={"gallery_page_size": str(size)},
                 library_state={"scan_in_progress": True},
             )
-        assert refresh.call_count == (1 if deleted_occurrence == "stale" else 0)
+        # 6.5 option 1: a stale common-scope page waits for its owners (startup, scans, the watcher, tag
+        # saves); a request never schedules the refresh.
+        assert refresh.call_count == 0
         assert calls[-2:] == [("rollback", None), ("close", None)]
         return
     payload = repository.build_root_startup_preview_payload(

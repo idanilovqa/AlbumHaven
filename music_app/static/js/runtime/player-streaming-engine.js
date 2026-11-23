@@ -930,19 +930,20 @@ function checkStreamingSocketLiveness({ readLate = false } = {}) {
   // A switch is no seek past the received audio: the old song plays on while its open is answered.
   const seekWaits = Boolean(seekRole && seek.kind !== 'replacement'
     && !seekRole.local && !seekRole.metadataAccepted);
-  if (silentMs <= (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) return;
-  // While that read is awaited, the backlog of audio messages after a late one decides nothing either.
-  if (seekWaits && (readLate || engine.socketReadTimer)) return recheckStreamingSocketOnceRead(socket);
+  if (silentMs <= (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) {
+    engine.socketReadDeadline = null;
+    return;
+  }
+  // A late page gets a moment to read its socket; until then neither the late message nor the backlog
+  // of audio messages after it decides. The next check after that moment, an audio position or the
+  // half-second interval, decides as on any page.
+  if (seekWaits && readLate && engine.socketReadDeadline?.socket !== socket) {
+    engine.socketReadDeadline = { socket, atMs: performance.now() + STREAMING_LATE_PAGE_READ_MS };
+  }
+  const deadline = engine.socketReadDeadline;
+  if (seekWaits && deadline?.socket === socket && performance.now() < deadline.atMs) return;
+  engine.socketReadDeadline = null;
   replaceSilentStreamingSocket(socket);
-}
-
-function recheckStreamingSocketOnceRead(socket) {
-  const engine = streamingEngineState();
-  if (engine.socketReadTimer) return;
-  engine.socketReadTimer = window.setTimeout(() => {
-    engine.socketReadTimer = 0;
-    if (engine.socket === socket) checkStreamingSocketLiveness();
-  }, STREAMING_LATE_PAGE_READ_MS);
 }
 
 // How far the page is behind the audio thread whose message it reads.

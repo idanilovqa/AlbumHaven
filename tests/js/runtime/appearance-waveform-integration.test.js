@@ -59,6 +59,8 @@ function loadRuntime(initial, seekbarMode) {
     CustomEvent: window.CustomEvent,
     getComputedStyle: () => root.style,
     getStreamingPlaybackSnapshot: () => ({ currentTime: 0, duration: 0, paused: true }),
+    // The shown song is player-loop-playback.js's; nothing plays here.
+    resolveShownPlayerTrack: () => null,
     renderUtilityModalContent() {},
   });
   for (const file of ['appearance-backgrounds-bridge.js', 'player-and-waveform.js', 'loop-range-controls.js']) {

@@ -5175,6 +5175,22 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-loop-playback.js#renderGlobalPlayerCover",
+      "action": "error/load listeners installed by renderGlobalPlayerCover",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-loop-playback.js#renderGlobalPlayerCover:event:error",
+        "js:music_app/static/js/runtime/player-loop-playback.js#renderGlobalPlayerCover:event:load"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-loop-playback.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-loop-playback.js#saveCurrentLoop",
       "action": "fetch requests installed by saveCurrentLoop",
       "entrypoints": [
@@ -5201,22 +5217,6 @@
       "action": "requestAnimationFrame timers installed by schedule",
       "entrypoints": [
         "js:music_app/static/js/runtime/player-loop-playback.js#schedule:timer:requestAnimationFrame"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/player-loop-playback.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:runtime/player-loop-playback.js#setCurrentPlayerTrack",
-      "action": "error/load listeners installed by setCurrentPlayerTrack",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/player-loop-playback.js#setCurrentPlayerTrack:event:error",
-        "js:music_app/static/js/runtime/player-loop-playback.js#setCurrentPlayerTrack:event:load"
       ],
       "owners": [
         "music_app/static/js/runtime/player-loop-playback.js"
@@ -5370,21 +5370,6 @@
       "action": "setTimeout timers installed by primeStreamingCachedTrack",
       "entrypoints": [
         "js:music_app/static/js/runtime/player-streaming-engine.js#primeStreamingCachedTrack:timer:setTimeout"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/player-streaming-engine.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:runtime/player-streaming-engine.js#recheckStreamingSocketOnceRead",
-      "action": "setTimeout timers installed by recheckStreamingSocketOnceRead",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#recheckStreamingSocketOnceRead:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/player-streaming-engine.js"

@@ -1665,7 +1665,9 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
   assert.deepEqual(scheduled, [adjacent], 'the promoted current prepares its adjacent queued-next once');
   assert.deepEqual(listenTracks, [replacement]);
   assert.deepEqual(nowPlayingTracks, [replacement]);
-  assert.deepEqual(uiCurrentPaths, [replacement.path, replacement.path]);
+  // Made current, its first frame (the player changes to it as it sounds), and the press's end; the
+  // repeated first frames redraw nothing.
+  assert.deepEqual(uiCurrentPaths, [replacement.path, replacement.path, replacement.path]);
   assert.equal(audio.playCalls, 0, 'reconciliation never returns to native audio playback');
 });
 

@@ -536,8 +536,6 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
   if (pendingPlayerStart?.path === selectedTrackPath) pendingPlayerStart = null;
-  // It sounds: the player's title, time, cover and waveform change to it together, now.
-  if (typeof getPlayerElements === 'function') updatePlayerUi();
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -547,6 +545,8 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  // It sounds: the player's title, time, cover and waveform change to it together, now.
+  if (typeof getPlayerElements === 'function') updatePlayerUi();
   const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()

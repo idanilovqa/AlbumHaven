@@ -254,7 +254,11 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
     every album id whose old rows they replace. A pair a save formed or broke is in scope
     through either identity or through the stored references, so both albums' results are
     rewritten together.
+
+    Every read takes ``connection``: without it a reader would lease the pool or open a connection per batch.
     """
+    if connection is None:
+        raise TypeError("An index batch reads on its caller's connection; none was given.")
     browse = _browse()
     if duplicates and album_ids:
         album_ids = sorted({int(_value(row, "album_id")) for row in connection.execute(

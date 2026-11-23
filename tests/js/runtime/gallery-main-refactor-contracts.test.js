@@ -2674,6 +2674,8 @@ function loadPendingSourceTotalsPage({ pending = ['hoard|new_arrivals'], albums 
     return nextTimer;
   };
   context.clearBrowserTimeout = id => { live.delete(id); };
+  const chromeUpdates = [];
+  context.updateGalleryMainChrome = () => chromeUpdates.push(plain(context.state.gallery.sourceTotalsByScope));
   context.state.gallery.mainState = context.createGalleryMainState();
   const fireAll = async () => {
     for (let fired = 0; live.size && fired < 100; fired += 1) {
@@ -2682,7 +2684,9 @@ function loadPendingSourceTotalsPage({ pending = ['hoard|new_arrivals'], albums 
       await callback();
     }
   };
-  return { context, renders, requests, live, fireAll, publish: () => { published = true; }, maxLive: () => maxLive };
+  return {
+    context, renders, requests, live, chromeUpdates, fireAll, publish: () => { published = true; }, maxLive: () => maxLive,
+  };
 }
 
 test('a source switch to a scope whose totals are still pending happens at once and shows the real totals when they arrive', async () => {
@@ -2705,6 +2709,8 @@ test('a source switch to a scope whose totals are still pending happens at once 
   await page.fireAll();
 
   assert.deepEqual(plain(context.state.gallery.sourceTotalsByScope['hoard|new_arrivals']), { artistCount: 7, albumCount: 11 });
+  assert.deepEqual(page.chromeUpdates.at(-1)['hoard|new_arrivals'], { artistCount: 7, albumCount: 11 },
+    'the gallery bar is redrawn with the real totals');
   assert.deepEqual(plain(context.resolveGallerySummaryTotals(
     context.state.view, { artistCount: 80, albumCount: 200 }, context.state.gallery.mainState, null,
     context.state.gallery.sourceTotalsByScope,

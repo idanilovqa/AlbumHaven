@@ -477,10 +477,15 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
         if len(marks) + len(groups) > inline_limit:
             queue_maintenance(repository)
             return True
-        with repository._connect_to_database() as connection:
-            if marks:
+        # Each drain on a lease of its own. A lease is not autocommit, and a drain's last statement runs after
+        # its transaction block, so a second drain on the same lease ran inside that implicit transaction and
+        # its SET TRANSACTION ISOLATION LEVEL failed (ActiveSqlTransaction): the list stayed "indexing" after
+        # any change that marks albums and loose groups together. Leaving a lease commits it.
+        if marks:
+            with repository._connect_to_database() as connection:
                 _drain(repository, connection, library_id, marks, try_lock=True)
-            if groups:
+        if groups:
+            with repository._connect_to_database() as connection:
                 _drain_groups(repository, connection, library_id, groups, try_lock=True)
         return True
     except Exception as error:

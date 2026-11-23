@@ -1,6 +1,7 @@
 """Transaction, scope and privilege proof on the existing disposable PG fixture."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
 
@@ -940,3 +941,55 @@ def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery
     for plan in explained:
         buffers = plan["Plan"]["Shared Hit Blocks"] + plan["Plan"]["Shared Read Blocks"]
         assert buffers < 1000, f"a bounds query read {buffers} buffers: {json.dumps(plan)[:400]}"
+
+
+def test_a_cover_look_up_save_journals_one_album_and_its_owner_drains_it_alone(gallery_inventory, monkeypatch):
+    """6.5 (option a), on real Postgres: a Cover Look Up save journals exactly its album; the owner it queues
+    after the commit drains that album alone (affected set 1), with no browse request and no whole-scope
+    gallery rebuild, and leaves no dirty row behind."""
+    from concurrent.futures import Future
+
+    from music_app.services import cache
+
+    fixture = gallery_inventory
+    held = []
+
+    class Executor:
+        """Holds the queued owner, so the save is proven to return before it runs."""
+
+        def submit(self, action):
+            future = Future()
+            held.append((action, future))
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("a cover save rebuilt the whole gallery scope"))
+    track = fixture.first["path"]
+    cover = Path(track).parent / "chosen.jpg"
+    cover.parent.mkdir(parents=True, exist_ok=True)
+    cover.write_bytes(b"\xff\xd8\xff\xe0cover")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select count(*) as rows from library.local_relation_dirty_albums").fetchone()["rows"] == 0
+        album_id = connection.execute("""
+            select tracks.album_id from library.local_tracks tracks
+            join library.local_track_files files on files.track_id=tracks.id where files.private_path=%s
+        """, (track,)).fetchone()["album_id"]
+
+    result = cache.persist_cover_selection_for_tracks_for_config(
+        fixture.config, {track}, cover, cover_revision="chosen-revision", cover_selection_origin="user",
+    )
+
+    assert result["album_rows_updated"] == 1
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        dirty = [row["album_id"] for row in connection.execute(
+            "select album_id from library.local_relation_dirty_albums order by album_id").fetchall()]
+    assert dirty == [album_id], f"the save journals its album alone, and the save returned before the drain: {dirty}"
+    assert len(held) == 1, "one owner queued after the commit"
+    action, future = held[0]
+    outcome = action()
+    future.set_result(outcome)
+    assert outcome.get("updated") and not outcome.get("gallery_rebuild_required"), outcome
+    assert list(outcome["processed_relation_album_ids"]) == [album_id], "the drain is keyed to that album (affected set 1)"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select count(*) as rows from library.local_relation_dirty_albums").fetchone()["rows"] == 0

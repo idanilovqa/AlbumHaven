@@ -5672,3 +5672,41 @@ test('a Re-scan answered at once keeps its messages; a failed one says it could 
   await failed.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, failed.button);
   assert.deepEqual(failed.toasts, [['Unable to re-scan this album.', 'error']]);
 });
+
+// Owner (2026-11-23): a save whose files are written is saved. A "finishing" answer keeps the edit on screen and
+// hands it to the pending-edit store, so a reload or another tab still shows it until the library holds it.
+test('a save answered "finishing" keeps the edit and hands it to the pending-edit store', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Song.flac';
+  const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, title: 'Song' }] };
+  const added = [];
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    window: { AlbumHavenPendingTagEdits: { addFinishing: (entry) => added.push(entry), add: () => assert.fail('resend queue used') } },
+    crypto: { randomUUID: () => '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b' },
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { title: 'Renamed Song' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    scheduleTagEditSaveTaskWatch() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return { ok: true, status: 202, async json() { return { ok: true, save_task_id: 'task-1', save_task_status: 'finishing' }; } };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(added.length, 1, 'the finishing save was not kept for reloads and other tabs');
+  assert.equal(added[0].id, '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
+  assert.deepEqual(JSON.parse(JSON.stringify(added[0].payload.updates)), { [trackPath]: { title: 'Renamed Song' } });
+  assert.ok(!alerts.some(([, variant]) => variant === 'error'), 'a finishing save was reported as failed');
+});

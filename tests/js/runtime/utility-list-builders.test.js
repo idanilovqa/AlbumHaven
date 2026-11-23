@@ -8791,3 +8791,28 @@ test('problematic track-path index matches the per-row lookup for long Loose Tra
     assert.equal(index.get(trackPath) || null, context.getProblematicAlbumForTrackPath(trackPath), trackPath);
   }
 });
+
+// Owner (2026-11-23): a finishing save is watched until it ends, so the page never stays silent. The
+// "Tags still updating" notice still shows at about a minute; polling then slows and continues.
+test('watchSaveTask keeps watching a finishing save past the usual polls until it completes', async () => {
+  const context = loadHelpers();
+  const alerts = [];
+  const waits = [];
+  let fetchCount = 0;
+  context.fetch = async () => {
+    fetchCount += 1;
+    const status = fetchCount < 150 ? 'finishing' : 'failed';
+    return { ok: true, async json() { return { ok: true, status, error: 'stop here' }; } };
+  };
+  context.waitForBrowserTimeout = async (ms) => { waits.push(ms); };
+  context.showRepairAlert = (...args) => alerts.push(args);
+  context.settleTagEditViewMutation = () => {};
+  context.releaseFailedTagEditViewMutation = () => {};
+
+  await context.watchSaveTask('finishing-task');
+
+  assert.equal(fetchCount, 150, 'a finishing save stopped being watched before it ended');
+  const notices = alerts.filter(([message]) => message === 'Your edits remain queued.');
+  assert.equal(notices.length, 1, 'the "Tags still updating" notice shows once');
+  assert.ok(Math.max(...waits) <= 5000 && Math.max(...waits) > 500, `polling slowed to at most 5 s: ${Math.max(...waits)}`);
+});

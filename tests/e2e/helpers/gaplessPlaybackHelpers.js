@@ -651,15 +651,20 @@ export async function observeSwitchPresentation(page, titleSelector) {
     const sample = () => {
       const snapshot = getStreamingPlaybackSnapshot();
       const engine = state.player?.streaming;
+      const currentPath = String(engine?.roles?.current?.track?.path || '');
+      // A switch waits from the press: first for its song's rate (the pending start names the song),
+      // then for its audio (the pending seek's continuity role).
+      const pressedPath = String(engine?.pendingStart?.track?.path || '');
       samples.push({
         at: performance.now(),
-        currentPath: String(engine?.roles?.current?.track?.path || ''),
+        currentPath,
         currentStreamId: Number(engine?.roles?.current?.streamId || 0),
         currentTime: Number(snapshot.currentTime || 0),
         generation: Number(snapshot.generation || 0),
         mode: String(snapshot.mode || ''),
         paused: Boolean(snapshot.paused),
-        switchingTo: engine?.pendingSeek ? String(engine.roles?.continuity?.track?.path || '') : '',
+        switchingTo: engine?.pendingSeek ? String(engine.roles?.continuity?.track?.path || '')
+          : (pressedPath !== currentPath ? pressedPath : ''),
         title: String(document.querySelector(selector)?.textContent || '').trim(),
       });
       if (samples.length > 12_000) samples.shift();

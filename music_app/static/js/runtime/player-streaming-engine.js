@@ -3440,9 +3440,10 @@ function cutOverToAuthorizedStreamingTrack(prepared) {
 }
 
 // A start until its song's role opens: a socket lost meanwhile leaves the start to open it there.
+// It names its song from the press on, while the song's rate is still asked too.
 function startBrowserStreamingTrack(track, options = {}) {
   const engine = streamingEngineState();
-  const pending = { autoplay: options.autoplay !== false };
+  const pending = { autoplay: options.autoplay !== false, track };
   engine.pendingStart = pending;
   const start = openBrowserStreamingTrack(track, options, pending).finally(() => {
     if (engine.pendingStart === pending) engine.pendingStart = null;

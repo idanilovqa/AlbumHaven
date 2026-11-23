@@ -632,7 +632,7 @@ def test_inventory_repository_rejects_missing_database_url_before_connecting():
 
 def _cte_body(sql: str, name: str) -> tuple[str, str]:
     """(the keyword after AS, the body) of CTE ``name``: the text up to the next top-level CTE or SELECT."""
-    match = re.search(rf"\n\s+{name} as (materialized )?\(", sql)
+    match = re.search(rf"\s{name} as (materialized )?\(", sql)
     assert match, f"no CTE {name}"
     depth, start = 1, match.end()
     for index in range(start, len(sql)):

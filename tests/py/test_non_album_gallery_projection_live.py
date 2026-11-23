@@ -78,7 +78,9 @@ def test_live_album_projections_keep_exceptions_only_in_loose_tracks(watcher_rep
     ordinary_exception = source in {"clear_null", "clear_empty"} or exception == "Unknown exception"
     expected = {"owner::normal album", "owner::mixed album"} | ({"owner::interview album"} if ordinary_exception else set())
     startup_sidebar, startup_rows = repository._load_root_startup_rows(state, {})
-    for rows in (startup_sidebar, repository._load_root_sidebar_rows(state)):
+    with repository._connect_to_database() as connection:
+        sidebar_rows = repository._load_root_sidebar_rows(state, connection=connection)
+    for rows in (startup_sidebar, sidebar_rows):
         assert sum(row["album_count"] for row in rows) == len(expected)
     surfaces = {
         "root": repository._load_root_album_browse_rows(state),

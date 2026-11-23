@@ -472,6 +472,15 @@ _LOOSE_READ_FIXED_ROWS = 200
 # The read at 20,000 stored rows took about 2.0 s on the hosted runner (expand, sort, 5,000 track entries);
 # 3.0 s leaves 50% headroom for runner variance while still catching a read that scans the store twice.
 _LOOSE_READ_SECONDS_AT_SCALE = 3.0
+# Table rows the inline drain itself reads (sequential tuples read plus index tuples fetched, summed over
+# every user table) may differ between 20 and 20,000 stored rows by at most this many: index depth and
+# planner choices on the small tables, never a pass over the store.
+_DRAIN_ROWS_READ_SLACK = 100
+
+_DRAIN_ROWS_READ_SQL = """
+    select relname, coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) as rows_read
+    from pg_stat_xact_user_tables
+"""
 
 
 def _apply_case64_draft(fixture):
@@ -616,6 +625,9 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
                       where track_id < %(base)s order by track_id limit 1) seed,
                   generate_series(1, %(stored)s) n
             """, {"base": synthetic_base, "stored": stored})
+            # Setup only: fresh statistics for the seeded store, so the planner never judges 20,000 rows by
+            # an empty table's estimates before autovacuum gets to it.
+            connection.execute("analyze library.non_album_track_rows")
         phase("seed done", stored)
         before = _store_rows(fixture)
         assert len(before) == stored + waiting
@@ -644,11 +656,30 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
         monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted_load)
         drain = loose_track_store.drain
 
-        def measured_drain(*args, **kwargs):
-            # The drain on its own: what it adds to the read's shared counters.
+        def rows_read(raw):
+            return {row["relname"]: int(row["rows_read"]) for row in raw.execute(_DRAIN_ROWS_READ_SQL).fetchall()}
+
+        def measured_drain(inventory, connection, **kwargs):
+            # The drain on its own: what it adds to the read's shared counters, its wall time, and the table
+            # rows it reads. The drain runs inside the read's transaction, so the transaction-local statistics
+            # (pg_stat_xact_user_tables) give its reads exactly, with no wait for the asynchronous stats
+            # flush. They are read on the uncounted connection, so they add nothing to the read's counters.
+            raw = getattr(connection, "_connection", connection)
+            read_before = rows_read(raw)
             statements, rows = counts.sql_statements, counts.returned_rows
-            cleared = drain(*args, **kwargs)
-            drains.append((stored, counts.sql_statements - statements, counts.returned_rows - rows))
+            drain_started = monotonic()
+            cleared = drain(inventory, connection, **kwargs)
+            seconds = monotonic() - drain_started
+            statement_delta, row_delta = counts.sql_statements - statements, counts.returned_rows - rows
+            read_after = rows_read(raw)
+            per_table = {
+                table: read_after[table] - read_before.get(table, 0)
+                for table in read_after if read_after[table] != read_before.get(table, 0)
+            }
+            drains.append({"stored": stored, "statements": statement_delta, "returned_rows": row_delta,
+                           "seconds": seconds, "rows_read": sum(per_table.values()), "per_table": per_table})
+            phase(f"drain alone {seconds * 1000:.0f} ms, {sum(per_table.values())} table rows read {per_table}",
+                  stored)
             return cleared
 
         read_candidates = loose_track_store.read_candidates
@@ -658,11 +689,13 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
             measured.setattr(loose_track_store, "drain", measured_drain)
             measured.setattr(loose_track_store, "read_candidates", lambda *args, **kwargs: stored_read.append(
                 read_candidates(*args, **kwargs)) or stored_read[-1])
-            phase("drain start", stored)
+            # These bracket the whole read (state, mark count, inline drain, stored list, expand and sort);
+            # the drain's own time and reads are logged by measured_drain.
+            phase("read start", stored)
             read_started = monotonic()
             _loose_payload(repository)  # the read request drains inline
             read_seconds = monotonic() - read_started
-            phase("drain done", stored)
+            phase(f"read done in {read_seconds:.3f} s", stored)
         assert len(stored_read) == 1
         assert len(stored_read[0]) == min(stored + waiting, MAX_NON_ALBUM_CANDIDATE_LIMIT), (
             "the read returns the stored list up to the cap, so the cap is reached at scale"
@@ -695,9 +728,14 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
     )
     # The drain alone is keyed by its marks: the same statements and returned rows at both store sizes.
     assert len(drains) == 2, f"one inline drain per size: {drains}"
-    (_small, small_statements, small_rows), (_large, large_statements, large_rows) = drains
-    assert (small_statements, small_rows) == (large_statements, large_rows), (
-        f"the drain grew with the store: {drains}"
+    small_drain, large_drain = drains
+    assert (small_drain["statements"], small_drain["returned_rows"]) == (
+        large_drain["statements"], large_drain["returned_rows"]), f"the drain grew with the store: {drains}"
+    # The table rows the drain reads, not just the rows it returns: a drain that scans the store reads 20,000
+    # more rows at scale even when it returns the same 50.
+    assert large_drain["rows_read"] - small_drain["rows_read"] <= _DRAIN_ROWS_READ_SLACK, (
+        f"the drain read {small_drain['rows_read']} table rows at 20 stored and {large_drain['rows_read']} at "
+        f"20,000: {small_drain['per_table']} vs {large_drain['per_table']}"
     )
 
 

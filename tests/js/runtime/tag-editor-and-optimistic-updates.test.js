@@ -5536,8 +5536,6 @@ function loadMissingAlbumRescan(answers) {
     URL,
     encodeURIComponent,
     getTrackModalAlbumRequestKey: album => album.key,
-    getPendingMissingAlbumRefreshRequest: () => null,
-    refreshMissingAlbumView: async (_album, key) => { refreshed.push(key); },
     showToast: (message, tone) => toasts.push([message, tone]),
     scheduleBrowserTimeout: (callback, delay) => { delays.push(delay); Promise.resolve().then(callback); return delays.length; },
     fetch: async (url, options = {}) => {
@@ -5547,6 +5545,9 @@ function loadMissingAlbumRescan(answers) {
     },
   });
   vm.runInContext(helperSource, context);
+  // After the helper loads: its own declarations of these two would replace stubs given before it.
+  context.getPendingMissingAlbumRefreshRequest = () => null;
+  context.refreshMissingAlbumView = async (_album, key) => { refreshed.push(key); };
   const button = { disabled: false, isConnected: true, setAttribute() {}, removeAttribute() {} };
   return { context, toasts, requests, delays, refreshed, button };
 }

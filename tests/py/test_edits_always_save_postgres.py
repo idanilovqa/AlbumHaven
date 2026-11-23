@@ -39,11 +39,20 @@ def _library_id(fixture):
     return _rows(fixture, "select id from library.libraries where library_kind = 'local' limit 1")[0]["id"]
 
 
-def _hold_library_wide_marker(fixture):
+def _hold_library_wide_marker(fixture, monkeypatch):
     """Another transaction journals a library-wide change (album 0, as a detached-track write does) and
-    commits it. Its owner hasn't drained it yet."""
+    commits it. Its owner hasn't drained it yet: the journal owner's drain, which a write queues in the
+    background, is recorded instead of run, so the check is about the user's write alone."""
+    from music_app.services import gallery_projection_postgres
+
+    queued = []
+    monkeypatch.setattr(gallery_projection_postgres, "queue_journaled_relation_drain",
+                        lambda _config: queued.append("journaled drain"))
+    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
+                        lambda _config, **_kwargs: queued.append("gallery refresh"))
     _rows(fixture, "select library.mark_relation_album_dirty(%s, 0)", (_library_id(fixture),))
     assert _markers(fixture) == 1
+    return queued
 
 
 def _markers(fixture):
@@ -73,8 +82,8 @@ def _album_titles(fixture):
 
 # (a) A structural tag save while another transaction holds the library-wide marker.
 
-def test_live_a_structural_save_commits_while_another_transaction_holds_a_library_wide_marker(library):
-    _hold_library_wide_marker(library)
+def test_live_a_structural_save_commits_while_another_transaction_holds_a_library_wide_marker(library, monkeypatch):
+    _hold_library_wide_marker(library, monkeypatch)
 
     result = _rename(library, "Renamed Album")
 
@@ -85,7 +94,7 @@ def test_live_a_structural_save_commits_while_another_transaction_holds_a_librar
 
 # (b) The same for move-album, confirm-removal and keep-missing.
 
-def test_live_a_move_commits_while_another_transaction_holds_a_library_wide_marker(library):
+def test_live_a_move_commits_while_another_transaction_holds_a_library_wide_marker(library, monkeypatch):
     fixture = library
     main = Path(fixture.roots[0]["path"])
     source, destination = main / "Owner" / ALBUM, main / "Owner" / f"{ALBUM} (Moved)"
@@ -94,7 +103,7 @@ def test_live_a_move_commits_while_another_transaction_holds_a_library_wide_mark
     for entry in fixture.tracks:
         path = str(destination / Path(entry["path"]).name)
         moved[path] = {**entry, "path": path}
-    _hold_library_wide_marker(fixture)
+    _hold_library_wide_marker(fixture, monkeypatch)
 
     persisted = fixture.adapter.persist_moved_album_inventory(
         root_id=fixture.roots[0]["id"], active_file_entries=moved,
@@ -119,11 +128,11 @@ def _missing_album(fixture):
     return _rows(fixture, "select album_key from library.local_albums where title = %s", (ALBUM,))[0]["album_key"]
 
 
-def test_live_confirming_a_removal_commits_while_another_transaction_holds_a_library_wide_marker(library):
+def test_live_confirming_a_removal_commits_while_another_transaction_holds_a_library_wide_marker(library, monkeypatch):
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
     album_key = _missing_album(library)
-    _hold_library_wide_marker(library)
+    _hold_library_wide_marker(library, monkeypatch)
 
     result = PostgresMissingAlbumRemovalService(
         library.config, connect=isolatedPostgres._connect, root_health_check=lambda _root: True,
@@ -136,11 +145,11 @@ def test_live_confirming_a_removal_commits_while_another_transaction_holds_a_lib
 
 # A guard, not a red: keeping a missing album never reached the publication gate, so it already
 # commits at 5ffbaba62. (b)'s reds are the move and the confirmed removal above.
-def test_live_keeping_a_missing_album_commits_while_another_transaction_holds_a_library_wide_marker(library):
+def test_live_keeping_a_missing_album_commits_while_another_transaction_holds_a_library_wide_marker(library, monkeypatch):
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
     album_key = _missing_album(library)
-    _hold_library_wide_marker(library)
+    _hold_library_wide_marker(library, monkeypatch)
 
     PostgresMissingAlbumRemovalService(library.config, connect=isolatedPostgres._connect).keep_missing(album_key)
 
@@ -179,7 +188,9 @@ def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_wit
 
     small = _measure_save(fixture, "First Size", adapter, counted)
     _seed_albums(fixture, 2000)
+    _gallery_state(fixture, "before the 2,001-album save")
     large = _measure_save(fixture, "Second Size", adapter, counted)
+    _gallery_state(fixture, "after the 2,001-album save")
 
     print("edits always save, (statements, rows read, seconds, per table) at 1 and 2,001 albums:", small, large)
     assert small[0] == large[0], f"The save's statements grew with the library: {small[:2]} vs {large[:2]}."
@@ -404,6 +415,19 @@ def _generation(fixture):
     return _rows(fixture, "select generation from library.gallery_projection_state")[0]["generation"]
 
 
+def _gallery_state(fixture, label):
+    """Printed when a header test fails: header generations, the current generation, the journal and each
+    scope's albums, so a skipped patch is located from one run."""
+    print(f"edits always save, gallery state {label}:",
+          "current", _generation(fixture), "headers", _headers(fixture),
+          "journal", [(row["album_id"], row["first_gallery_generation"]) for row in _rows(fixture,
+              "select album_id, first_gallery_generation from library.local_relation_dirty_albums order by 1")],
+          "albums", [(row["id"], row["album_key"], row["title"]) for row in _rows(fixture,
+              "select id, album_key, title from library.local_albums order by id limit 5")],
+          "entries", sorted((row["scope_key"][:8], row["album_key"]) for row in _rows(fixture,
+              "select scope_key, album_key from library.gallery_membership_entries order by 1, 2 limit 20")))
+
+
 def _scopes_showing(fixture, title):
     return {row["scope_key"] for row in _rows(fixture, """
         select distinct entries.scope_key from library.gallery_membership_entries entries
@@ -423,8 +447,10 @@ def _lower_one_header(fixture):
 
 def test_live_a_save_shows_in_every_header_the_journal_covers(library):
     behind, _lagging_generation = _lower_one_header(library)
+    _gallery_state(library, "before the save")
 
     _rename(library, "Shown Everywhere")
+    _gallery_state(library, "after the save")
 
     covered = set(_headers(library)) - {behind}
     assert covered <= _scopes_showing(library, "Shown Everywhere"), (

@@ -188,10 +188,13 @@ def test_live_a_save_with_the_baseline_not_ready_commits_with_no_full_prepare_an
 # scopes published, so the per-header membership patch is counted too (6.5's R4 condition).
 
 @pytest.mark.parametrize("analysed", [False, True], ids=["never-analysed", "analysed"])
-def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_with_custom_scopes(library, analysed):
+def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_with_custom_scopes(
+        library, analysed, monkeypatch):
     """Both statistics states: a save right after a bulk change runs on missing statistics in production
     (case 55), so the save's reads must stay flat without ANALYZE too, by keyed lookups, not by statistics."""
     fixture = library
+    # The save and then the journal owner's drain it queues are both counted, in that order on this thread.
+    _hold_background_owners(monkeypatch)
     adapter, counted = _counting_adapter(fixture)
     # Several custom gallery scopes published, so the per-header membership patch is counted too (R4).
     _publish_custom_scopes(fixture)
@@ -224,8 +227,10 @@ def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_wit
 COMPONENT_ROWS_PER_ALBUM = 25
 
 
-def test_live_a_save_reads_its_artist_component_at_a_small_constant_per_album(library):
+def test_live_a_save_reads_its_artist_component_at_a_small_constant_per_album(library, monkeypatch):
     fixture = library
+    # The save and then the journal owner's drain it queues are both counted, in that order on this thread.
+    _hold_background_owners(monkeypatch)
     adapter, counted = _counting_adapter(fixture)
     _seed_albums(fixture, 500, tag="unrelated")
     _seed_albums(fixture, 10, tag="family", own_artist=False)
@@ -307,11 +312,14 @@ def _counting_adapter(fixture):
 
 
 def _measure_save(fixture, title, adapter, counted):
-    """(statements, rows read, seconds, rows read per table) for one album rename."""
+    """(statements, rows read, seconds, rows read per table) for one album rename and the journal owner's
+    drain it queues (the gallery shows a non-artist edit when that drain runs), both on counted connections."""
     counted.clear()
     before = _rows_read(fixture)
     began = time.perf_counter()
     _rename(fixture, title, adapter=adapter)
+    from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
+    ensure_pending_relation_projection_ready(fixture.config, connect=adapter._connect)
     seconds = round(time.perf_counter() - began, 3)
     after = _rows_read(fixture)
     tables = {table: after.get(table, 0) - before.get(table, 0) for table in after}

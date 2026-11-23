@@ -200,6 +200,22 @@ def queue_watcher_cover_refresh_for_track_paths_for_state(
     _submit_watcher_cover_refresh(library_state, config, logger)
 
 
+def queue_cover_lookup_for_added_albums_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger: object,
+    albums: list[object],
+) -> None:
+    """A scan's added albums get the watcher's bounded cover lookup: only their own tracks are queued and read."""
+    queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        {str(track.path) for album in albums for track in getattr(album, "tracks", None) or []},
+        affected_album_keys=tuple(str(album.key) for album in albums),
+    )
+
+
 def _submit_watcher_cover_refresh(
     library_state: dict[str, object],
     config: dict[str, object],
@@ -1450,6 +1466,9 @@ def refresh_library_for_state(
                 ),
                 job_workers=config.get("BULK_COVER_JOB_WORKERS", _BULK_COVER_JOB_WORKERS),
             ),
+        ),
+        start_added_album_cover_lookup=lambda albums: queue_cover_lookup_for_added_albums_for_state(
+            library_state, config, logger, albums,
         ),
         queue_problematic_albums_prewarm=lambda: _queue_problematic_albums_prewarm_for_state(
             library_state,

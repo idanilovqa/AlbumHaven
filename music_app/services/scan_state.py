@@ -142,6 +142,7 @@ def finalize_post_scan_actions(
     previous_album_keys: set[str],
     start_manual_cover_refresh: Callable[..., dict[str, object]],
     start_background_cover_refresh: Callable[[], None],
+    start_added_album_cover_lookup: Callable[[list[object]], None] | None = None,
 ) -> None:
     pending_cover_refresh = bool(library_state.get("pending_cover_refresh_after_scan"))
     pending_cover_force_search = bool(library_state.get("pending_cover_refresh_force_search"))
@@ -159,8 +160,21 @@ def finalize_post_scan_actions(
         start_manual_cover_refresh(force_search=pending_cover_force_search)
         return
 
-    # A scan publishes inventory. Cover-provider crawls are explicit user work;
-    # starting one here turns an ordinary scan into a library-wide remote crawl.
+    # Only the albums this scan added get the automatic cover lookup, as albums the watcher adds do.
+    # A library-wide provider crawl stays explicit user work.
+    added_albums = [
+        album for album in library_state.get("albums") or []
+        if str(getattr(album, "key", "") or "") and str(album.key) not in previous_album_keys
+    ]
+    if added_albums and start_added_album_cover_lookup is not None:
+        log_app_event(
+            config,
+            logger,
+            "Cover art refresh queued after indexing",
+            level="info",
+            added_album_count=len(added_albums),
+        )
+        start_added_album_cover_lookup(added_albums)
 
 
 # A full scan of a slow library can take hours; any watcher or tag-edit
@@ -239,6 +253,7 @@ def refresh_library_state(
     refresh_relation_views: Callable[..., None],
     start_manual_cover_refresh: Callable[..., dict[str, object]],
     start_background_cover_refresh: Callable[[], None],
+    start_added_album_cover_lookup: Callable[[list[object]], None] | None = None,
     queue_problematic_albums_prewarm: Callable[[], None] | None = None,
     queue_utility_rules_prewarm: Callable[[], None] | None = None,
     queue_mbid_assertion_follow_up: Callable[..., object] | None = None,
@@ -747,6 +762,7 @@ def refresh_library_state(
                 previous_album_keys=previous_album_keys,
                 start_manual_cover_refresh=start_manual_cover_refresh,
                 start_background_cover_refresh=start_background_cover_refresh,
+                start_added_album_cover_lookup=start_added_album_cover_lookup,
             )
             if queue_mbid_assertion_follow_up is not None:
                 try:

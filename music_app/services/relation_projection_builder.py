@@ -709,11 +709,9 @@ def build_component_relation_views(
     cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Relation views of one affected component: the source rows of the albums a write changed and the
-    albums related to them (affected-set, 6.5 11-23). It takes only those rows; it never reads anything."""
-    rows = list(component_rows)
-    if not rows:
-        raise ValueError("A component relation build needs the component's source rows.")
-    return _relation_views_from_rows(rows, alias_policy=alias_policy, cooperate=cooperate)
+    albums related to them (affected-set, 6.5 11-23). It takes only those rows and never reads anything; an
+    empty component (a library-wide marker alone) has empty views."""
+    return _relation_views_from_rows(list(component_rows), alias_policy=alias_policy, cooperate=cooperate)
 
 
 def _relation_views_from_rows(

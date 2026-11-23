@@ -236,11 +236,12 @@ def test_a_scoped_source_load_refuses_to_run_without_album_ids(album_ids):
         load_scoped_relation_source_rows(NoConnection(), album_ids)
 
 
-def test_a_component_relation_build_refuses_to_run_without_its_rows():
+def test_a_component_relation_build_of_no_rows_reads_nothing_and_is_empty():
+    """It takes only the rows it is given (6.5, 11-23): an empty component builds empty views."""
     from music_app.services.relation_projection_builder import build_component_relation_views
 
-    with pytest.raises(ValueError, match='source rows'):
-        build_component_relation_views([])
+    views = build_component_relation_views([])
+    assert views['artists'] == [] and views['alias_to_canonical'] == {}
 
 
 @pytest.mark.parametrize('artist', ['VA', 'Unknown Artist', 'Various Artists'])

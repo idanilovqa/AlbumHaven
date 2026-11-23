@@ -167,3 +167,243 @@ def test_live_a_page_reads_a_bounded_number_of_items_past_an_inactive_root(loose
 
     assert reads[20] == reads[400], f"Rows read grew with the hidden items: {reads}."
     assert reads[400] <= 3 * 3, f"A page of 2 read {reads[400]} items."
+
+
+# 6.5's first condition: a key mismatch would leave marks that never clear an item.
+KEY_PATHS = [
+    pytest.param("C:\Music\Artist\Album\01 - Song.flac", id="windows-backslashes"),
+    pytest.param("c:\MUSIC\artist\ALBUM\01 - Song.flac", id="windows-mixed-case"),
+    pytest.param("D:/Music/Artist/Album/01.flac", id="windows-forward-slashes"),
+    pytest.param("C:\Music/Mixed\Separators/01.flac", id="windows-mixed-separators"),
+    pytest.param("C:\Music\Artist\Album\\", id="windows-trailing-separator"),
+    pytest.param("C:\01.flac", id="windows-drive-root"),
+    pytest.param("/music/artist/album/01.flac", id="posix"),
+    pytest.param("/Music/Artist/Album/", id="posix-trailing-separator"),
+    pytest.param("/01.flac", id="posix-root"),
+    pytest.param("/music/Caf\u00e9/01.flac", id="non-ascii-nfc"),
+    pytest.param("/music/Cafe\u0301/01.flac", id="non-ascii-nfd"),
+    pytest.param("C:\Музыка\ДДТ\Ремиксы\01.flac", id="cyrillic"),
+    pytest.param("/music/天門/She and Her Cat/01.flac", id="cjk"),
+]
+
+
+@pytest.mark.parametrize("path", KEY_PATHS)
+def test_live_the_sql_group_key_equals_the_loaders_for_every_path_shape(watcher_repair_inventory, path):
+    """The group a trigger marks (0294's key over the stored scan_physical_parent) is the group the loader
+    builds an item for (_problematic_loose_group_key over its identity), for every path shape."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services.library_inventory_postgres import _membership_problem_group_identity_sql
+
+    fixture = watcher_repair_inventory
+    root_id = 7
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        # The stored column's own expression, read from the catalog, never retyped here.
+        generated = connection.execute(
+            """select pg_get_expr(defaults.adbin, defaults.adrelid) as expression
+               from pg_attrdef defaults
+               join pg_attribute columns on columns.attrelid = defaults.adrelid and columns.attnum = defaults.adnum
+               where defaults.adrelid = 'library.local_track_files'::regclass
+                 and columns.attname = 'scan_physical_parent'""",
+        ).fetchone()["expression"]
+        connection.execute(
+            f"""create temp table key_paths (private_path text,
+                  scan_physical_parent text generated always as ({generated}) stored)""")
+        connection.execute("insert into key_paths (private_path) values (%s)", (path,))
+        row = connection.execute(
+            f"""select scan_physical_parent as stored_folder,
+                  library.problematic_loose_group_key(%(root)s, scan_physical_parent) as sql_key,
+                  {_membership_problem_group_identity_sql("%(root)s", "private_path")} as loader_identity,
+                  split_part({_membership_problem_group_identity_sql("%(root)s", "private_path")}, chr(1), 2)
+                    as loader_folder
+                from key_paths""",
+            {"root": root_id},
+        ).fetchone()
+
+    assert row["loader_folder"] == row["stored_folder"], "The trigger and the loader name different folders."
+    assert row["sql_key"] == browse._problematic_loose_group_key(row["loader_identity"]), (
+        "The marked group's key is not the item's key.")
+
+
+def _library_id(fixture):
+    return _rows(fixture, "select id from library.libraries where library_kind = 'local' limit 1")[0]["id"]
+
+
+def _event_move_between_folders(fixture):
+    moved = fixture.stray("Strays C")
+    _watcher_pass(fixture, active=[moved], deleted=[fixture.strays["A"]["path"]])
+    return {"Strays A", "Strays C"}
+
+
+def _event_override(fixture):
+    _rows(fixture, """insert into library.exception_overrides (library_id, track_key, override_payload)
+                      values (%s, %s, '{"exception_type": "Non-album rarity"}'::jsonb)""",
+          (_library_id(fixture), fixture.strays["A"]["path"]))
+    return {"Strays A"}
+
+
+def _event_rule_added_then_reverted(fixture):
+    from music_app.services import library_browse_postgres as browse
+
+    key = browse._problem_identity_row_key(fixture.strays["B"]["path"], "Missing artist", scope="file")
+    _rows(fixture, "insert into library.ignored_repairs (library_id, repair_key) values (%s, %s)",
+          (_library_id(fixture), key))
+    _assert_read_is_a_full_rebuild(fixture)
+    _rows(fixture, "delete from library.ignored_repairs where repair_key = %s", (key,))
+    return {"Strays B"}
+
+
+def _event_root_renamed(fixture):
+    _rows(fixture, "update library.library_roots set metadata = metadata || '{\"label\": \"Renamed\"}'::jsonb "
+                   "where root_path = %s", (fixture.roots[1]["path"],))
+    return set()
+
+
+def _event_root_deleted(fixture):
+    _rows(fixture, "delete from library.library_roots where root_path = %s", (fixture.roots[1]["path"],))
+    return {"Strays H"}
+
+
+def _event_stale_and_back(fixture):
+    path = fixture.strays["A"]["path"]
+    _rows(fixture, "update library.local_track_files set scan_cache_stale = true where private_path = %s", (path,))
+    assert _marked_groups(fixture) <= {"Strays A"}
+    _assert_read_is_a_full_rebuild(fixture)
+    _rows(fixture, "update library.local_track_files set scan_cache_stale = false where private_path = %s", (path,))
+    return {"Strays A"}
+
+
+def _event_artist_renamed(fixture):
+    _rows(fixture, "update library.local_artists set name = name || ' (renamed)', sort_name = sort_name || 'z'")
+    # Loose files have no artist tag; a group is marked only if one of its tracks names a renamed artist.
+    return {row["folder"].rsplit("/", 1)[-1] for row in _rows(fixture, """
+        select distinct files.scan_physical_parent as folder from library.local_track_files files
+        join library.local_tracks tracks on tracks.id = files.track_id
+        where tracks.album_id is null and tracks.artist_id is not null""")}
+
+
+def _assert_read_is_a_full_rebuild(fixture):
+    assert _as_served(_indexed_problematic_items(fixture.database_url, limit=50)) == _as_served(
+        _evaluated_problematic_items(fixture.config))
+
+
+EVENTS = [
+    pytest.param(_event_move_between_folders, id="move-between-folders"),
+    pytest.param(_event_override, id="override"),
+    pytest.param(_event_rule_added_then_reverted, id="rule-added-then-reverted"),
+    pytest.param(_event_root_renamed, id="root-renamed"),
+    pytest.param(_event_root_deleted, id="root-deleted"),
+    pytest.param(_event_stale_and_back, id="stale-and-back"),
+    pytest.param(_event_artist_renamed, id="artist-renamed"),
+]
+
+
+@pytest.mark.parametrize("event", EVENTS)
+def test_live_each_event_marks_only_its_groups_and_a_read_equals_a_full_rebuild(loose_library, event):
+    fixture = loose_library
+    _assert_read_is_a_full_rebuild(fixture)
+    assert _marked_groups(fixture) == set()
+
+    affected = event(fixture)
+
+    assert _marked_groups(fixture) <= affected, f"Unaffected groups marked: {_marked_groups(fixture) - affected}."
+    _assert_read_is_a_full_rebuild(fixture)
+    assert _marked_groups(fixture) == set()
+
+
+def test_live_0294_applies_over_existing_loose_rows_and_reruns_idempotently(loose_library):
+    """6.5's third condition: on a library that already has loose files and items, 0294 builds one group row
+    per loose group and gives every loose item its root; running it again changes nothing."""
+    from pathlib import Path
+
+    fixture = loose_library
+    migration = (Path(__file__).resolve().parents[2] / "migrations" / "postgres"
+                 / "0294_mark_loose_groups_for_problematic_index.sql").read_text(encoding="utf-8")
+
+    def state():
+        return (
+            _rows(fixture, "select item_key, root_id, folder, marked_xid is not null as marked "
+                           "from library.problematic_loose_groups order by item_key"),
+            _rows(fixture, "select item_key, root_id from library.problematic_index_items "
+                           "where album_id is null order by item_key"),
+            _rows(fixture, """select indexname, indexdef from pg_indexes where schemaname = 'library'
+                              and indexname in ('problematic_loose_groups_marked_idx',
+                                'problematic_index_items_root_order_idx', 'local_track_files_loose_group_idx')
+                              order by indexname"""),
+        )
+
+    built = state()
+    loose_groups = _rows(fixture, """select count(distinct (library_root_id, scan_physical_parent)) as n
+        from library.local_track_files where scan_cache_stale is false
+          and nullif(metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null""")[0]["n"]
+    assert len(built[0]) == loose_groups == 3
+    assert all(row["root_id"] is not None for row in built[1])
+
+    # As a library looked before 0294: no group rows, and loose items without a root.
+    _rows(fixture, "delete from library.problematic_loose_groups")
+    _rows(fixture, "update library.problematic_index_items set root_id = null")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(migration)
+    groups, items, indexes = state()
+    assert [(row["item_key"], row["root_id"], row["folder"]) for row in groups] == [
+        (row["item_key"], row["root_id"], row["folder"]) for row in built[0]]
+    assert items == built[1] and indexes == built[2]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(migration)
+    assert state() == (groups, items, indexes), "0294 is not idempotent."
+
+
+def _table_rows(fixture, drain_connection):
+    """Rows read and written per library table so far, after the drain's backend has flushed its stats."""
+    import time
+
+    drain_connection.execute("select pg_stat_force_next_flush()")
+    drain_connection.execute("select 1")  # idle after this: the forced flush happens
+    previous = None
+    for _ in range(40):
+        with isolatedPostgres._connect(fixture.setup_url) as reader:
+            reader.execute("select pg_stat_clear_snapshot()")
+            current = {row["relname"]: (int(row["read"]), int(row["written"])) for row in reader.execute(
+                """select relname, coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) as read,
+                          n_tup_ins + n_tup_upd + n_tup_del as written
+                   from pg_stat_user_tables where schemaname = 'library'""").fetchall()}
+        if current == previous:
+            return current
+        previous = current
+        time.sleep(0.05)
+    return previous
+
+
+def _one_loose_edit_drain(fixture, title):
+    """Rows the drain of one loose file's edit read and wrote, per table."""
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from music_app.services import library_browse_postgres as browse, problematic_index
+
+    repository = browse.PostgresLibraryBrowseRepository({**fixture.config, problematic_index.ENABLED_KEY: "1"})
+    _assert_read_is_a_full_rebuild(fixture)  # nothing waits before the edit
+    _watcher_pass(fixture, active=[{**fixture.strays["A"], "title": title}])
+    with psycopg.connect(fixture.database_url, row_factory=dict_row, autocommit=True) as connection:
+        library_id = _library_id(fixture)
+        groups = connection.execute(problematic_index._MARKED_GROUPS_SQL, (library_id, "", 100)).fetchall()
+        assert len(groups) == 1
+        before = _table_rows(fixture, connection)
+        problematic_index._drain_groups(repository, connection, library_id, groups)
+        after = _table_rows(fixture, connection)
+    return {table: (after[table][0] - before.get(table, (0, 0))[0], after[table][1] - before.get(table, (0, 0))[1])
+            for table in after if after[table] != before.get(table)}
+
+
+def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(loose_library):
+    """6.5's fourth condition, counted from the database's own table statistics."""
+    fixture = loose_library
+    _watcher_pass(fixture, active=[fixture.stray(f"Small {number:02}") for number in range(17)])
+    small = _one_loose_edit_drain(fixture, "Edited at 20")
+    _watcher_pass(fixture, active=[fixture.stray(f"Large {number:04}") for number in range(2000)])
+    large = _one_loose_edit_drain(fixture, "Edited at 2020")
+
+    totals = {name: (sum(read for read, _ in rows.values()), sum(written for _, written in rows.values()))
+              for name, rows in (("20", small), ("2020", large))}
+    assert abs(totals["2020"][0] - totals["20"][0]) <= 25, f"Rows read grew with the library: {small} vs {large}."
+    assert totals["2020"][1] == totals["20"][1], f"Rows written grew with the library: {small} vs {large}."

@@ -4958,8 +4958,8 @@ test('paused metadata and consumption update accounting without credit until exp
   assert.ok(diagnostics.inFlightFrames.continuity <= 5 * 48_000);
 });
 
-// The head was reset to the start of the track, and the song did not restart when the network was
-// back. Here the app is served through
+// The head never resets to the start, and the song goes on when the network is back. A laptop serving
+// the app through
 // a tunnel that answers 530 for about a minute after its Wi-Fi returns: every attempt in that
 // minute fails. A lost socket under audio that cannot play on waits at the heard place, still
 // playing, and reopens there on the first socket the server answers, with nothing pressed.
@@ -4999,7 +4999,7 @@ test('a lost socket waits playing at the heard place and reopens there once the 
   assert.equal(harness.api.snapshot().paused, false);
 });
 
-// Another song needed up to six presses to play. Each press
+// One press starts another song after an outage. Each press
 // in the minute the tunnel answered 530 failed and needed another; one press now waits for the server.
 test('another song pressed once while the server is still away opens on the first socket it answers', async () => {
   let serverBack = false;
@@ -5196,6 +5196,52 @@ test('a socket that reopens after an outage has a claim waiting out its retry as
   assert.equal(retriedNow, 1, 'the claim asks as soon as the socket is back');
 });
 
+// After a minute of tunnel 530 handshakes, Chromium held each new socket 1-5 s before sending it,
+// past its 4 s deadline, and one press played nothing for 8 s after the server answered (hosted
+// FTC-PLAYBACK-OFFLINE-005). A retry asks over HTTP first: no socket while the browser is offline or
+// the tunnel answers without its server, and one on the first answer.
+test('a reconnect retry opens no socket while offline or while the tunnel answers 530, and one on the first answer', async () => {
+  let status = 530;
+  const asked = [];
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count === 2,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async (url) => {
+      asked.push(url);
+      return { ok: status < 400, status, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2, 'the lost socket is replaced at once');
+  const retry = async () => {
+    timers.fire(timers.pending().find(({ delay }) => delay <= 1_000));
+    await settleTwice(harness);
+  };
+
+  for (let attempt = 0; attempt < 5; attempt += 1) await retry();
+  assert.equal(harness.sockets.length, 2, 'no socket while the tunnel answers 530');
+  assert.deepEqual(asked, Array(5).fill('/playback/state'), 'one question per retry');
+
+  status = 200;
+  harness.context.window.navigator = { onLine: false };
+  for (let attempt = 0; attempt < 3; attempt += 1) await retry();
+  assert.equal(harness.sockets.length, 2, 'no socket while offline');
+  assert.equal(asked.length, 5, 'and no question either');
+
+  harness.context.window.navigator = { onLine: true };
+  await retry();
+  assert.equal(harness.sockets.length, 3, 'the first answer opens one socket');
+  assert.equal(harness.sockets.at(-1).readyState, 1);
+  assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
 // Once the server answered again, every probe replaced the attempt then
 // connecting, which takes 1.6-2 s through the tunnel, so no socket ever opened. The attempt a probe
 // starts is on the network that answers and is left to connect; another is replaced only once it
@@ -5239,8 +5285,7 @@ test('a reconnect that a probe started is left to connect, however slowly, while
   assert.equal(harness.sockets.at(-1).closeCalls, 0);
 });
 
-// The app must notice soon that the network is back. After Wi-Fi returns a tunnel can answer 530 for
-// minutes, then 200. Every 530 is still
+// The app notices at once that the network is back. After Wi-Fi returns a tunnel answers 530 for minutes, then 200. Every 530 is still
 // unreachable, the server is asked again on every tick without backing off, and the first 200
 // replaces the hung attempt on that tick.
 test('a hung reconnect is replaced on the first good answer after a run of tunnel 530s, asked every tick', async () => {
@@ -7022,7 +7067,7 @@ test('a seek inside the received bytes decodes them here, from the seek table, w
   assert.ok(harness.sent('credit').every(credit => credit.streamId === open.streamId));
 });
 
-// A seek must show the head at its new place at once. The rest of
+// A seek shows the head at its new place at once. The rest of
 // the song decoded in one call held the click's task, and the page's paint, for seconds.
 test('a local seek decodes only what its credit asks, a slice at a time, before the click returns', async () => {
   const { decoders, create } = recordingDecoders();
@@ -7820,8 +7865,7 @@ test('offline, a seek past the received audio jumps at once and plays from there
   assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
 });
 
-// At 100% CPU a seek showed its place late, and took two clicks: the first moved the head only
-// slightly, not to where it was clicked.
+// CPU at 100%: a click shows its place at once, and the first click moves the head there.
 test('offline, a seek past the received audio shows its place and silences the old audio before the slow restart, whose last reports do not move the head', async () => {
   const timers = manualTimers();
   const harness = encodedHarness({
@@ -7892,8 +7936,8 @@ test('the browser going offline gives up the open socket at once, so a seek past
   assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
 });
 
-// On a laptop, a click past the received audio did not stop the music at once, the time stood still,
-// and then Play showed paused. A laptop with another network
+// On a laptop, a click past the received audio stops the music at once, the time moves there and Play
+// never pauses by itself. A laptop with another network
 // interface never reports `offline`: the socket stays open and silent.
 test('a seek the open socket does not begin to answer jumps to its target silently and keeps playing, with no offline event', async () => {
   const timers = manualTimers();
@@ -7948,8 +7992,7 @@ test('a socket that hears nothing, not even a heartbeat, is given up while the r
   assert.equal(harness.sockets[1].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152, 'the rest joins at the splice');
 });
 
-// After the network was back, another track needed four to six tries to play. A start or a song's
-// rate asked of a socket that died
+// One press starts another song after the network is back. A start or a song's rate asked of a socket that died
 // without closing is never answered: the socket, which hears not even the server's heartbeat, is
 // replaced, and what waited on it goes again on the new one, so one press starts the song.
 test('paused, a start asked of a socket that hears nothing goes again on a new socket, with no second press', async () => {
@@ -8154,7 +8197,7 @@ test('a reconnect attempt that hangs is given up after a few seconds and the nex
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
-// With the CPU at 100%, playback did not continue when the network came back. On a loaded machine a connection can take longer than the deadline to open.
+// CPU at 100%: playback goes on when the network is back. On a loaded machine a connection can take longer than the deadline to open.
 test('each reconnect attempt cut off by its deadline allows the next one twice as long, up to 16 s', async () => {
   const timers = manualTimers();
   const harness = encodedHarness({
@@ -9469,5 +9512,142 @@ test('bounded interaction: the streaming keepalive sends one control per tick ov
     run,
     budgets: { requests: 10, outputEmissions: 0, domMutations: 0 },
     growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+/** A playing song whose socket is lost; [refuse] answers each later attempt as the test's network does. */
+async function startCountedOutage(counter, refuse, options = {}) {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    // Every socket the engine opens is counted, refused or not.
+    refuseConnection: (count) => {
+      counter.count('requests');
+      return count > 1 ? refuse : false;
+    },
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    ...options,
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  return { harness, timers };
+}
+
+test('bounded interaction: a reconnect retry asks once and opens one socket per tick over a 1,000-attempt outage', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (attempts) => {
+    const counter = createInteractionCounter();
+    const asked = [];
+    // The server answers its questions, but the network refuses every socket.
+    const fetch = async (url) => {
+      counter.count('requests');
+      asked.push(url);
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    const { harness, timers } = await startCountedOutage(counter, true, { fetch });
+    const retry = async () => {
+      timers.fire(timers.pending().find(({ delay }) => delay <= 1_000));
+      await settleTwice(harness);
+    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) await retry();
+    const opened = harness.sockets.length;
+    const questions = asked.length;
+    const work = await counter.measure(async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) await retry();
+    });
+    assert.equal(harness.sockets.length, opened + 10, 'one socket per retry');
+    assert.deepEqual(asked.slice(questions), Array(10).fill('/playback/state'), 'one question per retry');
+    assert.notEqual(harness.api.snapshot().mode, 'error', 'failed attempts never end the wait');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#scheduleStreamingReconnect',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 20 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: a hung connect given up at its deadline opens one socket per cycle over 1,000 attempts', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (attempts) => {
+    const counter = createInteractionCounter();
+    const { harness, timers } = await startCountedOutage(counter, 'hang');
+    const giveUp = async () => {
+      timers.fire(timers.pending().find(({ delay }) => delay >= 4_000));
+      await settleTwice(harness);
+      const retry = timers.pending().find(({ delay }) => delay <= 2_000);
+      if (retry) timers.fire(retry);
+      await settleTwice(harness);
+    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) await giveUp();
+    const opened = harness.sockets.length;
+    const work = await counter.measure(async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) await giveUp();
+    });
+    assert.equal(harness.sockets.length, opened + 10, 'one socket per deadline');
+    assert.notEqual(harness.api.snapshot().mode, 'error', 'hung attempts never end the wait');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#connectStreamingSocket',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 10 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: the socket liveness check does no work per tick over a 1,000-tick session', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (ticks) => {
+    const counter = createInteractionCounter();
+    const { harness } = await startCountedStreamingSession(counter);
+    const socket = harness.engine.socket;
+    const check = liveness(harness).callback;
+    for (let tick = 0; tick < ticks; tick += 1) check();
+    const work = await counter.measure(() => {
+      for (let tick = 0; tick < 10; tick += 1) check();
+    });
+    assert.equal(harness.engine.socket, socket, 'a socket that is heard is kept');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#watchStreamingSocketLiveness',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 0, outputEmissions: 0, domMutations: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('request capture: the reachability probe asks only the playback state, once per tick, over a 1,000-tick outage', async () => {
+  const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+  const { createRequestCapture, measureInteractionContract } = require('../helpers/request-capture.js');
+  await measureInteractionContract('js:runtime/player-streaming-engine.js#probeStreamingReachability', {
+    setup: async (ticks) => {
+      // The network is frozen: attempts hang and the server does not answer.
+      const capture = createRequestCapture(() => Promise.reject(new TypeError('Failed to fetch')));
+      const { harness } = await startCountedOutage(createInteractionCounter(), 'hang', { fetch: capture.fetch });
+      // The attempt has hung well past a healthy connect.
+      harness.setNow(5_000);
+      const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1).callback();
+      for (let tick = 0; tick < ticks; tick += 1) await probe();
+      return { harness, capture, probe };
+    },
+    act: async ({ harness, capture, probe }) => {
+      const sockets = harness.sockets.length;
+      const sent = capture.requests.length;
+      for (let tick = 0; tick < 10; tick += 1) await probe();
+      assert.equal(harness.sockets.length, sockets, 'while the server does not answer, the attempt waits');
+      return { requests: capture.urls().slice(sent) };
+    },
   });
 });

@@ -255,8 +255,7 @@ async function updateWaveformAppearance(forceReload = false) {
     clearWaveformCanvas();
   }
   // The peaks belong to the song, not to one stream of it: a restart of the same song (a seek past
-  // the received audio in an outage) keeps its waveform, so the listener always sees where the head
-  // is moved.
+  // the received audio in an outage) keeps its waveform, so a seek always has it to aim at.
   // A pressed song's peaks can load before it sounds: the shown song keeps the ones last drawn.
   const active = state.player.waveform.compactPeaks;
   const drawn = state.player.waveform.shown;

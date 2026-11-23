@@ -292,8 +292,7 @@ async function requestOfferedPlaybackClaim(claim, track) {
   }
 }
 
-// A start nobody answered is not refused (otherwise a press after the network returned needed up to
-// six tries before a song played): the connections a
+// A start nobody answered is not refused, so one press starts a song after an outage: the connections a
 // browser kept from before an outage can stay dead for a while after it, so every request on them
 // goes unanswered. The song plays on, and its claim is asked again every couple of seconds until the
 // server answers; only a refusal stops it.

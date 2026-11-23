@@ -1461,8 +1461,7 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   assert.equal(context.isActivePlaybackOwner(), false);
 });
 
-// After the network came back, a press on another song needed up to six tries before it played.
-// Connections kept from before an outage stay dead for a
+// One press starts another song after an outage. Connections kept from before an outage stay dead for a
 // while after it, so each press's requests went unanswered and the press was given up.
 test('a start whose requests go unanswered plays on and asks again until the server answers', async () => {
   const requests = [];

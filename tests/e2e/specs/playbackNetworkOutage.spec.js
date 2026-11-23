@@ -2,6 +2,12 @@ import { expect, test } from '../support/baseFixtures.js';
 import { startCpuLoad } from '../helpers/cpuLoad.js';
 import { startNetworkRelay } from '../helpers/networkRelay.js';
 import { assertTitleFollowsSound, observeSwitchPresentation } from '../helpers/index.js';
+import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.js';
+
+// A seek's place is painted within a few frames even at full load; a regression held the page for seconds.
+// The limit is the one this check always had, below 500 ms: 500 itself fails, as the helper passes its ceiling.
+// The target only sets where the report says the grace began; it is no new approved budget.
+const SEEK_PAINT_BUDGET = defineTimingBudget({ targetMaximum: 299.999, graceMs: 200 });
 
 const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
@@ -56,8 +62,8 @@ function framesAfterPress({ started, frames, events }) {
     afterClick: frame.at > clickEnded }));
 }
 
-// A seek past the received audio while offline keeps the player playing, silent at its place, as on
-// mobile; when the network returns the song plays on by itself, and one press of Play is enough.
+// A seek past the received audio keeps the player on play, as on mobile, silent until the network is
+// back; then it plays on by itself, and Play works with one press.
 test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }, testInfo) => {
@@ -175,9 +181,9 @@ test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays play
   }
 });
 
-// On a laptop, a click past the received audio stops the old audio at once and waits there, still
-// playing; after the network returns one press on another song plays it, and Play is taken at once,
-// the first time. A laptop that keeps another network interface (a VPN or a virtual
+// On a laptop, a click past the received audio stops the music at once and moves the time there,
+// Play never pauses by itself, and after the network is back one press starts another song or Play.
+// A laptop that keeps another network interface (a VPN or a virtual
 // adapter) never reports `offline`, and connections made before the outage stay dead afterwards.
 test('FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received audio falls silent at once and stays playing, and after the network returns one press plays the current or another song', {
   tag: '@area:playback',
@@ -295,9 +301,9 @@ test('FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received a
   }
 });
 
-// On a laptop with the CPU at 100%: one click past the received audio shows its place at once and
-// stays there, with the waveform; the song plays on by itself when the network comes back; and one
-// press on another song plays it. A full CPU is no excuse for any of these.
+// On a laptop with the CPU at 100%: a click past the received audio takes, shows its place at once
+// and moves the head there with the first click; the waveform stays; playback goes on when the
+// network is back; one press starts another song after it. A full CPU excuses none of it.
 test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received audio in an outage shows its place at once with one click and keeps the waveform, playback goes on by itself when the network returns, and one press plays another song', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, settingsModalAppBarActions, stepLogger, trackModalActions, utilityAppearanceActions, utilityTabBarActions }, testInfo) => {
@@ -313,7 +319,7 @@ test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received 
   let load = null;
   let durationSeconds = 0;
 
-  // A laptop like this never reports `offline`; connections made before the outage stay dead.
+  // This laptop never reports `offline`; connections made before the outage stay dead.
   const wifiOff = () => relay.stall();
   const wifiOn = () => relay.restore({ revive: false });
   const audibleAfter = async (mark, path) => {
@@ -438,9 +444,9 @@ test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received 
   }
 });
 
-// A click in the received audio plays at once, the head never jumps to the start, the song plays on
-// by itself when the server is back, one Play continues it, and one press on another song plays it.
-// Here the app is served through a Cloudflare tunnel from a laptop:
+// A click in the received audio plays at once, the head never resets to the start, the song goes on
+// when the network is back, Play works then, and one press starts another song. The laptop here
+// serves the app through a Cloudflare tunnel:
 // Wi-Fi off cuts the browser and the server alike, and for about a minute after it returns the
 // tunnel answers every request with a 530 error page.
 for (const { id, serverBackAfterMs, outcome } of [
@@ -614,9 +620,9 @@ for (const { id, serverBackAfterMs, outcome } of [
   });
 }
 
-// With the network on, a seek to another place never stops playback, resets the head to the start of
-// the track or dims Play. Reproduced: the third seek stopped playback with an AudioWorklet protocol
-// rejection, a late chunk of the stream the seek had just replaced.
+// With the network on, a seek never stops playback, resets the head to the start or dims Play. It did:
+// the third seek stopped playback with an
+// AudioWorklet protocol rejection, a late chunk of the stream the seek had just replaced.
 test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back each show their place, never reset to the start, never stop or disable Play, and the last one plays', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }) => {
@@ -645,7 +651,7 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
       expect(durationSeconds).toBeGreaterThan(120);
     });
 
-    // A seek shows the head at its new place at once, as it did before streaming playback.
+    // A seek shows the head at its new place at once, as on main.
     await stepLogger.step('Ten rapid seeks: each paints its place within two frames, never the start, and Play stays playing and enabled', async () => {
       const fractions = [0.8, 0.3, 0.65, 0.15, 0.9, 0.5, 0.7, 0.2, 0.85, 0.4];
       const bounds = await player.timeline.boundingBox();
@@ -659,8 +665,7 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
         expect(painted, `the seek to ${target}s is on the bar in the first or second frame: ${JSON.stringify(frames.slice(0, 3))}`)
           .toBeGreaterThanOrEqual(0);
         expect(painted).toBeLessThanOrEqual(1);
-        // Main's player paints it within a few frames even at full load; the regression held the page for seconds.
-        expect(frames[painted].afterMs, `the seek to ${target}s is painted soon after the click`).toBeLessThan(500);
+        expectTimingBudget(expect, frames[painted].afterMs, SEEK_PAINT_BUDGET, `the seek to ${target}s painted after the click`);
         await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 2000 })
           .toBeGreaterThanOrEqual(target - 2);
         for (let read = 0; read < 4; read += 1) {
@@ -712,8 +717,8 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
   }
 });
 
-// A click past the received audio leaves Play neither dimmed nor disabled: the player stays playing,
-// the head still for want of data, and the song continues on its own when the network returns.
+// A click past the received audio leaves Play playing and enabled, the head still for lack of data,
+// and the song continues on its own when the network returns.
 test('FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }, testInfo) => {

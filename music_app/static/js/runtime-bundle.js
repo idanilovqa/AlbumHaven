@@ -8261,7 +8261,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
 const STREAMING_DECODER_BASE_URL = '/static/vendor/wasm-audio-decoders/';
 // Each build decodes in a Worker of its own (its `workerClassName`), so a song decoding never holds
 // the page: on the page's thread a press waited behind about 0.7 s of decoding a second at 4x CPU
-// (a press must answer at once even at 100% CPU). A browser that cannot start one
+// (a press is instant even at 100% CPU). A browser that cannot start one
 // decodes on the page's thread instead.
 const STREAMING_DECODER_BUILDS = {
   mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder', workerClassName: 'MPEGDecoderWebWorker' },
@@ -8504,13 +8504,14 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
-// A lost socket is replaced at once, then after each of these delays, then every last one. An attempt
-// the network refuses costs next to nothing, and a server back after an outage (a tunnel's minute of
-// 502s) is found within a second (a longer wait here stacked up to 2 s with the claim's).
+// A lost socket is replaced at once, then after each of these delays, then every last one, each retry
+// first asking over HTTP whether the server is back (streamingServerIsDown), so a server back after an
+// outage (a tunnel's minute of 502s) is found within a second (up to 2 s of this wait used to stack
+// with the claim's).
 const STREAMING_RECONNECT_DELAYS_MS = [500, 1000];
 // The server sends a heartbeat this often (`/playback/pcm?heartbeat=`), however long its answers
 // take: a socket is judged by what it hears, never by how fast it is answered, because a busy
-// server answers slowly (as one does with the CPU at 100%).
+// server answers slowly, as with the CPU at 100%.
 const STREAMING_HEARTBEAT_MS = 250;
 // A socket that heard nothing at all for this long died without closing; on a slow mobile network
 // one 16 KB frame of audio, and the heartbeats queued behind it, can take a few seconds to arrive.
@@ -8526,15 +8527,16 @@ const STREAMING_LATE_PAGE_READ_MS = 100;
 const STREAMING_PRESS_WAIT_REPORT_MS = 15000;
 // A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
 // Each attempt given up so allows the next one twice as long, up to 16 s: on a loaded machine a
-// connection that is only slow to open must open at last (as with the CPU at 100%).
+// connection that is only slow to open must open at last, CPU at 100% included.
 const STREAMING_CONNECT_DEADLINE_MS = 4000;
 const STREAMING_CONNECT_DEADLINE_DOUBLINGS = 2;
 // While a reconnect attempt hangs, the server is asked this often whether it answers again. Once it
 // does, the hanging attempt (begun on the network that went) is replaced at once with the short
-// deadline: a network that froze and came back gives no other sign (measured: playback resumed
-// 19.6 s after the network was back while a 16 s attempt hung). It is asked again as soon as an
-// answer settles, at most every 0.4 s, so the first good answer after a run of tunnel 530s replaces
-// the attempt within about half a second, not after a long while.
+// deadline: a network that froze and came back gives no other sign (playback resumed 19.6 s after the
+// network was back while a 16 s attempt hung). It is
+// asked again as soon as an answer settles, at most every 0.4 s, so the first good answer after a
+// run of tunnel 530s replaces the attempt within about half a second, so the app notices at once that
+// the network is back.
 const STREAMING_REACHABILITY_TICK_MS = 400;
 // How long one question waits for its answer.
 const STREAMING_REACHABILITY_PROBE_MS = 1500;
@@ -8560,7 +8562,7 @@ const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
 const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
 // The most encoded bytes one decode call takes. A local seek or a kept track queues the rest of the
 // song as one chunk; decoded whole, it held the page for seconds before the playhead could move
-// (a seek must show its new place at once).
+// to its new place.
 const STREAMING_ENCODED_DECODE_SLICE_BYTES = 16 * 1024;
 // Several credits stay in flight, so a start's cushion does not wait one round trip per credit.
 const STREAMING_ENCODED_CREDIT_WINDOW_BYTES = 4 * STREAMING_ENCODED_CREDIT_BYTES;
@@ -9136,8 +9138,9 @@ function forgetLostStreamingSocket() {
 // still waiting for the server, or audio with no seek table to splice at. The head stays at the
 // place (a seek's or start's target) and waits there, silent, in the state the listener chose, and
 // the song opens there on the next socket, however long the server takes to answer again, as an
-// offline seek past the received audio does. Stopping, with one retry while the network was still
-// gone, reset the head to the start of the track and left the song stopped when the network returned.
+// offline seek past the received audio does. The head never resets to the start, and the song goes
+// on when the network is back. Stopping, with one retry while the network was still gone, lost the
+// place and the play.
 function detachAtStreamingPlace(code) {
   const engine = streamingEngineState();
   const seek = engine.pendingSeek;
@@ -9209,10 +9212,28 @@ function scheduleStreamingReconnect() {
   if (!detached || detached.paused || engine.socket || detached.timer) return;
   const delays = STREAMING_RECONNECT_DELAYS_MS;
   const delay = delays[Math.min(detached.failures, delays.length) - 1];
-  detached.timer = window.setTimeout(() => {
+  const timer = window.setTimeout(async () => {
+    const down = await streamingServerIsDown();
+    if (detached.timer !== timer || engine.detached !== detached) return;
     detached.timer = 0;
-    if (engine.detached === detached) reconnectStreamingTransport();
+    if (down) scheduleStreamingReconnect();
+    else reconnectStreamingTransport();
   }, delay);
+  detached.timer = timer;
+}
+
+// Whether a retry would only fail again: the browser is offline, or the server's tunnel answers
+// without it (502/530). Such a retry is skipped, not tried. Chromium delays every socket a page
+// opens by 1-5 s once most of its recent handshakes failed (a failed or given-up handshake counts
+// for two minutes), so a tunnel's minute of 530 handshakes made the sockets after it wait longer
+// than their 4 s deadline, and one press played nothing for 8 s after the server answered. A
+// question over HTTP is not delayed. A question nothing answers is no reason to skip: a frozen or
+// overloaded network still gets its attempt.
+async function streamingServerIsDown() {
+  if (window.navigator?.onLine === false) return true;
+  if (typeof fetch !== 'function') return false;
+  const response = await askStreamingServer();
+  return response?.status >= 500;
 }
 
 // A socket opened while detached closed again.
@@ -9342,15 +9363,15 @@ function resumeStreamingReconnect() {
 }
 
 // While detached, a seek inside the audio here plays at once; past it, the track restarts there
-// and its open waits for the next socket (the head jumps, and waits at the target). A
+// and its open waits for the next socket (jump, and wait at the target). A
 // paused player stays paused there.
 function seekStreamingAudioHere(detached, startFrame) {
   return detached.kind !== 'reopen'
     && (detached.spliceFrame === null || startFrame < detached.spliceFrame);
 }
 
-// A seek shows its place at once, with one click, also at 100% CPU. The restart that opens the
-// song at the place can
+// A click shows its place at once and the first click moves the head there, CPU at 100% included.
+// The restart that opens the song at the place can
 // take a while on a loaded machine, so the head shows the place and the old audio stops at once,
 // and the old audio's last reports do not move the head until the restart replaces it.
 function jumpWhileDetached(track, startSeconds) {
@@ -11325,7 +11346,7 @@ function requestStreamingSampleRate(track) {
   });
 }
 
-// A probe sent to a socket that died without closing (otherwise a press on another song after the
+// A probe sent to a socket that died without closing (a press on another song after the
 // network returned waited forever) goes again on the socket that replaces it.
 function sendStreamingProbe(requestId, probe) {
   probe.socket = streamingEngineState().socket;
@@ -11366,26 +11387,34 @@ function probeStreamingReachability(socket) {
     }
     if (asking || performance.now() - socket.connectStartedMs < STREAMING_REACHABILITY_MIN_HANG_MS) return;
     asking = true;
-    const abort = typeof AbortController === 'function' ? new AbortController() : null;
-    const deadline = window.setTimeout(() => abort?.abort(), STREAMING_REACHABILITY_PROBE_MS);
     try {
-      const response = await fetch('/playback/state', { cache: 'no-store', credentials: 'same-origin', signal: abort?.signal });
-      // A tunnel without its server answers 502/530: not reachable yet.
-      if (response.status >= 500 || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+      const response = await askStreamingServer();
+      // Nothing answered, or a tunnel without its server did (502/530): not reachable yet.
+      if (!response || response.status >= 500 || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
       clearInterval(timer);
       engine.detached.abandonedConnects = 0;
       abandonStreamingConnectingSocket(socket);
       // The next attempt is on the network that answers: it is left to connect.
       engine.detached.probedReconnect = true;
       reconnectStreamingTransport();
-    } catch (_error) {
-      // Still unreachable.
     } finally {
-      window.clearTimeout(deadline);
       asking = false;
     }
   }, STREAMING_REACHABILITY_TICK_MS);
   return timer;
+}
+
+// Asks the server for the playback state: its response, or null when nothing answered in time.
+async function askStreamingServer() {
+  const abort = typeof AbortController === 'function' ? new AbortController() : null;
+  const deadline = window.setTimeout(() => abort?.abort(), STREAMING_REACHABILITY_PROBE_MS);
+  try {
+    return await fetch('/playback/state', { cache: 'no-store', credentials: 'same-origin', signal: abort?.signal });
+  } catch (_error) {
+    return null;
+  } finally {
+    window.clearTimeout(deadline);
+  }
 }
 
 // Opens the engine's playback socket; queued controls wait for it to open.
@@ -11931,8 +11960,7 @@ async function openBrowserStreamingTrack(track, {
   const startRequestId = engine.startRequestId;
   // A start while the network is still gone (or the server not yet back) waits for the next socket
   // as an offline seek past the received audio does: it opens on whichever socket connects next,
-  // with no second press (otherwise one press needed up to six tries). Any other start leaves the
-  // lost socket's audio behind.
+  // with no second press. Any other start leaves the lost socket's audio behind.
   const detached = engine.detached;
   if (detached && !keepDetached && engine.socket?.readyState !== WebSocket.OPEN) {
     detached.kind = 'reopen';
@@ -15416,8 +15444,7 @@ async function requestOfferedPlaybackClaim(claim, track) {
   }
 }
 
-// A start nobody answered is not refused (otherwise a press after the network returned needed up to
-// six tries before a song played): the connections a
+// A start nobody answered is not refused, so one press starts a song after an outage: the connections a
 // browser kept from before an outage can stay dead for a while after it, so every request on them
 // goes unanswered. The song plays on, and its claim is asked again every couple of seconds until the
 // server answers; only a refusal stops it.
@@ -19830,8 +19857,7 @@ async function updateWaveformAppearance(forceReload = false) {
     clearWaveformCanvas();
   }
   // The peaks belong to the song, not to one stream of it: a restart of the same song (a seek past
-  // the received audio in an outage) keeps its waveform, so the listener always sees where the head
-  // is moved.
+  // the received audio in an outage) keeps its waveform, so a seek always has it to aim at.
   // A pressed song's peaks can load before it sounds: the shown song keeps the ones last drawn.
   const active = state.player.waveform.compactPeaks;
   const drawn = state.player.waveform.shown;

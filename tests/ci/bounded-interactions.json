@@ -4823,6 +4823,21 @@
       "rollback": "Revert the ownership presentation comparison in syncMirroredPlaybackState; every broadcast from another tab then repaints the whole player and waveform again. No data or API change."
     },
     {
+      "id": "js:runtime/playback-ownership-helpers.js#initPlaybackOwnershipCoordinator:online",
+      "action": "online listeners installed by initPlaybackOwnershipCoordinator (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#initPlaybackOwnershipCoordinator:event:online"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest",
       "action": "Select tracks in a burst, renew the claim, release it, and be refused by another owner",
       "entrypoints": [
@@ -4909,6 +4924,21 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/playback-ownership-helpers.js#scheduleUnansweredPlaybackClaimRetry",
+      "action": "setTimeout timers installed by scheduleUnansweredPlaybackClaimRetry (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#scheduleUnansweredPlaybackClaimRetry:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#startPlaybackOwnershipHeartbeat",
@@ -5280,6 +5310,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-streaming-decoders.js#createStreamingDecoder",
+      "action": "setTimeout timers installed by createStreamingDecoder (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-decoders.js#createStreamingDecoder:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-decoders.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-streaming-decoders.js#loadStreamingDecoderScript",
       "action": "error/load listeners installed by loadStreamingDecoderScript",
       "entrypoints": [
@@ -5294,6 +5339,36 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#connectStreamingSocket",
+      "action": "setTimeout timers installed by connectStreamingSocket (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: a hung connect given up at its deadline opens one socket per cycle over 1,000 attempts",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#keepStreamingSocketAlive",
@@ -5328,13 +5403,29 @@
       "rollback": "Test-only contract; the keepalive is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its setInterval entrypoint."
     },
     {
-      "id": "js:runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine",
-      "action": "close/error/message/open/processorerror listeners installed by prepareStreamingPlaybackEngine",
+      "id": "js:runtime/player-streaming-engine.js#openBrowserStreamingTrack",
+      "action": "setTimeout timers installed by openBrowserStreamingTrack (hand-written: --sync was not run)",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:close",
-        "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:error",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#openBrowserStreamingTrack:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine",
+      "action": "message/processorerror listeners installed by prepareStreamingPlaybackEngine, and the socket's close/error/message/open listeners installed by connectStreamingSocket (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:close",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:error",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:message",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:open",
         "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:message",
-        "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:open",
         "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:processorerror"
       ],
       "owners": [
@@ -5381,10 +5472,49 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrack",
-      "action": "setTimeout timers installed by startBrowserStreamingTrack",
+      "id": "js:runtime/player-streaming-engine.js#probeStreamingReachability",
+      "action": "setInterval timers installed by probeStreamingReachability, and the playback-state question and its deadline in askStreamingServer, which the reconnect retry asks too (hand-written: --sync was not run)",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#startBrowserStreamingTrack:timer:setTimeout"
+        "js:music_app/static/js/runtime/player-streaming-engine.js#askStreamingServer:request:fetch",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#askStreamingServer:timer:setTimeout",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#probeStreamingReachability:timer:setInterval"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/state"
+        ],
+        "forbidden": []
+      },
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "request capture: the reachability probe asks only the playback state, once per tick, over a 1,000-tick outage",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#publishStreamingDiagnostics",
+      "action": "requestAnimationFrame timers installed by publishStreamingDiagnostics (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#publishStreamingDiagnostics:timer:requestAnimationFrame"
       ],
       "owners": [
         "music_app/static/js/runtime/player-streaming-engine.js"
@@ -5394,6 +5524,85 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#scheduleStreamingReconnect",
+      "action": "setTimeout timers installed by scheduleStreamingReconnect (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#scheduleStreamingReconnect:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 20
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: a reconnect retry asks once and opens one socket per tick over a 1,000-attempt outage",
+      "performanceTargets": [],
+      "rollback": "Revert the commit that makes a retry ask the playback state first; retries then open one socket each without a question, and this budget returns to 10."
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#watchStreamingNetwork",
+      "action": "change/offline/online listeners installed by watchStreamingNetwork (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingNetwork:event:change",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingNetwork:event:offline",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingNetwork:event:online"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#watchStreamingSocketLiveness",
+      "action": "setInterval timers installed by watchStreamingSocketLiveness (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingSocketLiveness:timer:setInterval"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 0,
+        "outputEmissions": 0,
+        "domMutations": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: the socket liveness check does no work per tick over a 1,000-tick session",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-waveform-peaks.js#loadSavedLoopWaveformPeaks",

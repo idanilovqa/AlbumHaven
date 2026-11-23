@@ -8201,6 +8201,29 @@ test('a start whose silent socket is replaced while another song\'s rate is stil
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
+// A press whose song's rate is still asked is already switching to that song: the engine says which,
+// as it does once the switch waits for its audio, so a second press during it is seen as one.
+test('a press still asking its song\'s rate names the song it switches to', async () => {
+  const harness = encodedHarness({
+    holdSampleRateProbes: true,
+    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000]]),
+  });
+  await startEncoded(harness, makeTrack('01.mp3'));
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.mp3').path, 'its rate is asked');
+  assert.equal(harness.sockets[0].sent.some(({ type, path }) => type === 'open' && path === makeTrack('02.mp3').path),
+    false, 'nothing is opened before the rate is known');
+  assert.equal(harness.context.streamingEngineState().pendingStart?.track?.path, makeTrack('02.mp3').path);
+
+  void harness.api.start(makeTrack('03.mp3'));
+  await settleTwice(harness);
+  assert.equal(harness.context.streamingEngineState().pendingStart?.track?.path, makeTrack('03.mp3').path,
+    'a later press takes over');
+});
+
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);

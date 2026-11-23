@@ -258,9 +258,88 @@ def test_the_next_source_change_recovers_a_common_scope_once(monkeypatch):
     assert scheduled == [config]
 
 
+class _RunningExecutor:
+    """Runs each submitted action at once, as the write executor's thread would, into a completed future."""
+
+    def __init__(self):
+        self.submitted = 0
+
+    def submit(self, action):
+        from concurrent.futures import Future
+
+        self.submitted += 1
+        future = Future()
+        try:
+            future.set_result(action())
+        except Exception as error:
+            future.set_exception(error)
+        return future
+
+
 def test_a_failed_custom_first_build_is_not_queued_again_at_the_same_generation(monkeypatch):
     """(d) A paged request queues a never-built custom scope's first build once; after it fails, more requests
-    at the same source generation queue nothing; a source change allows one more."""
+    at the same source generation queue nothing, including one that arrives the moment the build's
+    single-flight slot is released; a source change allows one more."""
+    from music_app.services import cache
+
+    executor = _RunningExecutor()
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", executor)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-custom-first-build"}
+    repository, context = _pending_repository(monkeypatch, config)
+    params = {"gallery_page_size": "8", "category": "hoard"}
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("custom scope build failed")))
+
+    def request():
+        with pytest.raises(browse.GalleryProjectionPending):
+            repository.build_root_startup_preview_payload(query_params=params)
+
+    import threading
+
+    gap = {"armed": True, "released": False}
+
+    class ReleasingPending(dict):
+        """Notes the moment the failed build's single-flight slot is popped."""
+
+        def pop(self, key, *default):
+            value = super().pop(key, *default)
+            if gap["armed"]:
+                gap["armed"], gap["released"] = False, True
+            return value
+
+    class GapLock:
+        """A request lands right after that slot's lock is released, before any later completion callback."""
+
+        def __init__(self):
+            self._lock = threading.Lock()
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *_exc):
+            self._lock.release()
+            if gap["released"]:
+                gap["released"] = False
+                request()
+            return False
+
+    monkeypatch.setattr(gallery, "_PENDING", ReleasingPending())
+    monkeypatch.setattr(gallery, "_PENDING_LOCK", GapLock())
+    request()
+    assert executor.submitted == 1, "the failure is recorded before the slot is released"
+    for _request in range(5):
+        request()
+    assert executor.submitted == 1, "a failed first build is not queued again at the same generation"
+    context["generation"] = 3
+    request()
+    assert executor.submitted == 2, "a source change allows one more first build"
+
+
+def test_concurrent_custom_first_builds_submit_one_action_and_no_trailing_rebuild(monkeypatch):
+    """Two requests for the same never-built custom scope at once queue exactly one build, and nothing runs
+    after it."""
+    import threading
     from concurrent.futures import Future
     from music_app.services import cache
 
@@ -274,25 +353,46 @@ def test_a_failed_custom_first_build_is_not_queued_again_at_the_same_generation(
 
     monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
     monkeypatch.setattr(gallery, "_PENDING", {})
-    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-custom-first-build"}
-    repository, context = _pending_repository(monkeypatch, config)
-    params = {"gallery_page_size": "8", "category": "hoard"}
+    barrier = threading.Barrier(2, timeout=5)
+    schedule = gallery.schedule_gallery_projection_refresh
 
-    def request():
-        with pytest.raises(browse.GalleryProjectionPending):
-            repository.build_root_startup_preview_payload(query_params=params)
+    def together(*args, **kwargs):
+        barrier.wait()  # both requests have passed any check before either queues
+        return schedule(*args, **kwargs)
 
-    request()
-    request()  # while it runs: single-flight, and no trailing rebuild is stored behind it
+    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", together)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-concurrent-first-build"}
+    state = browse._root_sidebar_view_state({"category": "hoard"})
+    threads = [threading.Thread(target=gallery.queue_gallery_scope_first_build,
+                                kwargs={"config": config, "view_state": state, "generation": 2})
+               for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
     assert len(submitted) == 1
-    assert all(following is None for following, _generation in gallery._PENDING.values())
-    submitted[0].set_exception(RuntimeError("custom scope build failed"))
-    for _request in range(5):
-        request()
-    assert len(submitted) == 1, "a failed first build is not queued again at the same generation"
-    context["generation"] = 3
-    request()
-    assert len(submitted) == 2, "a source change allows one more first build"
+    submitted[0].set_result({"built": 1})
+    assert len(submitted) == 1, "no trailing second build after the first one"
+
+
+def test_a_custom_first_build_never_falls_into_a_whole_library_rebuild(monkeypatch):
+    """With incremental membership, a first build whose relations need a full gallery rebuild leaves that to
+    its owner: no ensure_gallery_projection_ready, and nothing recorded as failed at this generation."""
+    from music_app.services import cache, scoped_relation_projection
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", _RunningExecutor())
+    monkeypatch.setattr(gallery, "_PENDING", {})
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda *_a, **_k: {"initialized": True, "gallery_rebuild_required": True})
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("a first build ran the whole-library gallery rebuild"))
+    monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("a first build ran a gallery build"))
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-first-build-rebuild-required"}
+    state = browse._root_sidebar_view_state({"category": "hoard"})
+    gallery.queue_gallery_scope_first_build(config, view_state=state, generation=2, incremental_membership=True)
+    key = (config["ALBUM_HAVEN_APP_DATABASE_URL"], gallery.gallery_projection_scope_key(state))
+    assert key not in gallery._FAILED_FIRST_BUILDS, "the owner's rebuild moves the generation; no failure here"
 
 
 def test_a_request_with_a_published_common_scope_never_publishes_a_live_snapshot(monkeypatch):

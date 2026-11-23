@@ -9033,6 +9033,46 @@ test('a double tap on a song already sounding still restarts it', async (t) => {
   assert.equal(opensOf(harness, '01.flac').length, opens + 1);
 });
 
+// The pressed song's title and row stayed after the switch it named was given up.
+for (const ended of ['Pause', 'Play of the paused song']) {
+  test(`${ended} during a pending switch stops naming its song`, async (t) => {
+    const { harness } = await playingSong(t);
+    const rows = installRowPresses(harness);
+    const { context } = harness;
+    let drawn = null;
+    context.renderSelectedTrackState = () => {
+      drawn = context.state.player.selectedTrack?.path || context.state.player.current.path;
+    };
+    await rows.press('05.flac');
+    assert.equal(drawn, makeTrack('05.flac').path, 'the pressed song is named from its press, as ever');
+
+    if (ended === 'Pause') context.togglePlayerPlayback();
+    else {
+      // Paused by something other than the player's own Pause, which would already have superseded it.
+      harness.engine.snapshot.paused = true;
+      context.togglePlayerPlayback();
+    }
+    await harness.settle();
+
+    assert.equal(context.state.player.selectedTrack, null);
+    assert.equal(drawn, makeTrack('01.flac').path, 'the player and its rows show the playing song again');
+  });
+}
+
+test('a press on another song during a pending switch names that song at once, and never the playing one between', async (t) => {
+  const { harness } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  const { context } = harness;
+  const drawn = [];
+  context.renderSelectedTrackState = () => {
+    drawn.push(context.state.player.selectedTrack?.path || context.state.player.current.path);
+  };
+  await rows.press('05.flac');
+  await rows.press('06.flac');
+
+  assert.deepEqual(drawn, [makeTrack('05.flac').path, makeTrack('06.flac').path]);
+});
+
 test('a press on a different song still switches, and back', async (t) => {
   const { harness, node } = await playingSong(t);
   const rows = installRowPresses(harness);

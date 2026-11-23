@@ -962,6 +962,7 @@ function togglePlayerPlayback(options = {}) {
   if (playback.paused) {
     const track = state.player.current;
     const selectionToken = ++playerTrackSelectionToken;
+    clearSelectedTrack();
     Promise.resolve().then(async () => {
       if (selectionToken !== playerTrackSelectionToken) return false;
       const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
@@ -1013,6 +1014,8 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
   pendingPlayerPlaybackHandoffSelectionToken = ++playerTrackSelectionToken;
   const selectionToken = playerTrackSelectionToken;
+  // The switch it supersedes never finishes: nothing may go on naming its song.
+  clearSelectedTrack();
   const track = state.player.current;
   const session = state.player.listenSession;
   const ownership = typeof getPlaybackOwnershipState === 'function' ? getPlaybackOwnershipState() : null;

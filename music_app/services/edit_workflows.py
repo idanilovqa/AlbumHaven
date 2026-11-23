@@ -258,6 +258,8 @@ def _run_edit_jobs(
             log_app_event=log_app_event,
         )
         failure_payload["edit_outcome"] = "recovery_pending" if compensation_failures else "failed_rolled_back"
+        # The page says why by this stage (owner, 2026-11-22); the path and raw error stay in the log entry.
+        failure_payload["failure_stage"] = "media_write"
         return [], [], failure_payload
 
     for _job_index, raw_path, entry, repairs, changed_fields in sorted(

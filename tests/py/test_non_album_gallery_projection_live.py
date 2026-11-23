@@ -6,19 +6,22 @@ from tests.e2e.support import isolatedPostgres
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory
 
 
-@pytest.mark.parametrize("field,value,query", [
-    ("year", 2001, "2001"),
-    ("artist", "Scan Artist", "Scan Artist"),
-    ("album_artist", "Scan Owner", "Scan Owner"),
-    ("album", "Scan Release", "Scan Release"),
-    ("title", "Don't Stop", "Dont Stop"),
-    ("title", "Morning", "Mornng"),
-    ("album_artist", "Raw Artist", "Canonical Artist"),
-    ("exception_type", "non album rarity", "Non-album rarity"),
-    ("override", "Custom Collection", "Custom Collection"),
+@pytest.mark.parametrize("field,value,query,found", [
+    ("year", 2001, "2001", True),
+    ("artist", "Scan Artist", "Scan Artist", True),
+    ("album_artist", "Scan Owner", "Scan Owner", True),
+    ("album", "Scan Release", "Scan Release", True),
+    ("album_artist", "Raw Artist", "Canonical Artist", True),
+    # Loose search also matches an exact year, exception type or collection name.
+    # A stored "non album rarity" is the "Non-album rarity" type; case does not matter.
+    ("exception_type", "non album rarity", "non-album rarity", True),
+    ("override", "Custom Collection", "Custom Collection", True),
+    # Literal search: no typo matching.
+    ("title", "Morning", "Mornng", False),
+    ("exception_type", "non album rarity", "Non-album rarty", False),
 ])
 def test_global_loose_track_search_keeps_persisted_field_matches(
-    watcher_repair_inventory, field, value, query,
+    watcher_repair_inventory, field, value, query, found,
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -45,7 +48,7 @@ def test_global_loose_track_search_keeps_persisted_field_matches(
         canonical_to_aliases={"Canonical Artist": ["Raw Artist"]}, query=query,
         include_library_wide=True,
     )
-    assert [entry["path"] for entry in entries] == [track["path"]]
+    assert [entry["path"] for entry in entries] == ([track["path"]] if found else [])
 
 
 @pytest.mark.parametrize("source, exception", [

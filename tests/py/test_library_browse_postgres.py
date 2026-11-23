@@ -20431,3 +20431,28 @@ def test_root_source_totals_never_reach_a_connection_open_per_scope(tmp_path):
     ]
 
     assert hazards == []
+
+
+@pytest.mark.parametrize("query, found", [
+    # Loose search also matches an exact year, exception type or collection name, any case.
+    ("2001", True),
+    ("non-album rarity", True),
+    ("CUSTOM COLLECTION", True),
+    # The rest of the Gallery rule is kept: the whole query inside a field, no typo or word matching.
+    ("Mornng", False),
+    ("Non-album rarty", False),
+    ("Collection Custom", False),
+    ("1999", False),
+])
+def test_loose_track_search_also_matches_an_exact_year_exception_type_or_collection(query, found):
+    from music_app.services import library_browse_postgres as browse_module
+
+    rarity = {"path": "/music/Generic/a.flac", "title": "Morning", "year": 2001, "exception_type": "non album rarity"}
+    collection = {"path": "/music/Generic/b.flac", "title": "Morning", "year": "", "exception_type": "Custom Collection"}
+
+    matched = [entry["path"] for entry in (rarity, collection)
+               if browse_module._non_album_entry_matches_query(entry, query)]
+
+    expected = {"2001": [rarity["path"]], "non-album rarity": [rarity["path"]],
+                "CUSTOM COLLECTION": [collection["path"]]}
+    assert matched == (expected[query] if found else [])

@@ -296,7 +296,7 @@ def _counting_adapter(fixture):
                     read = self._inventory_rows_read() - before
                 except Exception:
                     read = 0
-                if read >= 200:
+                if read >= 20:
                     counted.heavy.append((read, f"{_app_caller()} | {statement[:200]}"))
             return cursor
 

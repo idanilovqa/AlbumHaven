@@ -12,7 +12,7 @@ const STREAMING_SILENCE_ACK_MS = 1000;
 const STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS = 0.2;
 const STREAMING_OUTPUT_DRAIN_MARGIN_MS = 20;
 // Play here in another tab of this browser must silence this one even while its main thread is busy
-// (owner, round 10: never both at once): a Worker hears that tab and holds a port to the audio thread.
+// (never both at once): a Worker hears that tab and holds a port to the audio thread.
 // It acts only on a takeover that names this tab's client, which the server gives only to its account.
 const STREAMING_SILENCE_RELAY_SOURCE = `let clientId = '';
 let port = null;
@@ -609,8 +609,8 @@ function getSoundingStreamingPlayback() {
   };
 }
 
-// Play here elsewhere may start only after this tab is silent (owner, round 10: "two tabs play shortly
-// at the same time"). Resolves once nothing more is rendered, to a function that resolves once what was
+// Play here elsewhere may start only after this tab is silent, so two tabs never play at the same
+// time. Resolves once nothing more is rendered, to a function that resolves once what was
 // rendered has left the output, true if it is still silent then. Null when the audio thread never said so.
 async function silenceStreamingPlaybackForHandover() {
   const engine = streamingEngineState();

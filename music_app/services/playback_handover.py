@@ -1,6 +1,6 @@
 """Play here asks the playing client, over its playback socket, to fall silent and say what sounded where.
 
-Only its word is proof of silence (owner, 2026-11-22: "I don't want plays to overlap"): no socket, a closed
+Only its word is proof of silence, so plays never overlap: no socket, a closed
 one or no answer in time means the press does not start. The holder first asks whether the press is still
 wanted, so a press that is over stops nobody.
 """

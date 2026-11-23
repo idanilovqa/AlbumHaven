@@ -245,7 +245,7 @@ class NativePlaybackController(
         private set
 
     private val claims = PlaybackClaimOwner(claimApi, clientId, io, ::post, clock, ::onClaimEvent) {
-        // Where the song is, so another device can take it over there (owner, 2026-11-17).
+        // Where the song is, so another device can take it over there.
         queue.getOrNull(index)?.durationMs?.takeIf { it > 0 }?.let { ClaimPosition(positionMs().coerceIn(0, it), it) }
     }
 
@@ -483,7 +483,7 @@ class NativePlaybackController(
             maybeAnswerHandover()
             maybeReconnect()
             maybeRecoverStalledStart()
-            // A stream may buffer while the claim is requested; only an owner is heard, and only within its
+            // A stream may buffer while the claim is requested; only the claim's holder is heard, and only within its
             // five minutes without the server. A fade that can no longer be heard ends at once: the claim
             // is given back only after it.
             val wasPausing = pausing()
@@ -701,9 +701,8 @@ class NativePlaybackController(
     }
 
     /**
-     * Playback is heard only while it owns the claim, and for five minutes without the server (owner,
-     * 2026-11-22: "You cannot just start without an answer"). This replaces the instant start of
-     * 2026-11-08: a play fills its buffer while it asks.
+     * Playback is heard only while it holds the claim, and for five minutes without the server: nothing
+     * starts without the server's answer. A play fills its buffer while it asks.
      */
     private fun mayBeHeard(): Boolean = claims.maySound()
 
@@ -1134,10 +1133,10 @@ class NativePlaybackController(
     }
 
     /**
-     * Play here on another device asks this one over the socket (owner, 2026-11-22): it asks whether the
+     * Play here on another device asks this one over the socket: it asks whether the
      * press is still wanted. Told to stop, it falls silent
      * at once and, once the paused output's last buffer has left the device, answers the item it
-     * sounded and where (owner, round 10: never both at once). A skip silences the outgoing item at
+     * sounded and where, so the two never sound at once. A skip silences the outgoing item at
      * once and a gapless move changes the item at its boundary, so the queue's current item is the one
      * that sounds. With nothing sounding or wanted it says it is silent, and nobody waits for it.
      * True when [text] was the handover's and not the stream's.

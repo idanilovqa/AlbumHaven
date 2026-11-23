@@ -150,7 +150,7 @@
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
       this.consecutiveAlbumContinuity = false;
-      // The player fails closed (owner, 2026-11-22): nothing sounds without a grant still inside the time
+      // The player fails closed: nothing sounds without a grant still inside the time
       // allowed without the server. Kept here, so no frozen page or sleeping computer outlasts it.
       this.awaitsPermission = options?.processorOptions?.awaitsPermission === true;
       this.soundUntilWallMs = 0;

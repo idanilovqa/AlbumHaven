@@ -8451,7 +8451,7 @@ const STREAMING_SILENCE_ACK_MS = 1000;
 const STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS = 0.2;
 const STREAMING_OUTPUT_DRAIN_MARGIN_MS = 20;
 // Play here in another tab of this browser must silence this one even while its main thread is busy
-// (owner, round 10: never both at once): a Worker hears that tab and holds a port to the audio thread.
+// (never both at once): a Worker hears that tab and holds a port to the audio thread.
 // It acts only on a takeover that names this tab's client, which the server gives only to its account.
 const STREAMING_SILENCE_RELAY_SOURCE = `let clientId = '';
 let port = null;
@@ -9048,8 +9048,8 @@ function getSoundingStreamingPlayback() {
   };
 }
 
-// Play here elsewhere may start only after this tab is silent (owner, round 10: "two tabs play shortly
-// at the same time"). Resolves once nothing more is rendered, to a function that resolves once what was
+// Play here elsewhere may start only after this tab is silent, so two tabs never play at the same
+// time. Resolves once nothing more is rendered, to a function that resolves once what was
 // rendered has left the output, true if it is still silent then. Null when the audio thread never said so.
 async function silenceStreamingPlaybackForHandover() {
   const engine = streamingEngineState();
@@ -14264,13 +14264,13 @@ function failStreamingEngine(source, event, reason) {
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 // A playing tab renews this often: its listen writes need a live lease. A missed renewal frees nothing
-// (owner, 2026-11-22: "I don't want plays to overlap"): only the holder's word that it is silent does.
+// (plays never overlap): only the holder's word that it is silent does.
 const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
 // Renewal ticks after which a tab that is not playing gives back a claim it holds (a start that failed,
 // autoplay the browser held back: no lease frees it), and an asked tab that never heard the press was over
 // looks for itself. A pause drains its listen writes, and a press is over, well before.
 const PLAYBACK_OWNERSHIP_SILENT_TICKS = 3;
-// Music stops this long after the last answered request was sent (owner, 2026-11-22), so that a device that
+// Music stops this long after the last answered request was sent, so that a device that
 // died blocks nobody for longer: the server lets another start 5 s after this, never earlier.
 const PLAYBACK_SILENT_WITHOUT_SERVER_MS = 300000;
 // A start nobody answered is asked again this often, with no second press.
@@ -14281,8 +14281,8 @@ const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
 // This tab's playback identity, kept when a page unloads so the next page of the same tab renews the
-// same claim instead of being refused while the old page's lease runs (sandbox5, 2026-11-19: Play after
-// a page load gave 409 and no sound; the unload beacon can always be dropped). Written only at unload
+// same claim instead of being refused while the old page's lease runs (Play after a page load gave 409
+// and no sound; the unload beacon can always be dropped). Written only at unload
 // and taken at load, so a duplicated tab never shares a live tab's identity.
 const PLAYBACK_SAME_TAB_STORAGE_KEY = 'albumhaven.playbackSameTab.v1';
 let sameTabPlaybackClaim = takeSameTabPlaybackClaim();
@@ -14534,8 +14534,8 @@ function loadsSilentlyWhileAsking() {
   return !playingEngine()?.holdsOwnClaim && !playingEngineHandshake();
 }
 
-// An outage start waits and then starts by itself (owner, 2026-11-22), as after the retest of B-D4 round 6
-// ("I had to click into another song 6 TIMES"). A newer press, a pause or a takeover ends the wait.
+// An outage start waits and then starts by itself, with no second press. A newer press, a pause or a
+// takeover ends the wait.
 function waitToAskAgain() {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, PLAYBACK_OWNERSHIP_RETRY_MS);
@@ -14755,7 +14755,7 @@ async function playbackOwnershipTrack(track, previous = null) {
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
 }
 
-// A start is one request (owner, 2026-11-22: the shortened wait): with no reference kept, the claim names the
+// A start is one request (the shortened wait): with no reference kept, the claim names the
 // song by its path and the same answer brings the reference.
 function claimedPlaybackTrack(track, previous = null) {
   if (!track?.path) throw new Error('Playback track is unavailable.');
@@ -15035,7 +15035,7 @@ function notifyBlockedPlaybackStart() {
 }
 
 /**
- * A loaded page resumes by itself only what this tab was playing (owner, 2026-11-22): its last page handed
+ * A loaded page resumes by itself only what this tab was playing: its last page handed
  * on moments ago. A new tab, a restarted browser and a hand-over that was lost open paused.
  */
 function canThisTabResumePlayback() {
@@ -15054,7 +15054,7 @@ function canRestoreActivePlayback(parsedState) {
 
 function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   const ownership = getPlaybackOwnershipState();
-  // Back from the page cache, this page is the tab's live owner again: nothing is handed on.
+  // Back from the page cache, this page is the tab's live holder again: nothing is handed on.
   if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
   ownership.handoffAttempted = false;
   ownership.claimInDoubt = Boolean(ownership.activeClaim);
@@ -15096,7 +15096,7 @@ function playbackToHandOver(starting) {
 }
 
 /**
- * Play here elsewhere still wants this tab to stop (owner, 2026-11-22): it stops and, once its output is
+ * Play here elsewhere still wants this tab to stop: it stops and, once its output is
  * silent, answers the song that sounded and where, with its claim's token. No path crosses the socket.
  */
 function answerPlaybackHandover(requestId) {
@@ -15185,7 +15185,7 @@ async function settlePlaybackHandover() {
 }
 
 /**
- * Play while another client plays (owner, 2026-11-17, playback.claim.takeover): that client's
+ * Play while another client plays (playback.claim.takeover): that client's
  * song continues here from where it last said it was, and this claim replaces its claim.
  */
 function takeOverPlaybackHere() {
@@ -15208,7 +15208,7 @@ async function takeOverPlayback() {
 }
 
 /**
- * One request (owner, 2026-11-22): the server asks the playing client, which stops and says what
+ * One request: the server asks the playing client, which stops and says what
  * sounds and where, and moves the claim here with that answer. Without its word it refuses.
  */
 async function takeOverAtConfirmedPlace() {
@@ -19473,8 +19473,8 @@ async function updateWaveformAppearance(forceReload = false) {
   if (state.player.waveform.renderToken !== renderToken) return;
   const duration = Number(playback.duration) || 0;
   const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
-  // The waveform follows the sound, not the press (owner, round 10: "keep it until new song is
-  // playing"): the last one drawn stays where it was until the pressed song sounds.
+  // The waveform follows the sound, not the press: the last one drawn stays where it was until the
+  // pressed song sounds.
   const held = state.player.waveform.shown;
   if (held && keepsHeldWaveform(held, path, waveform, playback)) {
     drawWaveformOnCanvas(els.waveformCanvas, held.data, held.progressRatio);
@@ -41106,7 +41106,7 @@ let playerUnloadStatePersisted = false;
 let playerUnloadPlaybackSnapshot = null;
 
 // What this tab played when its page left, for that tab's next page alone: the saved state above is every
-// tab's (owner, 2026-11-22: a tab resumes only what that same tab was playing).
+// tab's, and a tab resumes only what that same tab was playing.
 const PLAYER_TAB_STATE_STORAGE_KEY = 'albumhaven.playerTabState.v1';
 
 function takeTabPlayerState() {
@@ -46601,7 +46601,7 @@ function resolvePlayerUiStatus(playback) {
     ? getMirroredPlaybackTrack()
     : null;
   // A song just pressed shows until it plays or fails: a refresh while it starts never repaints the
-  // song it replaces (owner, 2026-11-19: "name of the song blinks and return to the currently playing").
+  // song it replaces, so the title never blinks back to it.
   const displayTrack = mirroredTrack || state.player.selectedTrack || state.player.current;
   return {
     lockedByAnotherTab,
@@ -46619,8 +46619,8 @@ function resolvePlayerUiStatus(playback) {
 // The seek position and its time label: all that a timeline drag preview changes.
 function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, playingElsewhere, blockedLabel }) {
   // A pressed song waiting for its audio shows its own start place and length, as its title and waveform
-  // do: never the old song's running time under the new title (owner round 9, 2026-11-21: "the
-  // majority of player UI does not [...] All these should be syncronoized").
+  // do: never the old song's running time under the new title, as every part of the player switches
+  // together.
   const pendingTrack = !lockedByAnotherTab && state.player.selectedTrack
     && state.player.selectedTrack.path !== state.player.current?.path ? state.player.selectedTrack : null;
   const duration = pendingTrack ? Math.max(0, Number(pendingTrack.durationSeconds) || 0) : getPlayerDuration();
@@ -46849,10 +46849,10 @@ async function playTrackFromPayload(track, options = {}) {
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
   // A press paints and loads at once, also where the first press lets the browser start audio, and is
-  // heard only once granted: the audio thread holds it (owner, 2026-11-22: "You cannot just start without
-  // an answer", the shortened wait). It waits before loading where nothing can hold the sound (the app's
+  // heard only once granted: the audio thread holds it, as nothing starts without an answer (the
+  // shortened wait). It waits before loading where nothing can hold the sound (the app's
   // own player, unless it already owns playback), and where another client is known to play: then it
-  // paints nothing either and the overlay offers Play here (sandbox5, 2026-11-21).
+  // paints nothing either and the overlay offers Play here.
   const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
     && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
@@ -46887,7 +46887,7 @@ async function playTrackFromPayload(track, options = {}) {
   }
   showSelectedTrackImmediately(track, shouldAutoplay, startSeconds);
   // The pressed song paints before its stream starts: the start's own work never holds the frame
-  // that shows the press (owner: instant even at 100% CPU). Audio that is not yet running (the first
+  // that shows the press, which is instant even at 100% CPU. Audio that is not yet running (the first
   // press after load) starts in the press itself, where every browser lets the press start sound.
   if (shouldAutoplay && state.player.streaming?.context?.state === 'running') await afterNextPlayerPaint();
   if (selectionToken !== playerTrackSelectionToken) return false;
@@ -46933,7 +46933,7 @@ async function playTrackFromPayload(track, options = {}) {
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
   if (waitsForGrant && (diedWaiting || getPlayerPlaybackSnapshot().mode === 'error')) {
-    // Answered, it starts by itself (owner, 2026-11-22), with no second press.
+    // Answered, it starts by itself, with no second press.
     startedRole = await start();
     if (selectionToken !== playerTrackSelectionToken) return false;
   }

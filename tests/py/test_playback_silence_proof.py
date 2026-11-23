@@ -1,4 +1,4 @@
-"""A client starts only on proof that the holder is silent (owner, 2026-11-22: "I don't want plays to overlap").
+"""A client starts only on proof that the holder is silent, so plays never overlap.
 
 The claims run their own SQL on an in-memory SQLite table: these tests need and open no Postgres connection.
 """
@@ -265,7 +265,7 @@ def test_a_leaving_page_that_came_back_meanwhile_is_not_replaced(handing):
     assert refused(lambda: handing.hand_over(taker, observed, None)) == 409
 
 
-# Owner, 2026-11-22 ("Yes to all", b): music stops after 5 minutes without the server, and only then can
+# Music stops after 5 minutes without the server, and only then can
 # another start, 5 s later. The one timeout, and only for a player that silences itself.
 @pytest.mark.parametrize("surface", ["private_web", "mobile"])
 @pytest.mark.parametrize("takeover", [False, True])

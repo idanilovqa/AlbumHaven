@@ -195,7 +195,7 @@ async def acquire_playback(request: Request):
 
 
 async def _claimed_track(request, payload):
-    """The claim's track and what the answer adds to it. A start is one request (owner, 2026-11-22: the
+    """The claim's track and what the answer adds to it. A start is one request (the
     shortened wait): a browser without a reference names its song by path and is issued one in the same call.
     """
     track = payload.get("track")
@@ -214,7 +214,7 @@ async def _claimed_track(request, payload):
 
 async def _confirmed_takeover(request, payload):
     """playback.claim.takeover, confirmed: the holder stops and says what sounds and where. Without its word
-    that it is silent the press is refused (owner, 2026-11-22: "You cannot just start without an answer")."""
+    that it is silent the press is refused: nothing starts without an answer."""
     claims, actor = PostgresPlaybackClaims(playback_config(request)), request.state.current_actor
     hub = request.app.state.playback_pcm_registry.handover
     client_id = payload.get("clientId")
@@ -259,7 +259,7 @@ async def _scrobbling_status(request):
     """`scrobbling.available`: whether this claim's now-playing and scrobble writes can reach Last.fm.
 
     Only a renewal says it: a start is answered without waiting for the lookup, which took over half of a
-    claim's time (owner, 2026-11-22: the shortened wait).
+    claim's time (the shortened wait).
 
     True only when the actor may send both, the Last.fm API is configured and the account holds a
     session; it reveals nothing else. Omitted when it cannot be read, so clients fall back to the

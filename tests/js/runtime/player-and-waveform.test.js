@@ -132,8 +132,7 @@ function waveformSwitch() {
   return { context, old, next, oldPeaks, newPeaks, shows, snapshot };
 }
 
-// Owner, round 10 (2026-11-22): "Waveform of the currently playing song disappears for a split second -
-// keep it until new song is playing".
+// The playing song's waveform never disappears for a moment: it stays until the new song is playing.
 test('a switch keeps the old waveform, never blank, until the pressed song sounds, then shows its own', async () => {
   const { context, next, oldPeaks, newPeaks, shows, snapshot } = waveformSwitch();
   await context.updateWaveformAppearance();

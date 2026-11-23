@@ -187,7 +187,7 @@ let playerUnloadStatePersisted = false;
 let playerUnloadPlaybackSnapshot = null;
 
 // What this tab played when its page left, for that tab's next page alone: the saved state above is every
-// tab's (owner, 2026-11-22: a tab resumes only what that same tab was playing).
+// tab's, and a tab resumes only what that same tab was playing.
 const PLAYER_TAB_STATE_STORAGE_KEY = 'albumhaven.playerTabState.v1';
 
 function takeTabPlayerState() {

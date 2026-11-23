@@ -254,8 +254,8 @@ def test_claim_heartbeat_exact_expiry_matching_release_and_side_effect_guard(pla
 
 
 def test_a_lapsed_claim_renews_by_its_token_and_nobody_else_starts_meanwhile(playback_inventory):
-    # A client that lost its network keeps playing past its lease, so nobody may start over it (owner,
-    # 2026-11-22: "I don't want plays to overlap"); once it gave the claim back, its token is void.
+    # A client that lost its network keeps playing past its lease, so nobody may start over it (plays
+    # never overlap); once it gave the claim back, its token is void.
     fixture = playback_inventory
     clock = [datetime(2026, 11, 15, tzinfo=timezone.utc)]
     service = claims_service(fixture, lambda: clock[0])
@@ -287,7 +287,7 @@ def test_a_lapsed_claim_renews_by_its_token_and_nobody_else_starts_meanwhile(pla
 
 
 def test_a_takeover_flag_alone_replaces_no_holder(playback_inventory):
-    # Owner, 2026-11-22: "You cannot just start without an answer". Installed apps still send the flag.
+    # Nothing starts without an answer. Installed apps still send the flag.
     fixture = playback_inventory
     clock = [datetime(2026, 11, 17, tzinfo=timezone.utc)]
     service = claims_service(fixture, lambda: clock[0])
@@ -305,7 +305,7 @@ def test_a_takeover_flag_alone_replaces_no_holder(playback_inventory):
 
 
 def test_another_client_sees_where_the_claims_song_is_and_how_to_open_it(playback_inventory):
-    # Owner, 2026-11-17: after a takeover the other device's song continues here from where it was,
+    # After a takeover the other device's song continues here from where it was,
     # so each renewal carries its position and the claim state names the song for this client.
     fixture = playback_inventory
     clock = [datetime(2026, 11, 17, tzinfo=timezone.utc)]
@@ -385,7 +385,7 @@ def test_a_takeover_is_only_a_fresh_boolean_request(playback_inventory, extra):
 
 
 def test_a_confirmed_handover_is_never_overwritten_by_the_holders_late_save(playback_inventory):
-    # Owner, 2026-11-22: Play here starts where the playing tab says, whatever it saved before or since.
+    # Play here starts where the playing tab says, whatever it saved before or since.
     fixture = playback_inventory
     clock = lambda: datetime.now(timezone.utc)
     service = claims_service(fixture, clock)
@@ -417,7 +417,7 @@ def test_a_confirmed_handover_is_never_overwritten_by_the_holders_late_save(play
 
 
 def test_a_handover_without_an_answer_uses_the_newest_save_and_yields_to_a_third_client(playback_inventory):
-    # Owner, 2026-11-22: without its answer nothing starts. Only its word of silence takes the saved place.
+    # Without its answer nothing starts. Only its word of silence takes the saved place.
     fixture = playback_inventory
     now = datetime.now(timezone.utc)
     service = claims_service(fixture, lambda: now)
@@ -677,7 +677,7 @@ def test_stage_handoff_requires_exact_private_web_predecessor(playback_inventory
     assert getattr(failure.value, "status_code", None) == 403
 
 
-# sandbox5 (2026-11-18): closing a playing tab, then Play in another browser, was refused for 15-30 s.
+# Closing a playing tab, then Play in another browser, was refused for 15-30 s.
 def test_an_unloaded_tabs_pending_handoff_gives_way_to_the_first_fresh_acquire(playback_inventory):
     fixture = playback_inventory
     started_at = datetime(2026, 10, 25, tzinfo=timezone.utc)
@@ -743,7 +743,7 @@ def test_the_owners_token_renewal_withdraws_a_staged_handoff(playback_inventory)
     service.release(fixture.actor, client_id=client_id, claim_token=claim["claimToken"])
 
 
-# Owner, 2026-11-22: "I don't want plays to overlap". A holder that stopped renewing may play on through an
+# Plays never overlap. A holder that stopped renewing may play on through an
 # outage (B-D4): however long it is quiet, only its own word frees playback.
 @pytest.mark.parametrize("surface", ["private_web", "mobile"])
 @pytest.mark.parametrize("quiet_for", [11, 17, 31, 86_400])
@@ -2054,7 +2054,7 @@ def test_claim_reports_whether_its_listens_reach_lastfm_and_nothing_else(playbac
 
     def claim(actor, *, api_enabled=True, token=None, client_id=None):
         if token is None:
-            # A start is answered without the lookup (owner, 2026-11-22: the shortened wait): its renewal says it.
+            # A start is answered without the lookup (the shortened wait): its renewal says it.
             client_id, token = started(actor)
         configure_native_app(playback_app, fixture, actor)
         playback_app.state.config["LASTFM_API_ENABLED"] = api_enabled

@@ -330,7 +330,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect((await globalPlayerActions.readViewCheckpoint()).style).toBe('floating');
     await globalPlayerActions.expandPlayer();
   });
-  // Owner, mockup playback-elsewhere-status v003 (2026-11-17): Play stays pressable, never dimmed.
+  // Mockup playback-elsewhere-status v003: Play stays pressable, never dimmed.
   await stepLogger.step('A second tab keeps a pressable Play icon rather than a Locked label', async () => {
     await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
     await trackModalActions.waitForLoadedSummary();

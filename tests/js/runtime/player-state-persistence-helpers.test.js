@@ -1698,7 +1698,7 @@ test('a restore inside the APK re-attaches to the native queue instead of starti
   assert.deepEqual(browser.starts, [[persistedTrack.path, 12]]);
 });
 
-// Owner, 2026-11-22 ("Yes to all", e): a new tab opens paused; a tab resumes only what that same tab played.
+// A new tab opens paused; a tab resumes only what that same tab played.
 function openedTab({ own = null, ownHandover = true } = {}) {
   const shared = { track: { src: '/track?path=theirs.flac', path: 'C:/Music/theirs.flac', title: 'Theirs' },
     currentTime: 40, paused: false };

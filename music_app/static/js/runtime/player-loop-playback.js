@@ -161,7 +161,7 @@ function resolvePlayerUiStatus(playback) {
     ? getMirroredPlaybackTrack()
     : null;
   // A song just pressed shows until it plays or fails: a refresh while it starts never repaints the
-  // song it replaces (owner, 2026-11-19: "name of the song blinks and return to the currently playing").
+  // song it replaces, so the title never blinks back to it.
   const displayTrack = mirroredTrack || state.player.selectedTrack || state.player.current;
   return {
     lockedByAnotherTab,
@@ -179,8 +179,8 @@ function resolvePlayerUiStatus(playback) {
 // The seek position and its time label: all that a timeline drag preview changes.
 function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, playingElsewhere, blockedLabel }) {
   // A pressed song waiting for its audio shows its own start place and length, as its title and waveform
-  // do: never the old song's running time under the new title (owner round 9, 2026-11-21: "the
-  // majority of player UI does not [...] All these should be syncronoized").
+  // do: never the old song's running time under the new title, as every part of the player switches
+  // together.
   const pendingTrack = !lockedByAnotherTab && state.player.selectedTrack
     && state.player.selectedTrack.path !== state.player.current?.path ? state.player.selectedTrack : null;
   const duration = pendingTrack ? Math.max(0, Number(pendingTrack.durationSeconds) || 0) : getPlayerDuration();
@@ -409,10 +409,10 @@ async function playTrackFromPayload(track, options = {}) {
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
   // A press paints and loads at once, also where the first press lets the browser start audio, and is
-  // heard only once granted: the audio thread holds it (owner, 2026-11-22: "You cannot just start without
-  // an answer", the shortened wait). It waits before loading where nothing can hold the sound (the app's
+  // heard only once granted: the audio thread holds it, as nothing starts without an answer (the
+  // shortened wait). It waits before loading where nothing can hold the sound (the app's
   // own player, unless it already owns playback), and where another client is known to play: then it
-  // paints nothing either and the overlay offers Play here (sandbox5, 2026-11-21).
+  // paints nothing either and the overlay offers Play here.
   const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
     && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
@@ -447,7 +447,7 @@ async function playTrackFromPayload(track, options = {}) {
   }
   showSelectedTrackImmediately(track, shouldAutoplay, startSeconds);
   // The pressed song paints before its stream starts: the start's own work never holds the frame
-  // that shows the press (owner: instant even at 100% CPU). Audio that is not yet running (the first
+  // that shows the press, which is instant even at 100% CPU. Audio that is not yet running (the first
   // press after load) starts in the press itself, where every browser lets the press start sound.
   if (shouldAutoplay && state.player.streaming?.context?.state === 'running') await afterNextPlayerPaint();
   if (selectionToken !== playerTrackSelectionToken) return false;
@@ -493,7 +493,7 @@ async function playTrackFromPayload(track, options = {}) {
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
   if (waitsForGrant && (diedWaiting || getPlayerPlaybackSnapshot().mode === 'error')) {
-    // Answered, it starts by itself (owner, 2026-11-22), with no second press.
+    // Answered, it starts by itself, with no second press.
     startedRole = await start();
     if (selectionToken !== playerTrackSelectionToken) return false;
   }

@@ -106,7 +106,7 @@ function activeOwnershipState() {
   };
 }
 
-// sandbox5 (2026-11-19): Play right after a page load gave 409 and no sound while the previous page's
+// Play right after a page load gave 409 and no sound while the previous page's
 // lease ran; its unload beacon had been dropped. The tab's identity now carries over in sessionStorage.
 function sameTabHarness({ refuseInherited = false, record } = {}) {
   const storage = new Map([['albumhaven.playbackSameTab.v1', JSON.stringify(record)]]);
@@ -170,7 +170,7 @@ test('a page hands its claim to the next page of its tab only while it holds one
   assert.deepEqual(JSON.parse(storage.get('albumhaven.playbackSameTab.v1')), { clientId: 'local-tab', claimToken: 'B'.repeat(43) });
 });
 
-// sandbox5 (2026-11-21): the server tells a live holder from a browser that closed without a word by
+// The server tells a live holder from a browser that closed without a word by
 // its renewals, so a playing tab renews every 4 s; a tab without a claim still reads the shared state
 // only every 10 s.
 test('a playing tab renews every 4 s, and a tab without a claim reads the shared state every 10 s', () => {
@@ -651,7 +651,7 @@ test('server claim acquisition uses protocol v1 and keeps paths out of ownership
   });
 
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
-  // Owner, 2026-11-22 (the shortened wait): one request, which names the song once, for the server alone.
+  // The shortened wait: one request, which names the song once, for the server alone.
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/playback/state');
   assert.equal(requests[0].method, 'PUT');
@@ -1217,7 +1217,7 @@ test('the local lease runs for the answer\'s leaseMs from before the request was
   assert.equal(context.state.player.ownership.activeClaim, null, 'an answer without leaseMs is refused');
 });
 
-// Owner, 2026-11-22 ("Yes to all"): playing on without the server for five minutes replaces dropping at the lease.
+// Playing on without the server for five minutes replaces dropping at the lease.
 test('a lapsed lease with no answer keeps the claim, no listen writes and no more time to sound', async () => {
   const harness = leaseHarness({ renew: (_answer, signal) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(new Error('aborted')));
@@ -1353,7 +1353,7 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   assert.equal(context.isActivePlaybackOwner(), false);
 });
 
-// Owner, 2026-11-17 (playback.claim.takeover): Play while another client plays continues that
+// playback.claim.takeover: Play while another client plays continues that
 // client's song here from where it last said it was, and this claim replaces the other one.
 function playingElsewhereState() {
   return {
@@ -1390,7 +1390,7 @@ test('Play while another client plays, for an engine with its own claim, opens i
   assert.equal(await context.takeOverPlaybackHere(), true);
 
   assert.deepEqual(requests.map(({ url, method }) => [method, url]), [['PUT', '/playback/state']]);
-  // Owner's rule for both directions: a phone taking over also continues at the confirmed place.
+  // The same rule in both directions: a phone taking over also continues at the confirmed place.
   assert.equal(requests[0].body.confirm, true);
   assert.equal(requests[0].body.clientSurface, 'mobile');
   assert.equal(requests[0].body.clientId, '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', 'the native client takes it');
@@ -1574,7 +1574,7 @@ function handoverHolder({ sounding, paused = false, claim } = {}) {
   return { context, state, order, answers, refs };
 }
 
-// Owner, 2026-11-22 (confirmed handover): Play here asks the playing tab, which stops and says what sounds.
+// Confirmed handover: Play here asks the playing tab, which stops and says what sounds.
 test('asked by Play here elsewhere, the playing tab cancels a pending switch, stops, then answers its place', async () => {
   const { context, state, order, answers, refs } = handoverHolder();
   await context.answerPlaybackHandover('request-1');
@@ -1625,7 +1625,7 @@ test('a silent tab that cannot name its song says it is silent', async () => {
   assert.equal(JSON.stringify(answers), JSON.stringify([{ type: 'handover-silent', requestId: 'request-10' }]));
 });
 
-// Owner, round 10: the two tabs never sound at once. In one browser they tell each other directly.
+// The two tabs never sound at once. In one browser they tell each other directly.
 test('a tab told by another tab of this browser that it took over stops without asking the server', async () => {
   const { context, stopStreamingPlaybackCalls } = loadHelper({
     state: activeOwnershipState(),
@@ -1688,7 +1688,7 @@ test('a tab that holds and gave back no claim answers nothing', async () => {
   assert.deepEqual(answers, []);
 });
 
-// Owner, 2026-11-22: "I don't want plays to overlap", and a refused press never leaves the holder stopped.
+// Plays never overlap, and a refused press never leaves the holder stopped.
 for (const [name, here, paused, playsOn] of [
   ['was refused', true, false, true],
   ['went through', false, false, false],
@@ -2058,7 +2058,7 @@ for (const first of [true, false]) {
   });
 }
 
-// Owner, 2026-11-22 ("Yes to all"): the shortened wait, 5 minutes without the server, and an outage start waits.
+// The shortened wait, 5 minutes without the server, and an outage start waits.
 function claimingTab(answer, overrides = {}) {
   const clock = { monotonic: 1_000 };
   const requests = [];

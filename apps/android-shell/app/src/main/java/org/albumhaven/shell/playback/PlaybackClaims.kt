@@ -12,7 +12,7 @@ data class ClaimTrack(
     val artworkUrl: String?,
 )
 
-/** Where the claim's song is, so another client can take it over there (owner, 2026-11-17). */
+/** Where the claim's song is, so another client can take it over there. */
 data class ClaimPosition(val ms: Long, val durationMs: Long)
 
 sealed interface ClaimResponse {
@@ -103,7 +103,7 @@ class PlaybackClaimOwner(
     val owned: Boolean get() = token != null
 
     /**
-     * Sound needs the claim and the server within five minutes (owner, 2026-11-22), so that a phone that
+     * Sound needs the claim and the server within five minutes, so that a phone that
      * died blocks nobody for longer. [clock] counts deep sleep too. A renewal's answer lets it sound again.
      */
     fun maySound(): Boolean = token != null && clock() < soundUntilMs
@@ -130,7 +130,7 @@ class PlaybackClaimOwner(
     /** Requests ownership for [claimTrack]; [onResult] runs once on the playback thread. */
     fun acquire(claimTrack: ClaimTrack, onResult: (ClaimOutcome) -> Unit) = acquire(claimTrack, false, onResult)
 
-    /** As [acquire]; with [takeOver] the claim replaces another client's live one (owner, 2026-11-17). */
+    /** As [acquire]; with [takeOver] the claim replaces another client's live one. */
     fun acquire(claimTrack: ClaimTrack, takeOver: Boolean, onResult: (ClaimOutcome) -> Unit) {
         track = claimTrack
         releasedToken = null
@@ -168,7 +168,7 @@ class PlaybackClaimOwner(
     }
 
     /**
-     * Play here on another device asked this one (owner, 2026-11-22): the token to answer with, after
+     * Play here on another device asked this one: the token to answer with, after
      * which this client no longer owns playback and gives nothing back, so no save of it lands later.
      * If nobody took over, its next acquire is a new claim, which voids that answer: it never sounds
      * beside a taker still on its way. Asked again, it answers with that token. Null when it holds none.
@@ -199,9 +199,9 @@ class PlaybackClaimOwner(
 
     /**
      * Heartbeats a held claim every ten seconds, and two seconds after a renewal the server did not
-     * answer. Losing the network gives nothing up (owner decision, 2026-11-15): the claim outlives its
+     * answer. Losing the network gives nothing up: the claim outlives its
      * lease, whose token the server renews until another device claims, so only a refusal gives it up.
-     * It only falls silent after five minutes of it ([maySound], owner 2026-11-22).
+     * It only falls silent after five minutes of it ([maySound]).
      */
     fun tick() {
         val now = clock()
@@ -310,7 +310,7 @@ class PlaybackClaimOwner(
             }
             is ClaimResponse.Rejected -> settle(ClaimOutcome.UNAVAILABLE)
             ClaimResponse.Unreachable -> {
-                // No answer is neither a refusal (owner decision, 2026-11-15) nor a grant (2026-11-22): the
+                // No answer is neither a refusal nor a grant: the
                 // play waits silently and starts by itself once answered, the offered token its best credential.
                 if (offered != null) unansweredRelease = offered
                 acquiring = true

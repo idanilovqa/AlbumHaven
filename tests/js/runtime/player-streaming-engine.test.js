@@ -6381,7 +6381,7 @@ test('padding after the last mapped sample never delays end of stream', async ()
   assert.equal(harness.portMessages('eos').at(-1).emittedFrames, 1_152);
 });
 
-// Owner, 2026-11-22 (confirmed handover): Play here elsewhere asks the playing tab over this socket.
+// Confirmed handover: Play here elsewhere asks the playing tab over this socket.
 test('the socket names its client, hands a handover to the player and answers only while it is open', async () => {
   const asked = [];
   const settled = [];
@@ -6485,7 +6485,7 @@ test('asked during a switch, the real engine answers the song still sounding and
   assert.equal(harness.api.snapshot().paused, true);
 });
 
-// Owner, round 10 (2026-11-22): "there's an overlap in sound and two tabs play shortly at the same time".
+// Two tabs never sound at the same time, not even shortly.
 test('a tab asked by Play here answers only when its output is silent, at the last frame it sent out', async (t) => {
   const timers = [];
   const harness = createEngineHarness({
@@ -6541,7 +6541,7 @@ test('a tab asked by Play here answers only when its output is silent, at the la
   assert.equal(answer().position.ms, Math.round((100 * 128) / 48), 'nothing repeated, nothing skipped');
 });
 
-// Owner, round 10 (2026-11-22): "half a second of glitch" when Play here starts in tab 2.
+// Play here starts in tab 2 without a glitch.
 test('a paused tab that takes over starts once at that place, with none of the audio it had buffered', async (t) => {
   const harness = createEngineHarness({ realProcessor: true });
   t.after(() => harness.api.stop());
@@ -7090,7 +7090,7 @@ test('a successor prepared ahead is kept at the local audible boundary', async (
   assert.equal(kept.length, 1, 'it is kept once');
 });
 
-// Owner, 2026-11-22: nothing is heard before the grant, though the stream loads meanwhile.
+// Nothing is heard before the grant, though the stream loads meanwhile.
 test('a start with no grant loads its audio silently and sounds once the grant arrives', async (t) => {
   let permission = { untilMs: 0, forMs: 0 };
   const harness = createEngineHarness({

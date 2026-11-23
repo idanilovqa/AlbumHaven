@@ -223,7 +223,7 @@ def test_a_malformed_press_is_refused_before_the_playing_tab_is_asked_to_stop(ha
     asyncio.run(scenario())
 
 
-# Owner, 2026-11-22 ("Yes to all", a): the shortened wait. One request, and Last.fm is looked up afterwards.
+# The shortened wait. One request, and Last.fm is looked up afterwards.
 @pytest.fixture
 def claim_app(handover_app, monkeypatch):
     from types import SimpleNamespace

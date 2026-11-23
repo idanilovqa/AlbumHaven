@@ -42,8 +42,7 @@ const displayedSeconds = (text) => {
   return match ? Number(match[1]) * 60 + Number(match[2]) : Number.NaN;
 };
 
-// Owner, 2026-11-17: "Once that message playing in another tab is shown the play button should be
-// actionable, because if it would be dim it is not clear to the user that it can be pressed." Play
+// Once "Playing in another tab" shows, Play stays actionable: dimmed, it would not look pressable. Play
 // takes playback over (playback.claim.takeover): the other device's song continues here from where
 // it was, the other device stops and shows "Playing in another tab".
 test('FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device\'s song here at its place and stops the other device', {
@@ -61,8 +60,8 @@ test('FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues 
         await session.galleryActions.goto();
         await session.galleryActions.waitForGalleryReady();
       }
-      // Owner, round 9 (2026-11-21): "\"Playing in another tab\" still has no yellow tint as I asked". A
-      // player palette inked that label but not "Nothing is playing"; the second device uses one.
+      // "Playing in another tab" keeps its golden tint: a player palette inked that label but not
+      // "Nothing is playing"; the second device uses one.
       await appearance.capture();
       await second.settingsModalAppBarActions.openSettings();
       await second.utilityTabBarActions.openTab('appearance');
@@ -94,8 +93,8 @@ test('FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues 
       await first.globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 60 });
     });
 
-    // Owner, round 7 (2026-11-18): "Make Playing in another tab slightly golden in shade, like NOTHING
-    // IS PLAYING. And increase the font size. Add hover on play button \"Play in this tab instead\"".
+    // "Playing in another tab" is slightly golden, like "Nothing is playing", and larger; Play's hover
+    // says "Play in this tab instead".
     await stepLogger.step('The second device shows the song under a larger golden status, and hovering Play says it plays here instead', async () => {
       await second.globalPlayerActions.expectPlayingElsewhereOverlay({ artist: ARTIST, album: ALBUM, title: TITLE });
       const secondPlayer = second.globalPlayerActions.globalPlayer;
@@ -148,9 +147,9 @@ test('FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues 
   }
 });
 
-// sandbox5 (2026-11-18): closing a browser tab that was playing and pressing Play in another browser
-// right after was refused (409, "Playback unavailable", then "Playing in another tab") for 15-30 s:
-// the closed tab's claim waited for its reload. The owner closes playing tabs and plays elsewhere.
+// Closing a browser tab that was playing and pressing Play in another browser right after was refused
+// (409, "Playback unavailable", then "Playing in another tab") for 15-30 s: the closed tab's claim
+// waited for its reload. Closing a playing tab and playing elsewhere is an ordinary way to switch.
 test('FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds', {
   tag: '@area:playback',
 }, async ({ playbackOwnershipSessions, stepLogger }) => {
@@ -179,7 +178,7 @@ test('FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song 
     await first.globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 3 });
   });
 
-  await stepLogger.step('The playing tab closes, as the owner closes it', async () => {
+  await stepLogger.step('The playing tab closes', async () => {
     const closed = first.page.waitForEvent('close');
     await first.page.close({ runBeforeUnload: true });
     await closed;
@@ -204,7 +203,7 @@ test('FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song 
   });
 });
 
-// sandbox5 r13 (2026-11-19), twice at the same step: after a song played, navigating to another artist
+// Seen twice at the same step: after a song played, navigating to another artist
 // and pressing Play on a song gave no audio for 30 s; the next song pressed played at once. The page
 // load left the playing page's claim waiting for a reload for 15 s, and the press was refused.
 test('FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once', {
@@ -263,8 +262,7 @@ test('FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one
   });
 });
 
-// Owner, 2026-11-19, verbatim: "When I click play on a new song, in the player name of the song blinks
-// and return to the currently playing befoire changing again to the one that I started."
+// Pressing a new song never shows the playing song's title again before the pressed one's.
 test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }) => {
@@ -290,8 +288,8 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
     await expect(player.title).toContainText(TITLE);
   });
 
-  // Owner round 9 (2026-11-21): "title is changing qucil;ly, but the majority of player UI does not [...]
-  // All these should be syncronoized." The time is read right after each title: one redraw sets both.
+  // Every part of the player switches with the title. The time is read right after each title: one
+  // redraw sets both.
   await stepLogger.step('Read continuously from the press until the other song has played a second, the title never goes back and the time switches with it', async () => {
     // Title and time are read together in every painted frame: a flicker a listener sees cannot fall
     // between two reads, and neither can be read a frame later than the other.
@@ -303,8 +301,7 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
     await page.waitForTimeout(1000);
     const { started, frames, events } = await pressPaint;
     const samples = frames.map(({ title, time }) => ({ title, seconds: displayedSeconds(time) }));
-    // The press shows its song at once: within 150 ms, in the first frame after its click (orchestrator,
-    // 2026-11-21, for the owner's "instant").
+    // The press shows its song at once: within 150 ms, in the first frame after its click.
     const pressedAt = events.find(({ name }) => name !== 'click')?.startTime ?? started;
     const clickEnded = events.find(({ name }) => name === 'click')?.processingEnd;
     const shown = frames.find(({ shows }) => shows);
@@ -325,7 +322,7 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
   });
 });
 
-// sandbox5 (2026-11-21): a browser that closed without a word (a crash, a killed process) kept its claim,
+// A browser that closed without a word (a crash, a killed process) kept its claim,
 // and the first press in another browser started the song and stopped it 6 ms later on the refusal.
 // A holder that stopped renewing gives way: the press plays, with no stop and no refused claim.
 test('FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it', {

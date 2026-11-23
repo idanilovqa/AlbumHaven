@@ -1958,7 +1958,7 @@ test('a hard cut without quiet edges is left untouched', () => {
   assert.ok(fixture.events('boundary-padding').every(({ removableFrames }) => removableFrames === 0));
 });
 
-// Owner, 2026-11-22 ("Yes to all"): the shortened wait loads silently, and music stops 5 minutes after the
+// The shortened wait loads silently, and music stops 5 minutes after the
 // server was last heard, enforced here so that a frozen page or a sleeping computer cannot outlast it.
 function gatedPlayer() {
   const fixture = createProcessor({ processorOptions: { awaitsPermission: true }, currentCapacityFrames: 48_000 });

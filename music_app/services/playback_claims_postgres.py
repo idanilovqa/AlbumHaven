@@ -1,9 +1,9 @@
-"""One transactional playback owner per account and library, replaced only on proof that it is silent.
+"""One transactional playback holder per account and library, replaced only on proof that it is silent.
 
-The owner, 2026-11-22: "You cannot just start without an answer [...] I don't want plays to overlap". An
+Nothing starts without an answer, and plays never overlap. An
 expired lease is no proof, as a client plays on through an outage (B-D4): it only ends listen writes. Proof
 is the holder's own word: its release, its answer to Play here, or its page saying it is leaving once its
-output has drained. The one timeout is a promise kept by the holder's own audio thread (owner, 2026-11-22):
+output has drained. The one timeout is a promise kept by the holder's own audio thread:
 it falls silent 5 minutes after it last sent a renewal that was answered, and only a claim that made that
 promise gives way, 5 s later by this server's clock from when that renewal arrived.
 """
@@ -160,7 +160,7 @@ class PostgresPlaybackClaims:
         if handoff is not None and client_surface != "private_web":
             raise PlaybackContractError()
         # playback.claim.takeover is still sent by Play here, also of installed apps. It is no proof that
-        # the holder is silent, so by itself it replaces nothing (owner, 2026-11-22).
+        # the holder is silent, so by itself it replaces nothing.
         if type(takeover) is not bool or (takeover and (claim_token is not None or handoff is not None)):
             raise PlaybackContractError()
         track = self._track(actor, track)
@@ -226,7 +226,7 @@ class PostgresPlaybackClaims:
                      json.dumps(stored_track), *_silent_bounds(now))).fetchone()
             else:
                 # The token renews its claim even past the lease, as for a client that played on
-                # without a network: nobody else can start until it says it is silent. The owner renewing
+                # without a network: nobody else can start until it says it is silent. The holder renewing
                 # (a page of the same tab after a reload) is no longer leaving: its handoff no longer applies.
                 row = connection.execute("""update app.playback_claims set expires_at = %s, track = %s::jsonb,
                       pending_handoff_id = null, pending_handoff_digest = null,

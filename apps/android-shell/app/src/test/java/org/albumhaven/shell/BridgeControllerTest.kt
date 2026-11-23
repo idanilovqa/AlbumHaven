@@ -333,7 +333,7 @@ class BridgeControllerTest {
         assertTrue(ok(send(sandbox, load(revision = 4))))
         assertTrue(ok(send(sandbox, load(revision = 5, items = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0,"year":"1999"}]"""))))
         assertEquals("stale_revision", errorCode(send(sandbox, command("playback.play", """{"queueRevision":2}"""))))
-        // Play while another device plays (playback.claim.takeover, owner 2026-11-17).
+        // Play while another device plays (playback.claim.takeover).
         assertTrue(ok(send(sandbox, load(revision = 6, takeover = "true", keepCurrent = "false"))))
     }
 

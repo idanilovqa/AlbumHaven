@@ -324,8 +324,7 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
-// Owner round 9 (2026-11-21): "title is changing qucil;ly, but the majority of player UI does not
-// [...] All these should be syncronoized." A pressed song shows its own start and length with its
+// Every part of the player switches with the title. A pressed song shows its own start and length with its
 // title from the press, not the old song's running time, until its audio starts.
 test('while a switch waits for its audio, the time and seek bar show the pressed song from the press', async () => {
   const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A' };
@@ -357,7 +356,7 @@ test('while a switch waits for its audio, the time and seek bar show the pressed
   assert.equal(context.state.player.selectedTrack, null);
 });
 
-// Owner, mockup playback-elsewhere-status v003 (2026-11-17): "Playing in another tab" sits over the
+// Mockup playback-elsewhere-status v003: "Playing in another tab" sits over the
 // dimmed player, and Play stays pressable above the dimming: it takes playback over here.
 // An installed phone without the takeover capability fails closed, as main does (blocker, 2026-11-22).
 test('where playback cannot be taken over, a player locked by another device has no Play here', () => {
@@ -436,8 +435,7 @@ test('playback on another device shows the elsewhere overlay over the player and
   assert.equal(time.textContent, '10 - 20');
 });
 
-// Owner, 2026-11-19: "When I click play on a new song, in the player name of the song blinks and
-// return to the currently playing befoire changing again to the one that I started."
+// Pressing a new song never shows the playing song's title again before the pressed one's.
 test('a refresh while a pressed song starts keeps showing the pressed song, not the one it replaces', () => {
   const player = new FakeElement();
   const timelineWrap = new FakeElement();
@@ -1205,7 +1203,7 @@ test('playTrackFromPayload claims ownership and dispatches streaming start witho
   assert.deepEqual(nativeSrcAssignments, []);
 });
 
-// sandbox5 (2026-11-21): a first press while another client's claim was held started the song and
+// A first press while another client's claim was held started the song and
 // stopped it 6 ms later on the refusal. With another client known to play, the press waits for the
 // answer: refused, nothing starts (the overlay shows Play here); granted (the holder went silent), it plays.
 for (const granted of [false, true]) {
@@ -4148,7 +4146,7 @@ test('thin mobile Play hit area yields horizontal playhead drag but preserves ta
   assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
 });
 
-// sandbox5 r28 (2026-11-21): at 4x CPU the stream's start ran in the press's own task, ahead of the
+// At 4x CPU the stream's start ran in the press's own task, ahead of the
 // frame that shows the pressed song. The press paints first; the stream starts after that frame, and
 // at once in a hidden tab, where no frame comes.
 test('a pressed song paints before its stream starts, and a hidden tab starts at once', async () => {

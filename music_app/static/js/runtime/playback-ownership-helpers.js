@@ -1,13 +1,13 @@
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 // A playing tab renews this often: its listen writes need a live lease. A missed renewal frees nothing
-// (owner, 2026-11-22: "I don't want plays to overlap"): only the holder's word that it is silent does.
+// (plays never overlap): only the holder's word that it is silent does.
 const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
 // Renewal ticks after which a tab that is not playing gives back a claim it holds (a start that failed,
 // autoplay the browser held back: no lease frees it), and an asked tab that never heard the press was over
 // looks for itself. A pause drains its listen writes, and a press is over, well before.
 const PLAYBACK_OWNERSHIP_SILENT_TICKS = 3;
-// Music stops this long after the last answered request was sent (owner, 2026-11-22), so that a device that
+// Music stops this long after the last answered request was sent, so that a device that
 // died blocks nobody for longer: the server lets another start 5 s after this, never earlier.
 const PLAYBACK_SILENT_WITHOUT_SERVER_MS = 300000;
 // A start nobody answered is asked again this often, with no second press.
@@ -18,8 +18,8 @@ const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
 // This tab's playback identity, kept when a page unloads so the next page of the same tab renews the
-// same claim instead of being refused while the old page's lease runs (sandbox5, 2026-11-19: Play after
-// a page load gave 409 and no sound; the unload beacon can always be dropped). Written only at unload
+// same claim instead of being refused while the old page's lease runs (Play after a page load gave 409
+// and no sound; the unload beacon can always be dropped). Written only at unload
 // and taken at load, so a duplicated tab never shares a live tab's identity.
 const PLAYBACK_SAME_TAB_STORAGE_KEY = 'albumhaven.playbackSameTab.v1';
 let sameTabPlaybackClaim = takeSameTabPlaybackClaim();
@@ -271,8 +271,8 @@ function loadsSilentlyWhileAsking() {
   return !playingEngine()?.holdsOwnClaim && !playingEngineHandshake();
 }
 
-// An outage start waits and then starts by itself (owner, 2026-11-22), as after the retest of B-D4 round 6
-// ("I had to click into another song 6 TIMES"). A newer press, a pause or a takeover ends the wait.
+// An outage start waits and then starts by itself, with no second press. A newer press, a pause or a
+// takeover ends the wait.
 function waitToAskAgain() {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, PLAYBACK_OWNERSHIP_RETRY_MS);
@@ -492,7 +492,7 @@ async function playbackOwnershipTrack(track, previous = null) {
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
 }
 
-// A start is one request (owner, 2026-11-22: the shortened wait): with no reference kept, the claim names the
+// A start is one request (the shortened wait): with no reference kept, the claim names the
 // song by its path and the same answer brings the reference.
 function claimedPlaybackTrack(track, previous = null) {
   if (!track?.path) throw new Error('Playback track is unavailable.');
@@ -772,7 +772,7 @@ function notifyBlockedPlaybackStart() {
 }
 
 /**
- * A loaded page resumes by itself only what this tab was playing (owner, 2026-11-22): its last page handed
+ * A loaded page resumes by itself only what this tab was playing: its last page handed
  * on moments ago. A new tab, a restarted browser and a hand-over that was lost open paused.
  */
 function canThisTabResumePlayback() {
@@ -791,7 +791,7 @@ function canRestoreActivePlayback(parsedState) {
 
 function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   const ownership = getPlaybackOwnershipState();
-  // Back from the page cache, this page is the tab's live owner again: nothing is handed on.
+  // Back from the page cache, this page is the tab's live holder again: nothing is handed on.
   if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
   ownership.handoffAttempted = false;
   ownership.claimInDoubt = Boolean(ownership.activeClaim);
@@ -833,7 +833,7 @@ function playbackToHandOver(starting) {
 }
 
 /**
- * Play here elsewhere still wants this tab to stop (owner, 2026-11-22): it stops and, once its output is
+ * Play here elsewhere still wants this tab to stop: it stops and, once its output is
  * silent, answers the song that sounded and where, with its claim's token. No path crosses the socket.
  */
 function answerPlaybackHandover(requestId) {
@@ -922,7 +922,7 @@ async function settlePlaybackHandover() {
 }
 
 /**
- * Play while another client plays (owner, 2026-11-17, playback.claim.takeover): that client's
+ * Play while another client plays (playback.claim.takeover): that client's
  * song continues here from where it last said it was, and this claim replaces its claim.
  */
 function takeOverPlaybackHere() {
@@ -945,7 +945,7 @@ async function takeOverPlayback() {
 }
 
 /**
- * One request (owner, 2026-11-22): the server asks the playing client, which stops and says what
+ * One request: the server asks the playing client, which stops and says what
  * sounds and where, and moves the claim here with that answer. Without its word it refuses.
  */
 async function takeOverAtConfirmedPlace() {

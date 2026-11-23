@@ -249,9 +249,9 @@ class NativePlaybackControllerTest {
         assertEquals(1, harness.controller.snapshot.currentIndex)
     }
 
-    // Owner, 2026-11-17 (playback.claim.takeover): Play while another device plays moves its song
+    // playback.claim.takeover: Play while another device plays moves its song
     // here; the claim replaces the other device's and reports where this device's song is.
-    // Owner, 2026-11-22: Play here on another device asks this one, which stops and says what sounds.
+    // Play here on another device asks this one, which stops and says what sounds.
     @Test
     fun askedByPlayHereElsewhereItStopsAndAnswersTheSoundingItemAndItsPlaceWithoutGivingTheClaimBack() {
         val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
@@ -322,7 +322,7 @@ class NativePlaybackControllerTest {
         harness.load(1, first)
         repeat(20) { harness.step() }
 
-        // Owner, 2026-11-22: "You cannot just start without an answer".
+        // Nothing starts without the server's answer.
         assertEquals(NativePlaybackState.LOADING, harness.state())
         assertTrue(harness.sinks.all { it.writtenFrames == 0 })
 
@@ -792,7 +792,7 @@ class NativePlaybackControllerTest {
 
     @Test
     fun anUnreachableServerKeepsPlaybackForFiveMinutesAndAnotherDeviceTakingOverEndsIt() {
-        // Owner decisions 2026-11-15 and 2026-11-22: past the lease, for at most five minutes.
+        // Past the lease, for at most five minutes.
         val long = SyntheticTrack(tag = 3, frames = 120L * RATE)
         val harness = ControllerHarness(long, realTime = true)
         harness.claims.renewResponse = { ClaimResponse.Unreachable }
@@ -1264,9 +1264,9 @@ class NativePlaybackControllerTest {
     }
 
     /**
-     * Owner retest B-P3 (2026-11-17): paused with the network gone, Play did not go on. Paused, a
-     * failed reconnect gave the received audio up, and an unanswered claim request ended in an error.
-     * Owner, 2026-11-22: Play during an outage waits for the server, then starts by itself from the received
+     * Paused with the network gone, Play did not go on: paused, a failed reconnect gave the received
+     * audio up, and an unanswered claim request ended in an error. Play during an outage now waits for
+     * the server, then starts by itself from the received
      * audio, and the rest of the song joins in place.
      */
     @Test

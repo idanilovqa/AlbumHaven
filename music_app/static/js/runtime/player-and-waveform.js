@@ -271,8 +271,8 @@ async function updateWaveformAppearance(forceReload = false) {
   if (state.player.waveform.renderToken !== renderToken) return;
   const duration = Number(playback.duration) || 0;
   const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
-  // The waveform follows the sound, not the press (owner, round 10: "keep it until new song is
-  // playing"): the last one drawn stays where it was until the pressed song sounds.
+  // The waveform follows the sound, not the press: the last one drawn stays where it was until the
+  // pressed song sounds.
   const held = state.player.waveform.shown;
   if (held && keepsHeldWaveform(held, path, waveform, playback)) {
     drawWaveformOnCanvas(els.waveformCanvas, held.data, held.progressRatio);

@@ -232,7 +232,7 @@ export class GlobalPlayerActions {
   }
 
   /**
-   * Mockup playback-elsewhere-status v003 (owner, 2026-11-17): "Playing in another tab" centred over
+   * Mockup playback-elsewhere-status v003: "Playing in another tab" centred over
    * the whole dimmed player, the other device's song still there underneath, and Play lifted above
    * the dimming, enabled and pressable.
    */

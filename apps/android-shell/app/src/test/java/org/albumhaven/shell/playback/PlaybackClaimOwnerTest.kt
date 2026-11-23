@@ -37,7 +37,7 @@ class PlaybackClaimOwnerTest {
         assertEquals(2 * PlaybackClaimOwner.HEARTBEAT_MS, owner.nextDeadlineMs())
     }
 
-    // Owner, 2026-11-17 (playback.claim.takeover): Play while another device plays moves its song here.
+    // playback.claim.takeover: Play while another device plays moves its song here.
     @Test
     fun aTakeoverAcquireAsksOnceToReplaceTheOtherClaimAndEveryRequestReportsWhereTheSongIs() {
         var heard: ClaimPosition? = ClaimPosition(61_000, 300_000)
@@ -57,7 +57,7 @@ class PlaybackClaimOwnerTest {
         assertEquals(ClaimPosition(71_000, 300_000), api.positions.last())
     }
 
-    // sandbox5, 2026-11-22: a takeover after a seek or a skip got the place of up to ten seconds before.
+    // A takeover after a seek or a skip got the place of up to ten seconds before.
     @Test
     fun aSeekOrASkipIsPublishedAtOnceOneRenewalAtATime() {
         owner.acquire(track) {}
@@ -73,7 +73,7 @@ class PlaybackClaimOwnerTest {
         assertEquals("then the newest", 1_100L, owner.nextDeadlineMs())
     }
 
-    // Owner, 2026-11-22: the phone that just paused still answers Play here on another device.
+    // The phone that just paused still answers Play here on another device.
     @Test
     fun handOverNamesTheHeldTokenOrTheOneJustGivenBack() {
         owner.acquire(track) {}
@@ -351,7 +351,7 @@ class PlaybackClaimOwnerTest {
         assertTrue(events.isEmpty())
     }
 
-    // Owner, 2026-11-22: music stops after five minutes without the server, so a dead phone blocks no longer.
+    // Music stops after five minutes without the server, so a dead phone blocks no longer.
     @Test
     fun aClaimMaySoundForFiveMinutesFromWhenItsAnsweredRequestWasSent() {
         assertFalse("nothing before the grant", owner.maySound())

@@ -43,15 +43,17 @@ def album_display_cover_sql(album: str) -> str:
               or (image_folder = regexp_replace(track_folder, '/[^/]*$', '') and image_folder <> root_folder))
           group by image, image_folder
         )
-        select images.image
-        from images
-        cross join lateral (
-          select count(*) as covered from album_files
-          where album_files.track_folder = images.image_folder
-             or regexp_replace(album_files.track_folder, '/[^/]*$', '') = images.image_folder
+        select coverage.image
+        from (
+          select images.image, images.first, (
+            select count(*) from album_files
+            where album_files.track_folder = images.image_folder
+               or regexp_replace(album_files.track_folder, '/[^/]*$', '') = images.image_folder
+          ) as covered
+          from images
         ) coverage
         -- The folder-album holding most of the album, so a moved-in file can't lend its old image.
         where coverage.covered * 2 >= (select count(*) from album_files)
-        order by coverage.covered desc, images.first
+        order by coverage.covered desc, coverage.first
         limit 1
       ) end"""

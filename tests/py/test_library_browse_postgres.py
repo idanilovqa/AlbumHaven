@@ -12883,7 +12883,8 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "position('пїѕ'" in summary_sql
     # Missing cover art reads the cover an album shows, its folder-album's included, not the stored column.
     from music_app.services.album_display_cover import album_display_cover_sql
-    assert f"nullif(btrim(coalesce({album_display_cover_sql('library.local_albums')}" in summary_sql
+    displayed_cover = " ".join(album_display_cover_sql("library.local_albums").split()).lower()
+    assert f"nullif(btrim(coalesce({displayed_cover}" in summary_sql
     assert "library.local_albums.metadata ->> 'local_cover_width'" in summary_sql
     assert "library.local_albums.metadata ->> 'local_cover_height'" in summary_sql
     assert "library.local_tracks.scan_title_problem_candidate is true" in summary_sql

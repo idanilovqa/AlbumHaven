@@ -28,6 +28,9 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
   let stalled = false;
   // Connections whose other side broke while the network was gone: they are reset once it is back.
   const brokenInOutage = new Set();
+  // Connections left dead by a network that returned as another one: nothing reaches the page on
+  // them again, a close or reset from the app included.
+  const orphaned = new WeakSet();
 
   const reset = (socket) => (socket.resetAndDestroy ? socket.resetAndDestroy() : socket.destroy());
   // As on a real network, a side that errors or closes without ending resets the other one: a
@@ -38,7 +41,7 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
       let ended = false;
       socket.once('end', () => { ended = true; });
       const broke = () => {
-        if (ended || peer.destroyed) return;
+        if (ended || peer.destroyed || orphaned.has(socket)) return;
         if (stalled) brokenInOutage.add(peer);
         else reset(peer);
       };
@@ -140,7 +143,10 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
       frozenLinks.clear();
       brokenInOutage.clear();
       if (!server) await listen();
-      if (!revive) return;
+      if (!revive) {
+        for (const socket of paused) orphaned.add(socket);
+        return;
+      }
       for (const socket of broken) if (!socket.destroyed) reset(socket);
       for (const { source, destination } of frozen) {
         if (!source.destroyed && !destination.destroyed) source.pipe(destination);

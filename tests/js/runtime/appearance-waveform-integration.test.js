@@ -55,7 +55,7 @@ function loadRuntime(initial, seekbarMode) {
   const appearance = { seekbarMode, waveformFillColor: '#FF00FF', waveformEdgeColor: '#00FFFF' };
   const context = vm.createContext({
     window, document, console,
-    state: { player: { appearance }, utility: {} },
+    state: { player: { appearance, waveform: { renderToken: 0, shown: null } }, utility: {} },
     CustomEvent: window.CustomEvent,
     getComputedStyle: () => root.style,
     getStreamingPlaybackSnapshot: () => ({ currentTime: 0, duration: 0, paused: true }),

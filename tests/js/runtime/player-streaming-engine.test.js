@@ -6394,10 +6394,13 @@ test('the rate a song played at is remembered for the next page', async () => {
     setLocalStorageItem: (key, value) => stored.set(key, value),
   });
   await harness.api.start(makeTrack('01.mp3'));
+  // Nothing played yet, so the start asked the rate and opened at the answer.
+  const open = harness.sent('open')[0];
+  assert.equal(open.sampleRate, 48_000);
 
-  acceptMetadata(harness, harness.sent('open')[0], { sampleRate: 44_100 });
+  acceptMetadata(harness, open, { sampleRate: 48_000 });
 
-  assert.equal(stored.get('albumhaven.playbackSampleRate.v1'), '44100');
+  assert.equal(stored.get('albumhaven.playbackSampleRate.v1'), '48000');
 });
 
 test('a start at an unknown rate opens at once at the rate this browser last played, without a probe', async () => {
@@ -9104,9 +9107,13 @@ test('a press on another song during a pending switch names that song at once, a
 
 // A seek's socket was replaced while its heartbeats waited to be read by a busy page.
 async function seekWaitingOnTheServer() {
+  // Every later socket is refused: on real timers its reconnects would retry for ever.
+  const timers = manualTimers();
   const harness = encodedHarness({
     createStreamingDecoder: recordingDecoders().create,
     refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
   });
   const open = await startLocallySeekable(harness, 100_000);
   harness.setNow(1_000);

@@ -12,6 +12,16 @@ import { Transform } from 'node:stream';
  */
 export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0 } = {}) {
   const sockets = new Set();
+  // Every pipe between them. A paused stream is resumed by a pipe whose destination drains, so a
+  // frozen connection must be unpiped, or a request sent in the outage is still answered.
+  const links = new Set();
+  const frozenLinks = new Set();
+  const link = (source, destination) => {
+    const entry = { source, destination };
+    links.add(entry);
+    for (const stream of [source, destination]) stream.once('close', () => links.delete(entry));
+    return source.pipe(destination);
+  };
   let server = null;
   let port = 0;
   let tunnelDown = false;
@@ -55,15 +65,15 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
       socket.on('close', () => sockets.delete(socket));
       socket.on('error', () => {});
     }
-    client.pipe(upstream);
+    link(client, upstream);
     // The request line says whether this connection is the playback socket.
     client.once('data', (head) => {
       const playback = playbackBytesPerSecond > 0 && head.toString('latin1', 0, 64).includes('/playback/pcm');
-      if (!playback) return upstream.pipe(client);
+      if (!playback) return link(upstream, client);
       const limiter = throttle();
       limiter.on('error', () => {});
       sockets.add(limiter);
-      return upstream.pipe(limiter).pipe(client);
+      return link(link(upstream, limiter), client);
     });
   };
 
@@ -86,6 +96,10 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
     stall() {
       server?.close();
       server = null;
+      for (const entry of links) {
+        entry.source.unpipe(entry.destination);
+        frozenLinks.add(entry);
+      }
       for (const socket of sockets) socket.pause?.();
     },
     /**
@@ -96,8 +110,14 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
     restore: async ({ revive = true } = {}) => {
       tunnelDown = false;
       const stalled = [...sockets];
+      const frozen = [...frozenLinks];
+      frozenLinks.clear();
       if (!server) await listen();
-      if (revive) for (const socket of stalled) socket.resume?.();
+      if (!revive) return;
+      for (const { source, destination } of frozen) {
+        if (!source.destroyed && !destination.destroyed) source.pipe(destination);
+      }
+      for (const socket of stalled) socket.resume?.();
     },
     /**
      * The network is back but the server is not: every request, the playback socket's included, is

@@ -4705,9 +4705,9 @@
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability",
-      "action": "scheduleBrowserTimeout timers installed by hydrateArtistNonAlbumAvailability",
+      "action": "The one deferred retry per kind (artist availability, library Loose Tracks) that scheduleDeferredNonAlbumRetry arms for hydrateArtistNonAlbumAvailability and hydrateLibraryNonAlbumTracks: a bounded back-off, cancelled on leaving",
       "entrypoints": [
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability:timer:scheduleBrowserTimeout"
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#scheduleDeferredNonAlbumRetry:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
@@ -4734,21 +4734,6 @@
       "testIdentity": "bounded interaction: an artist availability pass sends one request, keeps one retry and stops at the same bound at any library size",
       "performanceTargets": [],
       "rollback": "Reverting the shared deferred back-off makes a still-deferred count re-poll every 250 ms without end: requests then grow until the test's firing cap and the contract fails."
-    },
-    {
-      "id": "js:runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks",
-      "action": "scheduleBrowserTimeout timers installed by hydrateLibraryNonAlbumTracks",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks:timer:scheduleBrowserTimeout"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#openAlbumInExplorer",
@@ -6428,9 +6413,10 @@
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum",
-      "action": "fetch requests installed by rescanMissingAlbum",
+      "action": "A missing album's Re-scan: one POST to its rescan endpoint, then while it answers searching at most MISSING_ALBUM_SEARCH_POLLS GETs of the same endpoint, each after one MISSING_ALBUM_SEARCH_POLL_MS timer (one timer at a time); nothing else",
       "entrypoints": [
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum:request:fetch"
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#request:request:fetch",
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"

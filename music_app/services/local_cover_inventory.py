@@ -210,10 +210,13 @@ class LocalCoverInventory:
         and each gets a walk that begins after the write, which the album's next read waits for.
         """
         try:
+            from music_app.services.cover_workflow import is_disc_like_folder
+
             folders: dict[str, Path] = {}
             for track_path in track_paths:
                 folder = Path(track_path).parent
-                for candidate in (folder, folder.parent):
+                # A disc's album is its parent; any other parent (an artist folder, a library root) is not this album.
+                for candidate in (folder, folder.parent) if is_disc_like_folder(folder) else (folder,):
                     folders.setdefault(root_key(candidate), candidate)
             if album_root is not None:
                 folders[root_key(album_root)] = Path(album_root)

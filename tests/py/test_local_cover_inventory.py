@@ -417,6 +417,23 @@ def writing(album, monkeypatch):
     return committed
 
 
+def test_a_write_walks_its_album_alone_never_its_artist_folder_or_library_root(tmp_path, monkeypatch):
+    # Freeze guard backlog case 50: a stored parent row must never turn one cover write into a walk of the artist
+    # folder or the library root.
+    library = tmp_path / "Main"
+    album = library / "Artist" / "Album"
+    album.mkdir(parents=True)
+    listings = inventory.LocalCoverInventory(CONFIG, repository=Store())
+    for folder in (library, library / "Artist", album):
+        listings.repository.publish(folder, [], expected_revision=None)
+    asked = []
+    monkeypatch.setattr(listings, "_ask", lambda root, **kwargs: asked.append(inventory.root_key(root)))
+
+    listings.after_write(album, {str(album / "01.mp3")})
+
+    assert asked == [inventory.root_key(album)]
+
+
 @pytest.mark.parametrize("drive", ["answers", "raises", "hangs"])
 @pytest.mark.parametrize("write", ["delete", "paste"])
 def test_the_write_routes_update_the_listing_and_never_depend_on_it(album, writing, monkeypatch, write, drive):

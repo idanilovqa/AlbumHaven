@@ -11151,14 +11151,32 @@
         "py:music_app/routes/playback_control_asgi.py#acquire_playback:route:PUT /playback/state"
       ],
       "owners": [
-        "music_app/routes/playback_control_asgi.py"
+        "music_app/routes/playback_control_asgi.py",
+        "music_app/services/mp3_stream_map.py"
       ],
       "rules": [
         "BI-04",
+        "BI-06",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 1,
+        "open_calls": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_playback_seek_table.py::test_a_claim_naming_its_song_by_path_prepares_only_that_songs_stream",
+      "testIdentity": "test_a_claim_naming_its_song_by_path_prepares_only_that_songs_stream",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/playback_control_asgi.py#playback_refs",

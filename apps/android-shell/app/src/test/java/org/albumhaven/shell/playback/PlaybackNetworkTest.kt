@@ -93,8 +93,13 @@ class PlaybackNetworkTest {
         assertEquals(cookieHeader, request.headers["Cookie"])
         assertEquals("csrf+value", request.headers[ShellSession.CSRF_HEADER])
         val body = JSONObject(request.body!!.utf8())
-        assertEquals(setOf("protocol", "clientId", "clientSurface", "claimToken", "state", "track"), body.keys().asSequence().toSet())
+        assertEquals(
+            setOf("protocol", "clientId", "clientSurface", "claimToken", "state", "track", "silencesItself"),
+            body.keys().asSequence().toSet(),
+        )
         assertEquals("mobile", body.getString("clientSurface"))
+        // The phone's render loop falls silent by itself five minutes without the server.
+        assertTrue(body.getBoolean("silencesItself"))
         assertTrue(body.isNull("claimToken"))
         assertEquals("playing", body.getString("state"))
         assertEquals(

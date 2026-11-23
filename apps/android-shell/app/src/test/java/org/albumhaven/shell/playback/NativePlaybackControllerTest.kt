@@ -322,8 +322,8 @@ class NativePlaybackControllerTest {
         harness.load(1, first)
         repeat(20) { harness.step() }
 
-        // Nothing starts without the server's answer.
-        assertEquals(NativePlaybackState.LOADING, harness.state())
+        // Nothing starts without the server's answer: the stream fills its buffer, and nothing is heard.
+        assertEquals(NativePlaybackState.BUFFERING, harness.state())
         assertTrue(harness.sinks.all { it.writtenFrames == 0 })
 
         claimIo.drain()

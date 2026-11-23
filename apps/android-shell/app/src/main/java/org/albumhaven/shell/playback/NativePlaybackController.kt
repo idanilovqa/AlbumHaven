@@ -491,6 +491,11 @@ class NativePlaybackController(
             val audible = mayBeHeard()
             if (loaded && wasPausing && !audible) engine?.pause(immediate = true)
             written = if (loaded && audible) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            // Resumed on the claim its pause kept: only once it sounds does it say it plays again.
+            if (written > 0 && renewOnceHeard) {
+                renewOnceHeard = false
+                claims.publishNow()
+            }
             if (wasPausing && !pausing()) pauseSettled()
             if (timing.awaitingAudible) sink?.let { timing.heard(clock(), it.heardFrames()) }
             maybeFinishDrainedQueue()
@@ -678,6 +683,8 @@ class NativePlaybackController(
         val requestRevision = revision
         val requestIndex = index
         val takeOver = takeOverOnPlay.also { takeOverOnPlay = false }
+        // A claim its pause kept answers at once with no request; the server hears it plays once it sounds.
+        renewOnceHeard = claims.owned && !takeOver
         claims.acquire(item.claimTrack(), takeOver) { outcome ->
             if (!wantPlay || revision != requestRevision || index != requestIndex) return@acquire
             when (outcome) {
@@ -965,6 +972,7 @@ class NativePlaybackController(
         }
         // The claim stays a while, so Play sounds at once and asks nothing; another device's press meanwhile
         // asks this one, which yields once nothing of it sounds ([answerYield]).
+        renewOnceHeard = false
         if (claims.owned) {
             releasePending = false
             pauseHoldUntilMs = clock() + PAUSE_HOLD_MS
@@ -1263,6 +1271,9 @@ class NativePlaybackController(
 
     /** Until when a pause keeps the claim; null when it holds none for a pause. */
     private var pauseHoldUntilMs: Long? = null
+
+    /** A Play on the claim its pause kept tells the server it plays again once its first frames are written. */
+    private var renewOnceHeard = false
 
     private var handoverAnswer: HandoverAnswer? = null
 

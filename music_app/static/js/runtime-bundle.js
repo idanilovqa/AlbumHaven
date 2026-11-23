@@ -47609,7 +47609,13 @@ function togglePlayerPlayback(options = {}) {
       }
       if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
       if (selectionToken !== playerTrackSelectionToken) return false;
-      return resumeStreamingPlayback();
+      const resumed = await resumeStreamingPlayback();
+      // Resumed on the claim its pause kept: only once it sounds does it tell the server it plays again,
+      // so other devices see it within a round trip and the request never delays the sound.
+      if (claim === true && resumed && typeof publishPlaybackPositionSoon === 'function') {
+        publishPlaybackPositionSoon();
+      }
+      return resumed;
     }).then((resumed) => {
       if (resumed === false || selectionToken !== playerTrackSelectionToken) return;
       beginStreamingPlayerListenSession(

@@ -4642,3 +4642,42 @@ test('bounded interaction: mobile player metadata motion measures its three rows
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });
+
+// A Play on the claim its pause kept sounds at once; only then does it tell the server it plays again, so
+// other devices see it within one round trip and the request never delays the sound.
+test('a resume on the held claim sounds first, then sends its playing renewal without waiting for it', async () => {
+  const order = [];
+  const snapshot = { currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' };
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: async () => { snapshot.paused = true; },
+    resumeStreamingPlayback: async () => { order.push('audible'); snapshot.paused = false; return true; },
+    canStartPlaybackInThisTab: () => true,
+    publishPlaybackPositionSoon: () => { order.push('playing renewal'); return new Promise(() => {}); },
+  });
+  context.state.player.current = { src: snapshot.src, path: 'C:/Music/song.flac', title: 'Song' };
+
+  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(order, ['audible', 'playing renewal']);
+});
+
+test('a resume that had to ask for the claim sends no extra renewal', async () => {
+  const order = [];
+  const snapshot = { currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' };
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: async () => { snapshot.paused = true; },
+    resumeStreamingPlayback: async () => { order.push('audible'); snapshot.paused = false; return true; },
+    canStartPlaybackInThisTab: async () => { order.push('claim asked'); return true; },
+    publishPlaybackPositionSoon: () => { order.push('playing renewal'); },
+  });
+  context.state.player.current = { src: snapshot.src, path: 'C:/Music/song.flac', title: 'Song' };
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(order.includes('playing renewal'), false);
+  assert.equal(order[0], 'claim asked');
+});

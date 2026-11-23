@@ -685,7 +685,7 @@ class NativePlaybackControllerTest {
     // Play after Pause sounded up to 0.9 s later than before Play here. A pause
     // keeps the claim for its hold, so Play within it sounds at once and asks the server nothing.
     @Test
-    fun aPlayWithinThePauseHoldSoundsAtOnceAndAsksTheServerNothing() {
+    fun aPlayWithinThePauseHoldSoundsAtOnceAndOnlyThenSaysItPlays() {
         val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
         val harness = ControllerHarness(long)
         harness.load(1, long)
@@ -701,8 +701,11 @@ class NativePlaybackControllerTest {
         assertEquals(CommandResult.ACCEPTED, harness.controller.play(1))
         harness.runUntil(maxSteps = 4) { harness.sinks.last().writtenFrames > writtenAtPause }
 
-        assertEquals("no claim request: it still holds the claim", calls, harness.claims.calls)
+        assertEquals("no claim request before it sounds: it still holds the claim", calls, harness.claims.calls)
         assertEquals(NativePlaybackState.PLAYING, harness.state())
+        // Only once it sounds does it say it plays again, so other devices see it within a round trip.
+        harness.step()
+        assertEquals(calls + "acquire:token-1", harness.claims.calls)
         assertEquals(listOf(Run(3, 0, harness.sinks.last().writtenFrames.toLong())), harness.sinks.last().runs())
     }
 

@@ -209,8 +209,8 @@ def _file_title(path):
 
 
 def _persisted_title(route, path):
-    rows = _rows(route.setup_url, "select metadata->>'title' as title from library.local_track_files "
-                                  "where private_path = %s", (path,))
+    rows = _rows(route.setup_url, """select tracks.title from library.local_track_files files
+        join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %s""", (path,))
     return rows[0]["title"] if rows else None
 
 

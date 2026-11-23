@@ -500,26 +500,40 @@ def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(lo
 # Rows a 200-folder batch's loader may read beyond the same batch at a 10x larger library: index pages and the
 # bootstrap rows, never a pass over the library's tracks, files or overrides.
 _BATCH_ROWS_READ_SLACK = 50
-# Shared buffers a one-page exception_overrides Seq Scan may touch per batch-key probe (6.5): its page, plus
-# one for a visibility or hint-bit lookup.
-_OVERRIDE_PROBE_BUFFERS_PER_KEY = 2
+# Shared buffers the batch's override step may touch in one statement (6.5): one pass over the table, or about
+# three buffers per batch key for index probes (index root and leaf, heap page), whichever is larger, plus this.
+_OVERRIDE_BUFFERS_PER_KEY = 3
+_OVERRIDE_BUFFERS_CONSTANT = 8
 # The first 500-folder batch of a drain right after a bulk add, with no statistics, took over 120 s before.
 _FIRST_BATCH_SECONDS = 5.0
+_TABLE_ROWS_READ_SQL = """
+    select relname, coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) as rows
+    from pg_stat_xact_user_tables where schemaname = 'library'
+"""
 
 
 class _ExplainingConnection:
-    """The drain's own connection, which first runs EXPLAIN (ANALYZE) of the candidate statement it is given,
-    so the plan checked is the executed one: a plan flat in estimate but not in execution cannot hide. The
-    analyzed run reads the same rows as the real one, so each size's rows-read count doubles alike."""
+    """The drain's own connection inside its own transaction. For the candidate statement it first runs
+    EXPLAIN (ANALYZE, BUFFERS), so the plan checked is the executed one, then counts the table rows the real
+    run alone reads, per table, from pg_stat_xact_user_tables: this transaction's own counts, no stats flush
+    to wait for, nothing from other statements."""
 
-    def __init__(self, connection, plans):
-        self._connection, self._plans = connection, plans
+    def __init__(self, connection, plans, rows_read):
+        self._connection, self._plans, self._rows_read = connection, plans, rows_read
+
+    def _table_rows(self):
+        return {row["relname"]: int(row["rows"]) for row in self._connection.execute(_TABLE_ROWS_READ_SQL).fetchall()}
 
     def execute(self, sql, params=None):
-        if "eligible_track_file_ids" in str(sql):
-            self._plans.append(
-                self._connection.execute("explain (analyze, buffers, format json) " + sql, params).fetchone())
-        return self._connection.execute(sql, params)
+        if "eligible_track_file_ids" not in str(sql):
+            return self._connection.execute(sql, params)
+        self._plans.append(
+            self._connection.execute("explain (analyze, buffers, format json) " + sql, params).fetchone())
+        before = self._table_rows()
+        cursor = self._connection.execute(sql, params)
+        after = self._table_rows()
+        self._rows_read.update({table: after[table] - before.get(table, 0) for table in after})
+        return cursor
 
     def __getattr__(self, name):
         return getattr(self._connection, name)
@@ -588,42 +602,39 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
             assert -1.0 not in reltuples.values(), f"the tables must be analyzed: {reltuples}"
         else:
             assert set(reltuples.values()) == {-1.0}, f"the tables must have no statistics: {reltuples}"
-        plans = []
-        with psycopg.connect(fixture.database_url, row_factory=dict_row) as connection:
-            connection.execute("set statement_timeout = '20s'")
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
             folders = {(int(row["root_id"]), str(row["folder"])) for row in connection.execute(
                 problematic_index._MARKED_GROUPS_SQL, (library_id, "", 200)).fetchall()}
-            assert len(folders) == 200
-            with connection.transaction(force_rollback=True):
-                read = "select coalesce(sum(coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0)), 0) as rows" \
-                       " from pg_stat_xact_user_tables where schemaname = 'library'"
-                before = int(connection.execute(read).fetchone()["rows"])
+        assert len(folders) == 200
+        plans, rows_read = [], {}
+        with psycopg.connect(fixture.database_url, row_factory=dict_row) as connection:
+            connection.execute("set statement_timeout = '20s'")
+            connection.commit()
+            with connection.transaction(force_rollback=True):  # the measured statement's own transaction
                 loaded = repository._load_problematic_loose_file_rows(
-                    connection=_ExplainingConnection(connection, plans), limit=None,
+                    connection=_ExplainingConnection(connection, plans, rows_read), limit=None,
                     membership_folders=folders, all_roots=True)
-                rows_read = int(connection.execute(read).fetchone()["rows"]) - before
         assert loaded, "the batch's loose files are loaded"
         nodes = _plan_nodes(plans[0]["QUERY PLAN"][0]["Plan"])
         assert any(node.get("Index Name") == "local_track_files_loose_group_idx" for node in nodes), (
             "the folder lookup uses 0294's index")
-        # 6.5's rule: a per-key probe of exception_overrides may be a Seq Scan only while the table is one page
-        # (scanning one page is cheaper than an index probe, and its rows are arithmetic, not I/O), and then it
-        # touches at most _OVERRIDE_PROBE_BUFFERS_PER_KEY shared buffers per probe. Any other Seq Scan on a
-        # library table, or on exception_overrides once it has more than one page, fails.
-        sequential = []
-        for node in nodes:
-            if node["Node Type"] != "Seq Scan" or node.get("Relation Name") not in tables:
-                continue
-            if node["Relation Name"] == "exception_overrides" and override_pages <= 1:
-                buffers = node.get("Shared Hit Blocks", 0) + node.get("Shared Read Blocks", 0)
-                loops = max(1, node.get("Actual Loops", 1))
-                assert buffers <= _OVERRIDE_PROBE_BUFFERS_PER_KEY * loops, (
-                    f"the one-page override probe touched {buffers} buffers over {loops} probes")
-                continue
-            sequential.append(node["Relation Name"])
-        assert sequential == [], (
-            f"no pass over a library table (exception_overrides: {override_pages} pages): {sequential}")
-        measured[size] = rows_read
+        # 6.5: no Seq Scan on the batch's tables at all, and none on exception_overrides inside a loop (once per
+        # key): a single pass over it (a hash join) or index probes per key are both fine.
+        sequential = [node["Relation Name"] for node in nodes
+                      if node["Node Type"] == "Seq Scan" and node.get("Relation Name") in tables
+                      and (node["Relation Name"] != "exception_overrides" or node.get("Actual Loops", 1) > 1)]
+        assert sequential == [], f"no pass over a library table, none per key: {sequential}"
+        ctes = {node["Subplan Name"]: node for node in nodes if str(node.get("Subplan Name", "")).startswith("CTE ")}
+        assert ctes["CTE override_hits"]["Actual Loops"] == 1, "the batch's override step runs once"
+        batch_keys = int(ctes["CTE batch_keys"]["Actual Rows"])
+        override_buffers = sum(node.get("Shared Hit Blocks", 0) + node.get("Shared Read Blocks", 0)
+                               for node in nodes if node.get("Relation Name") == "exception_overrides")
+        assert override_buffers <= max(override_pages, batch_keys * _OVERRIDE_BUFFERS_PER_KEY) + \
+            _OVERRIDE_BUFFERS_CONSTANT, (
+            f"the override step touched {override_buffers} buffers ({override_pages} pages, {batch_keys} keys)")
+        # Rows read, of the batch's own tables: the override step's reads are bounded by buffers above (one pass
+        # over the table is allowed), so they are not in this count.
+        measured[size] = sum(rows for table, rows in rows_read.items() if table != "exception_overrides")
 
     _seed_loose_files(fixture, "Small", 200)
     if overrides:

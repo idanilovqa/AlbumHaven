@@ -645,8 +645,8 @@ def _cte_body(sql: str, name: str) -> tuple[str, str]:
 def test_a_drain_batch_reads_overrides_in_materialized_steps_that_no_outer_row_can_rerun():
     """Case 55: a folder batch's overrides are read once per statement. batch_keys, override_hits,
     exception_candidates and their ranking are each AS MATERIALIZED; exception_overrides is read only inside
-    override_hits, whose fenced lookups refer to nothing but batch_keys and bootstrap_context; nothing after it
-    reads exception_overrides again."""
+    override_hits, as a set join of the batch keys (no lateral, so no per-key re-scan of the table) that refers
+    to nothing but batch_keys and bootstrap_context; nothing after it reads exception_overrides again."""
     sql = " ".join(inventory_module._non_album_candidates_sql(
         unassigned_only=True, membership_problems_only=True, all_roots=True, membership_folders=True,
     ).lower().split()).replace(" ( ", " (").replace(" )", ")")
@@ -655,9 +655,9 @@ def test_a_drain_batch_reads_overrides_in_materialized_steps_that_no_outer_row_c
         keyword, _body = _cte_body(sql, name)
         assert keyword == "materialized", f"{name} must be AS MATERIALIZED"
     _keyword, hits = _cte_body(sql, "override_hits")
-    assert hits.count("from library.exception_overrides overrides") == 2
+    assert hits.count("join library.exception_overrides overrides") == 2
     assert sql.count("library.exception_overrides") == hits.count("library.exception_overrides"), (
         "exception_overrides is read only inside override_hits")
-    outer = set(re.findall(r"\b([a-z_]+)\.(?:private_path|track_id|library_id)\b", hits)) - {"overrides", "track_override"}
+    outer = set(re.findall(r"\b([a-z_]+)\.(?:private_path|track_id|library_id)\b", hits)) - {"overrides"}
     assert outer <= {"batch_keys", "bootstrap_context"}, f"override_hits refers to an outer row: {outer}"
-    assert hits.count("offset 0)") == 2, "each lookup is fenced"
+    assert "lateral" not in hits, "a set join of the batch keys, never a per-key lateral"

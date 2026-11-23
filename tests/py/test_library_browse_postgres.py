@@ -1904,9 +1904,15 @@ def test_loose_tracks_show_the_rows_already_stored_while_the_store_is_not_ready(
     monkeypatch.setattr(loose_track_store, "drain", lambda *_args, **_kwargs: pytest.fail("no drain"))
     queued = []
     monkeypatch.setattr(repository, "queue_utility_projection_prewarm", queued.append)
+    monkeypatch.setattr(
+        browse,
+        "_selected_artist_family_context_from_state",
+        lambda *_args, **_kwargs: {"family_artists": [], "alias_to_canonical": {}, "canonical_to_aliases": {}},
+    )
 
     payload = repository.build_library_loose_tracks_payload(query_params={})
-    count = repository.build_library_loose_tracks_payload(query_params={"availability": "1"})
+    # The artist count request (the only availability request the client sends) carries the flags too.
+    count = repository.build_library_loose_tracks_payload(query_params={"artist": "Broadcast", "availability": "1"})
 
     assert [track["title"] for track in payload["library_non_album_tracks"]] == ["Stored loose"]
     assert payload["non_album_tracks_deferred"] is False

@@ -2982,6 +2982,85 @@ for (const kind of ['artist availability', 'library Loose Tracks']) {
   });
 }
 
+// Owner (relayed 2026-11-22): "If at least one loose tracks is already indexed let that page show it".
+test('library Loose Tracks shows the rows already stored, keeps asking with the same back-off, then settles on the full list', async () => {
+  const page = loadDeferredNonAlbumPage();
+  const partial = [{ path: 'D:/Music/One.flac', title: 'One' }];
+  const full = [...partial, { path: 'D:/Music/Two.flac', title: 'Two' }];
+  const answers = [
+    { library_non_album_tracks: partial, non_album_tracks_deferred: false, non_album_tracks_partial: true },
+    { library_non_album_tracks: full, non_album_tracks_deferred: false, non_album_tracks_partial: true },
+    { library_non_album_tracks: full, non_album_tracks_deferred: false },
+  ];
+  page.context.fetch = async (url) => {
+    page.requests.push(String(url));
+    const payload = answers.shift();
+    return { ok: true, status: 200, json: async () => payload };
+  };
+  const rendered = [];
+  page.context.rerenderOpenLibraryNonAlbumModal = () => rendered.push(
+    page.context.getVisibleNonAlbumTracks({ libraryWide: true }).map(track => track.title),
+  );
+  page.context.state.view.selected_artist = '';
+
+  await page.context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+
+  assert.deepEqual(page.context.getVisibleNonAlbumTracks({ libraryWide: true }).map(track => track.title), ['One'],
+    'the rows stored so far are shown');
+  assert.equal(page.context.hasPartialLibraryNonAlbumTracks(), true);
+  assert.equal(page.context.hasHydratedLibraryNonAlbumTracks(), false, 'still asking for more');
+  assert.equal(page.live.size, 1, 'one retry armed, on the same back-off');
+  await page.fireAll();
+
+  assert.deepEqual(page.delays, [250, 500], 'the existing bounded back-off');
+  assert.equal(page.requests.length, 3);
+  assert.deepEqual(rendered, [['One'], ['One', 'Two'], ['One', 'Two']], 'each answer repaints the open page');
+  assert.equal(page.context.hasPartialLibraryNonAlbumTracks(), false, 'the ready list is no longer partial');
+  assert.equal(page.context.hasHydratedLibraryNonAlbumTracks(), true);
+  assert.equal(page.live.size, 0, 'no retry once the store is ready');
+});
+
+test('the note under partial Loose Tracks renders nothing until the owner approves its wording', () => {
+  const { context } = loadHelper();
+  assert.equal(context.buildLooseTracksPartialNoteHtml(), '');
+});
+
+test('a Loose Tracks page that is still preparing does not ask again until its retry fires', async () => {
+  // Reopening the page after a deferred answer used to ask the server again at once, every answer.
+  const { context } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.scheduleBrowserTimeout = () => 1;
+  context.clearBrowserTimeout = () => {};
+  context.state.view = { library_non_album_tracks: [] };
+  context.state.ui = {};
+  const requests = [];
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: [], non_album_tracks_deferred: true }) };
+  };
+
+  context.openNonAlbumModal({ libraryWide: true });
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+
+  assert.equal(requests.length, 1, 'one ask; the armed retry asks again later');
+  assert.match(table.innerHTML, /utility-loading|Loading|loading/i);
+});
+
 test('bounded interaction: an artist availability pass sends one request, keeps one retry and stops at the same bound at any library size', async () => {
   const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
   const episode = async (albums) => {

@@ -1538,11 +1538,9 @@ class PostgresScanCacheAdapter:
         try:
             from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
             with persistence_stage("gallery_refresh_scheduling"):
-                schedule_gallery_projection_refresh(
-                    self._config, connect=self._connect,
-                    # A publication that could not patch membership rebuilds it in full.
-                    incremental_membership=not result.get("gallery_rebuild_required"),
-                )
+                # The journal's owner drains what the save left (R3): it realigns a header behind the
+                # journal's floor itself, then publishes the albums kept for it.
+                schedule_gallery_projection_refresh(self._config, connect=self._connect, incremental_membership=True)
         except Exception:
             _LOGGER.exception("Unable to schedule scoped gallery refresh after tag edit")
         return result

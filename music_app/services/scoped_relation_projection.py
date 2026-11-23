@@ -905,13 +905,25 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
         connection.execute("""update library.libraries set metadata=jsonb_set(metadata,
             '{scan_cache,relation_projection}',%(metadata)s::jsonb),updated_at=now() where id=%(library_id)s""",
             {'library_id': library_id, 'metadata': _jsonb(metadata)})
-    connection.execute('delete from library.local_relation_dirty_albums where library_id=%s and album_id=any(%s::bigint[])',
-                       (library_id, result['processed_relation_album_ids']))
-    result['relation_compatibility_bridge_ms'] = (perf_counter() - bridge_started) * 1000
+    baseline_ready = keep_journal = False
     if config is not None:
         from music_app.services.gallery_projection_postgres import (
             gallery_membership_baseline_ready,
+            gallery_membership_headers_behind,
+        )
+        baseline_ready = gallery_membership_baseline_ready(connection, result['first_gallery_generation'])
+        # R3: the journal is never emptied ahead of the headers. A header behind the journal's floor keeps
+        # these albums journaled for the owner's drain, which realigns it.
+        keep_journal = not baseline_ready and gallery_membership_headers_behind(
+            connection, result['first_gallery_generation'])
+    if not keep_journal:
+        connection.execute('delete from library.local_relation_dirty_albums where library_id=%s and album_id=any(%s::bigint[])',
+                           (library_id, result['processed_relation_album_ids']))
+    result['relation_compatibility_bridge_ms'] = (perf_counter() - bridge_started) * 1000
+    if config is not None:
+        from music_app.services.gallery_projection_postgres import (
             patch_gallery_membership_in_transaction,
+            patch_membership_per_header_in_transaction,
         )
         if result['first_gallery_generation'] is None:
             raise RuntimeError('Affected library changes have no gallery publication journal.')
@@ -927,7 +939,7 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                 and target_generation == start + 1
             ):
                 raise RuntimeError('Library sources changed during scoped publication; retry reconciliation.')
-        if gallery_membership_baseline_ready(connection, result['first_gallery_generation']):
+        if baseline_ready:
             with persistence_stage('relation_publication.gallery_membership'):
                 patch_gallery_membership_in_transaction(
                     connection, config, affected_album_ids=result['affected_relation_album_ids'],
@@ -937,10 +949,20 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                     expected_target_generation=target_generation,
                 )
         else:
-            # Membership predates these changes (a restored database, an interrupted
-            # startup). Failing here blocked every later publication and save, so the
-            # relations are published and the caller rebuilds membership from them.
-            result['gallery_rebuild_required'] = True
+            # Edits always save (R3/R4): headers at different generations are each patched from their own.
+            # One behind the journal's floor (a restored database, an interrupted startup) keeps the
+            # journal, and the owner's drain realigns it.
+            with persistence_stage('relation_publication.gallery_membership'):
+                lagging = patch_membership_per_header_in_transaction(
+                    connection, config, affected_album_ids=result['affected_relation_album_ids'],
+                    affected_album_keys=result['affected_relation_album_keys'],
+                    alias_to_canonical=result['affected_relation_aliases'],
+                    journal_floor_generation=result['first_gallery_generation'],
+                    expected_target_generation=target_generation,
+                )
+            if lagging:
+                result['gallery_rebuild_required'] = True
+                result['gallery_headers_behind_journal'] = lagging
     return result
 
 

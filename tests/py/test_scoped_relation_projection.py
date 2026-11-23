@@ -496,16 +496,22 @@ def test_atomic_multigroup_delta_with_wrong_base_still_reloads_current_state(mon
         assert state['relation_views'] == {'artists': ['Authoritative']}
 
 
-def test_scoped_publication_flags_a_full_gallery_rebuild_for_a_stale_baseline(monkeypatch):
-    """A restored database left membership at another generation; failing there blocked every save."""
+def test_scoped_publication_patches_each_header_and_keeps_the_journal_for_one_behind_its_floor(monkeypatch):
+    """A restored database left membership at another generation; failing there blocked every save.
+    Edits always save (R3/R4): the headers are patched from their own generations, a header behind the
+    journal's floor keeps the journal for its owner's drain, and that drain rebuilds it."""
     from music_app.services import gallery_projection_postgres as gallery
-    publications = []
+    exact, per_header, statements = [], [], []
     monkeypatch.setattr(gallery, 'patch_gallery_membership_in_transaction',
-                        lambda *args, **kwargs: publications.append(kwargs))
+                        lambda *args, **kwargs: exact.append(kwargs))
     monkeypatch.setattr(gallery, 'gallery_membership_baseline_ready', lambda *args: False)
+    monkeypatch.setattr(gallery, 'gallery_membership_headers_behind', lambda *args: True)
+    monkeypatch.setattr(gallery, 'patch_membership_per_header_in_transaction',
+                        lambda *args, **kwargs: per_header.append(kwargs) or ['behind'])
 
     class Connection:
         def execute(self, statement, params):
+            statements.append(statement)
             return type('Cursor', (), {'fetchone': lambda self: {'generation': 4, 'owned': False}})()
 
     result = scoped._finish_publication(Connection(), {
@@ -516,5 +522,9 @@ def test_scoped_publication_flags_a_full_gallery_rebuild_for_a_stale_baseline(mo
         'first_gallery_generation': 3, 'relations_last_built': 123.0,
     }, reason='test', config={}, copy_legacy_views=False)
 
-    assert publications == []
+    assert exact == []
+    assert [call['journal_floor_generation'] for call in per_header] == [3]
     assert result['gallery_rebuild_required'] is True
+    assert result['gallery_headers_behind_journal'] == ['behind']
+    assert not any('delete from library.local_relation_dirty_albums' in sql for sql in statements), (
+        "The journal was emptied ahead of a header behind its floor (R3).")

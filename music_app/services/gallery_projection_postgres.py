@@ -96,6 +96,17 @@ def _membership_headers(connection, params):
     """, params).fetchall()
 
 
+def gallery_membership_headers_behind(connection, journal_floor_generation):
+    """Whether any header is behind the journal's earliest generation: a gap only a realignment fills."""
+    if journal_floor_generation is None or not _membership_installed(connection):
+        return False
+    context = gallery_projection_context(connection)
+    if not context:
+        return False
+    headers = _membership_headers(connection, {**context, "builder_version": BUILDER_VERSION})
+    return not headers or any(header["source_generation"] < journal_floor_generation for header in headers)
+
+
 def gallery_membership_baseline_ready(connection, expected_generation):
     """Whether journaled changes from ``expected_generation`` can be patched into membership.
 
@@ -116,8 +127,6 @@ def patch_gallery_membership_in_transaction(
     alias_to_canonical, expected_generation, expected_target_generation=None,
 ):
     """Publish changed memberships against an exact, previously ready baseline."""
-    from music_app.services import library_browse_postgres as browse
-
     if expected_generation is None or not _membership_installed(connection):
         return 0
     context = gallery_projection_context(connection)
@@ -126,23 +135,32 @@ def patch_gallery_membership_in_transaction(
     if expected_target_generation is not None and context['generation'] != expected_target_generation:
         raise RuntimeError('Library sources changed before gallery publication; retry reconciliation.')
     keys = sorted({str(key) for key in affected_album_keys if str(key)})
-    params = {**context, "expected_generation": expected_generation,
-              "builder_version": BUILDER_VERSION, "affected_album_keys": keys}
-    headers = _membership_headers(connection, params)
+    headers = _membership_headers(connection, {**context, "builder_version": BUILDER_VERSION})
     if not headers or any(header["source_generation"] != expected_generation for header in headers):
         raise RuntimeError("Gallery membership baseline is unavailable; initialize or reconcile it before editing.")
+    publish = _header_membership_publisher(connection, config, context, keys, affected_album_ids, alias_to_canonical)
+    for header in headers:
+        publish(header, expected_generation)
+    return len(headers)
+
+
+def _header_membership_publisher(connection, config, context, keys, affected_album_ids, alias_to_canonical):
+    """Patches one header's affected albums from ``expected_generation`` to the current generation."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services.scoped_relation_projection import _published_aliases
+
     repository = browse.PostgresLibraryBrowseRepository(config)
     aliases = browse._root_browse_alias_to_canonical(alias_to_canonical)
-    published = 0
-    for header in headers:
+    album_ids = sorted(set(affected_album_ids))
+
+    def publish(header, expected_generation):
         state = dict(header["view_state"])
         rows = connection.execute(
             browse._root_gallery_membership_sql(candidate_albums_only=True),
-            {**browse._root_sidebar_params(state), "gallery_album_ids": sorted(set(affected_album_ids))},
+            {**browse._root_sidebar_params(state), "gallery_album_ids": album_ids},
         ).fetchall() if keys else []
         missing_rows = repository._load_missing_album_rows(album_keys=keys, connection=connection) if keys else []
         missing_payloads = browse._missing_album_projection_payloads(missing_rows, view_state=state)
-        from music_app.services.scoped_relation_projection import _published_aliases
         row_aliases = _published_aliases(connection, context['library_id'], {
             *(str(row.get('artist_name') or '').strip() for row in rows),
             *(str(album.get('album_artist') or 'Unknown Artist').strip() for album in missing_payloads),
@@ -158,12 +176,53 @@ def patch_gallery_membership_in_transaction(
                 %(builder_version)s, %(revision)s, %(view_state)s, %(affected_album_keys)s,
                 %(rows)s
             ) as published
-        """, {**params, "scope_key": header["scope_key"], "revision": revision,
+        """, {**context, "expected_generation": expected_generation, "builder_version": BUILDER_VERSION,
+                "affected_album_keys": keys, "scope_key": header["scope_key"], "revision": revision,
                 "view_state": Jsonb(state), "rows": Jsonb(membership_rows(snapshot))}))
         if not result or result.get("published") is not True:
             raise RuntimeError("Gallery membership baseline changed during inventory publication.")
-        published += 1
-    return published
+
+    return publish
+
+
+def patch_membership_per_header_in_transaction(
+    connection, config, *, affected_album_ids, affected_album_keys,
+    alias_to_canonical, journal_floor_generation, expected_target_generation=None,
+):
+    """Edits always save (R3/R4): each header is patched from its own generation.
+
+    The journal holds every album changed since ``journal_floor_generation`` (its earliest row), so a
+    header at or after that floor reaches the current generation by these albums alone. A header behind
+    the floor has a gap the journal can't fill: it is handed to ``patch_edited_albums_into_lagging_headers``
+    and returned, and the caller keeps the journal for its owner. Returns the header scope keys still lagging.
+    """
+    if journal_floor_generation is None or not _membership_installed(connection):
+        return []
+    context = gallery_projection_context(connection)
+    if not context:
+        return []
+    if expected_target_generation is not None and context['generation'] != expected_target_generation:
+        raise RuntimeError('Library sources changed before gallery publication; retry reconciliation.')
+    keys = sorted({str(key) for key in affected_album_keys if str(key)})
+    headers = _membership_headers(connection, {**context, "builder_version": BUILDER_VERSION})
+    publish = _header_membership_publisher(connection, config, context, keys, affected_album_ids, alias_to_canonical)
+    lagging = []
+    for header in headers:
+        if header["source_generation"] >= journal_floor_generation:
+            publish(header, header["source_generation"])
+        else:
+            lagging.append(header)
+    return patch_edited_albums_into_lagging_headers(connection, context, lagging, keys)
+
+
+def patch_edited_albums_into_lagging_headers(connection, context, headers, keys):
+    """The seam for 6.5's per-header patch (draft migration library.patch_gallery_membership_rows): show
+    the edited albums in a header behind the journal's floor without moving its generation.
+
+    Until that migration lands, nothing is patched here: the headers are returned as still lagging, the
+    caller keeps the journal and the journal owner's drain realigns them. This is not the final behaviour.
+    """
+    return [header["scope_key"] for header in headers]
 
 
 def _first(cursor):
@@ -674,8 +733,13 @@ def schedule_gallery_projection_refresh(
                 for waiting in [entry for entry in _DEFERRED_FIRST_BUILDS if entry[0] == database_url]:
                     del _DEFERRED_FIRST_BUILDS[waiting]
         if result.get("gallery_rebuild_required"):
-            # The relations are published; membership is rebuilt from them in full.
-            return ensure_gallery_projection_ready(config, connect=connect)
+            # The relations are published; a header behind the journal's floor has a gap the journal can't
+            # fill, so membership is realigned from them in full (abnormal: a restored database, an
+            # interrupted startup). The journal kept for that header (R3) is then published against the
+            # realigned headers, by its albums alone.
+            rebuilt = ensure_gallery_projection_ready(config, connect=connect)
+            ensure_pending_relation_projection_ready(config, connect=connect)
+            return rebuilt
         if "view_state" in options:
             return build_missing_custom_scope() or result
         return result

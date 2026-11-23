@@ -721,12 +721,17 @@ export function assertSwitchKeepsSongSounding(expect, { before, after, pressed, 
   expect(after.renderedPcmEvidence?.streamId).toBe(after.currentStreamId);
   expect(after.renderedPcmEvidence?.nonZeroSamples).toBeGreaterThan(0);
   expect(after.renderedPcmEvidence?.peakSample).toBeGreaterThan(0);
+  assertTitleFollowsSound(expect, { before, pressed, samples });
+}
 
+// The player keeps the playing song's title until the pressed song sounds, then shows the pressed
+// one within 250 ms and keeps it.
+export function assertTitleFollowsSound(expect, { before, pressed, samples }) {
+  const cut = samples.findIndex((sample) => sample.currentStreamId !== before.currentStreamId);
+  expect(cut, 'the pressed song must sound').toBeGreaterThan(0);
   // The desktop player reads "Artist - Title /", a phone's "Title".
   const showsPressed = ({ title }) => title === pressed.title
     || title.replace(/ \/$/, '').endsWith(` - ${pressed.title}`);
-  // The player keeps the playing song's title until the pressed song sounds, then shows the pressed
-  // one.
   const titled = samples.findIndex(showsPressed);
   expect(titled, 'the pressed title must be shown').toBeGreaterThanOrEqual(0);
   expect(titled, 'the pressed title shows only once its song sounds').toBeGreaterThanOrEqual(cut);

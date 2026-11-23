@@ -96,6 +96,7 @@ export {
 export {
   assertActiveReplacementContract,
   assertSwitchKeepsSongSounding,
+  assertTitleFollowsSound,
   findPromotedPreparedReplacement,
   observeSwitchPresentation,
   assertAudibleBoundaryCapture,

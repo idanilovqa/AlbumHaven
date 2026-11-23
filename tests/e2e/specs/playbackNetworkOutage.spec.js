@@ -1,6 +1,7 @@
 import { expect, test } from '../support/baseFixtures.js';
 import { startCpuLoad } from '../helpers/cpuLoad.js';
 import { startNetworkRelay } from '../helpers/networkRelay.js';
+import { assertTitleFollowsSound, observeSwitchPresentation } from '../helpers/index.js';
 
 const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
@@ -34,7 +35,8 @@ function samplePressPaint(locator, ms = 1500) {
     observer.observe({ type: 'event', durationThreshold: 16 });
     const sample = () => {
       frames.push({ at: performance.now(), text: String(element.textContent || ''),
-        progress: parseFloat(element.style.getPropertyValue('--player-seek-progress')) || 0 });
+        progress: parseFloat(element.style.getPropertyValue('--player-seek-progress')) || 0,
+        current: element.classList.contains('is-current') });
       if (performance.now() - started < duration) {
         requestAnimationFrame(sample);
         return;
@@ -681,16 +683,27 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
       await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
     });
 
-    // Instant even at 100% CPU: while a song plays and decodes
-    // under full load, a press on another song shows its title in the first frame after its click.
-    await stepLogger.step('Under the same load, a press on another song shows its title in the first frame after the click', async () => {
+    // Instant even at 100% CPU: while a song plays and decodes under full load, a press on another
+    // song shows on its row in the first frame after its click. The player follows the sound: it
+    // keeps the playing song's title until the pressed song sounds, then shows the pressed one.
+    await stepLogger.step('Under the same load, a press on another song shows on its row in the first frame after the click, and in the player when it sounds', async () => {
       await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
       await trackModalActions.waitForInteractiveSummary();
-      const paint = samplePressPaint(player.title, 2000);
-      await trackModalActions.playTrackByTitle(OTHER_TITLE);
-      const frames = framesAfterPress(await paint);
-      const firstAfterClick = frames.find(({ afterClick }) => afterClick);
-      expect(firstAfterClick?.text, `the first frame after the click: ${JSON.stringify(frames.slice(0, 3))}`).toContain(OTHER_TITLE);
+      const observer = await observeSwitchPresentation(page, player.titleSelector);
+      try {
+        const mark = await playbackEvidence.playbackMark();
+        const paint = samplePressPaint(trackModalActions.trackModal.trackRowByTitle(OTHER_TITLE), 2000);
+        const pressed = await trackModalActions.playTrackByTitle(OTHER_TITLE);
+        const frames = framesAfterPress(await paint);
+        const firstAfterClick = frames.find(({ afterClick }) => afterClick);
+        expect(firstAfterClick?.current, `the pressed row in the first frame after the click: ${JSON.stringify(frames.slice(0, 3))}`).toBe(true);
+        await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: pressed.path }, { timeout: 8000 });
+        await expect(player.title).toContainText(OTHER_TITLE);
+        const samples = await observer.finish();
+        assertTitleFollowsSound(expect, { before: samples[0], pressed, samples });
+      } finally {
+        await observer.finish();
+      }
       await trackModalActions.close();
     });
   } finally {

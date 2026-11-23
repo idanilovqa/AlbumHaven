@@ -6434,6 +6434,18 @@ test('a start the server refuses for its rate starts again at the reported rate'
   assert.equal(harness.contexts[1].state, 'running');
 });
 
+test('a paused start at an unknown rate asks the rate first and opens once', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map() });
+
+  const restored = await harness.api.start(makeTrack('01.flac'), { startSeconds: 2, autoplay: false });
+
+  assert.equal(harness.sockets[0].probes.length, 1);
+  assert.equal(harness.sent('open').length, 1);
+  assert.equal(harness.sent('open')[0].sampleRate, 48_000);
+  assert.equal(restored.generation, 1);
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
 test('a guessed start paused before its refusal starts again paused', async () => {
   const harness = createEngineHarness({ trackSampleRates: new Map() });
   await harness.api.start(makeTrack('01.flac'));

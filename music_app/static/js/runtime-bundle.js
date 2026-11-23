@@ -12042,7 +12042,9 @@ async function openBrowserStreamingTrack(track, {
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
   let sampleRate = 0;
-  const guessedSampleRate = !knownStreamingSampleRate(track)
+  // Only a start that is to sound guesses: nobody waits on a paused one (a restore), and a refused
+  // guess would leave it a second generation that never draws its waveform while paused.
+  const guessedSampleRate = autoplay && !knownStreamingSampleRate(track)
     && chooseStreamingQuality(track) === 'original' && !streamingQualityNeedsTrackSize(track);
   try {
     if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();

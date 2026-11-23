@@ -917,8 +917,15 @@ def finalize_structural_tag_edit_save_task(
     before_persistence_commit: Callable[[object], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
     timing_recorder: EditTagTimingRecorder | None = None,
+    lock_wait_seconds: float | None = None,
 ) -> None:
+    """``lock_wait_seconds`` bounds the save's wait for the inventory lock. Past it the save raises
+    EditSaveLockBusy with its files written and intent stored, keeping its reservation for the
+    background completion (row B2); None waits as long as the publication takes."""
+    from music_app.services.scan_cache_persistence import EditSaveLockBusy, edit_save_lock_wait
+
     finalize_started = perf_counter()
+    finishing = False
     try:
         try:
             persistence_started = perf_counter()
@@ -931,7 +938,7 @@ def finalize_structural_tag_edit_save_task(
                 timing_recorder.measure("postgres_commit")
                 if timing_recorder is not None
                 else nullcontext()
-            ), collect_persistence_stages() as persistence_stages:
+            ), collect_persistence_stages() as persistence_stages, edit_save_lock_wait(lock_wait_seconds):
                 try:
                     persistence_result = persist_structural_tag_edit(
                         changed_paths=set(changed_paths),
@@ -946,6 +953,10 @@ def finalize_structural_tag_edit_save_task(
                     if timing_recorder is not None:
                         timing_recorder.record_postgres_commit_stages(persistence_stages)
             persistence_ms = (perf_counter() - persistence_started) * 1000.0
+        except EditSaveLockBusy:
+            # Saved, finishing: never compensate (restore) written files for a busy lock.
+            finishing = True
+            raise
         except Exception as exc:
             compensation_succeeded = False
             try:
@@ -1241,7 +1252,7 @@ def finalize_structural_tag_edit_save_task(
             )
     finally:
         release = getattr(structural_tag_edit_reservation, "release", None)
-        if callable(release):
+        if callable(release) and not finishing:
             release()
 
 
@@ -1274,14 +1285,33 @@ def queue_finalize_save_task(*, wait_for_completion: bool = False, **kwargs) -> 
         raise
 
 
+# Placeholder wording (6.5, 11-23, row B2): new UI text, pending the owner's approval.
+EDIT_SAVE_FINISHING_MESSAGE = (
+    "Your edit is saved. The library is busy publishing a scan, so it will finish updating shortly."
+)
+
+
 def queue_finalize_structural_tag_edit_save_task(
     *,
     wait_for_completion: bool = False,
     **kwargs,
 ) -> None:
     if wait_for_completion:
-        finalize_structural_tag_edit_save_task(**kwargs)
+        from music_app.services.scan_cache_persistence import EditSaveLockBusy, edit_save_lock_wait_seconds
+
+        try:
+            finalize_structural_tag_edit_save_task(
+                **kwargs, lock_wait_seconds=edit_save_lock_wait_seconds(kwargs.get("config")))
+        except EditSaveLockBusy:
+            # The request answers "saved, finishing"; the same finalize completes the stored intent in
+            # the background as soon as the lock frees, holding the save's reservation until then.
+            update_save_task(kwargs["task_id"], status="finishing", error=EDIT_SAVE_FINISHING_MESSAGE)
+            _submit_structural_finalize(kwargs)
         return
+    _submit_structural_finalize(kwargs)
+
+
+def _submit_structural_finalize(kwargs: dict) -> None:
     try:
         future = _STRUCTURAL_TAG_EDIT_EXECUTOR.submit(
             finalize_structural_tag_edit_save_task,

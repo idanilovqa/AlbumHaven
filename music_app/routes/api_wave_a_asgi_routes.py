@@ -1469,6 +1469,10 @@ def _authoritative_edit_tags_response(
         for key in ("failure_stage", "edit_outcome"):
             if key in task:
                 failure_response[key] = task[key]
+        if status == "finishing":
+            # Saved, finishing (6.5, row B2): the files are written and the intent is stored; the save
+            # completes in the background when the inventory lock frees. Not a failure.
+            return {**failure_response, "finishing": True}, 202
         return failure_response, 500
 
     for key in (

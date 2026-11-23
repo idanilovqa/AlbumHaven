@@ -127,6 +127,41 @@ def set_local_lock_wait(connection: Any, seconds: float) -> None:
     connection.execute(f"set local lock_timeout = '{max(1, int(seconds * 1000))}ms'")
 
 
+class EditSaveLockBusy(RuntimeError):
+    """A user's save waited its whole ceiling for the inventory lock. Its files are written and its
+    intent is stored: the save is finishing, never lost or rolled back (6.5, 11-23, row B2)."""
+
+
+# The bound on the next structural save's inventory-lock wait in this context; None waits as long as
+# the publication holding the lock takes (the background completion of a finishing save).
+_edit_save_lock_wait: ContextVar[float | None] = ContextVar("album_haven_edit_save_lock_wait", default=None)
+
+
+@contextmanager
+def edit_save_lock_wait(seconds: float | None):
+    token = _edit_save_lock_wait.set(seconds)
+    try:
+        yield
+    finally:
+        _edit_save_lock_wait.reset(token)
+
+
+def _take_inventory_lock_for_a_save(connection: Any) -> None:
+    seconds = _edit_save_lock_wait.get()
+    if seconds is None:
+        connection.execute(_inventory_publication_advisory_lock_sql())
+        return
+    set_local_lock_wait(connection, seconds)
+    try:
+        connection.execute(_inventory_publication_advisory_lock_sql())
+    except Exception as error:
+        if getattr(error, "sqlstate", None) == "55P03":  # lock_not_available
+            raise EditSaveLockBusy("The library is publishing a scan; the save finishes when it ends.") from error
+        raise
+    # Only the inventory lock wait is bounded; the save's own row locks wait as before.
+    connection.execute("set local lock_timeout to default")
+
+
 class ScanCachePublicationSuperseded(RuntimeError):
     """Raised when a newer inventory mutation makes a prepared scan stale."""
 
@@ -1610,7 +1645,7 @@ class PostgresScanCacheAdapter:
 
         with self._connect_to_database() as connection:
             with persistence_stage("inventory_lock_wait"):
-                connection.execute(_inventory_publication_advisory_lock_sql())
+                _take_inventory_lock_for_a_save(connection)
             with persistence_stage("edit_grouping"):
                 _partition_edited_physical_copies(connection, changed_paths, previous_file_entries,
                                                  updated_file_entries, apply=True)
@@ -2162,7 +2197,9 @@ class PostgresScanCacheAdapter:
         # whether the gallery baseline or the relation journal is current is the publication's concern, never
         # a reason to refuse, wait for, or prepare anything before a user's save (rows B1, R2).
         with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
+            # Never waits (row B2): validation reads committed rows, and the save regroups the edit under
+            # the lock it takes to write. Busy, it validates against the last committed publication.
+            connection.execute(_try_inventory_publication_advisory_lock_sql())
             _partition_edited_physical_copies(connection, changed_paths, previous_file_entries,
                                              updated_file_entries, apply=False)
             groups, _, _, delta_fields, _ = _structural_tag_edit_groups(connection, changed_paths,
@@ -2277,7 +2314,7 @@ class PostgresScanCacheAdapter:
         )
         if uses_blank_album_persistence:
             with self._connect_to_database() as connection:
-                connection.execute(_inventory_publication_advisory_lock_sql())
+                connection.execute(_try_inventory_publication_advisory_lock_sql())
                 _ensure_bootstrap_context(connection)
                 result = _row_mapping(_first_row(connection.execute(
                     _validate_blank_album_tag_edit_sql(),
@@ -2312,7 +2349,7 @@ class PostgresScanCacheAdapter:
             )
 
         with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
+            connection.execute(_try_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             result = _row_mapping(
                 _first_row(
@@ -8799,3 +8836,8 @@ def _mark_missing_track_files(
         _mark_missing_track_files_sql(),
         {"ids": [int(row["id"]) for row in rows], "reasons": reasons, "source": _SOURCE},
     ).fetchall()
+
+
+def _try_inventory_publication_advisory_lock_sql() -> str:
+    """The inventory publication lock (relation_projection_postgres) taken only if it is free."""
+    return "select pg_try_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));"

@@ -567,7 +567,9 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
     # first and the refresh reused the replayed membership: built 0.) After a failed relation rebuild
     # (fail_first) the failed refresh already published both scopes at this generation, and under option 1
     # no request changes anything in between, so the recovering refresh skips them (ready headers) and
-    # publishes only after its relation rebuild: 2.
+    # publishes only after its relation rebuild: 2. That 2 depends on the pre-pass reusing the headers the failed
+    # attempt already published at the current generation; a later change that rebuilds ready headers shows
+    # up here as 4.
     assert refreshes[-1].result(timeout=10) == {"built": 2 if fail_first else 4}
     assert len(attempts) == (2 if fail_first else 1)
     assert not repository._load_relation_alias_maps().get("projection_stale_reason")

@@ -45132,6 +45132,9 @@ class VirtualArtistGrid {
   replayDeferredAppends(deferredAppends) {
     this._renderGeneration += 1;
     this._preserveExistingChildrenGeneration = this._renderGeneration;
+    // The replay completes the scroll that deferred it, as a setGroups render does.
+    const scrollRenderOwner = Number(this.diagnostics.latestScroll?.renderRafOwner || 0);
+    if (scrollRenderOwner) this.updateScrollDiagnostic(scrollRenderOwner, true);
     for (const { groups, replacedGroups, regroup } of deferredAppends) {
       if (this.appendGroupsNow(groups, replacedGroups)) continue;
       regroup?.();

@@ -2632,6 +2632,111 @@ test('source total prefetch caches every rapid toggle combination from one reque
   ]);
   assert.equal(context.state.gallery.sourceTotalsRevision, 43);
 });
+const SOURCE_SCOPE_KEYS = [
+  '', 'hoard', 'hoard|main_library', 'hoard|main_library|new_arrivals',
+  'hoard|new_arrivals', 'main_library', 'main_library|new_arrivals', 'new_arrivals',
+];
+
+// A page whose /home-data source totals leave `pending` scopes out until `publish()` is called.
+function loadPendingSourceTotalsPage({ pending = ['hoard|new_arrivals'], albums = 0, counter = null } = {}) {
+  const renders = [];
+  const requests = [];
+  const live = new Map();
+  let published = false;
+  let nextTimer = 0;
+  let maxLive = 0;
+  const context = loadRuntime({
+    state: { status: { inventory_mutation_revision: 42 }, gallery: {}, view: {
+      loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+      artist_count: 120,
+      album_count: 900,
+      artist_groups: Array.from({ length: albums }, (_value, index) => ({ artist: `Artist ${index}`, albums: [] })),
+    } },
+    window: { location: {}, history: {} },
+    renderArtistGroups: options => renders.push(options),
+    fetch: async (url) => {
+      requests.push(url);
+      counter?.count('requests');
+      const omitted = published ? [] : pending;
+      return { ok: true, json: async () => ({
+        inventory_mutation_revision: 42,
+        pending_source_scopes: omitted,
+        source_totals_by_scope: Object.fromEntries(SOURCE_SCOPE_KEYS.filter(key => !omitted.includes(key))
+          .map((key, index) => [key, { artist_count: key === 'hoard|new_arrivals' ? 7 : index,
+            album_count: key === 'hoard|new_arrivals' ? 11 : index + 10 }])),
+      }) };
+    },
+  });
+  context.scheduleBrowserTimeout = (callback) => {
+    nextTimer += 1;
+    live.set(nextTimer, callback);
+    maxLive = Math.max(maxLive, live.size);
+    return nextTimer;
+  };
+  context.clearBrowserTimeout = id => { live.delete(id); };
+  context.state.gallery.mainState = context.createGalleryMainState();
+  const fireAll = async () => {
+    for (let fired = 0; live.size && fired < 100; fired += 1) {
+      const [id, callback] = live.entries().next().value;
+      live.delete(id);
+      await callback();
+    }
+  };
+  return { context, renders, requests, live, fireAll, publish: () => { published = true; }, maxLive: () => maxLive };
+}
+
+test('a source switch to a scope whose totals are still pending happens at once and shows the real totals when they arrive', async () => {
+  // Pending totals switch to the final numbers when ready: no wait and no new text; the current counts stay until then.
+  const page = loadPendingSourceTotalsPage();
+  const { context } = page;
+
+  await context.transitionGalleryMain({ type: 'toggle-source', source: 'main_library' });
+
+  assert.equal(context.state.gallery.mainState.sources.main_library, false, 'the switch happens at once');
+  assert.equal(page.renders.length, 1);
+  assert.equal(context.state.gallery.sourceTotalsByScope['hoard|new_arrivals'], undefined);
+  assert.deepEqual(plain(context.resolveGallerySummaryTotals(
+    context.state.view, { artistCount: 80, albumCount: 200 }, context.state.gallery.mainState, null,
+    context.state.gallery.sourceTotalsByScope,
+  )), { artistCount: 80, albumCount: 200 }, 'the current counts stay while the scope is pending');
+  assert.equal(page.live.size, 1, 'one retry waits for the pending scope');
+
+  page.publish();
+  await page.fireAll();
+
+  assert.deepEqual(plain(context.state.gallery.sourceTotalsByScope['hoard|new_arrivals']), { artistCount: 7, albumCount: 11 });
+  assert.deepEqual(plain(context.resolveGallerySummaryTotals(
+    context.state.view, { artistCount: 80, albumCount: 200 }, context.state.gallery.mainState, null,
+    context.state.gallery.sourceTotalsByScope,
+  )), { artistCount: 7, albumCount: 11 }, 'the real totals replace them once published');
+  assert.equal(page.live.size, 0, 'no retry stays armed');
+});
+
+test('bounded interaction: pending source totals keep one retry and stop at the same bound at any library size', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const episode = async (albums) => {
+    const counter = createInteractionCounter();
+    const page = loadPendingSourceTotalsPage({ albums, counter });
+    return counter.measure(async () => {
+      await Promise.all([
+        page.context.prefetchGallerySourceTotalsForAllScopes(),
+        page.context.prefetchGallerySourceTotalsForAllScopes(),
+      ]);
+      await page.fireAll();
+      counter.count('timers', page.maxLive());
+      assert.equal(page.live.size, 0, 'no retry stays armed');
+    });
+  };
+  await measureScalePair({
+    id: 'js:runtime/gallery-main-interactions.js#schedulePendingSourceTotalsRetry',
+    small: 20,
+    large: 14000,
+    run: episode,
+    budgets: { requests: 7, timers: 1, itemsVisited: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
 test('a source transition waits for its exact total instead of flashing the previous count', async () => {
   let releaseTotals;
   const totalsReady = new Promise(resolve => { releaseTotals = resolve; });

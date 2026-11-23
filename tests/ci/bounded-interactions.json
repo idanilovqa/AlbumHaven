@@ -3387,6 +3387,38 @@
       }
     },
     {
+      "id": "js:runtime/gallery-main-interactions.js#schedulePendingSourceTotalsRetry",
+      "action": "The one retry schedulePendingSourceTotalsRetry arms while /home-data reports a source combination's totals pending: a bounded back-off that ends when they are published",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#schedulePendingSourceTotalsRetry:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 7,
+        "timers": 1,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-main-refactor-contracts.test.js",
+      "testIdentity": "bounded interaction: pending source totals keep one retry and stop at the same bound at any library size",
+      "performanceTargets": [],
+      "rollback": "Without the bound, a source combination that is never published would ask /home-data again every second for as long as the page stays open."
+    },
+    {
       "id": "js:runtime/gallery-main-interactions.js#revealGalleryArtistInfoSurface",
       "action": "requestAnimationFrame timers installed by revealGalleryArtistInfoSurface",
       "entrypoints": [

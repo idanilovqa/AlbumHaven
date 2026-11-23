@@ -2822,6 +2822,7 @@ def test_postgres_root_source_totals_use_ready_projection_for_every_scope(monkey
     assert len(contexts) == 1
     assert len(projected_scopes) == 7
     assert payload == {
+        "pending_source_scopes": [],
         "source_totals_by_scope": {
             "": {"artist_count": 0, "album_count": 0},
             "hoard": {"artist_count": 4, "album_count": 14},
@@ -2835,8 +2836,9 @@ def test_postgres_root_source_totals_use_ready_projection_for_every_scope(monkey
     }
 
 
-def test_postgres_root_source_totals_fall_back_for_missing_projection_scope(monkeypatch):
+def test_postgres_root_source_totals_report_an_unpublished_scope_pending_without_counting_it(monkeypatch):
     from music_app.services import gallery_projection_postgres as projection_module
+    from music_app.services import library_browse_postgres as browse_module
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     repository = PostgresLibraryBrowseRepository(
@@ -2865,50 +2867,20 @@ def test_postgres_root_source_totals_fall_back_for_missing_projection_scope(monk
         "load_gallery_projection_sidebar",
         fake_projection,
     )
-    alias_loads = []
-    monkeypatch.setattr(
-        repository,
-        "_load_relation_alias_maps",
-        lambda **kwargs: alias_loads.append(kwargs["connection"]) or {
-            "alias_to_canonical": {},
-            "canonical_to_aliases": {},
-        },
-    )
-    fallback_scopes = []
-    monkeypatch.setattr(
-        repository,
-        "_load_root_sidebar_rows",
-        lambda view_state, **_kwargs: fallback_scopes.append(
-            tuple(view_state["visible_library_categories"])
-        ) or [
-            {"artist_name": "Artist One", "album_ids": [101, 102], "album_count": 2},
-            {"artist_name": "Artist Two", "album_ids": [103], "album_count": 1},
-        ],
-    )
-    missing_loads = []
-    monkeypatch.setattr(
-        repository,
-        "_load_missing_album_rows",
-        lambda **kwargs: missing_loads.append(kwargs["connection"]) or [
-            _missing_browse_row(
-                album_id=104,
-                title="Missing Album",
-                category="hoard",
-                artist="Missing Artist",
-            ),
-        ],
-    )
+    # 6.5 (C, 2026-11-23): an unpublished scope is reported pending; /home-data never counts the library itself.
+    for reader in ("_load_relation_alias_maps", "_load_root_sidebar_rows", "_load_missing_album_rows"):
+        monkeypatch.setattr(repository, reader, lambda *_a, _reader=reader, **_k: pytest.fail(
+            f"/home-data source totals ran {_reader} for an unpublished scope"))
+    monkeypatch.setattr(browse_module, "_root_sidebar_sql",
+                        lambda: pytest.fail("/home-data source totals counted an unpublished scope"))
 
     payload = repository.build_root_source_totals_payload()
 
     assert len(projected_scopes) == 7
-    assert fallback_scopes == [("hoard",)]
-    assert len(alias_loads) == 1
-    assert len(missing_loads) == 1
     assert payload == {
+        "pending_source_scopes": ["hoard"],
         "source_totals_by_scope": {
             "": {"artist_count": 0, "album_count": 0},
-            "hoard": {"artist_count": 3, "album_count": 4},
             "hoard|main_library": {"artist_count": 5, "album_count": 15},
             "hoard|main_library|new_arrivals": {"artist_count": 7, "album_count": 17},
             "hoard|new_arrivals": {"artist_count": 6, "album_count": 16},

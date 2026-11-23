@@ -605,6 +605,9 @@ def schedule_gallery_projection_refresh(
         result = ensure_pending_relation_projection_ready(config, connect=connect) if incremental_membership else {}
         if incremental_membership:
             if not result.get("initialized"):
+                if not first_build:
+                    # Startup owns initialization; a write's owner has nothing to drain until then.
+                    return result
                 raise RuntimeError("Incremental gallery membership requires startup initialization.")
             if result.get("gallery_rebuild_required"):
                 if first_build:

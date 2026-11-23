@@ -248,14 +248,32 @@ def _seed_albums(fixture, count):
             """select files.id as file_id, tracks.id as track_id, tracks.album_id from library.local_track_files files
                join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %s""",
             (fixture.tracks[0]["path"],)).fetchone()
-        clone = {"album_key": "source.album_key || '::bulk::' || n", "title": "source.title || ' Bulk ' || n"}
+        # Each clone has its own artist: a shared one would put every clone in the saved album's relation
+        # component, which is per-artist work, not the library-wide reading this red is about.
+        clone = {"artist_key": "source.artist_key || '::bulk::' || n", "name": "source.name || ' Bulk ' || n"}
+        artists = _catalog_columns(connection, "local_artists")
+        connection.execute(
+            f"""insert into library.local_artists ({", ".join(artists)})
+                select {", ".join(clone.get(column, f"source.{column}") for column in artists)}
+                from library.local_artists source, generate_series(1, %(count)s) n
+                where source.id = (select artist_id from library.local_albums where id = %(album)s)""",
+            {"count": count, "album": source["album_id"]})
+        bulk_artist = """(select bulk.id from library.local_artists bulk where bulk.library_id = source.library_id
+                and bulk.artist_key = (select artist_key from library.local_artists where id = source.artist_id)
+                  || '::bulk::' || n)"""
+        clone = {"album_key": "source.album_key || '::bulk::' || n", "title": "source.title || ' Bulk ' || n",
+                 "artist_id": bulk_artist,
+                 "metadata": """case when source.metadata ? 'album_artist' then jsonb_set(source.metadata,
+                     '{album_artist}', to_jsonb((source.metadata ->> 'album_artist') || ' Bulk ' || n))
+                     else source.metadata end"""}
         albums = _catalog_columns(connection, "local_albums")
         connection.execute(
             f"""insert into library.local_albums ({", ".join(albums)})
                 select {", ".join(clone.get(column, f"source.{column}") for column in albums)}
                 from library.local_albums source, generate_series(1, %(count)s) n where source.id = %(album)s""",
             {"count": count, "album": source["album_id"]})
-        clone = {"track_key": "source.track_key || '::bulk::' || n", "album_id": "albums.id"}
+        clone = {"track_key": "source.track_key || '::bulk::' || n", "album_id": "albums.id",
+                 "artist_id": "coalesce(albums.artist_id, source.artist_id)"}
         tracks = _catalog_columns(connection, "local_tracks")
         connection.execute(
             f"""insert into library.local_tracks ({", ".join(tracks)})
@@ -347,12 +365,14 @@ def test_live_no_save_request_or_watcher_event_starts_the_one_time_build(library
 
 # A guard, not a red: a structural save already committed when its publication raised at
 # 5ffbaba62. It holds R1's savepoint to the same outcome.
+# Paired with the owner's next drain publishing the deferred edit (6.5).
 def test_live_a_rolled_back_publication_leaves_the_edit_committed(library, monkeypatch):
     from music_app.services import scoped_relation_projection
 
     def failing(*_args, **_kwargs):
         raise RuntimeError("Library changes are still being reconciled.")
 
+    publish = scoped_relation_projection.publish_affected_relation_projection
     monkeypatch.setattr(scoped_relation_projection, "publish_affected_relation_projection", failing)
 
     _rename(library, "Committed Despite Publication")
@@ -360,3 +380,18 @@ def test_live_a_rolled_back_publication_leaves_the_edit_committed(library, monke
     assert _album_titles(library) == {"Committed Despite Publication"}, "The publication's failure lost the edit."
     journaled = _rows(library, "select count(*) as n from library.local_relation_dirty_albums where album_id > 0")[0]["n"]
     assert journaled >= 1, "The edit's albums were not left in the journal for their owner."
+
+    # Deferred never means never: the journal owner's next drain publishes the edit with no other action.
+    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
+    from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+    monkeypatch.setattr(scoped_relation_projection, "publish_affected_relation_projection", publish)
+    queue_journaled_relation_drain(library.config)
+    for _ in range(3):
+        _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=60)
+    left = _rows(library, "select count(*) as n from library.local_relation_dirty_albums where album_id > 0")[0]["n"]
+    assert left == 0, f"The owner's drain left {left} journaled album(s) unpublished."
+    shown = _rows(library, """select count(*) as n from library.gallery_membership_entries entries
+        join library.local_albums albums on albums.album_key = entries.album_key
+        where albums.title = 'Committed Despite Publication'""")[0]["n"]
+    assert shown >= 1, "The owner's drain did not publish the saved album to the gallery."

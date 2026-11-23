@@ -1524,6 +1524,54 @@ test('a resume marks when its first audible frame renders, once, on the page clo
   assert.deepEqual(marks(), [2_000, 2_020]);
 });
 
+test('a resume tells its caller once, on its song\'s first audible frame, and a pause, seek or start drops it', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('resume-sound.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const consumed = (nonZeroSamples) => harness.nodes[0].port.dispatch({
+    type: 'consumed',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    frames: 40,
+    bufferedFrames: 0,
+    audible: true,
+    finiteSamples: 80,
+    nonZeroSamples,
+    peakSample: nonZeroSamples ? 0.5 : 0,
+    samples: [],
+  });
+  const heard = [];
+  const resumeListening = async (label) => {
+    await harness.api.pause();
+    await harness.api.resume(null, null, null, () => heard.push(label));
+  };
+
+  await resumeListening('first');
+  consumed(0);
+  assert.deepEqual(heard, [], 'silence is not its sound');
+  consumed(21);
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'once, on the first audible frame');
+
+  await resumeListening('paused again');
+  await harness.api.pause();
+  await harness.api.resume();
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a pause drops it');
+
+  await resumeListening('sought');
+  await harness.api.seek(30);
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a seek drops it');
+
+  await resumeListening('replaced');
+  await harness.api.start(makeTrack('other.flac'));
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a start drops it');
+});
+
 test('pause and explicit resume keep context, processor, and snapshot state aligned', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());

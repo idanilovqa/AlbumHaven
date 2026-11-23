@@ -4647,20 +4647,31 @@ test('bounded interaction: mobile player metadata motion measures its three rows
 });
 
 // A Play on the claim its pause kept sounds at once; only then does it tell the server it plays again, so
-// other devices see it within one round trip and the request never delays the sound.
+// other devices see it within one round trip and the request never delays the sound. "Sounds" is the
+// resumed song's first audible rendered frame, which the engine reports, not the resume call returning.
 test('a resume on the held claim sounds first, then sends its playing renewal without waiting for it', async () => {
   const order = [];
+  let onFirstSound = null;
   const snapshot = { currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' };
   const { context } = loadHelper({
     getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
     pauseStreamingPlayback: async () => { snapshot.paused = true; },
-    resumeStreamingPlayback: async () => { order.push('audible'); snapshot.paused = false; return true; },
+    resumeStreamingPlayback: async (_startRequestId, _onStarted, _currentRole, firstSound) => {
+      onFirstSound = firstSound;
+      snapshot.paused = false;
+      return true;
+    },
     canStartPlaybackInThisTab: () => true,
     publishPlaybackPositionSoon: () => { order.push('playing renewal'); return new Promise(() => {}); },
   });
   context.state.player.current = { src: snapshot.src, path: 'C:/Music/song.flac', title: 'Song' };
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, [], 'resumed but not yet heard: no request');
+
+  order.push('audible');
+  onFirstSound();
   for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(order, ['audible', 'playing renewal']);

@@ -369,9 +369,41 @@ def test_a_handover_at_the_timeout_needs_no_answer_and_the_taker_keeps_its_own_p
     taken = handing.service.hand_over(None, client_id=taker, client_surface="private_web",
                                       observed=handing.service.holder(None), answer=None, silences_itself=True)
 
-    assert (taken["confirmed"], taken["position"]["ms"]) == (False, 195_000)
+    # A holder that stopped renewing may have stopped playing long before: it goes on where it was last heard.
+    assert (taken["confirmed"], taken["position"]["ms"]) == (False, 5_000)
     handing.pass_time(305)
     assert handing.start(third)["claimToken"]
+
+
+def test_a_short_song_whose_holder_went_quiet_five_minutes_ago_goes_on_where_it_was_heard_not_at_its_end(handing):
+    holder, taker = str(uuid4()), str(uuid4())
+    handing.start(holder, silences_itself=True, position={"ms": 20_000, "durationMs": 90_000})
+    handing.pass_time(305)
+
+    taken = handing.hand_over(taker, handing.service.holder(None), None)
+
+    assert taken["position"] == {"ms": 20_000, "durationMs": 90_000}, "never at or past the song's end"
+
+
+def test_a_song_still_renewed_plays_on_from_its_last_place_but_never_reaches_its_end(handing):
+    holder, taker = str(uuid4()), str(uuid4())
+    handing.start(holder, position={"ms": 80_000, "durationMs": 90_000})
+    handing.pass_time(4)
+    assert handing.service.get(None, taker)["position"]["ms"] == 84_000, "it played on since the renewal"
+
+    handing.pass_time(10)
+
+    assert handing.service.get(None, taker)["position"]["ms"] == 80_000, "past the end: where it was heard"
+
+
+def test_a_holder_that_answers_at_its_songs_end_hands_on_the_songs_start(handing):
+    holder, taker = str(uuid4()), str(uuid4())
+    handing.start(holder)
+    ended = {"track": TRACK, "position": {"ms": 195_000, "durationMs": 195_000}}
+
+    taken = handing.hand_over(taker, handing.service.holder(None), ended)
+
+    assert (taken["confirmed"], taken["position"]) == (True, {"ms": 0, "durationMs": 195_000})
 
 
 def test_a_handoff_keeps_the_promise_of_the_page_that_takes_it(player):

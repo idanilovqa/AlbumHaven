@@ -333,7 +333,13 @@ def test_another_client_sees_where_the_claims_song_is_and_how_to_open_it(playbac
     service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
                     claim_token=claim["claimToken"], position={"ms": 290_000, "durationMs": 300_000})
     clock[0] += timedelta(seconds=20)
-    assert service.get(fixture.actor, laptop)["position"]["ms"] == 300_000, "never past the song's end"
+    assert service.get(fixture.actor, laptop)["position"]["ms"] == 290_000, \
+        "never at or past the song's end: where it was last heard"
+    service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
+                    claim_token=claim["claimToken"], position={"ms": 120_000, "durationMs": 300_000})
+    clock[0] += timedelta(minutes=5)
+    assert service.get(fixture.actor, laptop)["position"]["ms"] == 120_000, \
+        "a holder that stopped renewing goes on where it was last heard"
 
     service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
                     claim_token=claim["claimToken"])

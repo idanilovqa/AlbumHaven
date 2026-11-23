@@ -65,6 +65,14 @@ def _position(value):
     return {"ms": min(value["ms"], value["durationMs"]), "durationMs": value["durationMs"]}
 
 
+def _place(ms, heard_ms, duration_ms):
+    """Where another client continues the song: never at or past its end, where it would start and end at
+    once. Past the end it goes on where it was last heard, and from its start when that was its end too."""
+    if ms >= duration_ms:
+        ms = heard_ms if heard_ms < duration_ms else 0
+    return {"ms": ms, "durationMs": duration_ms}
+
+
 def validate_taker(client_id, client_surface):
     """A confirmed Play here is checked whole before the playing client is asked to stop."""
     _client(client_id)
@@ -335,6 +343,8 @@ class PostgresPlaybackClaims:
                 track, position = self._track(actor, answer["track"]), _position(answer["position"])
             except PlaybackContractError:
                 track = position = None
+            if position:
+                position = _place(position["ms"], position["ms"], position["durationMs"])
         confirmed = track is not None
         if not confirmed:
             with self._connect(self._database_url) as connection:
@@ -379,15 +389,19 @@ class PostgresPlaybackClaims:
                 "track": track, "position": position, "path": path}
 
     def _stored(self, stored):
-        """A claim's track and where it has played to since its client last said."""
+        """A claim's track and where its song is: played on from where its client last said while that client
+        still renews (every renewal says it again), and that place itself once it stopped, as it may have
+        stopped playing long before. A short song whose holder went quiet five minutes earlier started at
+        its end."""
         track = dict(stored)
         track.pop(_PROMISE, None)
         heard = track.pop("position", None)
         if not heard:
             return track, None
-        played = int((self._clock() - datetime.fromisoformat(heard["at"])).total_seconds() * 1000)
-        return track, {"ms": min(heard["ms"] + max(0, played), heard["durationMs"]),
-                       "durationMs": heard["durationMs"]}
+        played = max(0, int((self._clock() - datetime.fromisoformat(heard["at"])).total_seconds() * 1000))
+        if played >= _CLAIM_LEASE_SECONDS * 1000:
+            played = 0
+        return track, _place(heard["ms"] + played, heard["ms"], heard["durationMs"])
 
     def release(self, actor, *, client_id, claim_token):
         """The claim given back, for a Play here pressed on it moments later; None when none was held."""

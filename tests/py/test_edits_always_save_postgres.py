@@ -172,9 +172,50 @@ def test_live_a_save_with_the_baseline_not_ready_commits_with_no_full_prepare_an
 # scopes published, so the per-header membership patch is counted too (6.5's R4 condition).
 
 def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_with_custom_scopes(library):
+    fixture = library
+    adapter, counted = _counting_adapter(fixture)
+    # Several custom gallery scopes published, so the per-header membership patch is counted too (R4).
+    _publish_custom_scopes(fixture)
+
+    small = _measure_save(fixture, "First Size", adapter, counted)
+    _seed_albums(fixture, 2000)
+    large = _measure_save(fixture, "Second Size", adapter, counted)
+
+    print("edits always save, (statements, rows read, seconds, per table) at 1 and 2,001 albums:", small, large)
+    assert small[0] == large[0], f"The save's statements grew with the library: {small[:2]} vs {large[:2]}."
+    assert abs(large[1] - small[1]) <= 25, (
+        f"The save's rows read grew with the library: {small} vs {large}.")
+
+
+# (e) 6.5: a save reads its album's relation component (every album of the same artist). That is affected-set
+# work: it grows with that artist's albums at a small constant per album, never with the library. The
+# unrelated library is the same 500 one-artist albums in both measurements.
+
+COMPONENT_ROWS_PER_ALBUM = 40
+
+
+def test_live_a_save_reads_its_artist_component_at_a_small_constant_per_album(library):
+    fixture = library
+    adapter, counted = _counting_adapter(fixture)
+    _seed_albums(fixture, 500, tag="unrelated")
+    _seed_albums(fixture, 10, tag="family", own_artist=False)
+    small = _measure_save(fixture, "Ten Siblings", adapter, counted)
+    _seed_albums(fixture, 490, tag="relatives", own_artist=False)
+    large = _measure_save(fixture, "Five Hundred Siblings", adapter, counted)
+
+    per_album = (large[1] - small[1]) / 490
+    print("edits always save, component class (statements, rows read, seconds, per table) at N=10 and N=500:",
+          small, large, f"rows per added album={per_album:.1f}")
+    if large[2] > 1.0:
+        print(f"FINDING (not this fix's blocker): a save on an artist with 500 albums took {large[2]:.2f} s.")
+    assert small[0] == large[0], f"The save's statements grew with the artist's albums: {small[:2]} vs {large[:2]}."
+    assert per_album <= COMPONENT_ROWS_PER_ALBUM, (
+        f"The component read costs {per_album:.1f} rows per album: {small} vs {large}.")
+
+
+def _counting_adapter(fixture):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
-    fixture = library
     counted = []
 
     class Counting:
@@ -196,25 +237,19 @@ def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_wit
             return self._connection.execute(sql, *args, **kwargs)
 
     adapter = PostgresScanCacheAdapter(fixture.config, connect=lambda url: Counting(isolatedPostgres._connect(url)))
-    # Several custom gallery scopes published, so the per-header membership patch is counted too (R4).
-    _publish_custom_scopes(fixture)
+    return adapter, counted
 
-    def measure(title):
-        counted.clear()
-        before = _rows_read(fixture)
-        _rename(fixture, title, adapter=adapter)
-        after = _rows_read(fixture)
-        tables = {table: after.get(table, 0) - before.get(table, 0) for table in after}
-        return len(counted), sum(tables.values()), {table: rows for table, rows in tables.items() if rows}
 
-    small = measure("First Size")
-    _seed_albums(fixture, 2000)
-    large = measure("Second Size")
-
-    print("edits always save, (statements, rows read, per table) at 1 and 2,001 albums:", small, large)
-    assert small[0] == large[0], f"The save's statements grew with the library: {small[:2]} vs {large[:2]}."
-    assert abs(large[1] - small[1]) <= 25, (
-        f"The save's rows read grew with the library: {small} vs {large}.")
+def _measure_save(fixture, title, adapter, counted):
+    """(statements, rows read, seconds, rows read per table) for one album rename."""
+    counted.clear()
+    before = _rows_read(fixture)
+    began = time.perf_counter()
+    _rename(fixture, title, adapter=adapter)
+    seconds = round(time.perf_counter() - began, 3)
+    after = _rows_read(fixture)
+    tables = {table: after.get(table, 0) - before.get(table, 0) for table in after}
+    return len(counted), sum(tables.values()), seconds, {table: rows for table, rows in tables.items() if rows}
 
 
 CUSTOM_SCOPES = (
@@ -240,39 +275,43 @@ def _catalog_columns(connection, table):
              and is_generated = 'NEVER' and is_identity = 'NO' order by ordinal_position""", (table,)).fetchall()]
 
 
-def _seed_albums(fixture, count):
+def _seed_albums(fixture, count, *, tag="bulk", own_artist=True):
     """``count`` one-track albums in one INSERT per table (generate_series): clones of the saved album's
-    rows, every column but the identity and generated ones read from the catalog."""
+    rows, every column but the identity and generated ones read from the catalog. ``tag`` keeps each
+    batch's keys and folders apart; ``own_artist=False`` keeps the saved album's artist (its component)."""
+    suffix = f"'::{tag}::'"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         source = connection.execute(
             """select files.id as file_id, tracks.id as track_id, tracks.album_id from library.local_track_files files
                join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %s""",
             (fixture.tracks[0]["path"],)).fetchone()
-        # Each clone has its own artist: a shared one would put every clone in the saved album's relation
-        # component, which is per-artist work, not the library-wide reading this red is about.
-        clone = {"artist_key": "source.artist_key || '::bulk::' || n", "name": "source.name || ' Bulk ' || n"}
-        artists = _catalog_columns(connection, "local_artists")
-        connection.execute(
-            f"""insert into library.local_artists ({", ".join(artists)})
-                select {", ".join(clone.get(column, f"source.{column}") for column in artists)}
-                from library.local_artists source, generate_series(1, %(count)s) n
-                where source.id = (select artist_id from library.local_albums where id = %(album)s)""",
-            {"count": count, "album": source["album_id"]})
-        bulk_artist = """(select bulk.id from library.local_artists bulk where bulk.library_id = source.library_id
+        # By default each clone has its own artist: a shared one puts every clone in the saved album's relation
+        # component, which is per-artist work ((e) measures it), not the library-wide reading (d) is about.
+        if own_artist:
+            clone = {"artist_key": f"source.artist_key || {suffix} || n", "name": f"source.name || ' {tag} ' || n"}
+            artists = _catalog_columns(connection, "local_artists")
+            connection.execute(
+                f"""insert into library.local_artists ({", ".join(artists)})
+                    select {", ".join(clone.get(column, f"source.{column}") for column in artists)}
+                    from library.local_artists source, generate_series(1, %(count)s) n
+                    where source.id = (select artist_id from library.local_albums where id = %(album)s)""",
+                {"count": count, "album": source["album_id"]})
+        bulk_artist = f"""(select bulk.id from library.local_artists bulk where bulk.library_id = source.library_id
                 and bulk.artist_key = (select artist_key from library.local_artists where id = source.artist_id)
-                  || '::bulk::' || n)"""
-        clone = {"album_key": "source.album_key || '::bulk::' || n", "title": "source.title || ' Bulk ' || n",
-                 "artist_id": bulk_artist,
-                 "metadata": """case when source.metadata ? 'album_artist' then jsonb_set(source.metadata,
-                     '{album_artist}', to_jsonb((source.metadata ->> 'album_artist') || ' Bulk ' || n))
-                     else source.metadata end"""}
+                  || {suffix} || n)"""
+        clone = {"album_key": f"source.album_key || {suffix} || n", "title": f"source.title || ' {tag} ' || n"}
+        if own_artist:
+            clone["artist_id"] = bulk_artist
+            clone["metadata"] = f"""case when source.metadata ? 'album_artist' then jsonb_set(source.metadata,
+                     '{{album_artist}}', to_jsonb((source.metadata ->> 'album_artist') || ' {tag} ' || n))
+                     else source.metadata end"""
         albums = _catalog_columns(connection, "local_albums")
         connection.execute(
             f"""insert into library.local_albums ({", ".join(albums)})
                 select {", ".join(clone.get(column, f"source.{column}") for column in albums)}
                 from library.local_albums source, generate_series(1, %(count)s) n where source.id = %(album)s""",
             {"count": count, "album": source["album_id"]})
-        clone = {"track_key": "source.track_key || '::bulk::' || n", "album_id": "albums.id",
+        clone = {"track_key": f"source.track_key || {suffix} || n", "album_id": "albums.id",
                  "artist_id": "coalesce(albums.artist_id, source.artist_id)"}
         tracks = _catalog_columns(connection, "local_tracks")
         connection.execute(
@@ -280,9 +319,9 @@ def _seed_albums(fixture, count):
                 select {", ".join(clone.get(column, f"source.{column}") for column in tracks)}
                 from library.local_tracks source cross join generate_series(1, %(count)s) n
                 join library.local_albums albums on albums.album_key = (
-                  select album_key from library.local_albums where id = source.album_id) || '::bulk::' || n
+                  select album_key from library.local_albums where id = source.album_id) || {suffix} || n
                 where source.id = %(track)s""", {"count": count, "track": source["track_id"]})
-        moved = f"'{ALBUM}', 'Bulk ' || n"
+        moved = f"'{ALBUM}', '{tag} ' || n"
         clone = {"track_id": "tracks.id", "private_path": f"replace(source.private_path, {moved})",
                  "relative_path": f"replace(source.relative_path, {moved})"}
         files = _catalog_columns(connection, "local_track_files")
@@ -291,7 +330,7 @@ def _seed_albums(fixture, count):
                 select {", ".join(clone.get(column, f"source.{column}") for column in files)}
                 from library.local_track_files source cross join generate_series(1, %(count)s) n
                 join library.local_tracks tracks on tracks.track_key = (
-                  select track_key from library.local_tracks where id = source.track_id) || '::bulk::' || n
+                  select track_key from library.local_tracks where id = source.track_id) || {suffix} || n
                 where source.id = %(file)s""", {"count": count, "file": source["file_id"]})
     _finish_live_reconciliation(fixture.config)
 

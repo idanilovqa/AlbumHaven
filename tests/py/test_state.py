@@ -1732,6 +1732,35 @@ def test_state_utility_prewarm_routes_to_authoritative_postgres_projections_when
     assert legacy_calls == []
 
 
+def test_refresh_library_for_state_queues_a_scans_added_albums_like_watcher_additions(config, logger, library_state, monkeypatch):
+    """Owner (relayed 2026-11-22): a scan's added albums get the bounded cover lookup the watcher's get,
+    keyed by their own tracks and album keys."""
+    queued = []
+
+    def fake_refresh_library_state(_library_state, **kwargs):
+        kwargs["start_added_album_cover_lookup"]([SimpleNamespace(
+            key="artist::added", tracks=[SimpleNamespace(path=Path("/music/Added/01.flac")),
+                                         SimpleNamespace(path=Path("/music/Added/02.flac"))],
+        )])
+
+    monkeypatch.setattr(state_module, "refresh_library_state", fake_refresh_library_state)
+    monkeypatch.setattr(
+        state_module,
+        "queue_watcher_cover_refresh_for_track_paths_for_state",
+        lambda state, cfg, log, track_paths, *, affected_album_keys: queued.append(
+            (state, cfg, log, set(track_paths), tuple(affected_album_keys)),
+        ),
+    )
+
+    state_module.refresh_library_for_state(library_state, config, logger, force=False)
+
+    assert queued == [(
+        library_state, config, logger,
+        {str(Path("/music/Added/01.flac")), str(Path("/music/Added/02.flac"))},
+        ("artist::added",),
+    )]
+
+
 def test_refresh_library_for_state_threads_explicit_manual_cover_refresh_dependencies(config, logger, library_state, monkeypatch):
     captured = []
     scan_calls = []

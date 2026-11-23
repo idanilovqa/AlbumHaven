@@ -380,6 +380,84 @@ def test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_pro
     )
 
 
+_SCAN_ADDED_ALBUMS = 3
+
+
+def test_scan_added_album_cover_lookup_searches_only_the_added_albums_at_two_library_sizes(
+    cover_state, tmp_path, monkeypatch,
+):
+    """Owner (relayed 2026-11-22): albums a scan adds get the automatic cover lookup, never the whole library.
+    At 20 and 14,000 albums, a scan that added three coverless albums queues, reads and searches exactly
+    those three: the same counts at both sizes."""
+    from music_app.services import scan_state
+    from music_app.services import state as state_service
+    from music_app.services.library import album_to_dict, build_albums_from_file_cache
+
+    app, executor, searches = cover_state
+    config, logger = app.state.config, app.state.logger
+
+    def run(album_count: int) -> OperationCounts:
+        searches.clear()
+        counts = OperationCounts()
+        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        added = _cover_library(tmp_path / f"added-{album_count}", covered=0, missing=_SCAN_ADDED_ALBUMS)
+        existing = {
+            path: {"path": path, "title": "One", "album": "Album", "album_artist": f"Library Artist {index:05d}"}
+            for index in range(album_count - _SCAN_ADDED_ALBUMS)
+            for path in (f"/music/Library Artist {index:05d}/Album/01.mp3",)
+        }
+        existing_albums = build_albums_from_file_cache(existing)
+        added_albums = build_albums_from_file_cache(added)
+
+        class Repository:
+            """The Postgres browse repository answers keyed reads for the queued paths only."""
+
+            def __init__(self, _config):
+                pass
+
+            def build_album_payloads_by_track_paths(self, track_paths):
+                assert set(track_paths) <= set(added)
+                counts.returned_rows += 1
+                return [
+                    album_to_dict(album) for album in added_albums
+                    if any(str(track.path) in track_paths for track in album.tracks)
+                ]
+
+            def build_track_file_entries_by_paths(self, track_paths):
+                assert set(track_paths) <= set(added)
+                counts.returned_rows += len(track_paths)
+                return {path: dict(added[path]) for path in track_paths}
+
+        monkeypatch.setattr(state_service, "PostgresLibraryBrowseRepository", Repository)
+        library_state = app.state.library_state
+        library_state.update({
+            "file_cache": {**existing, **added}, "albums": [*existing_albums, *added_albums],
+            "covers_in_progress": False, "scan_in_progress": False, "pending_cover_refresh_after_scan": False,
+        })
+        scan_state.finalize_post_scan_actions(
+            library_state,
+            config=config,
+            logger=logger,
+            previous_album_keys={album.key for album in existing_albums},
+            start_manual_cover_refresh=lambda **_kwargs: pytest.fail("a scan starts no manual cover refresh"),
+            start_background_cover_refresh=lambda: pytest.fail("a scan starts no library-wide cover crawl"),
+            start_added_album_cover_lookup=lambda albums: state_service.queue_cover_lookup_for_added_albums_for_state(
+                library_state, config, logger, albums,
+            ),
+        )
+        executor.run_all()
+        assert sorted(album for _artist, album in searches) == sorted(album.name for album in added_albums), (
+            "each added album is searched once, and no other album"
+        )
+        assert not library_state["_watcher_cover_refresh_pending_track_paths"]
+        counts.queue_claims = len(searches)
+        return counts
+
+    small, large = run(20), run(14_000)
+    assert small.queue_claims == large.queue_claims == _SCAN_ADDED_ALBUMS
+    assert small.returned_rows == large.returned_rows, "keyed reads stay the same as the library grows"
+
+
 @pytest.mark.parametrize("interaction_id", [
     "py:services/state.py#refresh_cover_artwork_for_track_paths_for_state",
     "py:services/cover_refresh_runtime.py#refresh_cover_artwork_for_track_paths_request",

@@ -214,15 +214,19 @@ def test_finalize_post_scan_actions_prefers_pending_manual_refresh(monkeypatch):
     )]
 
 
-def test_finalize_post_scan_actions_does_not_start_provider_crawl_for_new_albums(monkeypatch):
+def test_finalize_post_scan_actions_looks_up_covers_for_the_added_albums_only(monkeypatch):
+    """Owner (relayed 2026-11-22): albums a scan adds get the automatic cover lookup, as albums the watcher
+    adds do; the whole library never does."""
     background_calls = []
+    looked_up = []
     logged = []
     config = {"LOG_EVENTS": True}
     logger = SimpleNamespace(name="explicit-scan-logger")
+    added = SimpleNamespace(key="album-2")
     library_state = {
         "pending_cover_refresh_after_scan": False,
         "pending_cover_refresh_force_search": False,
-        "albums": [SimpleNamespace(key="album-1"), SimpleNamespace(key="album-2")],
+        "albums": [SimpleNamespace(key="album-1"), added],
     }
 
     monkeypatch.setattr(scan_state, "log_app_event", lambda *args, **kwargs: logged.append((args, kwargs)))
@@ -234,10 +238,15 @@ def test_finalize_post_scan_actions_does_not_start_provider_crawl_for_new_albums
         previous_album_keys={"album-1"},
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: background_calls.append(True),
+        start_added_album_cover_lookup=lambda albums: looked_up.append(list(albums)),
     )
 
-    assert background_calls == []
-    assert logged == []
+    assert looked_up == [[added]], "only the added album is looked up"
+    assert background_calls == [], "no library-wide provider crawl"
+    assert logged == [(
+        (config, logger, "Cover art refresh queued after indexing"),
+        {"level": "info", "added_album_count": 1},
+    )]
 
 
 def test_finalize_post_scan_actions_does_not_crawl_existing_albums(monkeypatch):
@@ -1318,10 +1327,12 @@ def test_refresh_library_state_runs_mbid_follow_up_after_successful_publish(
         scan_music_incremental=lambda **kwargs: ({"new": {"album": "New"}}, 55.0),
         refresh_relation_views=refresh_relations,
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
-        start_background_cover_refresh=lambda: order.append("covers"),
+        start_background_cover_refresh=lambda: order.append("library-wide cover crawl"),
+        start_added_album_cover_lookup=lambda albums: order.append("covers"),
         queue_mbid_assertion_follow_up=queue_mbid_follow_up,
     )
 
+    # The added album's cover lookup runs between the publish and the MBID follow-up.
     assert order == ["relations", "covers", "mbid"]
     assert len(hook_calls) == 1
     assert hook_calls[0]["previous"][0].key == "old-album"
@@ -2667,21 +2678,18 @@ def test_scan_watcher_health_failure_remains_best_effort(
         followups.append("health")
         raise RuntimeError("watcher health failed")
 
-    def start_background_cover_refresh():
-        assert library_state["post_scan_cover_refresh_pending"] is True
-        followups.append("background")
-        library_state["scan_generation"] += 1
-
     scan_state.refresh_library_state(
         library_state, config=runtime_config, logger=runtime_logger, force=True,
         cache_lock=scan_state.Lock(), scan_music_incremental=lambda **_kwargs: ({}, 55.0),
         refresh_relation_views=lambda **_kwargs: None,
         start_manual_cover_refresh=lambda **_kwargs: followups.append("manual"),
-        start_background_cover_refresh=start_background_cover_refresh,
+        start_background_cover_refresh=lambda: followups.append("background"),
+        start_added_album_cover_lookup=lambda _albums: followups.append("added covers"),
         queue_mbid_assertion_follow_up=lambda *_args, **_kwargs: followups.append("mbid"),
         recover_library_watch_health=fail_health,
     )
-    assert followups == ["health", "background", "mbid"]
+    # A scan that adds no album starts no cover work at all (owner, relayed 2026-11-22: never the whole library).
+    assert followups == ["health", "mbid"]
     assert library_state["scan_outcome"] == "completed"
     assert library_state["scan_in_progress"] is False
     assert library_state["post_scan_cover_refresh_pending"] is False

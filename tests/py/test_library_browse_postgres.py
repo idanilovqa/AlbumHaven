@@ -20390,15 +20390,16 @@ def test_short_browse_reads_lease_the_pool_and_long_or_writing_ones_do_not(
     assert opened and set(opened) == {expected}
 
 
-def test_root_source_totals_keep_their_own_connection(monkeypatch):
-    """Each unprojected source scope recounts the whole library; that must not hold a pooled connection."""
+def test_root_source_totals_lease_the_browse_pool(monkeypatch):
+    """The totals only read published scope headers (no whole-library recount since 6.5's C ruling): a short
+    read, so they lease the shared browse pool like the other short reads."""
     browse, opened = _record_browse_connections(monkeypatch)
     repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/totals"})
 
     with pytest.raises(browse.GalleryProjectionPending):
         repository.build_root_source_totals_payload()
 
-    assert opened == ["fresh"]
+    assert opened == ["pool:browse"]
 
 
 def test_root_source_totals_never_reach_a_connection_open_per_scope(tmp_path):

@@ -1966,6 +1966,8 @@ function commitViewPayload(previousView, nextView, options = {}) {
     }
   }
   state.view = nextView;
+  // A different artist (or none) leaves the deferred loose-track count and list it was waiting for.
+  if (selectionChanged && typeof cancelDeferredNonAlbumRetries === 'function') cancelDeferredNonAlbumRetries();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
@@ -5229,22 +5231,37 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
-function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+function galleryArtistCountryPillHtml(artistMusicBrainz) {
   const country = galleryCountryName(artistMusicBrainz?.country);
-  return country
-    ? `<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span></span>`
-    : '';
+  return country ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>` : '';
+}
+
+function galleryArtistGenrePillsHtml(artistMusicBrainz) {
+  return (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean)
+    .map((genre) => (
+      genre === 'Genre unavailable'
+        ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
+        : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
+    ));
+}
+
+// The gallery bar wraps each pill for its header fit.
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+  const pill = galleryArtistCountryPillHtml(artistMusicBrainz);
+  return pill ? `<span class="gallery-bar__artist-country">${pill}</span>` : '';
 }
 
 function buildGalleryArtistGenresHtml(artistMusicBrainz = null) {
-  const genres = (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
-    .map((genre) => String(genre || '').trim())
-    .filter(Boolean);
-  return genres.map((genre) => (
-    genre === 'Genre unavailable'
-      ? '<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span></span>'
-      : `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span></span>`
-  )).join('');
+  return galleryArtistGenrePillsHtml(artistMusicBrainz)
+    .map((pill) => `<span class="gallery-bar__artist-genre">${pill}</span>`).join('');
+}
+
+// The Artist info panel shows bare pills: the country, then at most three genres.
+function buildGalleryArtistInfoMetadataHtml(artistMusicBrainz = null) {
+  return galleryArtistCountryPillHtml(artistMusicBrainz)
+    + galleryArtistGenrePillsHtml(artistMusicBrainz).slice(0, 3).join('');
 }
 
 function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
@@ -8009,6 +8026,31 @@ function cacheCurrentGallerySourceTotals() {
   return cacheGallerySourceTotals(categories, state.view);
 }
 
+// While a source combination's totals are not yet published, ask again after 1 s, doubling to 4 s, six times at most.
+const PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS = [1000, 2000, 4000, 4000, 4000, 4000];
+let pendingSourceTotalsRetry = null;
+
+// One armed retry. Only a retry continues the bounded wait at one inventory revision; a new revision starts it again.
+function schedulePendingSourceTotalsRetry(revision) {
+  if (pendingSourceTotalsRetry?.timer) return;
+  const attempt = pendingSourceTotalsRetry?.revision === revision ? pendingSourceTotalsRetry.attempt + 1 : 0;
+  const delay = PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) return;
+  const entry = { revision, attempt, timer: 0 };
+  entry.timer = scheduleBrowserTimeout(() => {
+    entry.timer = 0;
+    return prefetchGallerySourceTotalsForAllScopes();
+  }, delay);
+  pendingSourceTotalsRetry = entry;
+}
+
+function settlePendingSourceTotalsRetry() {
+  if (pendingSourceTotalsRetry?.timer && typeof clearBrowserTimeout === 'function') {
+    clearBrowserTimeout(pendingSourceTotalsRetry.timer);
+  }
+  pendingSourceTotalsRetry = null;
+}
+
 async function prefetchGallerySourceTotalsForAllScopes() {
   if (typeof state === 'undefined' || !state?.gallery || !state?.view
     || typeof fetch !== 'function') return false;
@@ -8035,6 +8077,7 @@ async function prefetchGallerySourceTotalsForAllScopes() {
       if (!response.ok) return false;
       const payload = await response.json();
       const received = payload?.source_totals_by_scope;
+      const pending = (Array.isArray(payload?.pending_source_scopes) ? payload.pending_source_scopes : []).map(String);
       const responseRevision = Number(payload?.inventory_mutation_revision);
       const latestRevision = Number(
         state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
@@ -8042,15 +8085,20 @@ async function prefetchGallerySourceTotalsForAllScopes() {
       if (!Number.isSafeInteger(responseRevision) || responseRevision !== latestRevision
         || !received || !expectedKeys.every((key) => {
         const total = received[key];
-        return Number.isFinite(Number(total?.artist_count))
-          && Number.isFinite(Number(total?.album_count));
+        return pending.includes(key) || (Number.isFinite(Number(total?.artist_count))
+          && Number.isFinite(Number(total?.album_count)));
       })) return false;
-      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys.map((key) => [key, {
-        artistCount: Number(received[key].artist_count),
-        albumCount: Number(received[key].album_count),
-      }]));
+      // A pending scope keeps the current counts until its totals are published; then the final numbers show.
+      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys
+        .filter(key => !pending.includes(key))
+        .map((key) => [key, {
+          artistCount: Number(received[key].artist_count),
+          albumCount: Number(received[key].album_count),
+        }]));
       state.gallery.sourceTotalsRevision = responseRevision;
       updateGalleryMainChrome();
+      if (pending.length) schedulePendingSourceTotalsRetry(responseRevision);
+      else settlePendingSourceTotalsRetry();
       return true;
     } catch {
       return false;
@@ -8836,7 +8884,7 @@ function renderGalleryArtistInfo(anchor) {
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
   const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
-  const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz);
+  const metadata = buildGalleryArtistInfoMetadataHtml(group.artist_musicbrainz);
   // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the
   // title, and the tag is named beside the links (display only).
   const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);
@@ -16207,6 +16255,48 @@ function getDeferredNonAlbumScopeKey(url) {
 let libraryNonAlbumHydrationRequest = null;
 let artistNonAlbumAvailabilityRequest = null;
 
+// While the server still prepares loose tracks, ask again after 250 ms, doubling to 2 s, eight times at most.
+const DEFERRED_NON_ALBUM_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000, 2000, 2000, 2000];
+const deferredNonAlbumRetries = new Map();
+
+function clearDeferredNonAlbumRetryTimer(entry) {
+  if (entry?.timer && typeof clearBrowserTimeout === 'function') clearBrowserTimeout(entry.timer);
+}
+
+// One armed retry per kind ('artist' or 'library'). Only a retry continues the bounded wait; a new scope or
+// a new ask (reopening Loose Tracks) starts it again.
+function scheduleDeferredNonAlbumRetry(kind, scopeKey, isCurrentScope, retry) {
+  const previous = deferredNonAlbumRetries.get(kind);
+  clearDeferredNonAlbumRetryTimer(previous);
+  const attempt = previous?.scopeKey === scopeKey && previous.retrying ? previous.attempt + 1 : 0;
+  const delay = DEFERRED_NON_ALBUM_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) {
+    deferredNonAlbumRetries.set(kind, { scopeKey, attempt, timer: 0, exhausted: true });
+    return;
+  }
+  const entry = { scopeKey, attempt, timer: 0, retrying: false };
+  entry.timer = scheduleBrowserTimeout(() => {
+    entry.timer = 0;
+    if (!isCurrentScope()) {
+      deferredNonAlbumRetries.delete(kind);
+      return undefined;
+    }
+    entry.retrying = true;
+    return retry();
+  }, delay);
+  deferredNonAlbumRetries.set(kind, entry);
+}
+
+function settleDeferredNonAlbumRetry(kind) {
+  clearDeferredNonAlbumRetryTimer(deferredNonAlbumRetries.get(kind));
+  deferredNonAlbumRetries.delete(kind);
+}
+
+// Leaving the view leaves no retry armed.
+function cancelDeferredNonAlbumRetries() {
+  for (const kind of Array.from(deferredNonAlbumRetries.keys())) settleDeferredNonAlbumRetry(kind);
+}
+
 function hasHydratedArtistNonAlbumAvailability(view = state.view || {}) {
   if (!String(view.selected_artist || '').trim()) return false;
   return view.non_album_track_count_scope
@@ -16248,6 +16338,7 @@ function hydrateArtistNonAlbumAvailability() {
       return state.view.non_album_track_count;
     }
     state.view.non_album_track_count_scope = scopeKey;
+    settleDeferredNonAlbumRetry('artist');
     if (String(state.view.query || '').trim()
         && getVisibleNonAlbumTracks().length !== state.view.non_album_track_count) {
       state.view.non_album_tracks_deferred = true;
@@ -16258,12 +16349,13 @@ function hydrateArtistNonAlbumAvailability() {
     if (artistNonAlbumAvailabilityRequest !== request) return;
     artistNonAlbumAvailabilityRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) !== scopeKey) return;
-        return hydrateArtistNonAlbumAvailability().catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'artist', scopeKey,
+        () => getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) === scopeKey,
+        () => hydrateArtistNonAlbumAvailability().catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   artistNonAlbumAvailabilityRequest = request;
@@ -16315,18 +16407,20 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    settleDeferredNonAlbumRetry('library');
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return tracks;
   })().finally(() => {
     if (libraryNonAlbumHydrationRequest !== request) return;
     libraryNonAlbumHydrationRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return;
-        return hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'library', scopeKey,
+        () => getLibraryNonAlbumScopeKey(state.view || {}) === scopeKey,
+        () => hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   libraryNonAlbumHydrationRequest = request;
@@ -16900,6 +16994,8 @@ function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
+  // Leaving Loose Tracks leaves no deferred retry armed.
+  settleDeferredNonAlbumRetry('library');
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);
@@ -29476,7 +29572,10 @@ async function saveUtilityLibrarySettings() {
       }
       scheduleStatusPoll(250);
     }
-    if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
+    if (ownsPresentation()) {
+      const saved = data.refresh_started ? 'Library settings saved. Scan started.' : 'Library settings saved.';
+      showToast(saved, 'success', 3200);
+    }
     return true;
   } catch (error) {
     settleLibraryStatusAction(statusAction);
@@ -44016,12 +44115,20 @@ async function refreshMissingAlbumView(album, albumKey, pendingRefreshRequest) {
   }
 }
 
+// Owner wording, 2026-11-22 (case 59).
 const MISSING_ALBUM_RESCAN_MESSAGES = {
   restored: ['Album found and restored.', 'success'],
   moved: ['Album found in its new folder and restored.', 'success'],
-  deleted: ['Still missing: its files were deleted from disk.', 'info'],
+  searching: ['Album is not found. Searching your library folders for it...', 'info'],
+  deleted: [
+    'Album must have been deleted or moved out of the library. Add it back to one of the library paths to see it in the app',
+    'info',
+  ],
   unreachable: ['Still missing: its drive or network share cannot be reached.', 'info'],
 };
+// The background search's result is asked for about every 1.5 s, for at most 30 s.
+const MISSING_ALBUM_SEARCH_POLL_MS = 1500;
+const MISSING_ALBUM_SEARCH_POLLS = 20;
 
 async function keepMissingAlbum(album) {
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -44047,22 +44154,33 @@ async function rescanMissingAlbum(album, button) {
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
   }
-  try {
-    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/rescan`, {
-      method: 'POST',
-      headers: { Accept: 'application/json' },
-    });
+  const url = `/api/library/albums/${encodeURIComponent(albumKey)}/rescan`;
+  const request = async (method) => {
+    const response = await fetch(url, { method, headers: { Accept: 'application/json' } });
     let payload = {};
     try {
       payload = await response.json();
     } catch (_error) {
       payload = {};
     }
-    if (!response.ok) throw new Error(payload.error || 'Unable to re-scan this album.');
+    if (!response.ok) throw new Error((method === 'POST' && payload.error) || 'Unable to re-scan this album.');
+    return payload;
+  };
+  const toast = ([message, tone]) => { if (typeof showToast === 'function') showToast(message, tone, 3600); };
+  try {
+    let payload = await request('POST');
+    if (payload.status === 'searching') {
+      toast(MISSING_ALBUM_RESCAN_MESSAGES.searching);
+      for (let poll = 0; payload.status === 'searching'; poll += 1) {
+        // Still searching after 30 s: the button is freed with no further message.
+        if (poll >= MISSING_ALBUM_SEARCH_POLLS) return false;
+        await new Promise(resolve => scheduleBrowserTimeout(resolve, MISSING_ALBUM_SEARCH_POLL_MS));
+        payload = await request('GET');
+      }
+    }
     await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
-    const [message, tone] = MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
-      || ['Still missing.', 'info'];
-    if (typeof showToast === 'function') showToast(message, tone, 3600);
+    toast(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+      || MISSING_ALBUM_RESCAN_MESSAGES.deleted);
     return payload.status !== 'missing';
   } catch (error) {
     if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);

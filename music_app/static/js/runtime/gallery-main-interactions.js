@@ -419,6 +419,31 @@ function cacheCurrentGallerySourceTotals() {
   return cacheGallerySourceTotals(categories, state.view);
 }
 
+// While a source combination's totals are not yet published, ask again after 1 s, doubling to 4 s, six times at most.
+const PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS = [1000, 2000, 4000, 4000, 4000, 4000];
+let pendingSourceTotalsRetry = null;
+
+// One armed retry. Only a retry continues the bounded wait at one inventory revision; a new revision starts it again.
+function schedulePendingSourceTotalsRetry(revision) {
+  if (pendingSourceTotalsRetry?.timer) return;
+  const attempt = pendingSourceTotalsRetry?.revision === revision ? pendingSourceTotalsRetry.attempt + 1 : 0;
+  const delay = PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) return;
+  const entry = { revision, attempt, timer: 0 };
+  entry.timer = scheduleBrowserTimeout(() => {
+    entry.timer = 0;
+    return prefetchGallerySourceTotalsForAllScopes();
+  }, delay);
+  pendingSourceTotalsRetry = entry;
+}
+
+function settlePendingSourceTotalsRetry() {
+  if (pendingSourceTotalsRetry?.timer && typeof clearBrowserTimeout === 'function') {
+    clearBrowserTimeout(pendingSourceTotalsRetry.timer);
+  }
+  pendingSourceTotalsRetry = null;
+}
+
 async function prefetchGallerySourceTotalsForAllScopes() {
   if (typeof state === 'undefined' || !state?.gallery || !state?.view
     || typeof fetch !== 'function') return false;
@@ -445,6 +470,7 @@ async function prefetchGallerySourceTotalsForAllScopes() {
       if (!response.ok) return false;
       const payload = await response.json();
       const received = payload?.source_totals_by_scope;
+      const pending = (Array.isArray(payload?.pending_source_scopes) ? payload.pending_source_scopes : []).map(String);
       const responseRevision = Number(payload?.inventory_mutation_revision);
       const latestRevision = Number(
         state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
@@ -452,15 +478,20 @@ async function prefetchGallerySourceTotalsForAllScopes() {
       if (!Number.isSafeInteger(responseRevision) || responseRevision !== latestRevision
         || !received || !expectedKeys.every((key) => {
         const total = received[key];
-        return Number.isFinite(Number(total?.artist_count))
-          && Number.isFinite(Number(total?.album_count));
+        return pending.includes(key) || (Number.isFinite(Number(total?.artist_count))
+          && Number.isFinite(Number(total?.album_count)));
       })) return false;
-      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys.map((key) => [key, {
-        artistCount: Number(received[key].artist_count),
-        albumCount: Number(received[key].album_count),
-      }]));
+      // A pending scope keeps the current counts until its totals are published; then the final numbers show.
+      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys
+        .filter(key => !pending.includes(key))
+        .map((key) => [key, {
+          artistCount: Number(received[key].artist_count),
+          albumCount: Number(received[key].album_count),
+        }]));
       state.gallery.sourceTotalsRevision = responseRevision;
       updateGalleryMainChrome();
+      if (pending.length) schedulePendingSourceTotalsRetry(responseRevision);
+      else settlePendingSourceTotalsRetry();
       return true;
     } catch {
       return false;

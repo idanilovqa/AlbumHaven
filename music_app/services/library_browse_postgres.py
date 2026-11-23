@@ -993,60 +993,27 @@ class PostgresLibraryBrowseRepository:
             if not context:
                 raise GalleryProjectionPending("Gallery source totals are being prepared.")
             sources = ("main_library", "new_arrivals", "hoard")
-            totals: dict[str, dict[str, int] | None] = {
+            totals: dict[str, dict[str, int]] = {
                 "": {"artist_count": 0, "album_count": 0},
             }
-            unprojected: dict[str, dict[str, object]] = {}
+            # A scope no owner has published yet is pending; home never counts the library itself (6.5).
+            pending: list[str] = []
             for mask in range(1, 2 ** len(sources)):
                 scope = [
                     source for index, source in enumerate(sources)
                     if mask & (1 << index)
                 ]
-                view_state = {
-                    "gallery_scope": "all",
-                    "visible_library_categories": scope,
-                }
                 key = "|".join(sorted(scope))
                 projection = load_gallery_projection_sidebar(
                     connection,
-                    view_state,
+                    {"gallery_scope": "all", "visible_library_categories": scope},
                     context=context,
                 )
                 if projection is None:
-                    totals[key] = None  # counted below, keeping the scope order
-                    unprojected[key] = view_state
+                    pending.append(key)
                 else:
                     sidebar, album_count = projection
                     totals[key] = {"artist_count": len(sidebar), "album_count": album_count}
-            if unprojected:
-                root_alias_to_canonical = _root_browse_alias_to_canonical(
-                    self._load_relation_alias_maps(connection=connection)["alias_to_canonical"]
-                )
-                missing_album_rows = self._load_missing_album_rows(connection=connection)
-            for key, view_state in unprojected.items():
-                rows = _canonicalize_artist_rows(
-                    self._load_root_sidebar_rows(view_state, connection=connection),
-                    root_alias_to_canonical,
-                )
-                missing_albums = _missing_album_projection_payloads(
-                    missing_album_rows,
-                    view_state=view_state,
-                )
-                _displays, _sort_values, artist_counts, album_count = (
-                    _root_sidebar_aggregate(rows)
-                )
-                album_count += len(missing_albums)
-                for album in missing_albums:
-                    artist_counts.setdefault(
-                        _row_artist_identity({
-                            "artist_name": _canonical_artist_name(
-                                album.get("album_artist") or "Unknown Artist",
-                                root_alias_to_canonical,
-                            ),
-                        }),
-                        0,
-                    )
-                totals[key] = {"artist_count": len(artist_counts), "album_count": album_count}
         finally:
             try:
                 rollback = getattr(connection, "rollback", None)
@@ -1056,7 +1023,7 @@ class PostgresLibraryBrowseRepository:
                 close = getattr(connection, "close", None)
                 if callable(close):
                     close()
-        return {"source_totals_by_scope": totals}
+        return {"source_totals_by_scope": totals, "pending_source_scopes": pending}
 
     def build_root_sidebar_payload(
         self,

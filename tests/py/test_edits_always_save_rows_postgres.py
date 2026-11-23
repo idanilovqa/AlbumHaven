@@ -331,3 +331,16 @@ def test_live_a_save_never_hangs_behind_a_held_inventory_lock(edit_route):
     if status != 200:
         assert payload.get("error"), f"The save failed without a readable message: {status} {payload}"
         assert not _shows_a_local_path(edit_route, payload), f"The failure shows a local path: {payload}"
+    # 6.5: past the ceiling the edit is "saved, finishing". Its files are written and its intent is
+    # stored, and the background owner completes it once the lock frees, with no restart.
+    assert _seconds_until_album_titled(edit_route, "Renamed Behind The Lock") < 10, (
+        "The saved edit did not finish after the inventory lock was released.")
+
+
+def _seconds_until_album_titled(route, title, *, timeout=15):
+    began = time.perf_counter()
+    while time.perf_counter() - began < timeout:
+        if _rows(route.setup_url, "select 1 from library.local_albums where title = %s", (title,)):
+            break
+        time.sleep(0.1)
+    return time.perf_counter() - began

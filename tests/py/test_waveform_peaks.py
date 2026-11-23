@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -99,8 +100,8 @@ def test_build_waveform_peaks_returns_exact_finite_stereo_max_abs_bins_without_r
         process = FakeProcess(stdout=stdout)
         calls: list[ProcessCall] = []
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, calls),
         )
         monkeypatch.setattr(
@@ -139,8 +140,7 @@ def test_build_waveform_peaks_returns_exact_finite_stereo_max_abs_bins_without_r
         assert "astats" in decoder_contract
         assert "ametadata" in decoder_contract
         assert ("-f", "null") in tuple(zip(args, args[1:]))
-        assert kwargs["stdout"] is asyncio.subprocess.PIPE
-        assert kwargs["stderr"] is asyncio.subprocess.PIPE
+        assert kwargs["stderr"] == subprocess.PIPE
 
     asyncio.run(scenario())
 
@@ -155,8 +155,8 @@ def test_build_waveform_peaks_bounds_decoder_aggregation_output_by_bins_not_trac
         process = FakeProcess(stdout=stdout)
         calls: list[ProcessCall] = []
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, calls),
         )
         monkeypatch.setattr(
@@ -205,8 +205,8 @@ def test_build_waveform_peaks_downmixes_mono_or_multichannel_input_to_stereo_bef
         process = FakeProcess(stdout=FakeStream(aggregate_records))
         calls: list[ProcessCall] = []
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, calls),
         )
         monkeypatch.setattr(
@@ -239,8 +239,8 @@ def test_build_waveform_peaks_rejects_aggregate_output_beyond_per_bin_budget(
         payload = b"x" * ((MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN * BIN_COUNT) + 1)
         process = FakeProcess(stdout=FakeStream(payload))
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, []),
         )
         monkeypatch.setattr(
@@ -273,8 +273,8 @@ def test_build_waveform_peaks_requires_reliable_duration_before_decoder_launch(
             raising=False,
         )
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(FakeProcess(stdout=FakeStream(b"")), launches),
         )
 
@@ -298,8 +298,8 @@ def test_build_waveform_peaks_rejects_metadata_frame_missing_one_stereo_channel(
         payload = b"frame:0 pts:0 pts_time:0\nlavfi.astats.1.Peak_level=-6.020600\n"
         process = FakeProcess(stdout=FakeStream(payload))
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, []),
         )
         monkeypatch.setattr(
@@ -365,8 +365,8 @@ def test_build_waveform_peaks_launches_decoder_with_explicit_low_priority_policy
             lambda: "resolved-ffmpeg",
         )
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, calls),
         )
         monkeypatch.setattr(
@@ -386,8 +386,7 @@ def test_build_waveform_peaks_launches_decoder_with_explicit_low_priority_policy
         args, kwargs = calls[0]
         assert args[: len(expected_prefix)] == expected_prefix
         assert kwargs.get("creationflags", 0) == expected_creationflags
-        assert kwargs["stdout"] is asyncio.subprocess.PIPE
-        assert kwargs["stderr"] is asyncio.subprocess.PIPE
+        assert kwargs["stderr"] == subprocess.PIPE
 
     asyncio.run(scenario())
 
@@ -417,8 +416,8 @@ def test_build_waveform_peaks_rejects_missing_empty_truncated_and_nonzero_decode
             lambda _path: 60.0,
         )
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, []),
         )
 
@@ -462,8 +461,8 @@ def test_build_waveform_peaks_cancellation_terminates_and_waits_for_exact_proces
             lambda _path: 60.0,
         )
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, []),
         )
 
@@ -534,8 +533,8 @@ def test_build_waveform_peaks_cancellation_drains_stdout_to_eof_before_process_w
             lambda _path: 60.0,
         )
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, []),
         )
 
@@ -583,8 +582,8 @@ def test_build_waveform_peaks_bounds_retained_stderr_diagnostics_while_draining_
             lambda _path: 60.0,
         )
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, []),
         )
 
@@ -638,8 +637,8 @@ def test_build_waveform_peaks_process_exit_during_terminate_preserves_cancellati
             lambda _path: 60.0,
         )
         monkeypatch.setattr(
-            waveform_peaks.asyncio,
-            "create_subprocess_exec",
+            waveform_peaks,
+            "start_child_process",
             _process_factory(process, []),
         )
 

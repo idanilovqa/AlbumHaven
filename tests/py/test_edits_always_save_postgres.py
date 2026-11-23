@@ -191,7 +191,7 @@ def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_wit
 # work: it grows with that artist's albums at a small constant per album, never with the library. The
 # unrelated library is the same 500 one-artist albums in both measurements.
 
-COMPONENT_ROWS_PER_ALBUM = 40
+COMPONENT_ROWS_PER_ALBUM = 25
 
 
 def test_live_a_save_reads_its_artist_component_at_a_small_constant_per_album(library):
@@ -378,6 +378,68 @@ def _rows_read(fixture):
         previous = current
         time.sleep(0.25)
     return previous
+
+
+# R3/R4 (6.5's ruling): headers at different generations. A save shows the edit in every header. A header the
+# journal covers (at or after its earliest generation) is patched to the current generation. A header behind
+# that floor keeps its generation and the journal stays for its owner. The owner's drain then realigns every
+# header and empties the journal.
+
+def _headers(fixture):
+    return {row["scope_key"]: row["source_generation"] for row in _rows(
+        fixture, "select scope_key, source_generation from library.gallery_membership_headers")}
+
+
+def _generation(fixture):
+    return _rows(fixture, "select generation from library.gallery_projection_state")[0]["generation"]
+
+
+def _scopes_showing(fixture, title):
+    return {row["scope_key"] for row in _rows(fixture, """
+        select distinct entries.scope_key from library.gallery_membership_entries entries
+        join library.local_albums albums on albums.album_key = entries.album_key
+        where albums.title = %s""", (title,))}
+
+
+def test_live_a_save_shows_in_every_header_and_moves_only_the_ones_the_journal_covers(library):
+    _publish_custom_scopes(library)
+    headers = _headers(library)
+    behind = sorted(headers)[0]
+    with isolatedPostgres._connect(library.setup_url) as connection:
+        connection.execute("""update library.gallery_membership_headers set source_generation = source_generation - 1
+            where scope_key = %s""", (behind,))
+    lagging_generation = headers[behind] - 1
+
+    _rename(library, "Shown Everywhere")
+
+    after = _headers(library)
+    current = _generation(library)
+    assert after[behind] == lagging_generation, "The save moved a header the journal does not cover."
+    assert {scope for scope, generation in after.items() if scope != behind and generation != current} == set(), (
+        f"A header the journal covers was not patched to the current generation {current}: {after}.")
+    assert _scopes_showing(library, "Shown Everywhere") == set(after), (
+        "The edit is missing from a header at Save (owner: an edited value updates everywhere at Save).")
+
+
+def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(library):
+    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
+    from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+    _publish_custom_scopes(library)
+    with isolatedPostgres._connect(library.setup_url) as connection:
+        connection.execute("update library.gallery_membership_headers set source_generation = source_generation - 1")
+    _rename(library, "Realigned By The Owner")
+    assert _rows(library, "select count(*) as n from library.local_relation_dirty_albums where album_id > 0")[0]["n"] >= 1, (
+        "The save emptied the journal ahead of the headers (R3).")
+
+    queue_journaled_relation_drain(library.config)
+    for _ in range(3):
+        _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=60)
+
+    current = _generation(library)
+    assert set(_headers(library).values()) == {current}, f"A header stayed behind after the owner's drain: {_headers(library)}."
+    assert _rows(library, "select count(*) as n from library.local_relation_dirty_albums")[0]["n"] == 0
+    assert _scopes_showing(library, "Realigned By The Owner") == set(_headers(library))
 
 
 # 6.5's conditions on R1 and R5.

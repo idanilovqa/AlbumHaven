@@ -276,14 +276,20 @@ def recovery_runtime(tmp_path, monkeypatch):
             state.failed.append((intent_id, str(error)))
 
     class SnapshotAdapter:
+        """Recovery loads only the journal's file entries, by key; the whole library snapshot is never read."""
+
         def load_snapshot(self, _cache_path, _root_identity):
-            return state.file_cache, None, {}, None, None
+            pytest.fail("tag edit recovery loaded the whole library snapshot")
+
+        def load_file_entries(self, paths):
+            return {path: dict(state.file_cache[path]) for path in paths if path in state.file_cache}
 
     monkeypatch.setattr(tag_edit_intents_postgres, "PostgresTagEditIntentRepository", IntentRepository)
     monkeypatch.setattr(scan_cache_persistence, "select_scan_cache_adapter", lambda _config: SnapshotAdapter())
+    # Recovery persists through the keyed structural tag-save path (case 56), one call for the journal's files.
     monkeypatch.setattr(
-        cache, "save_cache_updates_to_disk_for_config",
-        lambda _config, changed_entries, **_kwargs: state.persisted.append(set(changed_entries)),
+        cache, "persist_structural_tag_edit_for_config",
+        lambda _config, *, changed_paths, **_kwargs: state.persisted.append(set(changed_paths)),
     )
 
     def seed_inventory(track_count: int) -> None:
@@ -345,7 +351,6 @@ def test_claimed_tag_edit_recovery_contract_resolves_only_the_journal_paths_at_p
             recovery_runtime.runtime,
             recovery_runtime.repository(None),
             deepcopy(recovery_runtime.intent),
-            recovery_runtime.state.file_cache,
         ))
 
     measure_scale_pair(

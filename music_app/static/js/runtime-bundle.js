@@ -14702,6 +14702,17 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
   const claim = ownership.activeClaim;
   const playback = playbackSnapshot
     || (typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null);
+  // Paused on the claim its pause keeps, a leaving page hands nothing on and nothing of it sounds: it gives
+  // the claim back as it goes (one release, kept alive past the page), so no other device waits for it.
+  if (playback?.paused && ownership.pausedAtMs && claim?.claimToken && !ownership.handoffAttempted) {
+    ownership.handoffAttempted = true;
+    ownership.pausedAtMs = 0;
+    ownership.activeClaim = null;
+    ownership.releasedClaim = claim;
+    updatePlaybackSoundPermission();
+    void deletePlaybackClaim(claim).catch(() => {});
+    return false;
+  }
   if (ownership.handoffAttempted || !claim?.claimToken || playback?.paused || playback?.ended
       || typeof navigator?.sendBeacon !== 'function') return false;
   ownership.handoffAttempted = true;

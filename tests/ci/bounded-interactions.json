@@ -16045,8 +16045,9 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest \"tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count\"",
-      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count"
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the verified-save catch-up (tag_edit_catch_up) with its contract. A DB-step failure after verified files then restores the old tags again, which the owner's rule (2026-11-23) forbids."
     },
     {
       "id": "py:services/tag_edit_catch_up.py#_run",
@@ -16078,8 +16079,9 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest \"tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count\"",
-      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count"
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the verified-save catch-up (tag_edit_catch_up) with its contract. A DB-step failure after verified files then restores the old tags again, which the owner's rule (2026-11-23) forbids."
     },
     {
       "id": "py:services/tag_edit_catch_up.py#retry_waiting_catch_ups",

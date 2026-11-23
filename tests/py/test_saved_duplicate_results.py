@@ -188,6 +188,8 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
         return write(*arguments, **options)
 
     monkeypatch.setattr(problematic_index, "_write", paused)
+    queued = []
+    monkeypatch.setattr(problematic_index, "queue_maintenance", queued.append)
     evaluation = threading.Thread(target=problematic_index._maintain, args=(library.repository,))
     evaluation.start()
     expected = [change == "forms"] * 2
@@ -205,10 +207,21 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
         release.set()
         evaluation.join(60)
 
+    def marks():
+        return library.sql("select count(*) from library.problematic_index_dirty_albums where album_id <> 0")[0][0]
+
+    # 6.5 (28592adb3): background maintenance walks once. The save's marks are left free for the next pass,
+    # which is queued exactly once.
     assert library.marked(first, second) == expected, "An older evaluation overwrote the save."
-    assert library.sql("select count(*) from library.problematic_index_dirty_albums where album_id <> 0")[0][0] == 0, (
-        "The pass retries what the save outran."
-    )
+    assert marks() == 2, "The save's marks on both albums are left for the next pass."
+    assert queued == [library.repository], "Exactly one next pass is queued."
+
+    queued.clear()
+    problematic_index._maintain(library.repository)
+
+    assert marks() == 0, "The queued pass evaluates both of the save's marks."
+    assert queued == [], "Nothing further is queued: one extra pass at most."
+    assert library.marked(first, second) == expected, "The save's result stands after the next pass."
 
 
 # Plan rows the write's reads produce for each track of an affected album: at most 48.6 as

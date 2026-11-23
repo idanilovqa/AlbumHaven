@@ -215,6 +215,48 @@ def patch_membership_per_header_in_transaction(
     return patch_edited_albums_into_lagging_headers(connection, context, lagging, keys)
 
 
+def realign_headers_behind_journal(connection, config, scope_keys):
+    """The journal owner's drain only: realign headers behind the journal's floor (a restored database, an
+    interrupted startup). The journal cannot name what such a header missed, so that header alone is
+    republished from a complete snapshot of the current sources, from its own generation to the current one,
+    in the drain's transaction. A failure raises, so the drain rolls back and the journal stays."""
+    from music_app.services import library_browse_postgres as browse
+
+    context = gallery_projection_context(connection)
+    if not context or not scope_keys:
+        return 0
+    repository = browse.PostgresLibraryBrowseRepository(config)
+    alias_maps = repository._load_relation_alias_maps(connection=connection)
+    if not browse._relation_aliases_servable(alias_maps):
+        raise RuntimeError("Relations are not servable; headers behind the journal stay for the next drain.")
+    aliases = browse._root_browse_alias_to_canonical(alias_maps["alias_to_canonical"])
+    headers = connection.execute("""select scope_key, view_state, source_generation
+        from library.gallery_membership_headers
+        where library_id = %s and builder_version = %s and scope_key = any(%s::text[])""",
+        (context["library_id"], BUILDER_VERSION, sorted(scope_keys))).fetchall()
+    missing_rows = repository._load_missing_album_rows(connection=connection)
+    for header in headers:
+        state = dict(header["view_state"])
+        rows = connection.execute(browse._root_gallery_membership_sql(), browse._root_sidebar_params(state)).fetchall()
+        missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
+        snapshot = browse._prepare_root_gallery_snapshot(rows, missing, aliases, state)
+        keys = {row["album_key"] for row in snapshot["ordered"]}
+        keys.update(row["album_key"] for row in connection.execute("""select distinct album_key
+            from library.gallery_membership_entries where library_id = %s and scope_key = %s""",
+            (context["library_id"], header["scope_key"])).fetchall())
+        published = _first(connection.execute("""select library.patch_gallery_membership(
+            %(library_id)s,%(scope_key)s,%(expected)s,%(generation)s,%(builder)s,
+            %(revision)s,%(view_state)s,%(keys)s,%(rows)s) as published""", {
+            **context, "scope_key": header["scope_key"], "expected": header["source_generation"],
+            "builder": BUILDER_VERSION, "revision": snapshot["revision"], "view_state": Jsonb(state),
+            "keys": sorted(keys), "rows": Jsonb(membership_rows(snapshot)),
+        }))
+        if not published or not published.get("published"):
+            raise RuntimeError("Gallery changed while realigning a header behind the journal.")
+    _LOGGER.warning("Realigned %s gallery header(s) behind the relation journal from a full snapshot.", len(headers))
+    return len(headers)
+
+
 def patch_edited_albums_into_lagging_headers(connection, context, headers, keys):
     """The seam for 6.5's per-header patch (draft migration library.patch_gallery_membership_rows): show
     the edited albums in a header behind the journal's floor without moving its generation.
@@ -733,13 +775,8 @@ def schedule_gallery_projection_refresh(
                 for waiting in [entry for entry in _DEFERRED_FIRST_BUILDS if entry[0] == database_url]:
                     del _DEFERRED_FIRST_BUILDS[waiting]
         if result.get("gallery_rebuild_required"):
-            # The relations are published; a header behind the journal's floor has a gap the journal can't
-            # fill, so membership is realigned from them in full (abnormal: a restored database, an
-            # interrupted startup). The journal kept for that header (R3) is then published against the
-            # realigned headers, by its albums alone.
-            rebuilt = ensure_gallery_projection_ready(config, connect=connect)
-            ensure_pending_relation_projection_ready(config, connect=connect)
-            return rebuilt
+            # The relations are published; membership is rebuilt from them in full.
+            return ensure_gallery_projection_ready(config, connect=connect)
         if "view_state" in options:
             return build_missing_custom_scope() or result
         return result

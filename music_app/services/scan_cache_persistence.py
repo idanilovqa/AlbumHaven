@@ -5214,8 +5214,9 @@ def _reconcile_semantic_local_albums_sql(
         """
             join semantic_album_target_identities as target_identity
               on target_identity.library_id = library.local_albums.library_id
-             and target_identity.artist_id is not distinct from
-                 library.local_albums.artist_id
+             -- Plain equality, so the artist index bounds the candidates to the target's artist: the
+             -- where clause below already drops albums with no artist.
+             and target_identity.artist_id = library.local_albums.artist_id
              and target_identity.normalized_title =
                  lower(btrim(library.local_albums.title))
              and target_identity.release_year is not distinct from

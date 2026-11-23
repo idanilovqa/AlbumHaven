@@ -2971,10 +2971,8 @@ def test_semantic_album_reconciliation_can_scope_candidates_to_target_identity()
 
     assert "semantic_album_target_identities as materialized" in normalized_sql
     assert "library.local_albums.id = any(%(target_album_ids)s::bigint[])" in normalized_sql
-    assert (
-        "target_identity.artist_id is not distinct from "
-        "library.local_albums.artist_id"
-    ) in normalized_sql
+    # Plain equality lets the artist index bound the candidates (rows read never grow with the library).
+    assert "and target_identity.artist_id = library.local_albums.artist_id" in normalized_sql
     assert (
         "target_identity.normalized_title = "
         "lower(btrim(library.local_albums.title))"

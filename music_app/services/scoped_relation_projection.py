@@ -638,11 +638,15 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
                 where library_id=%s and album_id>0""", (library_id,)).fetchall():
             ids.add(row['album_id'])
             keys.update(row['album_keys'])
+    # One indexed lookup per kind of reference: an OR across them read every album of the library.
     current_albums =connection.execute("""select id,album_key from library.local_albums
-        where library_id=%(library_id)s and (id=any(%(album_ids)s::bigint[]) or album_key=any(%(album_keys)s::text[])
-          or id in (select tracks.album_id from library.local_track_files files
-            join library.local_tracks tracks on tracks.id=files.track_id
-            where tracks.library_id=%(library_id)s and files.private_path=any(%(paths)s::text[])))
+        where library_id=%(library_id)s and id=any(%(album_ids)s::bigint[])
+        union select id,album_key from library.local_albums
+        where library_id=%(library_id)s and album_key=any(%(album_keys)s::text[])
+        union select albums.id,albums.album_key from library.local_track_files files
+          join library.local_tracks tracks on tracks.id=files.track_id
+          join library.local_albums albums on albums.id=tracks.album_id and albums.library_id=%(library_id)s
+          where tracks.library_id=%(library_id)s and files.private_path=any(%(paths)s::text[])
         union all select 0 as id, null as album_key where exists (
           select 1 from library.local_track_files files join library.local_tracks tracks on tracks.id=files.track_id
           where tracks.library_id=%(library_id)s and tracks.album_id is null
@@ -912,10 +916,10 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
             gallery_membership_headers_behind,
         )
         baseline_ready = gallery_membership_baseline_ready(connection, result['first_gallery_generation'])
-        # R3: the journal is never emptied ahead of the headers. A header behind the journal's floor keeps
-        # these albums journaled for the owner's drain, which realigns it.
-        keep_journal = not baseline_ready and gallery_membership_headers_behind(
-            connection, result['first_gallery_generation'])
+        # R3: the journal is never emptied ahead of the headers. A save leaves these albums journaled when a
+        # header is behind the journal's floor; the journal's owner (this replay) realigns it below instead.
+        keep_journal = reason != 'pending_source_changes' and not baseline_ready and (
+            gallery_membership_headers_behind(connection, result['first_gallery_generation']))
     if not keep_journal:
         connection.execute('delete from library.local_relation_dirty_albums where library_id=%s and album_id=any(%s::bigint[])',
                            (library_id, result['processed_relation_album_ids']))
@@ -924,6 +928,7 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
         from music_app.services.gallery_projection_postgres import (
             patch_gallery_membership_in_transaction,
             patch_membership_per_header_in_transaction,
+            realign_headers_behind_journal,
         )
         if result['first_gallery_generation'] is None:
             raise RuntimeError('Affected library changes have no gallery publication journal.')
@@ -960,8 +965,10 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                     journal_floor_generation=result['first_gallery_generation'],
                     expected_target_generation=target_generation,
                 )
-            if lagging:
-                result['gallery_rebuild_required'] = True
+            if lagging and reason == 'pending_source_changes':
+                with persistence_stage('relation_publication.gallery_realignment'):
+                    realign_headers_behind_journal(connection, config, lagging)
+            elif lagging:
                 result['gallery_headers_behind_journal'] = lagging
     return result
 

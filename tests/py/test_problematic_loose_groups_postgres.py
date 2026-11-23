@@ -635,6 +635,10 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
         # Rows read, of the batch's own tables: the override step's reads are bounded by buffers above (one pass
         # over the table is allowed), so they are not in this count.
         measured[size] = sum(rows for table, rows in rows_read.items() if table != "exception_overrides")
+        # Printed on its own, never summed, so a later regression in the override step is visible.
+        print(f"[case55-drain-batch] statistics={statistics} overrides={overrides} size={size}"
+              f" exception_overrides rows read: {rows_read.get('exception_overrides', 0)}"
+              f" buffers: {override_buffers} (pages {override_pages}, keys {batch_keys})")
 
     _seed_loose_files(fixture, "Small", 200)
     if overrides:

@@ -582,8 +582,10 @@ def _non_album_candidates_sql(
           from batch_keys
           join library.exception_overrides overrides
             on overrides.track_id = batch_keys.track_id
-          -- A filter on the rows found, never an index condition: without statistics library_id_idx tied with
-          -- track_id_idx and read every override of the library.
+          -- The "+ 0" is deliberate, not redundant: it is what keeps library_id_idx from driving this join. An
+          -- expression on the column cannot use that index, so the library check stays a filter on the rows
+          -- track_id_idx finds; without statistics library_id_idx tied with track_id_idx and read every override
+          -- of the library. Do not simplify it away.
           where overrides.library_id + 0 = (select bootstrap_context.library_id from bootstrap_context)
         ),
         """ if membership_folders else ""

@@ -273,6 +273,12 @@ function recordStreamingRenderedPcmEvidence(roleState, message) {
     if (Number.isFinite(sample)) evidence.samples.push(sample);
   }
   if (message.audible === true) engine.audibleStreamId = roleState.streamId;
+  const resumeSound = engine.resumeSound;
+  if (resumeSound && resumeSound.streamId === roleState.streamId && roleState.role === 'current'
+      && message.frames > 0 && message.nonZeroSamples > 0) {
+    engine.resumeSound = null;
+    resumeSound.onFirstSound();
+  }
   // The first non-silent frames of the current song rendered after a resume, on the page clock.
   if (engine.diagnostics.resumedAtMs > 0 && !engine.diagnostics.resumeFirstFrameAtMs
       && roleState.role === 'current' && message.frames > 0 && message.nonZeroSamples > 0) {
@@ -2837,6 +2843,7 @@ async function startBrowserStreamingTrack(track, {
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
   engine.mode = 'starting';
+  engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
   engine.diagnostics.resumedAtMs = 0;
   engine.diagnostics.resumeFirstFrameAtMs = 0;
@@ -2962,6 +2969,7 @@ async function pauseBrowserStreaming() {
   const engine = streamingEngineState();
   const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
+  engine.resumeSound = null;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
@@ -2977,10 +2985,13 @@ async function pauseBrowserStreaming() {
   if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
 
+/** [onFirstSound]: called once, on the resumed song's first audible rendered frame; a pause, seek, start or
+ * cleanup before then drops it. */
 async function resumeBrowserStreaming(
   expectedStartRequestId = null,
   onPlaybackStarted = null,
   expectedCurrentRole = null,
+  onFirstSound = null,
 ) {
   const engine = streamingEngineState();
   const startRequestId = expectedStartRequestId
@@ -3025,6 +3036,9 @@ async function resumeBrowserStreaming(
     engine.diagnostics.resumedAtMs = performance.now();
     engine.diagnostics.resumeFirstFrameAtMs = 0;
   }
+  engine.resumeSound = typeof onFirstSound === 'function' && engine.roles.current
+    ? { streamId: engine.roles.current.streamId, onFirstSound }
+    : null;
   node.port.postMessage({ type: 'play', generation });
   engine.snapshot.paused = false;
   maybeGrantDeferredReplacementCredit();
@@ -3051,6 +3065,7 @@ async function seekBrowserStreaming(seconds) {
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;
   if (!current) return null;
+  engine.resumeSound = null;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (engine.pendingPromotion) {
     const pendingPromotion = engine.pendingPromotion;
@@ -3333,6 +3348,7 @@ async function cleanupStreamingResources(reason, {
     engine.mode = 'stopped';
     delete engine.diagnostics.lastError;
   }
+  engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
   engine.diagnostics.resumedAtMs = 0;
   engine.diagnostics.resumeFirstFrameAtMs = 0;

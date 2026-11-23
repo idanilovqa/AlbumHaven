@@ -16,8 +16,8 @@ const BROWSER_PLAYBACK_ENGINE = Object.freeze({
   adopt: () => null,
   start: (track, options) => startBrowserStreamingTrack(track, options),
   pause: () => pauseBrowserStreaming(),
-  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole) =>
-    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole),
+  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound) =>
+    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound),
   seek: seconds => seekBrowserStreaming(seconds),
   continuity: (track, options) => scheduleBrowserStreamingContinuity(track, options),
   setLoop: (active, startSeconds, endSeconds) => setBrowserStreamingLoop(active, startSeconds, endSeconds),
@@ -78,8 +78,11 @@ function pauseStreamingPlayback() {
   return currentPlaybackEngine().pause();
 }
 
-function resumeStreamingPlayback(expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null) {
-  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole);
+// [onFirstSound]: the browser engine calls it once, on the resumed song's first audible frame.
+function resumeStreamingPlayback(
+  expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null, onFirstSound = null,
+) {
+  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound);
 }
 
 function seekStreamingPlayback(seconds) {

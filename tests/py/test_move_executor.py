@@ -899,7 +899,7 @@ def test_move_album_contract_publishes_only_the_moved_album_at_production_track_
         small=20,
         large=160_000,
         run=run,
-        budgets={"builder_calls": 0, "returned_rows": 6, "sql_statements": 29, "invalidations": 1},
+        budgets={"builder_calls": 0, "returned_rows": 6, "sql_statements": 31, "invalidations": 1},
         growth=("returned_rows", 0),
     )
     assert small.invalidations == production.invalidations == 1

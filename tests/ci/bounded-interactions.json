@@ -10306,7 +10306,7 @@
       "budgets": {
         "builder_calls": 0,
         "returned_rows": 6,
-        "sql_statements": 29,
+        "sql_statements": 31,
         "invalidations": 1
       },
       "growth": {

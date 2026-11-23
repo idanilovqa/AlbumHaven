@@ -635,3 +635,58 @@ def test_a_request_waiting_for_a_folder_is_woken_when_the_worker_lists_it():
     waiter.join(0.5)
     assert not waiter.is_alive()
     assert time.monotonic() - started < 2.0
+
+
+class _SessionLease:
+    """A session lease: records its statements and whether it was closed."""
+
+    def __init__(self, acquired):
+        self.acquired, self.statements, self.closed = acquired, [], False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_failure):
+        self.closed = True
+        return False
+
+    def execute(self, sql, _params=None):
+        self.statements.append(sql)
+        return SimpleNamespace(fetchone=lambda: {"acquired": self.acquired})
+
+    def commit(self):
+        pass
+
+
+@pytest.mark.parametrize("acquired", [True, False])
+@pytest.mark.parametrize("slot_fails", [False, True])
+def test_the_work_slot_holds_its_session_lock_on_a_session_lease_and_releases_it_on_every_path(
+    monkeypatch, acquired, slot_fails,
+):
+    """BI-15 (6.5): the one-reader work slot is a session advisory lock, so it is taken on a session lease
+    nobody borrows next (session_connection), never a pooled one; it is unlocked whether the slot's work ends
+    or raises, and the lease is closed."""
+    leases = []
+
+    def session_connection(url):
+        leases.append(_SessionLease(acquired))
+        return leases[-1]
+
+    monkeypatch.setattr(inventory, "session_connection", session_connection, raising=False)
+    monkeypatch.setattr(inventory, "pooled_connection",
+                        lambda *_a, **_k: pytest.fail("the work slot's session lock was taken on a pooled lease"))
+    repository = inventory.LocalCoverInventoryRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://work-slot"})
+
+    if slot_fails:
+        with pytest.raises(RuntimeError, match="slot work failed"):
+            with repository.work_slot() as admitted:
+                assert admitted is acquired
+                raise RuntimeError("slot work failed")
+    else:
+        with repository.work_slot() as admitted:
+            assert admitted is acquired
+
+    assert len(leases) == 1 and leases[0].closed
+    unlocks = [sql for sql in leases[0].statements if "pg_advisory_unlock" in sql]
+    assert unlocks == (["select pg_advisory_unlock(hashtextextended('albumhaven-local-cover-inventory', 0))"]
+                       if acquired else [])

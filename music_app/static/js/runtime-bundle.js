@@ -43140,6 +43140,7 @@ async function confirmManualTagEdit() {
   });
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
+  let failedSaveStage = '';
   let failedSaveKeptNewTags = false;
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
@@ -43179,6 +43180,7 @@ async function confirmManualTagEdit() {
     if (!response.ok || !data.ok) {
       saveFolds?.fail();
       saveOutcomeUnknown = typeof data.ok !== 'boolean';
+      failedSaveStage = String(data.failure_stage || '').trim();
       if (
         data.save_task_id
         && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
@@ -43370,7 +43372,9 @@ async function confirmManualTagEdit() {
     showRepairAlert(
       failedSaveKeptNewTags
         ? 'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.'
-        : failedSaveTaskError || 'Failed to edit tags.',
+        // Owner (2026-11-22), their words: a file that can't be written. The path and error stay in View details.
+        : (failedSaveStage === 'media_write' ? 'Save failed: Read-only files' : '')
+          || failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {

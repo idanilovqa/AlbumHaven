@@ -3159,7 +3159,9 @@ test('manual tag edit keeps the editor closed after an immediate rolled-back per
   assert.deepEqual(clearedOptimisticSplits, [], 'an older failed request cannot undo a newer cover merge');
 });
 
-test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {
+// Owner (2026-11-22): a file that can't be written says so in the owner's words, never with its path or error.
+for (const [stage, text] of [['media_write', 'Save failed: Read-only files'], ['persistence', 'Failed to edit tags.']]) {
+test(`FTC-TAGS-040 manual tag edit keeps the editor closed after a logged ${stage} failure and says why`, async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\01 - Track.flac';
   const album = {
     key: 'artist::album::2000',
@@ -3193,7 +3195,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
           return {
             ok: false,
             error: `PermissionError: cannot write ${trackPath}`,
-            failure_stage: 'media_write',
+            failure_stage: stage,
             edit_outcome: 'failed_rolled_back',
             log_entry: { id: 'tag-edit-failure-42', action: 'Tag edit failed' },
           };
@@ -3207,13 +3209,14 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
   await context.confirmManualTagEdit();
 
   assert.equal(closedModal.hidden, true);
-  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
+  assert.equal(alerts.at(-1)[0], text);
   assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\Music|PermissionError/);
   assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1)[3])), {
     logHistoryEntryId: 'tag-edit-failure-42',
     logHistoryLink: true,
   });
 });
+}
 
 test('a failed tag edit whose files could not be put back says those files keep the new tags', async () => {
   const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\01 - Track.flac';

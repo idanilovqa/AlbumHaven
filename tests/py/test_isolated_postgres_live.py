@@ -736,6 +736,38 @@ def test_live_loose_tracks_show_the_rows_stored_so_far_while_the_store_builds(wa
     assert queued == [], "a read during the build never queues it"
 
 
+def test_live_a_rebuild_over_an_existing_store_never_shows_an_empty_list(watcher_repair_inventory, monkeypatch):
+    """6.5: a rebuild (builder change, owner rebuild, failed build's retry) builds over the stored rows: each
+    batch replaces its own tracks' rows, and only the end removes rows no batch touched. A read between
+    batches never sees an empty or shrunken list, and the finished store equals a fresh build."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, 5, loose=5)
+    repository = _prepare_store(fixture)
+    before = _loose_payload(repository)
+    assert len(before) == len(loose_entries)
+    monkeypatch.setattr(loose_track_store, "BUILD_BATCH", 2)
+    queued = []
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: queued.append(kind))
+    reads = []
+
+    def report(stage, **_values):
+        if stage == "batch":
+            payload = repository.build_library_loose_tracks_payload(query_params={})
+            reads.append((len(payload["library_non_album_tracks"]), payload["non_album_tracks_deferred"]))
+
+    loose_track_store.build(repository._inventory_repository, repository._owned_connection_context, progress=report)
+
+    assert reads and all(rows == len(loose_entries) and not deferred for rows, deferred in reads), (
+        f"the stored list is replaced batch by batch, never emptied: {reads}"
+    )
+    assert _loose_payload(repository) == before
+    assert queued == []
+
+
 def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_repair_inventory):
     """Case 64's deciding test: after each change the drained store reads the same as a full rebuild."""
     from music_app.services import loose_track_store

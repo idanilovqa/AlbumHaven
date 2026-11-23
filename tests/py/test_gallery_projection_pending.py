@@ -326,7 +326,7 @@ def test_a_failed_custom_first_build_is_not_queued_again_at_the_same_generation(
 
     monkeypatch.setattr(gallery, "_PENDING", ReleasingPending())
     monkeypatch.setattr(gallery, "_PENDING_LOCK", GapLock())
-    monkeypatch.setattr(gallery, "_first_build_readiness", lambda *_a, **_k: "ready")  # the build itself fails
+    monkeypatch.setattr(gallery, "_first_build_ready", lambda *_a, **_k: True)  # the build itself fails
     request()
     assert executor.submitted == 1, "the failure is recorded before the slot is released"
     for _request in range(5):
@@ -377,22 +377,20 @@ def test_concurrent_custom_first_builds_submit_one_action_and_no_trailing_rebuil
 
 
 def test_a_custom_first_build_never_falls_into_a_whole_library_rebuild(monkeypatch):
-    """With incremental membership, a first build while membership waits for a full rebuild (built at another
-    generation) leaves that to its owner: no gallery build, and the scope deferred, not failed, at this
-    generation."""
+    """With incremental membership, a first build while a full rebuild is journaled (the album -1 row) leaves
+    that to its owner: no gallery build, and the scope deferred, not failed, at this generation."""
     from music_app.services import cache
 
     monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", _RunningExecutor())
     monkeypatch.setattr(gallery, "_PENDING", {})
     monkeypatch.setattr(gallery, "_DEFERRED_FIRST_BUILDS", {})
-    monkeypatch.setattr(gallery, "gallery_membership_baseline_ready", lambda *_a, **_k: False)
     monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
                         lambda *_a, **_k: pytest.fail("a first build ran the whole-library gallery rebuild"))
     monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
                         lambda *_a, **_k: pytest.fail("a first build ran a gallery build"))
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-first-build-rebuild-required"}
     state = browse._root_sidebar_view_state({"category": "hoard"})
-    gallery.queue_gallery_scope_first_build(config, connect=_ReadOnlyDatabase(dirty=False, statements=[]),
+    gallery.queue_gallery_scope_first_build(config, connect=_ReadOnlyDatabase(dirty=True, statements=[]),
                                             view_state=state, generation=2, incremental_membership=True)
     key = (config["ALBUM_HAVEN_APP_DATABASE_URL"], gallery.gallery_projection_scope_key(state))
     assert key not in gallery._FAILED_FIRST_BUILDS, "the owner's rebuild moves the generation; no failure here"
@@ -449,7 +447,6 @@ def first_builds(monkeypatch):
     monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
                         lambda *_a, **options: builds.append(options["view_state"]) or {"built": 1})
     monkeypatch.setattr(gallery, "gallery_projection_context", lambda _connection: {"library_id": 1, "generation": 2})
-    monkeypatch.setattr(gallery, "gallery_membership_baseline_ready", lambda *_a, **_k: True)
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-first-build-dirty"}
     state = browse._root_sidebar_view_state({"category": "hoard"})
 

@@ -551,23 +551,46 @@ def is_common_gallery_scope(view_state) -> bool:
 
 # (database URL, scope key) -> source generation at which a custom scope's first build failed.
 _FAILED_FIRST_BUILDS: dict[tuple[str, str], int] = {}
+# (database URL, scope key) -> source generation at which a first build waited for journaled relation changes.
+_DEFERRED_FIRST_BUILDS: dict[tuple[str, str], int] = {}
 
 
 def queue_gallery_scope_first_build(config, *, connect=None, view_state, generation, incremental_membership=False):
     """A paged request's only build (6.5, option 1): the first build of a never-built custom scope, for that
-    scope alone and single-flight. After a failure it is not queued again until the source generation moves;
-    once the scope has a header, only its owners refresh it."""
+    scope alone and single-flight. After a failure, or while it waits for journaled relation changes, it is not
+    queued again until the source generation moves (or an owner drain ends the wait); once the scope has a
+    header, only its owners refresh it."""
     if is_common_gallery_scope(view_state):
         return None
-    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
+    key = (str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""), gallery_projection_scope_key(view_state))
     with _PENDING_LOCK:
-        if _FAILED_FIRST_BUILDS.get((database_url, gallery_projection_scope_key(view_state))) == generation:
+        if generation in (_FAILED_FIRST_BUILDS.get(key), _DEFERRED_FIRST_BUILDS.get(key)):
             return None
     # Single-flight without a trailing rebuild: _queue decides under its own lock.
     return schedule_gallery_projection_refresh(
         config, connect=connect, view_state=view_state, incremental_membership=incremental_membership,
         first_build_generation=generation,
     )
+
+
+def _first_build_ready(config, connect=None) -> bool:
+    """Whether a custom scope's first build may run now: read-only, with no advisory lock. False while any
+    relation change is journaled, including the album -1 / 0 rows that ask for a full rebuild (all belong to
+    their owners). Raises before startup initializes relations at the current builder version, so the failure
+    is recorded at its generation."""
+    from music_app.services.library_browse_postgres import _connect
+    from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
+    from music_app.services.scoped_relation_projection import _CONTEXT
+
+    with (connect or _connect)(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+        context = _first(connection.execute(_CONTEXT))
+        if context is None or context.get("normalized_builder_version") != RELATION_PROJECTION_BUILDER_VERSION:
+            raise RuntimeError("Incremental gallery membership requires startup initialization.")
+        journaled = _first(connection.execute(
+            "select 1 as present from library.local_relation_dirty_albums where library_id = %s limit 1",
+            (context["library_id"],),
+        ))
+        return journaled is None
 
 
 def queue_journaled_relation_drain(config):
@@ -590,53 +613,72 @@ def schedule_gallery_projection_refresh(
             key = ("refresh", scope_key)
             options["view_state"] = scope
 
+    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
+
     def refresh():
         if not first_build:
             return build()
-        failure_key = (str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""), scope_key)
+        first_build_key = (database_url, scope_key)
         try:
             result = build()
         except Exception:
             # Recorded before _queue releases the single-flight slot, so no request slips in between.
             with _PENDING_LOCK:
-                _FAILED_FIRST_BUILDS[failure_key] = first_build_generation
+                _FAILED_FIRST_BUILDS[first_build_key] = first_build_generation
             raise
         with _PENDING_LOCK:
-            _FAILED_FIRST_BUILDS.pop(failure_key, None)
+            _FAILED_FIRST_BUILDS.pop(first_build_key, None)
+            if result.get("deferred"):
+                # The journaled changes and any full rebuild belong to their owners; the scope is built by a
+                # request after they move the generation or drain the journal. Nothing failed here.
+                _DEFERRED_FIRST_BUILDS[first_build_key] = first_build_generation
+            else:
+                _DEFERRED_FIRST_BUILDS.pop(first_build_key, None)
         return result
+
+    def build_missing_custom_scope():
+        """The custom scope's membership, unless a header already exists; None when it does."""
+        from music_app.services.library_browse_postgres import _connect
+
+        with (connect or _connect)(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+            context = gallery_projection_context(connection)
+            header = _first(connection.execute("""
+                select 1 as present from library.gallery_membership_headers
+                where library_id = %(library_id)s and scope_key = %(scope_key)s
+                  and builder_version = %(builder_version)s
+            """, {"library_id": context["library_id"], "scope_key": scope_key,
+                    "builder_version": BUILDER_VERSION})) if context else None
+        if context and not header:
+            return _ensure_gallery_projection_ready(config, **options, allow_shared_seed=True)
+        return None
 
     def build():
         from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
 
-        result = ensure_pending_relation_projection_ready(config, connect=connect) if incremental_membership else {}
-        if incremental_membership:
-            if not result.get("initialized"):
-                if not first_build:
-                    # Startup owns initialization; a write's owner has nothing to drain until then.
-                    return result
-                raise RuntimeError("Incremental gallery membership requires startup initialization.")
-            if result.get("gallery_rebuild_required"):
-                if first_build:
-                    # A whole-library rebuild belongs to the owners; it moves the generation, and the custom
-                    # scope is built by a later request. Nothing failed here.
-                    return {"built": 0, "deferred": "gallery_rebuild_required"}
-                # The relations are published; membership is rebuilt from them in full.
-                return ensure_gallery_projection_ready(config, connect=connect)
-            if "view_state" in options:
-                from music_app.services.library_browse_postgres import _connect
-
-                with (connect or _connect)(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
-                    context = gallery_projection_context(connection)
-                    header = _first(connection.execute("""
-                        select 1 as present from library.gallery_membership_headers
-                        where library_id = %(library_id)s and scope_key = %(scope_key)s
-                          and builder_version = %(builder_version)s
-                    """, {"library_id": context["library_id"], "scope_key": scope_key,
-                            "builder_version": BUILDER_VERSION})) if context else None
-                if context and not header:
-                    return _ensure_gallery_projection_ready(config, **options, allow_shared_seed=True)
+        if first_build:
+            # Read-only and lock-free (fix 3): a request never drains the journal or publishes relations.
+            if not _first_build_ready(config, connect):
+                return {"built": 0, "deferred": "relation_changes_pending"}
+            if not incremental_membership:
+                return ensure_gallery_projection_ready(config, **options)
+            return build_missing_custom_scope() or {"built": 0}
+        if not incremental_membership:
+            return ensure_gallery_projection_ready(config, **options)
+        result = ensure_pending_relation_projection_ready(config, connect=connect)
+        if not result.get("initialized"):
+            # Startup owns initialization; a write's owner has nothing to drain until then.
             return result
-        return ensure_gallery_projection_ready(config, **options)
+        if result.get("updated"):
+            # Published: a first build waiting on these changes may run, whether or not the generation moved.
+            with _PENDING_LOCK:
+                for waiting in [entry for entry in _DEFERRED_FIRST_BUILDS if entry[0] == database_url]:
+                    del _DEFERRED_FIRST_BUILDS[waiting]
+        if result.get("gallery_rebuild_required"):
+            # The relations are published; membership is rebuilt from them in full.
+            return ensure_gallery_projection_ready(config, connect=connect)
+        if "view_state" in options:
+            return build_missing_custom_scope() or result
+        return result
 
     return _queue(config, key, refresh, trailing=not first_build, allow_shared=incremental_membership)
 

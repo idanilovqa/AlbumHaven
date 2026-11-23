@@ -12145,6 +12145,17 @@ def test_problematic_loose_public_key_preserves_projected_identity_bytes():
     )
 
 
+
+class _NoLooseRulesConnection:
+    """The loose loader reads its groups' exclusion rules over the connection; these cases have none."""
+
+    def execute(self, sql, params=None):
+        assert "library.ignored_repairs" in sql, "The loose loader reads only its rules over the connection."
+        return self
+
+    def fetchall(self):
+        return []
+
 @pytest.mark.parametrize(
     ("group_id", "folder_path", "old_path", "replacement_path"),
     [
@@ -12226,7 +12237,7 @@ def test_problematic_db_loose_identity_survives_unchanged_and_replacement_paths(
     )
 
     rows = repository._load_problematic_loose_file_rows(
-        connection=object(),
+        connection=_NoLooseRulesConnection(),
         limit=None,
     )
     album = browse._problematic_album_projection_payloads(rows)[0]
@@ -12282,7 +12293,7 @@ def test_problematic_loose_page_loads_canonical_headers_before_group_rows(monkey
     )
 
     rows = repository._load_problematic_loose_file_rows(
-        connection=object(),
+        connection=_NoLooseRulesConnection(),
         limit=2,
     )
 
@@ -12331,7 +12342,7 @@ def test_problematic_loose_page_selects_groups_in_final_problematic_order(monkey
     )
 
     rows = repository._load_problematic_loose_file_rows(
-        connection=object(),
+        connection=_NoLooseRulesConnection(),
         limit=1,
     )
 
@@ -12381,7 +12392,7 @@ def test_problematic_loose_page_hydrates_every_row_in_selected_group(monkeypatch
     )
 
     rows = repository._load_problematic_loose_file_rows(
-        connection=object(),
+        connection=_NoLooseRulesConnection(),
         limit=1,
     )
 
@@ -12434,7 +12445,7 @@ def test_problematic_loose_page_uses_release_year_in_final_order(monkeypatch):
     )
 
     rows = repository._load_problematic_loose_file_rows(
-        connection=object(),
+        connection=_NoLooseRulesConnection(),
         limit=1,
     )
 
@@ -12469,7 +12480,7 @@ def test_problematic_loose_page_sorts_complete_sql_tie_set_by_public_key(monkeyp
         lambda **options: selected.extend(options["membership_group_ids"]) or [],
     )
 
-    repository._load_problematic_loose_file_rows(connection=object(), limit=2)
+    repository._load_problematic_loose_file_rows(connection=_NoLooseRulesConnection(), limit=2)
 
     expected = [
         header["group_id"]
@@ -13639,7 +13650,7 @@ def test_empty_non_album_candidate_cache_does_not_request_unrestricted_inventory
 
     monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", unexpected_query)
     assert repository._load_non_album_entries(
-        view_state={}, alias_to_canonical={}, canonical_to_aliases={}, connection=object(),
+        view_state={}, alias_to_canonical={}, canonical_to_aliases={}, connection=_NoLooseRulesConnection(),
     ) == []
     browse.invalidate_postgres_utility_projection_cache()
 
@@ -14211,7 +14222,7 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
         canonical_to_aliases={},
         visible_artist_names=iter(["Radiohead", "Thom Yorke"]),
         query="Kid A",
-        connection=object(),
+        connection=_NoLooseRulesConnection(),
     )
     repository._load_non_album_entries(
         view_state={},
@@ -14219,12 +14230,12 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
         canonical_to_aliases={},
         visible_artist_names=["Broadcast"],
         query="Tender Buttons",
-        connection=object(),
+        connection=_NoLooseRulesConnection(),
     )
     repository._load_non_album_entries(
         view_state={}, alias_to_canonical={}, canonical_to_aliases={},
         visible_artist_names=["Bright Eyes"], query="Bright Eyes",
-        include_library_wide=True, connection=object(),
+        include_library_wide=True, connection=_NoLooseRulesConnection(),
     )
 
     assert calls == [

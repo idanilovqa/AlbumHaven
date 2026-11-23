@@ -4647,6 +4647,7 @@ class PostgresLibraryBrowseRepository:
                 ),
             )
             rows.append(row)
+        _attach_loose_ignored_repair_keys(connection, rows)
         return rows
 
     def _load_utility_rules_rows(self) -> list[object]:
@@ -6817,6 +6818,37 @@ def _problem_reason_identity_code(reason: object) -> str:
     if code is not None:
         return code
     return _encoded_problem_reason_identity(normalized_reason)
+
+
+_LOOSE_IGNORED_REPAIRS_SQL = """
+    select library.ignored_repairs.repair_key
+    from library.ignored_repairs
+    join app.bootstrap_owners on app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+    join library.libraries
+      on library.libraries.id = library.ignored_repairs.library_id
+     and library.libraries.owner_account_id = app.bootstrap_owners.account_id
+     and library.libraries.name = 'Local Library' and library.libraries.library_kind = 'local'
+    where split_part(library.ignored_repairs.repair_key, '::', 1) = any(%(identities)s::text[])
+"""
+
+
+def _attach_loose_ignored_repair_keys(connection: Any, rows: list[dict[str, object]]) -> None:
+    """A loose group's exclusions, as an album row carries its own: a file rule names the file's path, a
+    group rule the group's key. One read for these rows only."""
+    if not rows:
+        return
+    identities = sorted({str(row.get("file_private_path") or "") for row in rows}
+                        | {str(row.get("album_key") or "") for row in rows} - {""})
+    keys = [str((found.get("repair_key") if isinstance(found, Mapping) else found[0]) or "") for found in connection.execute(
+        _LOOSE_IGNORED_REPAIRS_SQL, {"identities": identities}).fetchall()]
+    by_identity: dict[str, list[str]] = {}
+    for key in keys:
+        by_identity.setdefault(key.split("::", 1)[0], []).append(key)
+    for row in rows:
+        row["ignored_repair_keys"] = sorted({
+            *by_identity.get(str(row.get("file_private_path") or ""), ()),
+            *by_identity.get(str(row.get("album_key") or ""), ()),
+        })
 
 
 def _problem_identity_row_key(

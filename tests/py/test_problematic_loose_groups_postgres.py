@@ -407,3 +407,17 @@ def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(lo
               for name, rows in (("20", small), ("2020", large))}
     assert abs(totals["2020"][0] - totals["20"][0]) <= 25, f"Rows read grew with the library: {small} vs {large}."
     assert totals["2020"][1] == totals["20"][1], f"Rows written grew with the library: {small} vs {large}."
+
+
+def test_no_app_code_deletes_a_library_root():
+    """Settings only deactivates a root; nothing deletes one. A root deleted by hand leaves its loose items
+    stored but unserved (the read joins active roots). A delete path in the app would need to remove that
+    root's index items in its transaction first (6.5's backlog: an FK with ON DELETE CASCADE)."""
+    import re
+    from pathlib import Path
+
+    app = Path(__file__).resolve().parents[2] / "music_app"
+    deleting = re.compile(r"delete\s+from\s+(?:only\s+)?library\.library_roots\b", re.IGNORECASE)
+    offenders = [str(path.relative_to(app)) for path in app.rglob("*.py")
+                 if deleting.search(path.read_text(encoding="utf-8", errors="replace"))]
+    assert offenders == []

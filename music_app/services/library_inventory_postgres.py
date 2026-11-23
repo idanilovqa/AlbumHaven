@@ -457,12 +457,25 @@ def _non_album_candidates_sql(
         )"""
     )
     membership_track_join = """
+          cross join lateral (
+            select keyed_tracks.id, keyed_tracks.library_id, keyed_tracks.album_id
+            from library.local_tracks keyed_tracks
+            where keyed_tracks.id = files.track_id
+            -- Fence, not redundant: offset 0 stops subquery pull-up, so each found file reaches its track by the
+            -- primary key whatever the statistics; joined freely, the planner read every track of the library
+            -- per folder through an index on library_id.
+            offset 0
+          ) membership_tracks
+    """ if membership_problems_only and unassigned_only and membership_folders else """
           join library.local_tracks membership_tracks
             on membership_tracks.id = files.track_id
            and membership_tracks.library_id = roots.library_id
     """ if membership_problems_only and unassigned_only else ""
     membership_unassigned_scope = (
-        "and membership_tracks.album_id is null"
+        # The library check applies to the one track found, outside the fence: it can never drive the lookup.
+        "and membership_tracks.library_id = roots.library_id\n            and membership_tracks.album_id is null"
+        if membership_problems_only and unassigned_only and membership_folders
+        else "and membership_tracks.album_id is null"
         if membership_problems_only and unassigned_only
         else ""
     )
@@ -506,6 +519,19 @@ def _non_album_candidates_sql(
     # A batch's override ranking runs once, over the batch's own files only (materialized, each file's overrides
     # looked up by its key); otherwise it was re-run per outer row of the main join.
     batch_materialized = "materialized " if membership_folders else ""
+    # A batch's tracks are read by their primary keys: the batch's own track ids as one array, so the main join
+    # can never reach local_tracks through an index on library_id (the whole library's tracks per batch).
+    batch_track_scope = (
+        "and library.local_tracks.id = any(array(select active_track_files.track_id from active_track_files))\n"
+        "        and library.local_track_files.id = any(array(select active_track_files.id from active_track_files))"
+        if membership_folders else ""
+    )
+    # Likewise the batch's files, by their primary keys.
+    batch_file_scope = (
+        "and library.local_track_files.id = any(array(select eligible_track_file_ids.track_file_id"
+        " from eligible_track_file_ids))"
+        if membership_folders else ""
+    )
     exception_candidates = """
           select
             active_track_files.id as track_file_id,
@@ -514,14 +540,14 @@ def _non_album_candidates_sql(
             path_override.override_payload,
             path_override.updated_at,
             0 as match_priority
+          -- The batch's files are the bootstrap library's own (eligible_track_file_ids joins their roots to it),
+          -- so no track row is read here.
           from active_track_files
-          join library.local_tracks
-            on library.local_tracks.id = active_track_files.track_id
-          join bootstrap_context
-            on bootstrap_context.library_id = library.local_tracks.library_id
+          cross join bootstrap_context
           cross join lateral (
             select overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at
             from library.exception_overrides overrides
+            -- (library_id, track_key) together: exactly exception_overrides_library_track_key_idx.
             where overrides.library_id = bootstrap_context.library_id
               and overrides.track_key = active_track_files.private_path
             -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays a parameterized probe of
@@ -540,20 +566,20 @@ def _non_album_candidates_sql(
             track_override.updated_at,
             1 as match_priority
           from active_track_files
-          join library.local_tracks
-            on library.local_tracks.id = active_track_files.track_id
-          join bootstrap_context
-            on bootstrap_context.library_id = library.local_tracks.library_id
+          cross join bootstrap_context
           cross join lateral (
-            select overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at
+            select overrides.id, overrides.library_id, overrides.track_key, overrides.override_payload,
+              overrides.updated_at
             from library.exception_overrides overrides
-            where overrides.library_id = bootstrap_context.library_id
-              and overrides.track_id = active_track_files.track_id
+            where overrides.track_id = active_track_files.track_id
             -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays a parameterized probe of
             -- exception_overrides_track_id_idx per batch file whatever the statistics; flattened, the planner
-            -- may hash-join a scan of every override instead.
+            -- may hash-join a scan of every override instead. The library check stays outside the fence:
+            -- inside, exception_overrides_library_id_idx tied with it without statistics and read every
+            -- override of the library per file.
             offset 0
           ) track_override
+          where track_override.library_id = bootstrap_context.library_id
         """ if membership_folders else """
           select
             active_track_files.id as track_file_id,
@@ -671,6 +697,7 @@ def _non_album_candidates_sql(
               %(private_path_count)s = 0
               or library.local_track_files.private_path = any(%(private_paths)s::text[])
             )
+            {batch_file_scope}
         ),
         exception_candidates as ({exception_candidates}),
         ranked_exception_overrides as {batch_materialized}(
@@ -784,6 +811,7 @@ def _non_album_candidates_sql(
             or library.local_tracks.id = any(%(track_ids)s::bigint[])
         )
         {"and library.local_tracks.album_id is null" if unassigned_only else ""}
+        {batch_track_scope}
         {artist_scope}
         {query_scope}
         and ({candidate_scope})

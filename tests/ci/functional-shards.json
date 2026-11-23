@@ -1247,6 +1247,20 @@
               "test": "tests/e2e/specs/libraryDataCorrections.spec.js",
               "case": "FTC-LIBRARY-CORRECTIONS-001 an unreadable track artist shows the album artist, is a problem, and Write in tags fixes the tags",
               "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+              "case": "FTC-TAGS-043 a save that finishes while a scan holds the library shows its new album name immediately, still shows it after a reload, in a second tab and in Album Details, and keeps it once the library holds it",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+              "case": "FTC-TAGS-044 a save whose file write fails shows the old values again, keeps no pending edit, and a reload shows the old values",
+              "area": "tag-edit"
             }
           ]
         }

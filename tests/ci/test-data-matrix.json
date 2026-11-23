@@ -12879,5 +12879,56 @@
     "filesystemScenarios": [],
     "expectedContracts": ["loose-tracks-mobile-back-title-alignment"],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+    "case": "FTC-TAGS-043 a save that finishes while a scan holds the library shows its new album name immediately, still shows it after a reload, in a second tab and in Album Details, and keeps it once the library holds it",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "finishing-save-overlay",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "tag-edit:finishing-save-overlay"
+    ],
+    "filesystemScenarios": [
+      "media-copy:finishing-save-overlay"
+    ],
+    "expectedContracts": [
+      "finishing-save-shown-after-reload-and-in-other-tabs",
+      "kept-edit-dropped-on-completion"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:finishing-save-overlay",
+      "filesystemCopy": "media/cases/finishing-save-overlay"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+    "case": "FTC-TAGS-044 a save whose file write fails shows the old values again, keeps no pending edit, and a reload shows the old values",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "failed-write-overlay-revert",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "tag-edit:failed-write-overlay-revert"
+    ],
+    "filesystemScenarios": [
+      "media-copy:failed-write-overlay-revert"
+    ],
+    "expectedContracts": [
+      "failed-write-reverts-without-kept-edit"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:failed-write-overlay-revert",
+      "filesystemCopy": "media/cases/failed-write-overlay-revert"
+    },
+    "ownerApproval": "approved"
   }
 ]

@@ -1044,6 +1044,31 @@ export class TagEditorActions {
     };
   }
 
+  // Owner (2026-11-23): the files are written, so the save has succeeded; the library is still catching up.
+  async applyAndReturnFinishingEdit(options = {}) {
+    const timeout = options.timeout || 90000;
+    const editResponsePromise = this.tagEditor.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/edit-tags'
+    ), { timeout });
+    await this.tagEditor.applyButton.click();
+    await expect(this.tagEditor.confirmDialog).toBeVisible({ timeout });
+    const confirmClick = this.tagEditor.confirmButton.click();
+    const beforeResponse = typeof options.onBeforeResponse === 'function'
+      ? (async () => { await confirmClick; await options.onBeforeResponse(); })()
+      : confirmClick;
+    await confirmClick;
+    await beforeResponse;
+    const response = await editResponsePromise;
+    const payload = await response.json();
+    expect(response.status(), JSON.stringify(payload)).toBe(202);
+    expect(payload.ok).toBe(true);
+    expect(payload.save_task_status).toBe('finishing');
+    await expect(this.tagEditor.overlay).toBeHidden({ timeout });
+    await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
+    return { payload, saveTaskId: String(payload.save_task_id || '').trim() };
+  }
+
   async applyAndWaitForTerminalSavedResponse(options = {}) {
     const timeout = options.timeout || 35000;
     let saveTaskPollCount = 0;

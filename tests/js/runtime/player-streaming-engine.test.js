@@ -8229,6 +8229,39 @@ test('a press still asking its song\'s rate names the song it switches to', asyn
   assert.equal(switchingTo(), makeTrack('03.flac').path, 'a later press takes over');
 });
 
+// Hosted FTC-PLAYBACK-OFFLINE-002, 2ecca92bb's parent: paused, the socket closed while a press on
+// another song was on its way, and for 60 s no socket and no open followed.
+for (const [received, kind] of [[100_000, 'whose received audio can be spliced'], [0, 'with no audio received']]) {
+  test(`a paused player ${kind} whose socket closes while a press is on its way opens the pressed song on one new socket`, async () => {
+    const harness = encodedHarness();
+    await startLocallySeekable(harness, received);
+    await harness.api.pause();
+    await harness.settle();
+    // The press waits on the browser's cache of kept songs while the socket closes.
+    let answerCache;
+    Object.assign(harness.context, {
+      streamingTrackCacheKey: (track, quality) => `${track.path}|${quality || 'original'}`,
+      loadStreamingCachedTrack: () => new Promise((resolve) => { answerCache = resolve; }),
+      keepStreamingCachedTrack: () => {},
+    });
+
+    const press = harness.api.start(makeTrack('02.mp3'));
+    await harness.settle();
+    assert.equal(typeof answerCache, 'function', 'the press is on its way');
+    harness.sockets[0].unexpectedClose();
+    await settleTwice(harness);
+    answerCache(null);
+    await settleTwice(harness);
+    await settleTwice(harness);
+
+    assert.equal(harness.sockets.length, 2, 'one new socket');
+    const opens = harness.sockets[1].sent.filter(({ type }) => type === 'open');
+    assert.deepEqual(opens.map(({ path }) => path), [makeTrack('02.mp3').path], 'one open, of the pressed song');
+    assert.notEqual(harness.api.snapshot().mode, 'error');
+    void press;
+  });
+}
+
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);

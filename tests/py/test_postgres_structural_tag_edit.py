@@ -2592,7 +2592,7 @@ def test_postgres_partial_album_move_publishes_only_destination_cover_authority(
     cover_publications = [
         (sql, params)
         for sql, params in connection.executed
-        if "select unnest(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+        if "from repaired_files album" in _normalized_sql(sql)
     ]
     assert len(cover_publications) == 1
     publication_sql, publication_params = cover_publications[0]
@@ -2634,7 +2634,7 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
     publication_sql, publication_params = next(
         (sql, params)
         for sql, params in connection.executed
-        if "select unnest(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+        if "from repaired_files album" in _normalized_sql(sql)
     )
     normalized_publication_sql = _normalized_sql(publication_sql)
     assert publication_params == {
@@ -2643,9 +2643,11 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
         "cover_inherited_from_structural_edit": True,
     }
     assert "selected_files.private_path = any(%(active_paths)s::text[])" in normalized_publication_sql
-    assert "album.id in ( select unnest(%(album_ids)s::bigint[]) union select selected_tracks.album_id" in (
-        normalized_publication_sql
-    )
+    # Only the files the save moves are written; the album's untouched files keep their folder cache.
+    assert "and files.private_path = any(%(active_paths)s::text[])" in normalized_publication_sql
+    # The moved files' album is read after reconciliation, from their own tracks, not the ids passed in.
+    assert "album.id in ( select selected_tracks.album_id" in normalized_publication_sql
+    assert "unnest(%(album_ids)s::bigint[])" not in normalized_publication_sql
 
 
 def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_rows(

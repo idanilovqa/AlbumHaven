@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.47 - 2026-11-22
+
+- Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.
+
 ## 0.11.46 - 2026-11-22
 
 - Fixed a 0.11.45 regression: one failed attempt to open another database connection could make requests fail even though working connections were free. Requests now fail fast only when no working connection exists, a slow first connection is waited for, and the app reconnects within seconds after Postgres returns.

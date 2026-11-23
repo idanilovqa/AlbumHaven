@@ -957,7 +957,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
-              "case": "FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers",
+              "case": "FTC-COVERS-018 a new album the watcher finds gets an automatic lookup that applies the first acceptable cover and stops later providers, and an existing album with a user cover is never searched",
               "area": "cover-providers"
             },
             {

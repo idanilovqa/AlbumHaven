@@ -1687,7 +1687,7 @@ test('manual all-provider scenarios explicitly opt into normal provider results'
 
 test('automatic cover scans isolate the coverless candidate without weakening later improvement coverage', () => {
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
-  const coverlessTitle = 'FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers';
+  const coverlessTitle = 'FTC-COVERS-018 a new album the watcher finds gets an automatic lookup that applies the first acceptable cover and stops later providers, and an existing album with a user cover is never searched';
   const improvementTitle = 'FTC-COVERS-019 automatic improvement preserves a user-owned cover and clears after gallery open';
 
   const readScenario = (title) => {
@@ -1707,12 +1707,14 @@ test('automatic cover scans isolate the coverless candidate without weakening la
   const coverlessMode = coverlessScenario.indexOf(
     "setProviderFixtureMode('automatic-coverless')",
   );
-  const coverlessScan = coverlessScenario.indexOf('triggerIncrementalScanAndWaitForBusy()');
-  assert.ok(coverlessMode >= 0, 'FTC-COVERS-018 must opt into the Fixture08-only provider mode.');
+  // Owner (2026-11-22): the automatic lookup runs for a new album the watcher finds, never a scan's whole library.
+  const coverlessCopy = coverlessScenario.indexOf('createWatchedAlbumFixture(');
+  assert.ok(coverlessMode >= 0, 'FTC-COVERS-018 must opt into the automatic-coverless provider mode.');
   assert.ok(
-    coverlessMode < coverlessScan,
-    'FTC-COVERS-018 must isolate provider results before its automatic scan starts.',
+    coverlessCopy > coverlessMode,
+    'FTC-COVERS-018 must isolate provider results before the watcher finds the new album.',
   );
+  assert.doesNotMatch(coverlessScenario, /triggerIncremental|triggerFullRescan/u, 'FTC-COVERS-018 starts no scan.');
   assert.doesNotMatch(coverlessScenario, /setProviderFixtureMode\('automatic-scan'\)/u);
 
   const improvementScenario = readScenario(improvementTitle);
@@ -1736,77 +1738,61 @@ test('automatic cover scans isolate the coverless candidate without weakening la
   );
 });
 
-test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its user cover', () => {
+test('FTC-COVERS-018 proves an existing album with a user cover is never searched and keeps its cover', () => {
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
   const coverLookupActions = read('tests/e2e/actions/coverLookupActions.js');
-  const title = 'FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers';
+  const title = 'FTC-COVERS-018 a new album the watcher finds gets an automatic lookup that applies the first acceptable cover and stops later providers, and an existing album with a user cover is never searched';
   const scenarioStart = spec.indexOf(`test('${title}',`);
   assert.ok(scenarioStart >= 0, `Expected exact scenario title: ${title}`);
   const scenarioEnd = spec.indexOf("\ntest('", scenarioStart + title.length);
   const scenario = spec.slice(scenarioStart, scenarioEnd < 0 ? undefined : scenarioEnd);
-  const scanBoundary = scenario.indexOf('triggerIncrementalScanAndWaitForBusy()');
-  assert.ok(scanBoundary >= 0, 'FTC-COVERS-018 must retain the real incremental-scan boundary.');
+  const watcherBoundary = scenario.indexOf('createWatchedAlbumFixture(');
+  assert.ok(watcherBoundary >= 0, 'FTC-COVERS-018 must add its new album through the watcher.');
 
-  const beforeScan = scenario.slice(0, scanBoundary);
+  const beforeWatcher = scenario.slice(0, watcherBoundary);
   assert.match(
-    beforeScan,
+    beforeWatcher,
     /selectAlbumDetailsByIdentityAndReadPayload\(\s*USER_OWNED_IMPROVEMENT_TARGET,?\s*\)/u,
   );
-  assert.match(beforeScan, /neutralBaselineAlbum\s*=\s*opened\.album/u);
-  assert.match(beforeScan, /expect\(neutralBaselineAlbum\.cover_selection_origin\)\.toBe\('user'\)/u);
-  assert.match(beforeScan, /expect\(neutralBaselineAlbum\.local_cover_width\)\.toBe\(640\)/u);
-  assert.match(beforeScan, /expect\(neutralBaselineAlbum\.local_cover_height\)\.toBe\(640\)/u);
+  assert.match(beforeWatcher, /neutralBaselineAlbum\s*=\s*opened\.album/u);
+  assert.match(beforeWatcher, /expect\(neutralBaselineAlbum\.cover_selection_origin\)\.toBe\('user'\)/u);
+  assert.match(beforeWatcher, /expect\(neutralBaselineAlbum\.local_cover_width\)\.toBe\(640\)/u);
+  assert.match(beforeWatcher, /expect\(neutralBaselineAlbum\.local_cover_height\)\.toBe\(640\)/u);
   assert.match(
-    beforeScan,
+    beforeWatcher,
     /expect\(USER_COVER_LINKED_FIELDS\.every\(\(field\) => neutralBaselineAlbum\[field\] !== null\)\)\.toBe\(true\)/u,
   );
-  assert.match(
-    beforeScan,
-    /neutralBaselineFullSizeCover\s*=\s*await coverLookupActions\.readFullSizeCoverEvidence\(\{[\s\S]*?coverPath:\s*await coverPathForReference\(neutralBaselineAlbum\.cover_ref\),[\s\S]*?coverRevision:\s*neutralBaselineAlbum\.cover_revision,[\s\S]*?\}\)/u,
-  );
-  assert.match(beforeScan, /trackModalActions\.waitForCoverLookupImprovementIndicator\(false\)/u);
+  assert.match(beforeWatcher, /trackModalActions\.waitForCoverLookupImprovementIndicator\(false\)/u);
 
-  const afterScan = scenario.slice(scanBoundary);
-  assert.match(
-    afterScan,
-    /waitForAutomaticProviderSearch\(\s*USER_OWNED_IMPROVEMENT_TARGET,?\s*\)/u,
+  const afterWatcher = scenario.slice(watcherBoundary);
+  assert.doesNotMatch(
+    afterWatcher,
+    /waitForAutomaticProviderSearch\(\s*USER_OWNED_IMPROVEMENT_TARGET/u,
+    'the existing album is never searched',
   );
+  assert.match(afterWatcher, /expect\(searchedExisting\)\.toEqual\(\[\]\)/u);
   assert.match(
-    afterScan,
+    afterWatcher,
     /selectAlbumDetailsByIdentityAndReadPayload\(\s*USER_OWNED_IMPROVEMENT_TARGET,?\s*\)/u,
   );
-  assert.match(afterScan, /neutralPreservedAlbum\s*=\s*opened\.album/u);
+  assert.match(afterWatcher, /neutralPreservedAlbum\s*=\s*opened\.album/u);
   assert.match(
-    afterScan,
+    afterWatcher,
     /expect\(neutralPreservedAlbum\.cover_selection_origin\)\.toBe\(neutralBaselineAlbum\.cover_selection_origin\)/u,
   );
   assert.match(
-    afterScan,
+    afterWatcher,
     /expect\(neutralPreservedAlbum\.cover_ref\)\.toBe\(neutralBaselineAlbum\.cover_ref\)/u,
   );
   assert.match(
-    afterScan,
+    afterWatcher,
     /expect\(neutralPreservedAlbum\.cover_revision\)\.toBe\(neutralBaselineAlbum\.cover_revision\)/u,
   );
   assert.match(
-    afterScan,
+    afterWatcher,
     /for \(const field of USER_COVER_LINKED_FIELDS\) \{\s*expect\(neutralPreservedAlbum\[field\]\)\.toBe\(neutralBaselineAlbum\[field\]\);\s*\}/u,
   );
-  assert.match(afterScan, /trackModalActions\.waitForCoverLookupImprovementIndicator\(false\)/u);
-  assert.match(
-    afterScan,
-    /neutralCandidate\s*=\s*candidates\.find\([\s\S]*?automatic-coverless-neutral[\s\S]*?\)/u,
-  );
-  assert.match(afterScan, /expect\(neutralCandidate\.resolution\)\.toBe\('600x600'\)/u);
-  assert.match(afterScan, /expect\(neutralCandidate\.selected\)\.toBe\(false\)/u);
-  assert.match(
-    afterScan,
-    /neutralCandidateEvidence\s*=\s*await coverLookupActions\.readRemoteCandidateEvidence\(neutralCandidate\.id\)/u,
-  );
-  // The card shows the proxy's 480 px preview (e0e98c8a7); the 600 px original stays pinned by resolution and hash.
-  assert.match(afterScan, /expect\(neutralCandidateEvidence\.naturalWidth\)\.toBe\(480\)/u);
-  assert.match(afterScan, /expect\(neutralCandidateEvidence\.naturalHeight\)\.toBe\(480\)/u);
-  assert.match(afterScan, /expect\(neutralCandidateEvidence\.src\)\.toContain\('automatic-coverless-neutral'\)/u);
+  assert.match(afterWatcher, /trackModalActions\.waitForCoverLookupImprovementIndicator\(false\)/u);
   assert.match(
     coverLookupActions,
     /naturalHeight:\s*element instanceof HTMLImageElement \? element\.naturalHeight : 0/u,
@@ -1818,13 +1804,9 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
     'Displayed-image evidence must return the browser-decoded natural height.',
   );
   assert.match(
-    afterScan,
-    /expect\(providerEvidence\.fixture_neutral_original_source_sha256\)\.toBe\(\s*neutralBaselineFullSizeCover\.sha256\.toLowerCase\(\),?\s*\)/u,
-  );
-  assert.match(
-    afterScan,
-    /expect\(evidenceAfterOpen\)\.toEqual\(evidenceBeforeOpen\)/u,
-    'Opening the persisted neutral result must not issue another provider search.',
+    afterWatcher,
+    /expect\(await coverLookupActions\.readProviderFixtureEvidence\(\)\)\.toEqual\(evidence\)/u,
+    'Opening the existing album must not issue a provider search.',
   );
 });
 

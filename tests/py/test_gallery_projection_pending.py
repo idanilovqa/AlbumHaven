@@ -326,6 +326,7 @@ def test_a_failed_custom_first_build_is_not_queued_again_at_the_same_generation(
 
     monkeypatch.setattr(gallery, "_PENDING", ReleasingPending())
     monkeypatch.setattr(gallery, "_PENDING_LOCK", GapLock())
+    monkeypatch.setattr(gallery, "_first_build_readiness", lambda *_a, **_k: "ready")  # the build itself fails
     request()
     assert executor.submitted == 1, "the failure is recorded before the slot is released"
     for _request in range(5):
@@ -376,23 +377,148 @@ def test_concurrent_custom_first_builds_submit_one_action_and_no_trailing_rebuil
 
 
 def test_a_custom_first_build_never_falls_into_a_whole_library_rebuild(monkeypatch):
-    """With incremental membership, a first build whose relations need a full gallery rebuild leaves that to
-    its owner: no ensure_gallery_projection_ready, and nothing recorded as failed at this generation."""
-    from music_app.services import cache, scoped_relation_projection
+    """With incremental membership, a first build while membership waits for a full rebuild (built at another
+    generation) leaves that to its owner: no gallery build, and the scope deferred, not failed, at this
+    generation."""
+    from music_app.services import cache
 
     monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", _RunningExecutor())
     monkeypatch.setattr(gallery, "_PENDING", {})
-    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
-                        lambda *_a, **_k: {"initialized": True, "gallery_rebuild_required": True})
+    monkeypatch.setattr(gallery, "_DEFERRED_FIRST_BUILDS", {})
+    monkeypatch.setattr(gallery, "gallery_membership_baseline_ready", lambda *_a, **_k: False)
     monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
                         lambda *_a, **_k: pytest.fail("a first build ran the whole-library gallery rebuild"))
     monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
                         lambda *_a, **_k: pytest.fail("a first build ran a gallery build"))
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-first-build-rebuild-required"}
     state = browse._root_sidebar_view_state({"category": "hoard"})
-    gallery.queue_gallery_scope_first_build(config, view_state=state, generation=2, incremental_membership=True)
+    gallery.queue_gallery_scope_first_build(config, connect=_ReadOnlyDatabase(dirty=False, statements=[]),
+                                            view_state=state, generation=2, incremental_membership=True)
     key = (config["ALBUM_HAVEN_APP_DATABASE_URL"], gallery.gallery_projection_scope_key(state))
     assert key not in gallery._FAILED_FIRST_BUILDS, "the owner's rebuild moves the generation; no failure here"
+    assert gallery._DEFERRED_FIRST_BUILDS.get(key) == 2
+
+
+class _ReadOnlyDatabase:
+    """The first build's read-only check: relations initialized at the current builder version, ``dirty``
+    journaled albums or none, and no membership header for the custom scope yet. Records every statement."""
+
+    def __init__(self, *, dirty, statements, initialized=True):
+        self.dirty, self.statements, self.initialized = dirty, statements, initialized
+
+    def __call__(self, _url):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def execute(self, sql, params=None):
+        from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
+
+        self.statements.append(" ".join(str(sql).split()))
+        if "local_relation_projection_state" in sql:
+            row = {"library_id": 1, "gallery_generation": 2, "normalized_builder_version":
+                   RELATION_PROJECTION_BUILDER_VERSION if self.initialized else "older-builder"}
+        elif "local_relation_dirty_albums" in sql:
+            row = {"present": 1} if self.dirty else None
+        else:
+            row = None
+        return SimpleNamespace(fetchone=lambda: row, fetchall=lambda: [row] if row else [])
+
+
+@pytest.fixture
+def first_builds(monkeypatch):
+    """A custom scope's first builds, run at once; the relation owners and every gallery build are watched."""
+    from music_app.services import cache, scoped_relation_projection
+
+    executor = _RunningExecutor()
+    builds, statements = [], []
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", executor)
+    monkeypatch.setattr(gallery, "_PENDING", {})
+    monkeypatch.setattr(gallery, "_FAILED_FIRST_BUILDS", {})
+    monkeypatch.setattr(gallery, "_DEFERRED_FIRST_BUILDS", {})
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda *_a, **_k: pytest.fail("a first build drained the relation journal"))
+    monkeypatch.setattr(scoped_relation_projection, "publish_affected_relation_projection",
+                        lambda *_a, **_k: pytest.fail("a first build published affected relations"))
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("a first build ran the whole-library gallery rebuild"))
+    monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
+                        lambda *_a, **options: builds.append(options["view_state"]) or {"built": 1})
+    monkeypatch.setattr(gallery, "gallery_projection_context", lambda _connection: {"library_id": 1, "generation": 2})
+    monkeypatch.setattr(gallery, "gallery_membership_baseline_ready", lambda *_a, **_k: True)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-first-build-dirty"}
+    state = browse._root_sidebar_view_state({"category": "hoard"})
+
+    def request(database, generation):
+        return gallery.queue_gallery_scope_first_build(
+            config, connect=database, view_state=state, generation=generation, incremental_membership=True)
+
+    return SimpleNamespace(executor=executor, builds=builds, statements=statements, config=config, state=state,
+                           request=request)
+
+
+def test_a_first_build_with_journaled_changes_defers_without_draining_or_locking(first_builds):
+    """Fix 3 (i): a custom scope's first build while relation changes are journaled is a read-only check: it
+    neither drains the journal (ensure_pending_relation_projection_ready) nor publishes affected relations,
+    takes no advisory lock, writes nothing (the journaled rows stay for their owner) and builds nothing."""
+    first_builds.request(_ReadOnlyDatabase(dirty=True, statements=first_builds.statements), 2)
+
+    assert first_builds.executor.submitted == 1
+    assert first_builds.builds == [], "deferred while relation changes wait for their owner"
+    assert first_builds.statements, "the check reads the relation state"
+    assert not [sql for sql in first_builds.statements if "advisory" in sql.lower()], first_builds.statements
+    assert all(sql.lower().startswith(("select", "with")) for sql in first_builds.statements), (
+        f"the check only reads; the journaled rows stay: {first_builds.statements}"
+    )
+
+
+def test_first_build_retries_at_the_deferred_generation_queue_nothing(first_builds):
+    """Fix 3 (ii): the deferral is remembered at its generation, so the page's 1 s retries queue nothing."""
+    database = _ReadOnlyDatabase(dirty=True, statements=first_builds.statements)
+    first_builds.request(database, 2)
+    for _retry in range(20):
+        first_builds.request(database, 2)
+
+    assert first_builds.executor.submitted == 1, "retries at the same generation are no-ops"
+    assert first_builds.builds == []
+
+
+def test_after_the_owner_moves_the_generation_one_request_builds_the_scope_once(first_builds):
+    """Fix 3 (iii): once the owner's drain has moved the generation (no journaled rows left), one request
+    builds the custom scope, once."""
+    first_builds.request(_ReadOnlyDatabase(dirty=True, statements=first_builds.statements), 2)
+    first_builds.request(_ReadOnlyDatabase(dirty=False, statements=first_builds.statements), 3)
+
+    assert first_builds.executor.submitted == 2
+    assert first_builds.builds == [first_builds.state], "one request builds the scope once"
+
+
+def test_an_owner_drain_releases_a_deferred_first_build_even_at_the_same_generation(first_builds, monkeypatch):
+    """A drain that published the journaled changes ends the deferral, whether or not it moved the generation,
+    so a custom scope is never left waiting for an unrelated later write."""
+    from music_app.services import scoped_relation_projection
+
+    first_builds.request(_ReadOnlyDatabase(dirty=True, statements=first_builds.statements), 2)
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda *_a, **_k: {"initialized": True, "updated": True})
+    gallery.queue_journaled_relation_drain(first_builds.config)
+    first_builds.request(_ReadOnlyDatabase(dirty=False, statements=first_builds.statements), 2)
+
+    assert first_builds.builds == [first_builds.state]
+
+
+def test_a_first_build_before_relations_are_initialized_still_fails_at_its_generation(first_builds):
+    """6.5: the read-only check keeps the raise when startup has not initialized relations, so the failure is
+    recorded at its generation (and retried only when it moves)."""
+    first_builds.request(_ReadOnlyDatabase(dirty=False, statements=first_builds.statements, initialized=False), 2)
+    key = (first_builds.config["ALBUM_HAVEN_APP_DATABASE_URL"], gallery.gallery_projection_scope_key(first_builds.state))
+
+    assert gallery._FAILED_FIRST_BUILDS.get(key) == 2
+    assert first_builds.builds == []
 
 
 def test_a_request_with_a_published_common_scope_never_publishes_a_live_snapshot(monkeypatch):

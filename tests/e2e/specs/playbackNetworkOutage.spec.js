@@ -1,6 +1,12 @@
 import { expect, test } from '../support/baseFixtures.js';
 import { startCpuLoad } from '../helpers/cpuLoad.js';
 import { startNetworkRelay } from '../helpers/networkRelay.js';
+import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.js';
+
+// A seek's place is painted within a few frames even at full load; a regression held the page for seconds.
+// The limit is the one this check always had, below 500 ms: 500 itself fails, as the helper passes its ceiling.
+// The target only sets where the report says the grace began; it is no new approved budget.
+const SEEK_PAINT_BUDGET = defineTimingBudget({ targetMaximum: 299.999, graceMs: 200 });
 
 const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
@@ -671,8 +677,7 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
         expect(painted, `the seek to ${target}s is on the bar in the first or second frame: ${JSON.stringify(frames.slice(0, 3))}`)
           .toBeGreaterThanOrEqual(0);
         expect(painted).toBeLessThanOrEqual(1);
-        // Main's player paints it within a few frames even at full load; the regression held the page for seconds.
-        expect(frames[painted].afterMs, `the seek to ${target}s is painted soon after the click`).toBeLessThan(500);
+        expectTimingBudget(expect, frames[painted].afterMs, SEEK_PAINT_BUDGET, `the seek to ${target}s painted after the click`);
         await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 2000 })
           .toBeGreaterThanOrEqual(target - 2);
         for (let read = 0; read < 4; read += 1) {

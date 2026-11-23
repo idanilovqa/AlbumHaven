@@ -593,10 +593,10 @@ test('a chunk or end of the stream a seek just replaced is dropped, and the seek
   const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
   enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(256).fill(0.25) });
   play(fixture);
-  renderQuantum(fixture);
+  assertRenderedNonSilentStereo(fixture);
   enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: Array(256).fill(-0.25) });
   fixture.send({ type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 144_000 });
-  renderQuantum(fixture);
+  assertRenderedNonSilentStereo(fixture);
   assert.equal(fixture.events('seek-boundary').length, 1);
 
   enqueue(fixture, { streamId: 41, role: 'current', sequence: 1, left: Array(128).fill(0.25) });

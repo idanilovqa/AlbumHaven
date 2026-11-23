@@ -41,14 +41,29 @@ def _library_id(fixture):
 
 def _hold_background_owners(monkeypatch):
     """Record, instead of run, the background owners a write queues (the journal owner's drain and the
-    gallery refresh), so a check observes the user's write alone and never races its owner."""
+    gallery refresh), so a check observes the user's write alone and never races its owner. ``run_owners``
+    then runs what was recorded, as the owners would have, after the write committed."""
     from music_app.services import gallery_projection_postgres
+    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
 
-    queued = []
+    class Queued(list):
+        pass
+
+    schedule_refresh = gallery_projection_postgres.schedule_gallery_projection_refresh
+    queued = Queued()
+
+    def run_owners():
+        for kwargs in queued:
+            schedule_refresh(kwargs.pop("config"), **kwargs)
+        queued.clear()
+        for _ in range(3):
+            _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=60)
+
     monkeypatch.setattr(gallery_projection_postgres, "queue_journaled_relation_drain",
-                        lambda _config: queued.append("journaled drain"))
+                        lambda config: queued.append({"config": config, "incremental_membership": True}))
     monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
-                        lambda _config, **_kwargs: queued.append("gallery refresh"))
+                        lambda config, **kwargs: queued.append({"config": config, **kwargs}))
+    queued.run_owners = run_owners
     return queued
 
 
@@ -59,6 +74,14 @@ def _hold_library_wide_marker(fixture, monkeypatch):
     _rows(fixture, "select library.mark_relation_album_dirty(%s, 0)", (_library_id(fixture),))
     assert _markers(fixture) == 1
     return queued
+
+
+def _owner_drain_clears_marker(fixture, queued):
+    """6.5's ruling (A): the journaled drain owns marker 0. The save's transaction left it (asserted before
+    this); the drain the save queued runs after commit, off the save's path, and clears it."""
+    assert queued, "The write queued no drain for marker 0's owner."
+    queued.run_owners()
+    assert _markers(fixture) == 0, "The drain the write queued left marker 0."
 
 
 def _markers(fixture):
@@ -89,13 +112,14 @@ def _album_titles(fixture):
 # (a) A structural tag save while another transaction holds the library-wide marker.
 
 def test_live_a_structural_save_commits_while_another_transaction_holds_a_library_wide_marker(library, monkeypatch):
-    _hold_library_wide_marker(library, monkeypatch)
+    queued = _hold_library_wide_marker(library, monkeypatch)
 
     result = _rename(library, "Renamed Album")
 
     assert result["track_rows_updated"] == 3
     assert _album_titles(library) == {"Renamed Album"}, "The save's rows did not commit."
-    assert _markers(library) == 1, "A user's save drained a marker it doesn't own."
+    assert _markers(library) == 1, "The save's own transaction drained marker 0."
+    _owner_drain_clears_marker(library, queued)
 
 
 # (b) The same for move-album, confirm-removal and keep-missing.
@@ -109,7 +133,7 @@ def test_live_a_move_commits_while_another_transaction_holds_a_library_wide_mark
     for entry in fixture.tracks:
         path = str(destination / Path(entry["path"]).name)
         moved[path] = {**entry, "path": path}
-    _hold_library_wide_marker(fixture, monkeypatch)
+    queued = _hold_library_wide_marker(fixture, monkeypatch)
 
     persisted = fixture.adapter.persist_moved_album_inventory(
         root_id=fixture.roots[0]["id"], active_file_entries=moved,
@@ -122,7 +146,8 @@ def test_live_a_move_commits_while_another_transaction_holds_a_library_wide_mark
     paths = {row["private_path"] for row in _rows(
         fixture, "select private_path from library.local_track_files where scan_cache_stale is false")}
     assert set(moved) <= paths, "The move's rows did not commit."
-    assert _markers(fixture) == 1
+    assert _markers(fixture) == 1, "The move's own transaction drained marker 0."
+    _owner_drain_clears_marker(fixture, queued)
 
 
 def _missing_album(fixture):
@@ -138,7 +163,7 @@ def test_live_confirming_a_removal_commits_while_another_transaction_holds_a_lib
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
     album_key = _missing_album(library)
-    _hold_library_wide_marker(library, monkeypatch)
+    queued = _hold_library_wide_marker(library, monkeypatch)
 
     result = PostgresMissingAlbumRemovalService(
         library.config, connect=isolatedPostgres._connect, root_health_check=lambda _root: True,
@@ -146,7 +171,8 @@ def test_live_confirming_a_removal_commits_while_another_transaction_holds_a_lib
 
     assert result["removed_album_key"] == album_key
     assert not _rows(library, "select 1 from library.local_albums where album_key = %s", (album_key,))
-    assert _markers(library) == 1
+    assert _markers(library) == 1, "The removal's own transaction drained marker 0."
+    _owner_drain_clears_marker(library, queued)
 
 
 # A guard, not a red: keeping a missing album never reached the publication gate, so it already
@@ -155,11 +181,12 @@ def test_live_keeping_a_missing_album_commits_while_another_transaction_holds_a_
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
     album_key = _missing_album(library)
-    _hold_library_wide_marker(library, monkeypatch)
+    queued = _hold_library_wide_marker(library, monkeypatch)
 
     PostgresMissingAlbumRemovalService(library.config, connect=isolatedPostgres._connect).keep_missing(album_key)
 
-    assert _markers(library) == 1
+    assert _markers(library) == 1, "Keeping the album drained marker 0 in its own transaction."
+    _owner_drain_clears_marker(library, queued)
 
 
 # (c) The baseline isn't ready: no full preparation, no wait, and the save commits.
@@ -184,14 +211,39 @@ def test_live_a_save_with_the_baseline_not_ready_commits_with_no_full_prepare_an
     assert _album_titles(library) == {"Saved Anyway"}
 
 
-# (d) The save's statements and rows read are the same at 1 and 2,001 albums, with several custom gallery
+# (d) The save's statements and rows read stay flat at 1, 2,001 and 6,001 albums, with several custom gallery
 # scopes published, so the per-header membership patch is counted too (6.5's R4 condition).
 
+def _set_statistics(fixture, analysed):
+    """6.5: both statistics states. ``analysed`` gives the inventory tables statistics, as production's have
+    after autovacuum. Otherwise autovacuum is off on them (the throwaway test database only) and they must
+    have never been analysed, as after a bulk change (case 55)."""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        if analysed:
+            connection.execute("analyze " + ", ".join(INVENTORY_TABLES))
+            return
+        for table in INVENTORY_TABLES:
+            connection.execute(f"alter table {table} set (autovacuum_enabled = false)")
+    _assert_never_analysed(fixture)
+
+
+def _assert_never_analysed(fixture):
+    never = _rows(fixture, """select relname, reltuples from pg_class
+        where oid = any(array[%s, %s, %s, %s]::regclass[])""", INVENTORY_TABLES)
+    assert all(row["reltuples"] == -1 for row in never), f"The tables were analysed: {never}."
+
+
+SIZE_GROWTH_ROWS = 25
+
+
 @pytest.mark.parametrize("analysed", [False, True], ids=["never-analysed", "analysed"])
-def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_with_custom_scopes(
+def test_live_a_structural_save_reads_and_runs_the_same_at_three_library_sizes_with_custom_scopes(
         library, analysed, monkeypatch):
     """Both statistics states: a save right after a bulk change runs on missing statistics in production
-    (case 55), so the save's reads must stay flat without ANALYZE too, by keyed lookups, not by statistics."""
+    (case 55), so the save's reads must stay flat without ANALYZE too, by keyed lookups, not by statistics.
+
+    6.5 (11-23): with statistics, 1 -> 2,001 albums may take a one-time planner step; 2,001 -> 6,001 must
+    add 25 rows or fewer, which shows that step is not growth."""
     fixture = library
     # The save and then the journal owner's drain it queues are both counted, in that order on this thread.
     _hold_background_owners(monkeypatch)
@@ -199,25 +251,29 @@ def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_wit
     # Several custom gallery scopes published, so the per-header membership patch is counted too (R4).
     _publish_custom_scopes(fixture)
     if not analysed:
-        with isolatedPostgres._connect(fixture.setup_url) as connection:
-            for table in INVENTORY_TABLES:
-                # The throwaway test database only: autovacuum must not analyse behind the measurement.
-                connection.execute(f"alter table {table} set (autovacuum_enabled = false)")
+        _set_statistics(fixture, analysed=False)
 
     small = _measure_save(fixture, "First Size", adapter, counted)
     _seed_albums(fixture, 2000, analyse=analysed)
     if not analysed:
-        never = _rows(fixture, """select relname, reltuples from pg_class
-            where oid = any(array[%s, %s, %s, %s]::regclass[])""", INVENTORY_TABLES)
-        assert all(row["reltuples"] == -1 for row in never), f"The tables were analysed: {never}."
+        _assert_never_analysed(fixture)
     _gallery_state(fixture, "before the 2,001-album save")
     large = _measure_save(fixture, "Second Size", adapter, counted)
     _gallery_state(fixture, "after the 2,001-album save")
+    _seed_albums(fixture, 4000, tag="more", analyse=analysed)
+    if not analysed:
+        _assert_never_analysed(fixture)
+    largest = _measure_save(fixture, "Third Size", adapter, counted)
 
-    print("edits always save, (statements, rows read, seconds, per table) at 1 and 2,001 albums:", small, large)
-    assert small[0] == large[0], f"The save's statements grew with the library: {small[:2]} vs {large[:2]}."
-    assert abs(large[1] - small[1]) <= 25, (
-        f"The save's rows read grew with the library: {small} vs {large}.")
+    print("edits always save, (statements, rows read, seconds, per table) at 1, 2,001 and 6,001 albums:",
+          small, large, largest)
+    assert small[0] == large[0] == largest[0], (
+        f"The save's statements grew with the library: {small[0]}, {large[0]}, {largest[0]}.")
+    assert largest[1] - large[1] <= SIZE_GROWTH_ROWS, (
+        f"The save's rows read grew from 2,001 to 6,001 albums: {large} vs {largest}.")
+    if not analysed:
+        assert abs(large[1] - small[1]) <= SIZE_GROWTH_ROWS, (
+            f"The save's rows read grew with the library: {small} vs {large}.")
 
 
 # (e) 6.5: a save reads its album's relation component (every album of the same artist). That is affected-set
@@ -479,10 +535,13 @@ def _scopes_showing(fixture, title):
         where albums.title = %s""", (title,))}
 
 
-def test_live_a_saved_edit_reaches_every_scope_through_its_queued_drain(library):
+@pytest.mark.parametrize("analysed", [False, True], ids=["never-analysed", "analysed"])
+def test_live_a_saved_edit_reaches_every_scope_through_its_queued_drain(library, analysed):
     """R4 (orchestrator, 11-23): the client shows the edit at the Save click; the server's gallery follows
     when the drain the save queues runs. A reload or another tab sees the old value until then, so the gap
-    from the save's commit to the edit in every scope holding the album is measured and reported."""
+    from the save's commit to the edit in every scope holding the album, with the journal empty, is
+    measured and reported, in both statistics states (6.5)."""
+    _set_statistics(library, analysed)
     _publish_custom_scopes(library)
     holding = _scopes_showing(library, ALBUM)
     assert holding, "The album is in no gallery scope before the save."
@@ -493,6 +552,7 @@ def test_live_a_saved_edit_reaches_every_scope_through_its_queued_drain(library)
 
     assert holding <= _scopes_showing(library, "Reached By The Drain"), (
         f"The drain the save queued did not publish the edit within {gap:.1f} s.")
+    assert _journal_rows(library) == 0, "The drain the save queued left the journal."
     # A reload or another tab sees the old value for this long (the saving screen updates at the click).
     assert gap < R4_GAP_BOUND, f"The save-to-gallery gap regressed: {gap * 1000:.0f} ms."
 
@@ -501,11 +561,17 @@ R4_GAP_BOUND = 1.0
 
 
 def _seconds_until_shown(fixture, scopes, title, *, timeout=10):
-    """Seconds from now until every one of ``scopes`` shows the album titled ``title`` (or the timeout)."""
+    """Seconds from now until every one of ``scopes`` shows the album titled ``title`` and the journal is
+    empty (or the timeout)."""
     began = time.perf_counter()
-    while not scopes <= _scopes_showing(fixture, title) and time.perf_counter() - began < timeout:
+    while not (scopes <= _scopes_showing(fixture, title) and _journal_rows(fixture) == 0) and (
+            time.perf_counter() - began < timeout):
         time.sleep(0.005)
     return time.perf_counter() - began
+
+
+def _journal_rows(fixture):
+    return _rows(fixture, "select count(*) as n from library.local_relation_dirty_albums")[0]["n"]
 
 
 def _lower_one_header(fixture):
@@ -518,9 +584,11 @@ def _lower_one_header(fixture):
     return behind
 
 
-def test_live_a_save_shows_in_every_header_the_journal_covers(library):
+@pytest.mark.parametrize("analysed", [False, True], ids=["never-analysed", "analysed"])
+def test_live_a_save_shows_in_every_header_the_journal_covers(library, analysed):
     """Rewritten for R4 (orchestrator, 11-23): the save, then the drain it queues. With one header behind the
     journal, the edit still reaches every scope that held the album, within the R4 bound."""
+    _set_statistics(library, analysed)
     behind = _lower_one_header(library)
     holding = _scopes_showing(library, ALBUM) - {behind}
     assert holding, "No header the journal covers holds the album."
@@ -530,12 +598,15 @@ def test_live_a_save_shows_in_every_header_the_journal_covers(library):
 
     assert holding <= _scopes_showing(library, "Shown Everywhere"), (
         "The edit is missing from a header the journal covers after the save's drain.")
+    assert _journal_rows(library) == 0, "The drain the save queued left the journal."
     assert gap < R4_GAP_BOUND, f"The covered headers showed the edit after {gap * 1000:.0f} ms."
 
 
-def test_live_a_save_shows_in_a_header_behind_the_journal_after_its_drain(library):
+@pytest.mark.parametrize("analysed", [False, True], ids=["never-analysed", "analysed"])
+def test_live_a_save_shows_in_a_header_behind_the_journal_after_its_drain(library, analysed):
     """Rewritten for R4: a header behind the journal (a restored database) is realigned by the drain the save
     queues, and then shows the edit at the current generation, within the R4 bound."""
+    _set_statistics(library, analysed)
     behind = _lower_one_header(library)
     assert behind in _scopes_showing(library, ALBUM), "The lowered header does not hold the album."
 
@@ -545,15 +616,12 @@ def test_live_a_save_shows_in_a_header_behind_the_journal_after_its_drain(librar
     assert behind in _scopes_showing(library, "Shown Behind Too"), (
         "The edit never reached the header behind the journal.")
     assert _headers(library)[behind] == _generation(library), "The drain left the header behind."
+    assert _journal_rows(library) == 0, "The drain the save queued left the journal."
     assert gap < R4_GAP_BOUND, f"The header behind the journal showed the edit after {gap * 1000:.0f} ms."
 
 
 def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(library, monkeypatch):
-    from music_app.services import gallery_projection_postgres
-    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
-
-    schedule_refresh = gallery_projection_postgres.schedule_gallery_projection_refresh
-    _hold_background_owners(monkeypatch)
+    queued = _hold_background_owners(monkeypatch)
     _publish_custom_scopes(library)
     with isolatedPostgres._connect(library.setup_url) as connection:
         connection.execute("update library.gallery_membership_headers set source_generation = source_generation - 1")
@@ -562,10 +630,9 @@ def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(lib
         "The save emptied the journal ahead of the headers (R3).")
 
     showing_before = _scopes_showing(library, "Realigned By The Owner")
-    # The journal owner's drain, as queue_journaled_relation_drain schedules it.
-    schedule_refresh(library.config, incremental_membership=True)
-    for _ in range(3):
-        _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=60)
+    # The journal owner's drain the save queued, as queue_journaled_relation_drain schedules it.
+    assert any(kwargs.get("incremental_membership") for kwargs in queued), "The save queued no journaled drain."
+    queued.run_owners()
 
     current = _generation(library)
     assert set(_headers(library).values()) == {current}, f"A header stayed behind after the owner's drain: {_headers(library)}."

@@ -194,8 +194,8 @@ def patch_membership_per_header_in_transaction(
 
     The journal holds every album changed since ``journal_floor_generation`` (its earliest row), so a
     header at or after that floor reaches the current generation by these albums alone. A header behind
-    the floor has a gap the journal can't fill: it is handed to ``patch_edited_albums_into_lagging_headers``
-    and returned, and the caller keeps the journal for its owner. Returns the header scope keys still lagging.
+    the floor has a gap the journal can't fill: it is left as it is and returned, and the journal owner's
+    drain realigns it (``realign_headers_behind_journal``). Returns the scope keys of those headers.
     """
     if journal_floor_generation is None or not _membership_installed(connection):
         return []
@@ -212,8 +212,8 @@ def patch_membership_per_header_in_transaction(
         if header["source_generation"] >= journal_floor_generation:
             publish(header, header["source_generation"])
         else:
-            lagging.append(header)
-    return patch_edited_albums_into_lagging_headers(connection, context, lagging, keys)
+            lagging.append(header["scope_key"])
+    return lagging
 
 
 def realign_headers_behind_journal(connection, config, scope_keys):
@@ -256,16 +256,6 @@ def realign_headers_behind_journal(connection, config, scope_keys):
             raise RuntimeError("Gallery changed while realigning a header behind the journal.")
     _LOGGER.warning("Realigned %s gallery header(s) behind the relation journal from a full snapshot.", len(headers))
     return len(headers)
-
-
-def patch_edited_albums_into_lagging_headers(connection, context, headers, keys):
-    """The seam for 6.5's per-header patch (draft migration library.patch_gallery_membership_rows): show
-    the edited albums in a header behind the journal's floor without moving its generation.
-
-    Until that migration lands, nothing is patched here: the headers are returned as still lagging, the
-    caller keeps the journal and the journal owner's drain realigns them. This is not the final behaviour.
-    """
-    return [header["scope_key"] for header in headers]
 
 
 def _first(cursor):

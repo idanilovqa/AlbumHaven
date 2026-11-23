@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.48 - 2026-11-23
+
+- Albums the watcher finds now appear in the Artist Tree without another navigation: a gallery answered before the library change was published is fetched again on the next idle status check, at most 40 times.
+
 ## 0.11.47 - 2026-11-22
 
 - Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.

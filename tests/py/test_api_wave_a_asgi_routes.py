@@ -4399,6 +4399,11 @@ def test_asgi_edit_tags_rejects_mixed_resolved_and_missing_postgres_paths_withou
         def build_album_payloads_by_track_paths(self, _track_paths):
             return [{"key": "artist-album", "tracks": [{"path": resolved_path, "album": "Album", "exception_type": ""}]}]
 
+        def wait_for_inventory_publication(self, *, timeout_seconds):
+            waits.append(timeout_seconds)
+            return True
+
+    waits: list[float] = []
     saved_overrides: list[dict[str, str]] = []
     monkeypatch.setattr(exception_overrides_module, "RuleStatePostgresAdapter", FakeExceptionOverridesAdapter)
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
@@ -4415,7 +4420,7 @@ def test_asgi_edit_tags_rejects_mixed_resolved_and_missing_postgres_paths_withou
         "/utilities/edit-tags",
         json_body={
             "confirmed": True,
-            "album": {"tracks": [{"path": resolved_path}, {"path": missing_path}]},
+            "album": {"tracks": [{"path": resolved_path}, {"path": missing_path, "title": "Missing Track"}]},
             "updates": {
                 resolved_path: {"exception_type": "Non-album rarity"},
                 missing_path: {"exception_type": "Non-album rarity"},
@@ -4424,9 +4429,13 @@ def test_asgi_edit_tags_rejects_mixed_resolved_and_missing_postgres_paths_withou
     )
 
     payload = _decode_json(body)
-    assert 400 <= status < 500
+    # Edits always save (6.5, 11-23, row B4): one wait for an in-flight publication, then the missing
+    # track is named by its title, never by its local path.
+    assert status == 409
     assert payload["ok"] is False
-    assert missing_path in payload["error"]
+    assert len(waits) == 1
+    assert "Missing Track" in payload["error"]
+    assert missing_path not in payload["error"]
     assert saved_overrides == []
 
 

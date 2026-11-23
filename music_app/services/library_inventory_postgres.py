@@ -474,10 +474,16 @@ def _non_album_candidates_sql(
     # lookup in 0294's partial index (local_track_files_loose_group_idx), whatever the statistics say: right
     # after a bulk add, with no ANALYZE, an IN over the folders was planned as a nested loop over every track
     # of the root, with the folder match as a late join filter (over 120 s for a 500-folder batch).
+    # The batch's folders, materialized so the planner works from their exact count.
+    membership_folder_list = """
+        membership_folder_list as materialized (
+          select folder.root_id, folder.parent
+          from unnest(%(membership_folder_roots)s::bigint[], %(membership_folder_parents)s::text[])
+            as folder(root_id, parent)
+        ),""" if membership_folders else ""
     membership_files = """(
             select folder_files.id, folder_files.track_id, folder_files.library_root_id, folder_files.private_path
-            from unnest(%(membership_folder_roots)s::bigint[], %(membership_folder_parents)s::text[])
-              as folder(root_id, parent)
+            from membership_folder_list folder
             cross join lateral (
               select folder_files.id, folder_files.track_id, folder_files.library_root_id, folder_files.private_path
               from library.local_track_files folder_files
@@ -486,6 +492,10 @@ def _non_album_candidates_sql(
                 and folder_files.scan_cache_stale is false
                 and nullif(folder_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '')
                   is not null
+              -- Fence, not redundant: offset 0 stops subquery pull-up, so this lookup stays a parameterized
+              -- probe of local_track_files_loose_group_idx per folder whatever the statistics; flattened, the
+              -- planner may join the whole table instead.
+              offset 0
             ) folder_files
           ) files""" if membership_folders else "library.local_track_files files"
     # The folder lookup above already holds 0294's partial predicate.
@@ -514,6 +524,10 @@ def _non_album_candidates_sql(
             from library.exception_overrides overrides
             where overrides.library_id = bootstrap_context.library_id
               and overrides.track_key = active_track_files.private_path
+            -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays a parameterized probe of
+            -- exception_overrides_library_track_key_idx per batch file whatever the statistics; flattened, the
+            -- planner may hash-join a scan of every override instead.
+            offset 0
           ) path_override
 
           union all
@@ -535,6 +549,10 @@ def _non_album_candidates_sql(
             from library.exception_overrides overrides
             where overrides.library_id = bootstrap_context.library_id
               and overrides.track_id = active_track_files.track_id
+            -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays a parameterized probe of
+            -- exception_overrides_track_id_idx per batch file whatever the statistics; flattened, the planner
+            -- may hash-join a scan of every override instead.
+            offset 0
           ) track_override
         """ if membership_folders else """
           select
@@ -623,7 +641,7 @@ def _non_album_candidates_sql(
     return f"""
         with bootstrap_context as (
           {_bootstrap_context_sql()}
-        ),
+        ),{membership_folder_list}
         eligible_track_file_ids as (
           -- Scan-published membership problems, scoped like the branches below:
           -- a materialized whole-library CTE read every file's metadata (1.05 s

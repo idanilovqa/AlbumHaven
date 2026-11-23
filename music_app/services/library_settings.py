@@ -63,10 +63,8 @@ def save_library_settings_and_start_refresh(
             start = not queued  # the running scan ended during the save
     started = False
     if start:
-        # Only for a scan of its own: during another scan these would change that scan's follow-up.
+        # Only for a scan of its own. Its covers: the lookup for the albums that scan adds (case 65).
         library_state["last_error"] = None
-        library_state["pending_cover_refresh_after_scan"] = True
-        library_state["pending_cover_refresh_force_search"] = False
         started = start_background_refresh(force=True, scan_mode="library_settings_update") is not False
         if not started and queue_root_change_scan is not None:
             queued = queue_root_change_scan(load_root_identity(config))  # a scan began during the save

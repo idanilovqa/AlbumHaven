@@ -93,6 +93,10 @@ class _WatcherCoverRefreshStale(RuntimeError):
     """The watcher's album projection changed while its covers were refreshed."""
 
 
+class _WatcherCoverRefreshAfterScan(_WatcherCoverRefreshStale):
+    """A scan is running: the queued albums wait for it, then get their own lookup (case 65)."""
+
+
 def _schedule_watcher_cover_refresh_retry(delay_seconds: float, callback: Callable[[], None]) -> None:
     timer = threading.Timer(delay_seconds, callback)
     timer.daemon = True
@@ -347,15 +351,13 @@ def _drain_watcher_cover_refresh_queue(
                     }
                 return targeted_state
 
-            def preserve_refresh_after_active_scan() -> None:
-                with _CACHE_LOCK:
-                    if library_state.get("scan_in_progress"):
-                        library_state["pending_cover_refresh_after_scan"] = True
-                        library_state["pending_cover_refresh_force_search"] = False
+            def stale() -> _WatcherCoverRefreshStale:
+                if library_state.get("scan_in_progress"):
+                    return _WatcherCoverRefreshAfterScan("Watcher cover refresh waits for the running scan.")
+                return _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
 
             if targeted_state_while_current() is not targeted_state:
-                preserve_refresh_after_active_scan()
-                raise _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
+                raise stale()
 
             result = refresh_cover_artwork_request(
                 get_state=targeted_state_while_current,
@@ -384,8 +386,7 @@ def _drain_watcher_cover_refresh_queue(
                 ),
             )
             if targeted_state_while_current() is not targeted_state:
-                preserve_refresh_after_active_scan()
-                raise _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
+                raise stale()
             with _CACHE_LOCK:
                 revision = int(library_state.get("inventory_mutation_revision") or 0)
             if (
@@ -415,6 +416,19 @@ def _drain_watcher_cover_refresh_queue(
                     album_keys_by_path.pop(path, None)
                     tokens_by_path.pop(path, None)
         except Exception as exc:
+            if isinstance(exc, _WatcherCoverRefreshAfterScan):
+                with _CACHE_LOCK:
+                    library_state.setdefault("_watcher_cover_refresh_pending_track_paths", set()).update(
+                        path for path in track_paths
+                        if tokens_by_path.get(path) == batch_tokens_by_path.get(path)
+                    )
+                    library_state["_watcher_cover_refresh_scheduled"] = False
+                    scan_running = bool(library_state.get("scan_in_progress"))
+                logger.info("Watcher cover refresh waits for the running scan.")
+                if not scan_running:
+                    # The scan ended after the check: its end may already have looked for waiting albums.
+                    _submit_watcher_cover_refresh(library_state, config, logger)
+                return
             settle_retries = int(library_state.get("_watcher_cover_refresh_settle_retries") or 0)
             if (
                 isinstance(exc, _WatcherCoverRefreshStale)
@@ -1513,10 +1527,10 @@ def start_background_refresh_for_state(
     with _CACHE_LOCK:
         if library_state.get("scan_in_progress"):
             return False
-        if force and library_state.pop(QUEUED_ROOT_CHANGE_KEY, None):
-            # This scan is the queued one: it pins the new roots and owes the saved change its cover refresh.
-            library_state["pending_cover_refresh_after_scan"] = True
-            library_state["pending_cover_refresh_force_search"] = False
+        if force:
+            # A forced scan is the queued one: it pins the new roots. Its covers come from the lookup for
+            # the albums it adds, never a whole-library refresh (case 65).
+            library_state.pop(QUEUED_ROOT_CHANGE_KEY, None)
         if accepted_state_updates:
             library_state.update(accepted_state_updates)
         library_state["scan_in_progress"] = True
@@ -1635,6 +1649,8 @@ def _refresh_library_worker(
     finally:
         # Completed, failed or cancelled: roots saved during that scan still get theirs.
         _start_queued_root_change_scan(library_state, config, logger)
+        # Albums the watcher added during the scan get their own cover lookup now (case 65).
+        _submit_watcher_cover_refresh(library_state, config, logger)
 
 
 def _library_inventory_ready(library_state: dict[str, object]) -> bool:

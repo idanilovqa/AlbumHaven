@@ -9470,11 +9470,15 @@ function streamingPageReadsLate(message) {
   return behindSeconds * 1000 > STREAMING_HEARTBEAT_MS;
 }
 
-// Audio from a silent socket detaches as from any lost socket; with none, or with a song's rate
-// still asked of it, a new socket simply takes over and what waited goes again on it.
+// Audio from a silent socket detaches as from any lost socket; with none, or with only a song's
+// rate still asked of it, a new socket simply takes over and the question goes again on it. An
+// open still unanswered (a seek past the received audio, a start) does not go again by itself, so
+// the socket is then given up as lost and the seek or start restarts at its place.
 function replaceSilentStreamingSocket(socket) {
   const engine = streamingEngineState();
-  if (engine.roles.current && !engine.sampleRateProbes?.size) {
+  const openWaits = [engine.roles.current, engine.roles.continuity]
+    .some((roleState) => roleState && !roleState.local && !roleState.metadataAccepted);
+  if (engine.roles.current && (openWaits || !engine.sampleRateProbes?.size)) {
     giveUpStreamingSocket(socket, 'socket silent');
     return;
   }

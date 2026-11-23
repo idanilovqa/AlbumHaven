@@ -5473,11 +5473,11 @@
     },
     {
       "id": "js:runtime/player-streaming-engine.js#probeStreamingReachability",
-      "action": "fetch requests and setInterval/setTimeout timers installed by probeStreamingReachability (hand-written: --sync was not run)",
+      "action": "setInterval timers installed by probeStreamingReachability, and the playback-state question and its deadline in askStreamingServer, which the reconnect retry asks too (hand-written: --sync was not run)",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#probeStreamingReachability:request:fetch",
-        "js:music_app/static/js/runtime/player-streaming-engine.js#probeStreamingReachability:timer:setInterval",
-        "js:music_app/static/js/runtime/player-streaming-engine.js#probeStreamingReachability:timer:setTimeout"
+        "js:music_app/static/js/runtime/player-streaming-engine.js#askStreamingServer:request:fetch",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#askStreamingServer:timer:setTimeout",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#probeStreamingReachability:timer:setInterval"
       ],
       "owners": [
         "music_app/static/js/runtime/player-streaming-engine.js"
@@ -5544,16 +5544,16 @@
         "production": 1000
       },
       "budgets": {
-        "requests": 10
+        "requests": 20
       },
       "growth": {
         "metric": "requests",
         "largeMinusSmallMax": 0
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
-      "testIdentity": "bounded interaction: a reconnect retry opens one socket per tick over a 1,000-attempt outage",
+      "testIdentity": "bounded interaction: a reconnect retry asks once and opens one socket per tick over a 1,000-attempt outage",
       "performanceTargets": [],
-      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
+      "rollback": "Revert the commit that makes a retry ask the playback state first; retries then open one socket each without a question, and this budget returns to 10."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#waitForStreamingReplacementCushion",

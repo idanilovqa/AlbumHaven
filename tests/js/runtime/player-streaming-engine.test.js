@@ -5229,6 +5229,52 @@ test('a socket that reopens after an outage has a claim waiting out its retry as
   assert.equal(retriedNow, 1, 'the claim asks as soon as the socket is back');
 });
 
+// After a minute of tunnel 530 handshakes, Chromium held each new socket 1-5 s before sending it,
+// past its 4 s deadline, and one press played nothing for 8 s after the server answered (hosted
+// FTC-PLAYBACK-OFFLINE-005). A retry asks over HTTP first: no socket while the browser is offline or
+// the tunnel answers without its server, and one on the first answer.
+test('a reconnect retry opens no socket while offline or while the tunnel answers 530, and one on the first answer', async () => {
+  let status = 530;
+  const asked = [];
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count === 2,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async (url) => {
+      asked.push(url);
+      return { ok: status < 400, status, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2, 'the lost socket is replaced at once');
+  const retry = async () => {
+    timers.fire(timers.pending().find(({ delay }) => delay <= 1_000));
+    await settleTwice(harness);
+  };
+
+  for (let attempt = 0; attempt < 5; attempt += 1) await retry();
+  assert.equal(harness.sockets.length, 2, 'no socket while the tunnel answers 530');
+  assert.deepEqual(asked, Array(5).fill('/playback/state'), 'one question per retry');
+
+  status = 200;
+  harness.context.window.navigator = { onLine: false };
+  for (let attempt = 0; attempt < 3; attempt += 1) await retry();
+  assert.equal(harness.sockets.length, 2, 'no socket while offline');
+  assert.equal(asked.length, 5, 'and no question either');
+
+  harness.context.window.navigator = { onLine: true };
+  await retry();
+  assert.equal(harness.sockets.length, 3, 'the first answer opens one socket');
+  assert.equal(harness.sockets.at(-1).readyState, 1);
+  assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
 // Once the server answered again, every probe replaced the attempt then
 // connecting, which takes 1.6-2 s through the tunnel, so no socket ever opened. The attempt a probe
 // starts is on the network that answers and is left to connect; another is replaced only once it
@@ -8191,21 +8237,30 @@ async function startCountedOutage(counter, refuse, options = {}) {
   return { harness, timers };
 }
 
-test('bounded interaction: a reconnect retry opens one socket per tick over a 1,000-attempt outage', async () => {
+test('bounded interaction: a reconnect retry asks once and opens one socket per tick over a 1,000-attempt outage', async () => {
   const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
   const run = async (attempts) => {
     const counter = createInteractionCounter();
-    const { harness, timers } = await startCountedOutage(counter, true);
+    const asked = [];
+    // The server answers its questions, but the network refuses every socket.
+    const fetch = async (url) => {
+      counter.count('requests');
+      asked.push(url);
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    const { harness, timers } = await startCountedOutage(counter, true, { fetch });
     const retry = async () => {
-      timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+      timers.fire(timers.pending().find(({ delay }) => delay <= 1_000));
       await settleTwice(harness);
     };
     for (let attempt = 0; attempt < attempts; attempt += 1) await retry();
     const opened = harness.sockets.length;
+    const questions = asked.length;
     const work = await counter.measure(async () => {
       for (let attempt = 0; attempt < 10; attempt += 1) await retry();
     });
     assert.equal(harness.sockets.length, opened + 10, 'one socket per retry');
+    assert.deepEqual(asked.slice(questions), Array(10).fill('/playback/state'), 'one question per retry');
     assert.notEqual(harness.api.snapshot().mode, 'error', 'failed attempts never end the wait');
     return work;
   };
@@ -8214,7 +8269,7 @@ test('bounded interaction: a reconnect retry opens one socket per tick over a 1,
     small: 10,
     large: 1000,
     run,
-    budgets: { requests: 10 },
+    budgets: { requests: 20 },
     growth: { metric: 'requests', largeMinusSmallMax: 0 },
   });
 });

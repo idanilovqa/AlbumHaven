@@ -7,9 +7,10 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
-// A lost socket is replaced at once, then after each of these delays, then every last one. An attempt
-// the network refuses costs next to nothing, and a server back after an outage (a tunnel's minute of
-// 502s) is found within a second (up to 2 s of this wait used to stack with the claim's).
+// A lost socket is replaced at once, then after each of these delays, then every last one, each retry
+// first asking over HTTP whether the server is back (streamingServerIsDown), so a server back after an
+// outage (a tunnel's minute of 502s) is found within a second (up to 2 s of this wait used to stack
+// with the claim's).
 const STREAMING_RECONNECT_DELAYS_MS = [500, 1000];
 // The server sends a heartbeat this often (`/playback/pcm?heartbeat=`), however long its answers
 // take: a socket is judged by what it hears, never by how fast it is answered, because a busy
@@ -701,10 +702,28 @@ function scheduleStreamingReconnect() {
   if (!detached || detached.paused || engine.socket || detached.timer) return;
   const delays = STREAMING_RECONNECT_DELAYS_MS;
   const delay = delays[Math.min(detached.failures, delays.length) - 1];
-  detached.timer = window.setTimeout(() => {
+  const timer = window.setTimeout(async () => {
+    const down = await streamingServerIsDown();
+    if (detached.timer !== timer || engine.detached !== detached) return;
     detached.timer = 0;
-    if (engine.detached === detached) reconnectStreamingTransport();
+    if (down) scheduleStreamingReconnect();
+    else reconnectStreamingTransport();
   }, delay);
+  detached.timer = timer;
+}
+
+// Whether a retry would only fail again: the browser is offline, or the server's tunnel answers
+// without it (502/530). Such a retry is skipped, not tried. Chromium delays every socket a page
+// opens by 1-5 s once most of its recent handshakes failed (a failed or given-up handshake counts
+// for two minutes), so a tunnel's minute of 530 handshakes made the sockets after it wait longer
+// than their 4 s deadline, and one press played nothing for 8 s after the server answered. A
+// question over HTTP is not delayed. A question nothing answers is no reason to skip: a frozen or
+// overloaded network still gets its attempt.
+async function streamingServerIsDown() {
+  if (window.navigator?.onLine === false) return true;
+  if (typeof fetch !== 'function') return false;
+  const response = await askStreamingServer();
+  return response?.status >= 500;
 }
 
 // A socket opened while detached closed again.
@@ -2676,26 +2695,34 @@ function probeStreamingReachability(socket) {
     }
     if (asking || performance.now() - socket.connectStartedMs < STREAMING_REACHABILITY_MIN_HANG_MS) return;
     asking = true;
-    const abort = typeof AbortController === 'function' ? new AbortController() : null;
-    const deadline = window.setTimeout(() => abort?.abort(), STREAMING_REACHABILITY_PROBE_MS);
     try {
-      const response = await fetch('/playback/state', { cache: 'no-store', credentials: 'same-origin', signal: abort?.signal });
-      // A tunnel without its server answers 502/530: not reachable yet.
-      if (response.status >= 500 || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+      const response = await askStreamingServer();
+      // Nothing answered, or a tunnel without its server did (502/530): not reachable yet.
+      if (!response || response.status >= 500 || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
       clearInterval(timer);
       engine.detached.abandonedConnects = 0;
       abandonStreamingConnectingSocket(socket);
       // The next attempt is on the network that answers: it is left to connect.
       engine.detached.probedReconnect = true;
       reconnectStreamingTransport();
-    } catch (_error) {
-      // Still unreachable.
     } finally {
-      window.clearTimeout(deadline);
       asking = false;
     }
   }, STREAMING_REACHABILITY_TICK_MS);
   return timer;
+}
+
+// Asks the server for the playback state: its response, or null when nothing answered in time.
+async function askStreamingServer() {
+  const abort = typeof AbortController === 'function' ? new AbortController() : null;
+  const deadline = window.setTimeout(() => abort?.abort(), STREAMING_REACHABILITY_PROBE_MS);
+  try {
+    return await fetch('/playback/state', { cache: 'no-store', credentials: 'same-origin', signal: abort?.signal });
+  } catch (_error) {
+    return null;
+  } finally {
+    window.clearTimeout(deadline);
+  }
 }
 
 // Opens the engine's playback socket; queued controls wait for it to open.

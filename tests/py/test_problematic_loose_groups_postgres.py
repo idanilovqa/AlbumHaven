@@ -415,6 +415,8 @@ def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(lo
 
     totals = {name: (sum(read for read, _ in rows.values()), sum(written for _, written in rows.values()))
               for name, rows in (("20", small), ("2020", large))}
+    print("drain contract (rows read, rows written):", totals, "per table at 20:", small, "at 2020:", large,
+          "ignored_repairs read:", small.get("ignored_repairs", (0, 0))[0], large.get("ignored_repairs", (0, 0))[0])
     assert abs(totals["2020"][0] - totals["20"][0]) <= 25, f"Rows read grew with the library: {small} vs {large}."
     assert totals["2020"][1] == totals["20"][1], f"Rows written grew with the library: {small} vs {large}."
 

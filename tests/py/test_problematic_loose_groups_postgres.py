@@ -541,13 +541,15 @@ def _seed_overrides(fixture, prefix, count):
             {"pattern": f"%{prefix} %", "count": count})
 
 
+@pytest.mark.parametrize("statistics", [False, True], ids=["never-analyzed", "analyzed"])
 @pytest.mark.parametrize("overrides", [False, True], ids=["no-overrides", "overrides"])
-def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_library, overrides):
+def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_library, overrides, statistics):
     """Case 55, plan-robust drain (6.5). Right after a bulk add of loose groups, before any ANALYZE (reltuples
-    -1, asserted), a 200-folder batch's loader uses 0294's local_track_files_loose_group_idx, scans no track or
-    file table sequentially, and reads the same number of table rows with 200 and 2,000 loose groups in the
-    library, with or without about 1,000 exception overrides. The first 500-folder drain batch then finishes
-    within _FIRST_BATCH_SECONDS. A statement timeout ends a bad plan fast."""
+    -1, asserted), and again with every table analyzed, a 200-folder batch's loader uses 0294's
+    local_track_files_loose_group_idx, scans no track or file table sequentially, and reads the same number of
+    table rows with 200 and 2,000 loose groups in the library, with or without about 1,000 exception overrides.
+    The first 500-folder drain batch then finishes within _FIRST_BATCH_SECONDS. A statement timeout ends a bad
+    plan fast."""
     import time
 
     import psycopg
@@ -566,11 +568,17 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
 
     def batch_rows_read(size):
         with isolatedPostgres._connect(fixture.setup_url) as connection:
-            never_analyzed = {row["relname"]: float(row["reltuples"]) for row in connection.execute(
+            if statistics:
+                for table in tables:
+                    connection.execute(f"analyze library.{table}")
+            reltuples = {row["relname"]: float(row["reltuples"]) for row in connection.execute(
                 "select relname, reltuples from pg_class where relnamespace = 'library'::regnamespace"
                 " and relname = any(%s)", (list(tables[:3]),)).fetchall()}
             connection.execute("update library.problematic_loose_groups set marked_xid = pg_current_xact_id()")
-        assert set(never_analyzed.values()) == {-1.0}, f"the tables must have no statistics: {never_analyzed}"
+        if statistics:
+            assert -1.0 not in reltuples.values(), f"the tables must be analyzed: {reltuples}"
+        else:
+            assert set(reltuples.values()) == {-1.0}, f"the tables must have no statistics: {reltuples}"
         plans = []
         with psycopg.connect(fixture.database_url, row_factory=dict_row) as connection:
             connection.execute("set statement_timeout = '20s'")
@@ -602,7 +610,8 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
     if overrides:
         _seed_overrides(fixture, "Large", 900)
     batch_rows_read("2000")
-    print(f"[case55-drain-batch] rows read for a 200-folder batch: {measured}")
+    print(f"[case55-drain-batch] statistics={statistics} overrides={overrides}"
+          f" rows read for a 200-folder batch: {measured}")
     assert abs(measured["2000"] - measured["200"]) <= _BATCH_ROWS_READ_SLACK, (
         f"the batch read grew with the library: {measured}")
 
@@ -614,7 +623,8 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
         started = time.perf_counter()
         problematic_index._drain_groups(repository, connection, library_id, groups)
         seconds = time.perf_counter() - started
-    print(f"[case55-drain-batch] first {len(groups)}-folder drain batch: {seconds:.2f} s")
+    print(f"[case55-drain-batch] statistics={statistics} overrides={overrides}"
+          f" first {len(groups)}-folder drain batch: {seconds:.2f} s")
     assert seconds < _FIRST_BATCH_SECONDS, f"the first drain batch took {seconds:.1f} s"
 
 

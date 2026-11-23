@@ -153,11 +153,12 @@ class PostgresLibraryInventoryRepository:
             unlimited=unlimited,
             membership_folders=bool(folders),
         )
-        execute = _execute_keyed_folder_batch if folders else _execute_rows
         if connection is None:
             with self._connect_to_database() as owned_connection:
-                return execute(owned_connection, sql, params)
-        return execute(connection, sql, params)
+                cursor = owned_connection.execute(sql, params)
+                return [dict(_row_mapping(row)) for row in cursor.fetchall()]
+        cursor = connection.execute(sql, params)
+        return [dict(_row_mapping(row)) for row in cursor.fetchall()]
 
     def load_membership_problem_group_headers(
         self,
@@ -201,30 +202,6 @@ class PostgresLibraryInventoryRepository:
 
 def _connect(database_url: str) -> Any:
     return _leased_connection(database_url)
-
-
-def _execute_rows(connection: Any, sql: str, params: Mapping[str, object]) -> list[dict[str, object]]:
-    return [dict(_row_mapping(row)) for row in connection.execute(sql, params).fetchall()]
-
-
-# A drain batch (case 55) reads only its folders' rows. Without statistics (right after a bulk add, before
-# ANALYZE) the planner judged the library's tables small and chose sequential and hash plans over all of
-# them; for this one statement every relation is reached by an index from the batch's folders instead.
-_KEYED_BATCH_SETTINGS = ("enable_seqscan", "enable_hashjoin", "enable_mergejoin")
-
-
-def _execute_keyed_folder_batch(connection: Any, sql: str, params: Mapping[str, object]) -> list[dict[str, object]]:
-    previous = _row_mapping(connection.execute(
-        "select " + ", ".join(f"current_setting('{name}') as {name}" for name in _KEYED_BATCH_SETTINGS)
-    ).fetchone(), _KEYED_BATCH_SETTINGS)
-    connection.execute("select " + ", ".join(f"set_config('{name}', 'off', true)" for name in _KEYED_BATCH_SETTINGS))
-    # A failed statement aborts the transaction, whose rollback ends these local settings with it.
-    rows = _execute_rows(connection, sql, params)
-    connection.execute(
-        "select " + ", ".join(f"set_config('{name}', %({name})s, true)" for name in _KEYED_BATCH_SETTINGS),
-        {name: str(previous.get(name) or "on") for name in _KEYED_BATCH_SETTINGS},
-    )
-    return rows
 
 
 def _row_mapping(

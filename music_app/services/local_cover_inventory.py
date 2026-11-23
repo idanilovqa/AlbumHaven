@@ -223,9 +223,13 @@ class LocalCoverInventory:
             rows = self.stored(folders.values())
             with self._lock:
                 listed = [key for key in folders if key in rows or key in self._walking or key in self._waiting]
+            if removed is not None:
+                # A removed cover is listed under one folder: the deepest that holds it. One row, one write.
+                removed_key = root_key(removed)
+                holders = [key for key in listed if key in rows and removed_key.startswith(key.rstrip(os.sep) + os.sep)]
+                if holders:
+                    self._drop(rows[max(holders, key=len)], folders[max(holders, key=len)], removed)
             for key in listed:
-                if removed is not None:
-                    self._drop(folders[key], removed)
                 self._ask(folders[key], after_write=True)
         except Exception:
             self._logger.exception("Could not update the local cover listing after a cover write.")
@@ -249,13 +253,12 @@ class LocalCoverInventory:
         row = self.stored([root]).get(root_key(root)) or {}
         return {"candidates": list(row.get("candidates") or []), "error": error}
 
-    def _drop(self, root, path) -> None:
-        for _attempt in range(3):
-            row = self.stored([root]).get(root_key(root))
-            stored = list((row or {}).get("candidates") or [])
-            kept = [item for item in stored if root_key(item["path"]) != root_key(path)]
-            if len(kept) == len(stored) or self.repository.publish(root, kept, expected_revision=row["revision"]):
-                return
+    def _drop(self, row, root, path) -> None:
+        """One write. If another writer changed the row first, the write's own walk drops the cover instead."""
+        stored = list(row.get("candidates") or [])
+        kept = [item for item in stored if root_key(item["path"]) != root_key(path)]
+        if len(kept) != len(stored):
+            self.repository.publish(root, kept, expected_revision=row["revision"])
 
     def _ask(self, root, *, after_write: bool) -> Future | None:
         key = root_key(root)

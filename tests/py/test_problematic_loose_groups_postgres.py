@@ -80,7 +80,9 @@ def test_live_a_group_whose_last_loose_file_joins_an_album_loses_its_item_and_ke
     before = _loose_items(fixture)
     rows_before = _rows(fixture, "select count(*) as n from library.problematic_loose_groups")[0]["n"]
 
-    tagged = {**fixture.strays["B"], "artist": "Owner", "album_artist": "Owner", "album": "Repair Album"}
+    # An album of its own: tagged as the three-track album elsewhere, it would be a redundant subset copy,
+    # which the scan keeps loose.
+    tagged = {**fixture.strays["B"], "artist": "Owner", "album_artist": "Owner", "album": "Strays B Album"}
     _watcher_pass(fixture, active=[tagged])
 
     after = _loose_items(fixture)
@@ -391,7 +393,10 @@ def _one_loose_edit_drain(fixture, title):
 
     repository = browse.PostgresLibraryBrowseRepository({**fixture.config, problematic_index.ENABLED_KEY: "1"})
     # Nothing waits before the edit: the deploy step drains every group the bulk add marked.
+    import time
+    began = time.perf_counter()
     problematic_index.prepare_for_serving(repository)
+    print(f"timing: prepare_for_serving took {time.perf_counter() - began:.1f} s", flush=True)
     _assert_read_is_a_full_rebuild(fixture)
     _watcher_pass(fixture, active=[{**fixture.strays["A"], "title": title}])
     with psycopg.connect(fixture.database_url, row_factory=dict_row, autocommit=True) as connection:
@@ -407,11 +412,18 @@ def _one_loose_edit_drain(fixture, title):
 
 def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(loose_library):
     """6.5's fourth condition, counted from the database's own table statistics."""
+    import time
+
     fixture = loose_library
+    began = time.perf_counter()
     _watcher_pass(fixture, active=[fixture.stray(f"Small {number:02}") for number in range(17)])
+    print(f"timing: 17 strays added in {time.perf_counter() - began:.1f} s", flush=True)
     small = _one_loose_edit_drain(fixture, "Edited at 20")
+    print(f"timing: drain at 20 done at {time.perf_counter() - began:.1f} s", flush=True)
     _watcher_pass(fixture, active=[fixture.stray(f"Large {number:04}") for number in range(2000)])
+    print(f"timing: 2,000 strays added at {time.perf_counter() - began:.1f} s", flush=True)
     large = _one_loose_edit_drain(fixture, "Edited at 2020")
+    print(f"timing: drain at 2,020 done at {time.perf_counter() - began:.1f} s", flush=True)
 
     totals = {name: (sum(read for read, _ in rows.values()), sum(written for _, written in rows.values()))
               for name, rows in (("20", small), ("2020", large))}

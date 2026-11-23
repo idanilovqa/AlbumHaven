@@ -479,6 +479,26 @@ def _lower_one_header(fixture):
     return behind, headers[behind] - 1
 
 
+def test_live_a_saved_edit_reaches_every_scope_through_its_queued_drain(library):
+    """R4 (orchestrator, 11-23): the client shows the edit at the Save click; the server's gallery follows
+    when the drain the save queues runs. A reload or another tab sees the old value until then, so the gap
+    from the save's commit to the edit in every scope holding the album is measured and reported."""
+    _publish_custom_scopes(library)
+    holding = _scopes_showing(library, ALBUM)
+    assert holding, "The album is in no gallery scope before the save."
+
+    _rename(library, "Reached By The Drain")
+    committed = time.perf_counter()
+    deadline = committed + 10
+    while not holding <= _scopes_showing(library, "Reached By The Drain") and time.perf_counter() < deadline:
+        time.sleep(0.005)
+    gap = time.perf_counter() - committed
+    print(f"edits always save, R4 gap from the save's commit to the edit in every scope: {gap * 1000:.0f} ms")
+
+    assert holding <= _scopes_showing(library, "Reached By The Drain"), (
+        f"The drain the save queued did not publish the edit within {gap:.1f} s.")
+
+
 def test_live_a_save_shows_in_every_header_the_journal_covers(library, monkeypatch):
     _hold_background_owners(monkeypatch)
     behind, _lagging_generation = _lower_one_header(library)

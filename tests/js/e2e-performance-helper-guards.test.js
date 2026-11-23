@@ -1538,7 +1538,9 @@ test('reload continuity E2E measures explicit Play startup and a long uninterrup
   assert.match(spec, /expectTimingBudget\([\s\S]*PLAYBACK_START_TIMING_BUDGET/);
   assert.match(spec, /const explicitPlayMark = await playbackEvidence\.playbackMark\(\)/);
   assert.match(spec, /const explicitPlayStartedAtMs = await page\.evaluate/);
-  assert.match(spec, /evidence\.observedAtMs - explicitPlayStartedAtMs/);
+  // Press to sound ends at the song's first rendered frame, through the shared click-to-sound rule.
+  assert.match(spec, /clickToSoundTiming\(\{[\s\S]*startedAtMs: explicitPlayStartedAtMs[\s\S]*evidence,/);
+  assert.doesNotMatch(spec, /observedAtMs - explicitPlayStartedAtMs/);
   assert.match(spec, /seconds: LONG_SUSTAINED_PLAYBACK_SECONDS/);
 });
 
@@ -1557,7 +1559,7 @@ test('playback-start spec and report retain the owner-approved budget without th
   assert.doesNotMatch(fixtures, /pending-owner-approval/);
 });
 
-test('playback-start timing ends at exact rendered sample evidence after UI readiness', async () => {
+test('playback-start timing ends at the pressed song\'s first rendered frame once the UI shows it playing', async () => {
   const moduleUrl = pathToFileURL(path.join(
     repoRoot,
     'tests/e2e/helpers/playbackStartPerformanceHelpers.js',
@@ -1649,11 +1651,13 @@ test('playback-start timing ends at exact rendered sample evidence after UI read
         },
         async waitForTrackPlaybackEvidence() {
           return {
+            path: track.path,
             pcmFrames: 1,
             finiteSamples: 2,
             nonZeroSamples: 2,
             peakSample: 0.5,
             renderedFrameDelta: 128,
+            firstFrameAtMs: browserCompletion.completedAtMs,
             observedAtMs: browserCompletion.completedAtMs + 25,
           };
         },
@@ -1667,7 +1671,9 @@ test('playback-start timing ends at exact rendered sample evidence after UI read
     });
 
     assert.equal(waitForFunctionCalls, 1);
-    assert.equal(result.completedAtMs, browserCompletion.completedAtMs + 25);
+    assert.equal(result.completedAtMs, browserCompletion.completedAtMs, 'the first rendered frame ends it');
+    assert.equal(result.elapsedMs, result.completedAtMs - result.startedAtMs);
+    assert.equal(result.observedAtMs, browserCompletion.completedAtMs + 25, 'the later reading is only reported');
   } finally {
     if (originalState === undefined) delete globalThis.state;
     else globalThis.state = originalState;

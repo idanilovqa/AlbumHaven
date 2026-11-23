@@ -554,50 +554,77 @@ def _non_album_candidates_sql(
               or library.local_track_files.private_path = any(%(private_paths)s::text[])
             )
         """
-    exception_candidates = """
-          select
-            active_track_files.id as track_file_id,
-            path_override.id,
-            path_override.track_key,
-            path_override.override_payload,
-            path_override.updated_at,
-            0 as match_priority
-          -- Once per statement, never per folder or per file: the batch's overrides are read in one step keyed
-          -- by the whole batch (its paths, then its track ids, each as one array the subquery takes from the
-          -- materialized batch), materialized, and joined to the batch's rows. Nothing in these subqueries
-          -- refers to an outer row, so the planner cannot run them inside the per-folder loop.
-          -- The batch's files are the bootstrap library's own (eligible_track_file_ids joins their roots to it),
-          -- so no track row is read here.
+    # A batch's overrides are looked up once per statement, one probe per distinct key of the batch, inside a
+    # materialized CTE that nothing outer can re-run (case 55): per folder or per file they ran once per loop.
+    batch_override_ctes = """
+        batch_keys as materialized (
+          select distinct active_track_files.private_path, active_track_files.track_id
           from active_track_files
-          join (
+        ),
+        override_hits as materialized (
+          select batch_keys.private_path as key_path, null::bigint as key_track_id,
+            path_override.id, path_override.track_key, path_override.override_payload, path_override.updated_at,
+            0 as match_priority
+          from batch_keys
+          cross join bootstrap_context
+          cross join lateral (
             select overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at
             from library.exception_overrides overrides
             -- (library_id, track_key) together: exactly exception_overrides_library_track_key_idx.
-            where overrides.library_id = (select bootstrap_context.library_id from bootstrap_context)
-              and overrides.track_key = any(array(select active_track_files.private_path from active_track_files))
+            where overrides.library_id = bootstrap_context.library_id
+              and overrides.track_key = batch_keys.private_path
+            -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays one probe per batch key.
+            offset 0
           ) path_override
-            on path_override.track_key = active_track_files.private_path
+
+          union all
+
+          select null::text as key_path, batch_keys.track_id as key_track_id,
+            track_override.id, track_override.track_key, track_override.override_payload,
+            track_override.updated_at, 1 as match_priority
+          from batch_keys
+          cross join bootstrap_context
+          cross join lateral (
+            select overrides.id, overrides.library_id, overrides.track_key, overrides.override_payload,
+              overrides.updated_at
+            from library.exception_overrides overrides
+            -- track_id alone: exactly exception_overrides_track_id_idx. The library check is applied to the
+            -- rows found, outside the fence: inside, library_id_idx tied with it without statistics.
+            where overrides.track_id = batch_keys.track_id
+            -- Fence, not redundant: offset 0 stops subquery pull-up, so this stays one probe per batch key.
+            offset 0
+          ) track_override
+          where track_override.library_id = bootstrap_context.library_id
+        ),
+        """ if membership_folders else ""
+    exception_candidates = """
+          -- The batch's override hits (materialized above, once per statement) joined to its files: both sides
+          -- are stored, so this join can be hashed and nothing here reads exception_overrides again.
+          select
+            active_track_files.id as track_file_id,
+            override_hits.id,
+            override_hits.track_key,
+            override_hits.override_payload,
+            override_hits.updated_at,
+            override_hits.match_priority
+          from override_hits
+          join active_track_files
+            on active_track_files.private_path = override_hits.key_path
+          where override_hits.match_priority = 0
 
           union all
 
           select
             active_track_files.id as track_file_id,
-            track_override.id,
-            track_override.track_key,
-            track_override.override_payload,
-            track_override.updated_at,
-            1 as match_priority
-          from active_track_files
-          join (
-            select overrides.id, overrides.track_id, overrides.track_key, overrides.override_payload,
-              overrides.updated_at
-            from library.exception_overrides overrides
-            -- track_id alone: exactly exception_overrides_track_id_idx. The library check is a filter on the
-            -- rows it finds; as an index condition, library_id_idx tied with it without statistics.
-            where overrides.track_id = any(array(select active_track_files.track_id from active_track_files))
-              and overrides.library_id + 0 = (select bootstrap_context.library_id from bootstrap_context)
-          ) track_override
-            on track_override.track_id = active_track_files.track_id
+            override_hits.id,
+            override_hits.track_key,
+            override_hits.override_payload,
+            override_hits.updated_at,
+            override_hits.match_priority
+          from override_hits
+          join active_track_files
+            on active_track_files.track_id = override_hits.key_track_id
+          where override_hits.match_priority = 1
         """ if membership_folders else """
           select
             active_track_files.id as track_file_id,
@@ -703,7 +730,7 @@ def _non_album_candidates_sql(
           {other_eligibility_branches}
         ),
         active_track_files as {batch_materialized}({active_track_files}),
-        exception_candidates as {batch_materialized}({exception_candidates}),
+        {batch_override_ctes}exception_candidates as {batch_materialized}({exception_candidates}),
         ranked_exception_overrides as {batch_materialized}(
           select
             exception_candidates.*,

@@ -1868,6 +1868,86 @@ def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
     ]
 
 
+@pytest.mark.parametrize("status", ["building", "failed"])
+def test_loose_tracks_show_the_rows_already_stored_while_the_store_is_not_ready(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+    status,
+):
+    """Owner (relayed 2026-11-22): "If at least one loose track is already indexed let that page show it",
+    with a note that more may appear. While the store builds (or waits to retry a failed build), a read
+    returns the rows stored so far, flagged partial; it never drains, builds or queues anything."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    tracks = [{"title": "Stored loose", "artist": "Broadcast", "album_artist": "Broadcast",
+               "display_path": "Broadcast/Loose/stored.flac", "library_root_category": "main_library"}]
+    _ready_loose_track_store(
+        monkeypatch, browse, tracks,
+        state={"status": status, "builder_version": loose_track_store.BUILDER_VERSION},
+    )
+    reads = []
+    monkeypatch.setattr(
+        loose_track_store, "read_candidates",
+        lambda _connection, *, limit: reads.append(limit) or [{"track_id": 1}],
+    )
+    monkeypatch.setattr(browse, "_non_album_entries_from_inventory_candidates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_relation_alias_maps",
+                        lambda **_kwargs: {"alias_to_canonical": {}, "canonical_to_aliases": {}})
+    monkeypatch.setattr(loose_track_store, "waiting_marks",
+                        lambda *_args, **_kwargs: pytest.fail("no drain while the store is not ready"))
+    monkeypatch.setattr(loose_track_store, "drain", lambda *_args, **_kwargs: pytest.fail("no drain"))
+    queued = []
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", queued.append)
+
+    payload = repository.build_library_loose_tracks_payload(query_params={})
+    count = repository.build_library_loose_tracks_payload(query_params={"availability": "1"})
+
+    assert [track["title"] for track in payload["library_non_album_tracks"]] == ["Stored loose"]
+    assert payload["non_album_tracks_deferred"] is False
+    assert payload["non_album_tracks_partial"] is True, "the page notes that more may appear"
+    assert payload.get("non_album_tracks_failed", False) is (status == "failed")
+    assert count == {
+        "non_album_track_count": 1, "non_album_tracks_partial": True,
+        **({"non_album_tracks_failed": True} if status == "failed" else {}),
+    }
+    assert reads == [browse.MAX_NON_ALBUM_CANDIDATE_LIMIT] * 2, "bounded reads of the stored rows"
+    assert queued == [], "a read never queues the build"
+
+
+def test_loose_tracks_with_no_stored_row_keep_the_preparing_answer_while_the_store_builds(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    """With no row stored yet the existing preparing (deferred) answer stays."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    _ready_loose_track_store(
+        monkeypatch, browse, [],
+        state={"status": "building", "builder_version": loose_track_store.BUILDER_VERSION},
+    )
+    queued = []
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", queued.append)
+
+    payload = repository.build_library_loose_tracks_payload(query_params={})
+
+    assert payload["library_non_album_tracks"] == []
+    assert payload["non_album_tracks_deferred"] is True
+    assert "non_album_tracks_partial" not in payload
+    assert queued == []
+
+
 def test_the_background_loose_tracks_owner_prepares_the_store_and_a_read_never_builds(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,

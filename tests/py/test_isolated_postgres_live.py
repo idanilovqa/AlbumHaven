@@ -681,6 +681,61 @@ def test_live_real_changes_run_every_loose_track_trigger_function_with_overrides
     ))
 
 
+def test_live_loose_tracks_show_the_rows_stored_so_far_while_the_store_builds(watcher_repair_inventory, monkeypatch):
+    """Owner (relayed 2026-11-22): "If at least one loose track is already indexed let that page show it",
+    with a note that more may appear. The build commits its rows in keyed batches while its state stays
+    "building": a read between batches shows the rows stored so far, flagged partial, and queues nothing.
+    Each batch loads only its own tracks; only the whole build, once, covers the library."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, 5, loose=5)
+    monkeypatch.setattr(loose_track_store, "BUILD_BATCH", 2)
+    queued = []
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: queued.append(kind))
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    loads = []
+    load = repository._inventory_repository.load_non_album_candidates
+
+    def counted_load(**kwargs):
+        rows = load(**kwargs)
+        loads.append((kwargs.get("track_ids"), len(rows)))
+        return rows
+
+    monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted_load)
+    reads, progress = [], []
+
+    def report(stage, **values):
+        progress.append((stage, values))
+        if stage == "batch":
+            payload = repository.build_library_loose_tracks_payload(query_params={})
+            reads.append((len(payload["library_non_album_tracks"]), payload["non_album_tracks_deferred"],
+                          payload.get("non_album_tracks_partial", False)))
+
+    loose_track_store.build(repository._inventory_repository, repository._owned_connection_context, progress=report)
+
+    assert reads, "the build reports each committed batch"
+    for rows, deferred, partial in reads:
+        assert (deferred, partial) == ((True, False) if rows == 0 else (False, True)), (
+            "no stored row: preparing; any stored row: shown, with more to come"
+        )
+    assert any(0 < rows < len(loose_entries) for rows, _deferred, _partial in reads), (
+        "rows appear batch by batch, before the build ends"
+    )
+    batches = [values for stage, values in progress if stage == "batch"]
+    assert [values["done"] for values in batches] == sorted(values["done"] for values in batches)
+    assert batches[-1]["done"] == batches[-1]["total"], "progress reaches tracks done of total"
+    assert loads and all(track_ids is not None and 0 < len(track_ids) <= 2 for track_ids, _rows in loads), (
+        "every batch loads only its own tracks"
+    )
+    final = repository.build_library_loose_tracks_payload(query_params={})
+    assert len(final["library_non_album_tracks"]) == len(loose_entries)
+    assert final["non_album_tracks_deferred"] is False and "non_album_tracks_partial" not in final
+    assert queued == [], "a read during the build never queues it"
+
+
 def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_repair_inventory):
     """Case 64's deciding test: after each change the drained store reads the same as a full rebuild."""
     from music_app.services import loose_track_store

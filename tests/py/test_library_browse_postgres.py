@@ -14072,9 +14072,10 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
 
 @pytest.mark.parametrize(("query", "matches"), [
     ("Canonical Artist", True), ("raw artist", True), ("Morning", True), ("audio", True),
-    # Gallery search has no typo tolerance and never matches years, exception
-    # types or word fragments, so neither do loose tracks.
-    ("Mornng", False), ("2001", False), ("Non-album rarity", False), ("Rawland", False),
+    # Loose search also matches an exact year or exception type.
+    ("2001", True), ("Non-album rarity", True),
+    # Gallery search has no typo tolerance and never matches word fragments, so neither do loose tracks.
+    ("Mornng", False), ("Rawland", False),
 ])
 @pytest.mark.parametrize("library_wide", [False, True])
 def test_non_album_search_uses_the_gallery_search_rule(monkeypatch, query, matches, library_wide):

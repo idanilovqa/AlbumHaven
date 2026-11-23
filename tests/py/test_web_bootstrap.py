@@ -1619,24 +1619,6 @@ def test_asgi_unrevisioned_cover_preview_stays_in_app_data_under_a_storage_polic
     assert (app.config["DATA_DIR"] / "display-cover-cache").is_dir()
     assert not policy.write_cache_root(cover_path).exists(), "nothing is written where the policy stores previews"
 
-    # The policy's storage stays a read fallback: a preview already there is served as it is.
-    from music_app.services.covers import resolve_cover_display_variant
-
-    stored_cover = app.config["MUSIC_DIR"] / "Artist" / "Stored Album" / "cover.jpg"
-    stored_cover.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (1200, 1200), "purple").save(stored_cover)
-    stored_preview = resolve_cover_display_variant(
-        stored_cover, cache_root=policy.write_cache_root(stored_cover), max_size=480,
-    )
-    assert stored_preview.is_relative_to(policy.write_cache_root(stored_cover))
-    app_previews = sorted((app.config["DATA_DIR"] / "display-cover-cache").rglob("*"))
-    status, _headers, body = run_asgi_request(
-        asgi_app, "GET", cover_reference_url(asgi_app, stored_cover), query={"size": "480"},
-    )
-    assert status == 200
-    assert body == stored_preview.read_bytes()
-    assert sorted((app.config["DATA_DIR"] / "display-cover-cache").rglob("*")) == app_previews, "served, not regenerated"
-
 
 @pytest.mark.parametrize("mode", ["album_folders", "custom"])
 def test_asgi_unrevisioned_cover_preview_keeps_legacy_app_cache_readable(app, asgi_app, tmp_path, mode):

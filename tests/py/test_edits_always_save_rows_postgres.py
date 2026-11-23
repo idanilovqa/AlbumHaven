@@ -247,17 +247,21 @@ def test_live_a_save_whose_file_lands_during_an_in_flight_publication_is_saved(e
 
 
 def test_live_a_save_naming_a_file_that_is_gone_says_which_track_without_its_path(edit_route):
-    """A file really gone (deleted between the user's load and Save) is named by its track title, never
-    by its local path (AGENTS.md: never expose local music paths)."""
-    gone = str(edit_route.music_dir / ARTIST / ALBUM / "04 Gone Row Track.mp3")
+    """A file the stored inventory no longer holds (a scan or watcher pass removed it between the user's
+    load and Save) is named by its track title, never by its local path (AGENTS.md: never expose local
+    music paths). The file stays on disk, so only the inventory lookup can refuse it."""
+    gone = edit_route.music_dir / ARTIST / ALBUM / "04 Gone Row Track.mp3"
+    _write_mp3(edit_route.base_audio, gone, title="Gone Row Track", number=4)
     tracks = [{"path": path, "title": entry["title"]} for path, entry in edit_route.entries.items()]
-    tracks.append({"path": gone, "title": "Gone Row Track"})
+    tracks.append({"path": str(gone), "title": "Gone Row Track"})
 
-    status, payload, _elapsed = _post_edit(edit_route, {gone: {"title": "Never Written"}}, tracks=tracks)
+    status, payload, _elapsed = _post_edit(edit_route, {str(gone): {"title": "Never Written"}}, tracks=tracks)
 
-    assert status >= 400, f"A gone file was reported saved: {status} {payload}"
+    error = str(payload.get("error") or "")
+    assert status >= 400, f"A file outside the inventory was reported saved: {status} {payload}"
+    assert error, f"The refusal has no readable message: {status} {payload}"
     assert not _shows_a_local_path(edit_route, payload), f"The refusal shows a local path: {payload}"
-    assert "Gone Row Track" in str(payload), f"The refusal doesn't name the gone track: {payload}"
+    assert "Gone Row Track" in error, f"The refusal doesn't name the track: {payload}"
 
 
 # B3: every request-pool connection is held (publications, browse reads); the save still checks out.

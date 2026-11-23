@@ -1617,7 +1617,20 @@ def load_relation_source_rows_sql(*, scoped: bool = False) -> str:
 
 
     if scoped:
-        sql = sql.replace(
+        # The edited albums' tracks first, by the album index, then their files by track id: a fence that
+        # keeps the read to those albums even on tables with no statistics yet (a save after a bulk change).
+        tracks_join = """join library.local_tracks
+            on library.local_tracks.library_id = bootstrap_context.library_id"""
+        assert sql.count(tracks_join) == 1 and sql.count('live_files as not materialized (') == 1
+        sql = sql.replace('live_files as not materialized (', """scoped_tracks as materialized (
+          select library.local_tracks.id
+          from library.local_tracks
+          where library.local_tracks.album_id = any(%(album_ids)s::bigint[])
+        ),
+        live_files as not materialized (""").replace(tracks_join, """join scoped_tracks on true
+          join library.local_tracks
+            on library.local_tracks.id = scoped_tracks.id
+           and library.local_tracks.library_id = bootstrap_context.library_id""").replace(
             'where library.local_tracks.album_id is not null',
             'where library.local_tracks.album_id = any(%(album_ids)s::bigint[])',
         )

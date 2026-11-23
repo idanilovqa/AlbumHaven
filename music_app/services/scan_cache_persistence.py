@@ -5902,21 +5902,28 @@ def _execute_semantic_local_album_reconciliation(
     )
     if allow_same_year_separate_release_merge and not scoped_target_ids:
         raise ValueError("Explicit release consolidation requires a targeted album identity.")
-    if not scoped_target_ids:
-        for statement in _reconcile_semantic_local_albums_sql():
-            connection.execute(statement)
-        return
-    for statement in _reconcile_semantic_local_albums_sql(
-        target_album_ids=scoped_target_ids,
-        allow_same_year_separate_release_merge=allow_same_year_separate_release_merge,
-    ):
+    statements = (
+        _reconcile_semantic_local_albums_sql(
+            target_album_ids=scoped_target_ids,
+            allow_same_year_separate_release_merge=allow_same_year_separate_release_merge,
+        )
+        if scoped_target_ids
+        else _reconcile_semantic_local_albums_sql()
+    )
+    skipping = False
+    for statement in statements:
+        if skipping and "drop table if exists pg_temp.semantic_album_candidates" not in statement:
+            continue
         if "%(target_album_ids)s" in statement:
-            connection.execute(
-                statement,
-                {"target_album_ids": list(scoped_target_ids)},
-            )
+            connection.execute(statement, {"target_album_ids": list(scoped_target_ids)})
         else:
             connection.execute(statement)
+        if "insert into pg_temp.semantic_album_candidates" in statement:
+            # No duplicate identity (every ordinary save): nothing to merge. The merge statements join the
+            # never-analysed temporary table, which the planner can't size, so they would scan every album.
+            empty = _first_row(connection.execute(
+                "select not exists(select 1 from pg_temp.semantic_album_candidates) as empty"))
+            skipping = bool(empty and _row_mapping(empty).get("empty") is True)
 
 
 def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
@@ -6638,6 +6645,34 @@ def _persist_structural_album_tag_edit_sql(
             on library.local_albums.library_id = bootstrap_context.library_id
            and library.local_albums.id = selection_scope.source_album_id
         ),
+        -- One keyed lookup per kind of match (the album, the destination key, the same release by its
+        -- artist): an OR across them read every album, with or without statistics.
+        locked_album_ids as materialized (
+          select selection_scope.source_album_id as id
+          from selection_scope
+          union
+          select keyed.id
+          from bootstrap_context
+          join library.local_albums as keyed
+            on keyed.library_id = bootstrap_context.library_id
+           and keyed.album_key = %(destination_album_key)s
+          union
+          select keyed.id
+          from bootstrap_context
+          join source_album_identity on true
+          join library.local_albums as keyed
+            on keyed.library_id = bootstrap_context.library_id
+           and keyed.artist_id = source_album_identity.artist_id
+          where """ + _same_release_sql("keyed", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
+          union
+          select keyed.id
+          from bootstrap_context
+          join source_album_identity on source_album_identity.artist_id is null
+          join library.local_albums as keyed
+            on keyed.library_id = bootstrap_context.library_id
+           and keyed.artist_id is null
+          where """ + _same_release_sql("keyed", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
+        ),
         locked_album_scope as materialized (
           select
             library.local_albums.id,
@@ -6653,13 +6688,10 @@ def _persist_structural_album_tag_edit_sql(
             on selection_scope.input_path_count = selection_scope.resolved_path_count
            and selection_scope.source_album_count = 1
           join source_album_identity on true
+          join locked_album_ids on true
           join library.local_albums
-            on library.local_albums.library_id = bootstrap_context.library_id
-           and (
-                 library.local_albums.id = selection_scope.source_album_id
-                 or library.local_albums.album_key = %(destination_album_key)s
-                 or """ + _same_release_sql("library.local_albums", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
-               )
+            on library.local_albums.id = locked_album_ids.id
+           and library.local_albums.library_id = bootstrap_context.library_id
           order by library.local_albums.id
           for update of local_albums
         ),

@@ -2108,8 +2108,9 @@ def test_postgres_album_split_reuses_legacy_key_with_same_release_identity(
         if "source_album_track_file_count" in _normalized_sql(sql)
     )
     normalized_sql = _normalized_sql(mutation_sql)
+    # The same-release match is a keyed lookup by the source's artist (locked_album_ids), then locked by id.
     locked_album_scope = normalized_sql.split(
-        "locked_album_scope as materialized (", 1
+        "locked_album_ids as materialized (", 1
     )[1].split("existing_destination_album as materialized", 1)[0]
     copied_ratings = normalized_sql.split(
         "copied_album_ratings as (", 1
@@ -2119,17 +2120,19 @@ def test_postgres_album_split_reuses_legacy_key_with_same_release_identity(
     assert mutation_params["destination_release_year"] == 2000
     assert mutation_params["destination_edition"] == ""
     assert mutation_params["updates_release_year"] is True
+    assert "keyed.artist_id = source_album_identity.artist_id" in locked_album_scope
     assert (
-        "library.local_albums.artist_id is not distinct from "
+        "keyed.artist_id is not distinct from "
         "source_album_identity.artist_id"
     ) in locked_album_scope
     assert (
-        "library.local_albums.release_year is not distinct from "
+        "keyed.release_year is not distinct from "
         "case when %(updates_release_year)s::boolean "
         "then %(destination_release_year)s "
         "else source_album_identity.release_year end"
     ) in locked_album_scope
-    assert "library.local_albums.metadata ->> 'edition'" in locked_album_scope
+    assert "keyed.metadata ->> 'edition'" in locked_album_scope
+    assert "join library.local_albums on library.local_albums.id = locked_album_ids.id" in locked_album_scope
     assert "destination_album.album_key" in copied_ratings
 
 
@@ -2953,7 +2956,9 @@ def test_semantic_album_reconciliation_serializes_bootstrap_library_before_candi
         scan_cache_persistence._execute_semantic_local_album_reconciliation
     )
     assert "isinstance" not in executor_source
-    assert "for statement in _reconcile_semantic_local_albums_sql()" in executor_source
+    # The unscoped run takes the statements as returned, in order (an empty candidate set skips to the drop).
+    assert "else _reconcile_semantic_local_albums_sql()" in executor_source
+    assert "for statement in statements:" in executor_source
 
 
 def test_semantic_album_reconciliation_can_scope_candidates_to_target_identity():

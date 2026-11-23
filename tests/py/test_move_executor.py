@@ -707,6 +707,9 @@ def test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_libra
         growth=("stat_calls", 0),
     )
     assert small.media_parses == production.media_parses == len(moved)
+    # 6.5 (11-23): opens never grow with the library (the scale pair's one growth slot holds stat_calls).
+    assert production.open_calls <= small.open_calls, (
+        f"Opens grew with the library: {small.open_calls} at 20 vs {production.open_calls} at 1,000 albums.")
 
 
 class _Rows:

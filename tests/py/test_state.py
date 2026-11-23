@@ -731,7 +731,7 @@ def test_watcher_cover_refresh_uses_live_state_as_its_commit_guard(
     assert get_state()["scan_generation"] == -1
 
 
-def test_watcher_cover_refresh_requeues_when_projection_changes_during_lookup(
+def test_watcher_cover_refresh_waits_for_a_scan_that_starts_during_lookup(
     config,
     logger,
     monkeypatch,
@@ -782,14 +782,26 @@ def test_watcher_cover_refresh_requeues_when_projection_changes_during_lookup(
     )
     submissions[0]()
 
-    assert settle_delays == [state_module._WATCHER_COVER_REFRESH_SETTLE_SECONDS]
-    assert len(submissions) == 2
+    # Case 65 (6.5): a scan started during the lookup. The album waits for that scan with its own track
+    # paths; it never turns into the whole-library manual cover refresh after the scan.
+    assert settle_delays == [], "no timer while the scan runs"
+    assert len(submissions) == 1
     assert library_state["_watcher_cover_refresh_attempts_by_track_path"]["track-a"] == 0
     assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
     assert library_state["_watcher_cover_refresh_album_keys_by_track_path"] == {
         "track-a": {"artist::album"}
     }
-    assert library_state["pending_cover_refresh_after_scan"] is True
+    assert not library_state.get("pending_cover_refresh_after_scan")
+
+    def end_scan(state, *_args, **_options):
+        state["scan_in_progress"] = False
+
+    monkeypatch.setattr(state_module, "refresh_library_for_state", end_scan)
+    monkeypatch.setattr(state_module, "_start_queued_root_change_scan", lambda *_args: None)
+    state_module._refresh_library_worker(library_state, config, logger, False)
+
+    assert len(submissions) == 2, "the scan's end submits the album's own lookup again"
+    assert not library_state.get("pending_cover_refresh_after_scan")
 
 
 def test_watcher_cover_refresh_outlasts_an_album_that_is_still_being_copied(

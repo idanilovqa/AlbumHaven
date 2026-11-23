@@ -737,7 +737,8 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
     assert post_payload["refresh_started"] is True
     assert post_payload["status"]["scan_in_progress"] is True
     assert post_payload["status"]["scan_mode"] == "library_settings_update"
-    assert asgi_app.state.library_state["pending_cover_refresh_after_scan"] is True
+    # Case 65 (6.5): the save's scan looks up covers only for the albums it adds, never the whole library.
+    assert not asgi_app.state.library_state.get("pending_cover_refresh_after_scan")
     assert refresh_calls == [
         {
             "library_state": asgi_app.state.library_state,

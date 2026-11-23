@@ -2848,7 +2848,8 @@ def test_roots_changed_during_a_scan_start_one_scan_when_it_ends(
     assert len(submitted) == 1, "two root changes coalesce into one scan"
     assert submitted[0][-1] is True, "the queued scan is forced"
     assert library_state["scan_mode"] == "library_settings_update"
-    assert library_state["pending_cover_refresh_after_scan"] is True
+    # Case 65 (6.5): the queued scan looks up covers only for the albums it adds, never the whole library.
+    assert not library_state.get("pending_cover_refresh_after_scan")
 
 
 def test_a_scan_that_already_published_the_queued_roots_starts_no_second_one(

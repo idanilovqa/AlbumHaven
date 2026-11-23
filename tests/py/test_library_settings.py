@@ -23,8 +23,9 @@ def test_save_library_settings_workflow_uses_injected_root_settings_writer():
 
     assert seen == [({"MUSIC_DIR": "C:\\Music"}, {"settings": True})]
     assert library_state["last_error"] is None
-    assert library_state["pending_cover_refresh_after_scan"] is True
-    assert library_state["pending_cover_refresh_force_search"] is False
+    # Case 65 (6.5): the save's scan looks up covers only for the albums it adds, never the whole library.
+    assert "pending_cover_refresh_after_scan" not in library_state
+    assert "pending_cover_refresh_force_search" not in library_state
     assert refresh_calls == [{"force": True, "scan_mode": "library_settings_update"}]
     assert watcher_root_calls == [[]]
     assert result == {
@@ -137,4 +138,4 @@ def test_save_library_settings_starts_the_reconcile_when_the_scan_ended_during_t
 
     assert started == [{"force": True, "scan_mode": "library_settings_update"}]
     assert (result["refresh_started"], result["refresh_queued"]) == (True, False)
-    assert library_state["pending_cover_refresh_after_scan"] is True
+    assert "pending_cover_refresh_after_scan" not in library_state, "no whole-library cover refresh (case 65)"

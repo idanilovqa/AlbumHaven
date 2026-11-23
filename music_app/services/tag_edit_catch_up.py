@@ -75,6 +75,9 @@ def _run(config, intent_id: str, on_settled: OutcomeCallback | None) -> dict[str
                 timer = threading.Timer(_RETRY_DELAYS[attempts - 1], retry_waiting_catch_ups)
                 timer.daemon = True
                 timer.start()
+            elif outcome == "busy":
+                # Still held after every timed retry: the page gets its answer; the drain keeps retrying.
+                outcome = "failed"
     if on_settled is not None and outcome != "busy":
         try:
             on_settled(outcome)

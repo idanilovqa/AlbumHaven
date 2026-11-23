@@ -9,15 +9,30 @@ const PENDING_TAG_EDIT_SAVED = new Set(['completed', 'reconciled_external']);
 const PENDING_TAG_EDIT_FAILED = new Set(['rolled_back', 'recovery_failed']);
 const PENDING_TAG_EDIT_FIRST_DELAY_MS = 2000;
 const PENDING_TAG_EDIT_MAX_DELAY_MS = 60000;
+// 6.5 (11-23): a save with no final answer after a day is dropped and logged, never checked forever.
+const PENDING_TAG_EDIT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Owner (2026-11-23): a "finishing" save (files written and verified, the library still catching up) stays
+// here so a reload or another tab still shows its values; it is never resent, only checked.
+const PENDING_TAG_EDIT_SHOWN_STATES = new Set(['finishing', 'waiting', 'resending']);
+
+// T3: the account and library this page belongs to (an opaque key the page carries); entries of another
+// scope stay in storage for their own pages and are neither shown nor checked here.
+function currentPendingTagEditScope() {
+  if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return '';
+  return String(document.querySelector('meta[name="album-haven-edit-scope"]')?.content || '');
+}
 
 const pendingTagEdits = (() => {
+  const scope = currentPendingTagEditScope();
+  // Ids this tab settled, discarded or expired: never written back from another tab's older copy.
+  const removedIds = new Set();
   let entries = readEntries();
   let timer = 0;
   let delayMs = PENDING_TAG_EDIT_FIRST_DELAY_MS;
   let running = false;
   const listeners = new Set();
 
-  function readEntries() {
+  function readStoredEntries() {
     try {
       const stored = JSON.parse(getLocalStorageItem(PENDING_TAG_EDITS_STORAGE_KEY, '[]') || '[]');
       return Array.isArray(stored) ? stored.filter((entry) => entry && entry.id && entry.payload) : [];
@@ -26,12 +41,34 @@ const pendingTagEdits = (() => {
     }
   }
 
+  function inScope(entry) {
+    return !scope || !entry.scope || entry.scope === scope;
+  }
+
+  function expired(entry) {
+    const created = Number(entry.created_at || 0);
+    return entry.state !== 'failed' && created > 0 && Date.now() - created > PENDING_TAG_EDIT_MAX_AGE_MS;
+  }
+
+  function readEntries() {
+    return readStoredEntries().filter((entry) => {
+      if (!inScope(entry) || removedIds.has(entry.id)) return false;
+      if (!expired(entry)) return true;
+      removedIds.add(entry.id);
+      console.warn(`[AlbumHaven][PendingTagEdits] Dropped a pending save with no answer for 24 hours (${entry.id}).`);
+      return false;
+    });
+  }
+
   function snapshot() {
     return entries.map((entry) => ({ ...entry, payload: undefined }));
   }
 
   function publish() {
-    setLocalStorageItem(PENDING_TAG_EDITS_STORAGE_KEY, JSON.stringify(entries));
+    // T4: merge per entry, so another tab's saves (and other scopes' saves) survive this tab's write.
+    const ownIds = new Set(entries.map((entry) => entry.id));
+    const others = readStoredEntries().filter((entry) => !ownIds.has(entry.id) && !removedIds.has(entry.id));
+    setLocalStorageItem(PENDING_TAG_EDITS_STORAGE_KEY, JSON.stringify([...others, ...entries]));
     const current = snapshot();
     listeners.forEach((listener) => {
       try { listener(current); } catch (error) { console.error('[AlbumHaven][PendingTagEdits] Listener failed.', error); }
@@ -60,7 +97,8 @@ const pendingTagEdits = (() => {
     if (!status.ok || known.ok !== true) throw new Error(known.error || `Save status answered ${status.status}`);
     if (known.found && PENDING_TAG_EDIT_SAVED.has(known.status)) return 'saved';
     if (known.found && PENDING_TAG_EDIT_FAILED.has(known.status)) return 'failed';
-    if (known.found) return 'waiting';
+    // A finishing save is already held by the server: it is only ever checked, never sent again.
+    if (known.found || entry.state === 'finishing') return 'waiting';
     // The server never received it: send it again under the same id.
     Object.assign(entry, { state: 'resending', attempts: Number(entry.attempts || 0) + 1, last_attempt_at: Date.now() });
     publish();
@@ -99,6 +137,7 @@ const pendingTagEdits = (() => {
         }
         if (outcome === 'saved') {
           entries = entries.filter((item) => item !== entry);
+          removedIds.add(entry.id);
           settledAny = true;
         } else if (outcome === 'failed') {
           entry.state = 'failed';
@@ -107,13 +146,17 @@ const pendingTagEdits = (() => {
           if (typeof showToast === 'function') {
             showToast(`Tag edit for “${entry.album?.name || 'an album'}” was not saved. It is in the Edit Queue.`, 'error', 5200);
           }
-        } else {
+        } else if (entry.state !== 'finishing') {
           entry.state = 'waiting';
         }
       }
     } finally {
       running = false;
-      delayMs = reachedServer ? PENDING_TAG_EDIT_FIRST_DELAY_MS : Math.min(delayMs * 2, PENDING_TAG_EDIT_MAX_DELAY_MS);
+      // T6: saves the server holds but has not finished are checked less and less often, up to a minute.
+      const onlyFinishing = entries.length > 0 && entries.every((entry) => entry.state === 'finishing');
+      delayMs = reachedServer && !onlyFinishing
+        ? PENDING_TAG_EDIT_FIRST_DELAY_MS
+        : Math.min(delayMs * 2, PENDING_TAG_EDIT_MAX_DELAY_MS);
       publish();
       // What the library holds now replaces the kept edit once the server has decided.
       if (settledAny && typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
@@ -123,8 +166,78 @@ const pendingTagEdits = (() => {
     }
   }
 
+  // The Save's own optimistic path lays each shown save's values over the loaded view (every display site).
+  function overlayCurrentView() {
+    let laid = 0;
+    for (const entry of entries) {
+      const updates = entry.payload?.updates;
+      if (!PENDING_TAG_EDIT_SHOWN_STATES.has(entry.state) || !entry.display_album || !updates) continue;
+      if (typeof buildOptimisticUpdatedAlbumsFromEdits !== 'function' || typeof applyUpdatedAlbumsToCurrentView !== 'function') break;
+      applyUpdatedAlbumsToCurrentView(buildOptimisticUpdatedAlbumsFromEdits(entry.display_album, updates), {
+        skipRender: true, originalAlbum: entry.display_album, preserveScroll: true, tagEdits: updates,
+      });
+      if (typeof applyTagEditsToNonAlbumView === 'function') applyTagEditsToNonAlbumView(entry.display_album, updates);
+      laid += 1;
+    }
+    return laid;
+  }
+
+  function overlayAlbumDetails(albumPayload) {
+    if (!albumPayload || !Array.isArray(albumPayload.tracks)) return albumPayload;
+    const values = {};
+    for (const entry of entries) {
+      if (!PENDING_TAG_EDIT_SHOWN_STATES.has(entry.state)) continue;
+      Object.entries(entry.payload?.updates || {}).forEach(([path, fields]) => {
+        values[path] = { ...(values[path] || {}), ...fields };
+      });
+    }
+    if (!Object.keys(values).length) return albumPayload;
+    return {
+      ...albumPayload,
+      tracks: albumPayload.tracks.map((track) => (values[track?.path] ? { ...track, ...values[track.path] } : track)),
+    };
+  }
+
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    // Another tab wrote: show its saves here too (the storage event never fires in the writing tab).
+    window.addEventListener('storage', (event) => {
+      if (event?.key !== PENDING_TAG_EDITS_STORAGE_KEY) return;
+      entries = readEntries();
+      const current = snapshot();
+      listeners.forEach((listener) => {
+        try { listener(current); } catch (error) { console.error('[AlbumHaven][PendingTagEdits] Listener failed.', error); }
+      });
+      if (overlayCurrentView() && typeof renderView === 'function') renderView();
+      schedule(delayMs);
+    });
+  }
+
   return {
     list: snapshot,
+    overlayCurrentView,
+    overlayAlbumDetails,
+    addFinishing({ id, payload, album = {} }) {
+      if (!id || !payload || entries.some((entry) => entry.id === id)) return;
+      entries.push({
+        id,
+        payload,
+        album: {
+          key: String(album.key || ''), name: String(album.name || ''),
+          album_artist: String(album.album_artist || ''), year: album.year ?? null,
+        },
+        display_album: JSON.parse(JSON.stringify(album || {})),
+        scope,
+        track_count: Array.isArray(album.tracks) ? album.tracks.length : 0,
+        created_at: Date.now(),
+        attempts: 0,
+        last_attempt_at: null,
+        state: 'finishing',
+        last_error: '',
+      });
+      delayMs = PENDING_TAG_EDIT_FIRST_DELAY_MS;
+      publish();
+      schedule(delayMs);
+    },
     add({ id, payload, album = {}, trackCount = 0 }) {
       if (!id || !payload || entries.some((entry) => entry.id === id)) return;
       entries.push({
@@ -135,6 +248,7 @@ const pendingTagEdits = (() => {
           album_artist: String(album.album_artist || ''), year: album.year ?? null,
         },
         track_count: Number(trackCount) || 0,
+        scope,
         created_at: Date.now(),
         attempts: 0,
         last_attempt_at: null,
@@ -155,6 +269,7 @@ const pendingTagEdits = (() => {
     },
     discard(id) {
       entries = entries.filter((item) => item.id !== id);
+      removedIds.add(id);
       publish();
       // A discarded edit may still have landed; show what the library holds.
       if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') void refreshCurrentViewAfterBackgroundCompletion();

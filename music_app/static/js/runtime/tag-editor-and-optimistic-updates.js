@@ -962,6 +962,14 @@ async function confirmManualTagEdit() {
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;
+    // Owner (2026-11-23): the files are written, so the save has succeeded; the library is still catching up.
+    // Kept so a reload or another tab still shows the new values until the library holds them.
+    if (
+      String(data.save_task_status || '').trim().toLowerCase() === 'finishing'
+      && clientRequestId && typeof window !== 'undefined' && window.AlbumHavenPendingTagEdits
+    ) {
+      window.AlbumHavenPendingTagEdits.addFinishing({ id: clientRequestId, payload: requestPayload, album });
+    }
     // Before anything is awaited: a page left during the refresh must not leave the save as pending.
     if (responseIsTerminal) saveFolds?.finish();
     const terminalResponseNeedsCanonicalRefresh = responseIsTerminal

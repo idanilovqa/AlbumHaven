@@ -226,6 +226,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             ("accounts.read", "system.preview_storage.read"),
         ),
         "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
+        "pending_edit_scope": _pending_edit_scope(actor),
         "account_menu_csrf_token": issue_session_csrf(
             request.cookies.get("__Host-album_haven_session"),
             request.app.state.auth_policy_config,
@@ -726,6 +727,17 @@ def _build_postgres_selected_artist_startup_view(
     initial_view = build_initial_view_preview(payload)
     payload_elapsed_ms = round((time.perf_counter() - payload_started_at) * 1000, 2)
     return initial_view, payload_elapsed_ms
+
+
+def _pending_edit_scope(actor) -> str:
+    """An opaque key for the signed-in account and its current library. The page's pending tag edits are
+    kept per scope, so another account on the same browser never sees or resends them (T3)."""
+    import hashlib
+
+    if not actor or not getattr(actor, "is_authenticated", False) or getattr(actor, "account_id", None) is None:
+        return ""
+    material = f"album-haven-edit-scope:{actor.account_id}:{getattr(actor, 'current_library_id', '') or ''}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
 
 
 def _build_bootstrap_payload(

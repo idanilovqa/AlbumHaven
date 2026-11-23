@@ -2335,3 +2335,19 @@ def test_pending_gallery_bootstrap_renders_bounded_preview_and_hydrates_without_
     assert "gallery_page_size=50" in hydration["followupEndpoint"]
     assert asgi_app.state.library_state["cold_scan_pending"] is False
     assert asgi_app.state.library_state["cold_scan_handoff_status"] == "idle"
+
+
+def test_pending_edit_scope_is_per_account_and_library_and_empty_when_signed_out():
+    """T3 (owner's overlay rule, 2026-11-23): a page's pending tag edits are kept per account and library."""
+    from types import SimpleNamespace
+
+    from music_app.routes.web_asgi import _pending_edit_scope
+
+    def actor(account_id, library_id):
+        return SimpleNamespace(is_authenticated=True, account_id=account_id, current_library_id=library_id)
+
+    scopes = {_pending_edit_scope(actor(1, 10)), _pending_edit_scope(actor(2, 10)), _pending_edit_scope(actor(1, 11))}
+    assert len(scopes) == 3 and all(scopes)
+    assert _pending_edit_scope(actor(1, 10)) == _pending_edit_scope(actor(1, 10))
+    assert _pending_edit_scope(SimpleNamespace(is_authenticated=False, account_id=None)) == ""
+    assert _pending_edit_scope(None) == ""

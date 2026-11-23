@@ -486,7 +486,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     if (Array.isArray(payload?.current_releases)) error.currentReleases = payload.current_releases;
     throw error;
   }
-  return payload.album;
+  // Owner (2026-11-23): a save still finishing shows its values in the track table too.
+  const pendingTagEdits = typeof window !== 'undefined' ? window.AlbumHavenPendingTagEdits : null;
+  return pendingTagEdits?.overlayAlbumDetails ? pendingTagEdits.overlayAlbumDetails(payload.album) : payload.album;
 }
 
 // The album an open modal shows was split or merged meanwhile. The refreshed gallery shows every

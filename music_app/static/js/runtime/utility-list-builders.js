@@ -2347,7 +2347,22 @@ async function watchSaveTask(taskId, context = {}) {
     }
     : null;
   let completionAnnounced = false;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // Owner (2026-11-23): a finishing save (files written, the library catching up) is watched until it ends,
+  // so the page is never left silent: the usual notice at the usual point, then slower checks.
+  let lastTaskStatus = '';
+  let stillUpdatingShown = false;
+  const showStillUpdating = () => {
+    if (stillUpdatingShown || mutationWasSuperseded()) return;
+    stillUpdatingShown = true;
+    // Owner (2026-11-23), their words: "Tags still updating: your edits remain queued."
+    showRepairAlert(
+      'Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
+  };
+  for (let attempt = 0; attempt < 120 || (lastTaskStatus === 'finishing' && !mutationWasSuperseded()); attempt += 1) {
     const consumesProvidedTerminalPayload = Boolean(
       providedTerminalPayload
       && (attempt === 0 || providedTerminalPayload.status === 'completed'),
@@ -2363,6 +2378,7 @@ async function watchSaveTask(taskId, context = {}) {
       } else if (!data.ok) {
         throw new Error(data.error || 'Unable to load save task.');
       }
+      lastTaskStatus = String(data.status || '').trim().toLowerCase();
       const responseTaskId = String(data.task_id || '').trim();
       if (responseTaskId && responseTaskId !== normalizedId) {
         providedTerminalPayload = null;
@@ -2820,17 +2836,10 @@ async function watchSaveTask(taskId, context = {}) {
       if (consumesProvidedTerminalPayload) throw error;
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
-    await waitForBrowserTimeout(500);
+    if (attempt >= 119) showStillUpdating();
+    await waitForBrowserTimeout(attempt >= 119 ? 5000 : 500);
   }
-  if (!mutationWasSuperseded()) {
-    // Owner (2026-11-23), their words: "Tags still updating: your edits remain queued."
-    showRepairAlert(
-      'Your edits remain queued.',
-      'info',
-      8000,
-      { title: 'Tags still updating', dismissible: true },
-    );
-  }
+  showStillUpdating();
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
 }

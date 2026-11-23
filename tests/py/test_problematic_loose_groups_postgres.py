@@ -111,3 +111,59 @@ def test_live_readiness_counts_waiting_loose_groups(loose_library):
     assert problematic_index.serving_readiness(repository)["changed_loose_groups_waiting"] == 1
     problematic_index.prepare_for_serving(repository)
     assert problematic_index.serving_readiness(repository)["changed_loose_groups_waiting"] == 0
+
+
+def _rows_read_for_a_page(fixture, limit):
+    """Rows every scan of the items table returned for one page, from EXPLAIN ANALYZE."""
+    import json
+
+    from music_app.services import problematic_index
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        plan = connection.execute(
+            "explain (analyze, format json) " + problematic_index._READ_PAGE_SQL,
+            {"after": None, "needle": "", "limit": limit + 1},
+        ).fetchone()
+    plan = plan[0] if isinstance(plan, (list, tuple)) else next(iter(plan.values()))
+    plan = json.loads(plan) if isinstance(plan, str) else plan
+    read = 0
+
+    def walk(node):
+        nonlocal read
+        if node.get("Relation Name") == "problematic_index_items":
+            read += int(node.get("Actual Rows", 0)) * int(node.get("Actual Loops", 1))
+        for child in node.get("Plans", []):
+            walk(child)
+
+    walk(plan[0]["Plan"])
+    return read
+
+
+def test_live_a_page_reads_a_bounded_number_of_items_past_an_inactive_root(loose_library):
+    """6.5's correction c: groups under an inactive root that sort before every item shown are never read,
+    so a page reads the same number of rows with 20 or 400 of them."""
+    fixture = loose_library
+    root_id = _rows(fixture, "select id from library.library_roots where root_path = %s",
+                    (fixture.roots[1]["path"],))[0]["id"]
+    library_id = _rows(fixture, "select library_id from library.library_roots where id = %s", (root_id,))[0]["library_id"]
+    _rows(fixture, "update library.library_roots set is_active = false where id = %s", (root_id,))
+
+    def hide(numbers):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.cursor().executemany(
+                """insert into library.problematic_index_items
+                     (library_id, item_key, album_id, root_id, sort_name, sort_artist, sort_year, sort_key,
+                      search_text, duplicate_identities, item)
+                   values (%s, %s, null, %s, %s, '', '', %s, '', '{}', '{}'::jsonb)""",
+                [(library_id, f"loose-source::hidden{number:06}", root_id, f"!{number:06}", f"hidden{number:06}")
+                 for number in numbers],
+            )
+
+    reads = {}
+    hide(range(20))
+    reads[20] = _rows_read_for_a_page(fixture, limit=2)
+    hide(range(20, 400))
+    reads[400] = _rows_read_for_a_page(fixture, limit=2)
+
+    assert reads[20] == reads[400], f"Rows read grew with the hidden items: {reads}."
+    assert reads[400] <= 3 * 3, f"A page of 2 read {reads[400]} items."

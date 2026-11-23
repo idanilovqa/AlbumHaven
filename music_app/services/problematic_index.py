@@ -1041,29 +1041,53 @@ def wait_for_background_work(timeout: float = 600) -> None:
         _EXECUTOR.submit(lambda: None).result(timeout=timeout)
 
 
+# Case 55 (6.5's correction c): a page reads each branch through 0294's (library_id, root_id, sort keys)
+# index, at most a page each: album items (no root) and every active root's loose groups. Items under an
+# inactive root are never read, however many sort before the first one shown.
+_PAGE_FILTER = """
+          and (%(after)s::text[] is null
+               or (items.sort_name, items.sort_artist, items.sort_year, items.sort_key)
+                  > ((%(after)s::text[])[1], (%(after)s::text[])[2],
+                     (%(after)s::text[])[3], (%(after)s::text[])[4]))
+          and (%(needle)s = '' or strpos(items.search_text, %(needle)s) > 0)"""
+_READ_PAGE_SQL = f"""
+    with library_scope as materialized (select ({_LIBRARY_SQL}) as library_id),
+    page as (
+      (select items.item, items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+       from library.problematic_index_items items, library_scope
+       where items.library_id = library_scope.library_id and items.root_id is null{_PAGE_FILTER}
+       order by items.root_id, items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+       limit %(limit)s)
+      union all
+      (select picked.item, picked.sort_name, picked.sort_artist, picked.sort_year, picked.sort_key
+       from library_scope
+       join library.library_roots roots
+         on roots.library_id = library_scope.library_id and roots.is_active is true
+       cross join lateral (
+         select items.item, items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+         from library.problematic_index_items items
+         where items.library_id = library_scope.library_id and items.root_id = roots.id{_PAGE_FILTER}
+         order by items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+         limit %(limit)s
+       ) picked)
+    )
+    select item from page
+    order by sort_name, sort_artist, sort_year, sort_key
+    limit %(limit)s"""
+
+
 def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str, str] | None,
               needle: str = "") -> list[dict[str, object]] | None:
     """Up to ``limit + 1`` items (every item when None) after ``after`` matching ``needle``.
 
-    None when no ready index exists yet.
+    None when no ready index exists yet. Items under an inactive root are not served (a read applies
+    root activity, case 55).
     """
     if not refresh(repository):
         return None
     with repository._browse_connection_context() as connection:
         rows = connection.execute(
-            f"""select items.item
-                from library.problematic_index_items items
-                where items.library_id = ({_LIBRARY_SQL})
-                  and (items.root_id is null or items.root_id in (
-                    select roots.id from library.library_roots roots
-                    where roots.library_id = items.library_id and roots.is_active is true))
-                  and (%(after)s::text[] is null
-                       or (items.sort_name, items.sort_artist, items.sort_year, items.sort_key)
-                          > ((%(after)s::text[])[1], (%(after)s::text[])[2],
-                             (%(after)s::text[])[3], (%(after)s::text[])[4]))
-                  and (%(needle)s = '' or strpos(items.search_text, %(needle)s) > 0)
-                order by items.sort_name, items.sort_artist, items.sort_year, items.sort_key
-                limit %(limit)s""",
+            _READ_PAGE_SQL,
             {"after": list(after) if after is not None else None, "needle": needle,
              "limit": None if limit is None else limit + 1},
         ).fetchall()

@@ -1929,9 +1929,7 @@ class PostgresScanCacheAdapter:
                 )
             )
             destination_metadata = _jsonb_compatible(destination_albums[0]["metadata"])
-            from music_app.services.keyed_plan import keyed_plan
-            # Keyed by the changed paths and the source album: index lookups even with no statistics yet.
-            with persistence_stage("structural_sql"), keyed_plan(connection):
+            with persistence_stage("structural_sql"):
                 result_row = _first_row(
                     connection.execute(
                         _persist_structural_album_tag_edit_sql(
@@ -6636,16 +6634,19 @@ def _persist_structural_album_tag_edit_sql(
         ),
         source_album_identity as materialized (
           select
-            library.local_albums.id,
-            library.local_albums.artist_id,
-            library.local_albums.release_year
+            source_album.id,
+            source_album.artist_id,
+            source_album.release_year
           from bootstrap_context
           join selection_scope
             on selection_scope.input_path_count = selection_scope.resolved_path_count
            and selection_scope.source_album_count = 1
-          join library.local_albums
-            on library.local_albums.library_id = bootstrap_context.library_id
-           and library.local_albums.id = selection_scope.source_album_id
+          -- Lateral lookups by key (offset 0 keeps each an index lookup), so no statistics are needed.
+          join lateral (
+            select album.id, album.artist_id, album.release_year from library.local_albums as album
+            where album.id = selection_scope.source_album_id and album.library_id = bootstrap_context.library_id
+            offset 0
+          ) as source_album on true
         ),
         -- One keyed lookup per kind of match (the album, the destination key, the same release by its
         -- artist): an OR across them read every album, with or without statistics.
@@ -6662,18 +6663,24 @@ def _persist_structural_album_tag_edit_sql(
           select keyed.id
           from bootstrap_context
           join source_album_identity on true
-          join library.local_albums as keyed
-            on keyed.library_id = bootstrap_context.library_id
-           and keyed.artist_id = source_album_identity.artist_id
-          where """ + _same_release_sql("keyed", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
+          join lateral (
+            select keyed.id from library.local_albums as keyed
+            where keyed.library_id = bootstrap_context.library_id
+              and keyed.artist_id = source_album_identity.artist_id
+              and """ + _same_release_sql("keyed", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
+            offset 0
+          ) as keyed on true
           union
           select keyed.id
           from bootstrap_context
           join source_album_identity on source_album_identity.artist_id is null
-          join library.local_albums as keyed
-            on keyed.library_id = bootstrap_context.library_id
-           and keyed.artist_id is null
-          where """ + _same_release_sql("keyed", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
+          join lateral (
+            select keyed.id from library.local_albums as keyed
+            where keyed.library_id = bootstrap_context.library_id
+              and keyed.artist_id is null
+              and """ + _same_release_sql("keyed", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
+            offset 0
+          ) as keyed on true
         ),
         locked_album_scope as materialized (
           select

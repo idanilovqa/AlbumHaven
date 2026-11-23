@@ -1617,23 +1617,105 @@ def load_relation_source_rows_sql(*, scoped: bool = False) -> str:
 
 
     if scoped:
-        # The edited albums' tracks first, by the album index, then their files by track id: a fence that
-        # keeps the read to those albums even on tables with no statistics yet (a save after a bulk change).
-        tracks_join = """join library.local_tracks
-            on library.local_tracks.library_id = bootstrap_context.library_id"""
-        assert sql.count(tracks_join) == 1 and sql.count('live_files as not materialized (') == 1
-        sql = sql.replace('live_files as not materialized (', """scoped_tracks as materialized (
+        # Keyed by the affected albums, with no planner settings: the tracks by the album index in a
+        # materialized fence, then each file, album, owner, featured artist and member by its own key in a
+        # lateral lookup (offset 0 keeps each one a parameterized index lookup). Joins by key only, so the
+        # read never grows with the library, even on tables with no statistics yet (case 55's shape).
+        replacements = (
+            ('live_files as not materialized (', """scoped_tracks as materialized (
           select library.local_tracks.id
           from library.local_tracks
           where library.local_tracks.album_id = any(%(album_ids)s::bigint[])
         ),
-        live_files as not materialized (""").replace(tracks_join, """join scoped_tracks on true
+        live_files as not materialized ("""),
+            ("""            library.local_track_files.id as track_file_id,
+            library.local_track_files.library_root_id,
+            library.library_roots.root_kind,
+            library.library_roots.root_path,
+            library.local_track_files.relative_path,
+            library.local_track_files.private_path
+          from bootstrap_context
           join library.local_tracks
-            on library.local_tracks.id = scoped_tracks.id
-           and library.local_tracks.library_id = bootstrap_context.library_id""").replace(
-            'where library.local_tracks.album_id is not null',
-            'where library.local_tracks.album_id = any(%(album_ids)s::bigint[])',
+            on library.local_tracks.library_id = bootstrap_context.library_id
+          join library.local_track_files
+            on library.local_track_files.track_id = library.local_tracks.id
+           and library.local_track_files.scan_cache_stale is false
+          join library.library_roots
+            on library.library_roots.id = library.local_track_files.library_root_id
+           and library.library_roots.library_id = bootstrap_context.library_id""",
+             """            scoped_file.id as track_file_id,
+            scoped_file.library_root_id,
+            library.library_roots.root_kind,
+            library.library_roots.root_path,
+            scoped_file.relative_path,
+            scoped_file.private_path
+          from bootstrap_context
+          join scoped_tracks on true
+          join lateral (
+            select library.local_tracks.* from library.local_tracks
+            where library.local_tracks.id = scoped_tracks.id
+              and library.local_tracks.library_id = bootstrap_context.library_id
+            offset 0
+          ) as local_tracks on true
+          join lateral (
+            select file.id, file.library_root_id, file.relative_path, file.private_path
+            from library.local_track_files as file
+            where file.track_id = local_tracks.id and file.scan_cache_stale is false
+            offset 0
+          ) as scoped_file on true
+          join library.library_roots
+            on library.library_roots.id = scoped_file.library_root_id
+           and library.library_roots.library_id = bootstrap_context.library_id"""),
+            ("""            library.local_tracks.library_id,
+            library.local_tracks.album_id,
+            library.local_tracks.artist_id as track_artist_id,""",
+             """            local_tracks.library_id,
+            local_tracks.album_id,
+            local_tracks.artist_id as track_artist_id,"""),
+            ('where library.local_tracks.album_id is not null',
+             'where local_tracks.album_id = any(%(album_ids)s::bigint[])'),
+            ("""          from album_track_artist_summary
+          join library.local_albums
+            on library.local_albums.library_id = album_track_artist_summary.library_id
+           and library.local_albums.id = album_track_artist_summary.album_id
+          left join library.local_artists as owner_artist
+            on owner_artist.id = library.local_albums.artist_id""",
+             """          from album_track_artist_summary
+          join lateral (
+            select album.* from library.local_albums as album
+            where album.id = album_track_artist_summary.album_id
+              and album.library_id = album_track_artist_summary.library_id
+            offset 0
+          ) as local_albums on true
+          left join lateral (
+            select artist.id, artist.name from library.local_artists as artist
+            where artist.id = local_albums.artist_id
+            offset 0
+          ) as owner_artist on true"""),
+            ("""        join library.local_album_featured_artists
+          on library.local_album_featured_artists.library_id = album_facts.library_id
+         and library.local_album_featured_artists.album_id = album_facts.album_id
+        left join library.local_artists as member_artist
+          on member_artist.id = library.local_album_featured_artists.artist_id""",
+             """        join lateral (
+          select featured.* from library.local_album_featured_artists as featured
+          where featured.library_id = album_facts.library_id and featured.album_id = album_facts.album_id
+          offset 0
+        ) as local_album_featured_artists on true
+        left join lateral (
+          select artist.id, artist.name from library.local_artists as artist
+          where artist.id = local_album_featured_artists.artist_id
+          offset 0
+        ) as member_artist on true"""),
         )
+        for old, replacement in replacements:
+            assert sql.count(old) == 1, old[:60]
+            sql = sql.replace(old, replacement)
+        # The album and featured-artist columns now come from the keyed lookups' aliases.
+        head, _, select = sql.partition('        album_facts as materialized (')
+        select = select.replace('library.local_albums.', 'local_albums.').replace(
+            'library.local_album_featured_artists.', 'local_album_featured_artists.')
+        sql = head + '        album_facts as materialized (' + select
     return sql
 
 

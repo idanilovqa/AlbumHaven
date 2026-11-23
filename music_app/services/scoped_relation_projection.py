@@ -684,10 +684,7 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     if expected_gallery_generation is not None:
         prior_generations.append(expected_gallery_generation)
     with persistence_stage('relation_publication.album_facts'):
-        from music_app.services.keyed_plan import keyed_plan
-        with keyed_plan(connection):
-            # Keyed by the affected albums: index lookups even on tables with no statistics yet.
-            rows = connection.execute(relations.load_relation_source_rows_sql(scoped=True), {'album_ids': sorted(ids)}).fetchall()
+        rows = connection.execute(relations.load_relation_source_rows_sql(scoped=True), {'album_ids': sorted(ids)}).fetchall()
         current_keys = {row['id']: row['album_key'] for row in connection.execute(
             'select id,album_key from library.local_albums where library_id=%s and id=any(%s::bigint[])',
             (library_id, sorted(ids))).fetchall()}

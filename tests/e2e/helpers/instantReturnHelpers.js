@@ -123,3 +123,23 @@ export async function visibleAlbumNames(galleryPage) {
     })
     .map(title => title.textContent.trim()));
 }
+
+// The album keys whose details [page] asks the server for from now on, counted when each request
+// starts (a click or the gallery's prewarm of visible albums), whether or not it is answered.
+export function requestedAlbumKeys(page) {
+  const keys = new Set();
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    const key = url.pathname === '/album-details' ? url.searchParams.get('album_key') : null;
+    if (key) keys.add(key);
+  });
+  return keys;
+}
+
+// The first album inside the window whose details were never asked for, so nothing holds them.
+export async function albumNeverRequested(galleryActions, requested) {
+  for (const name of await visibleAlbumNames(galleryActions.galleryPage)) {
+    if (name && !requested.has(await galleryActions.readAlbumKeyByName(name))) return name;
+  }
+  throw new Error('every album in the window had its details asked for');
+}

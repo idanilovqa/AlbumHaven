@@ -6,7 +6,7 @@ import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import {
-  failedStaticRequests, primeCopy, keptPages, keptStaticPaths, setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
+  albumNeverRequested, failedStaticRequests, primeCopy, keptPages, keptStaticPaths, requestedAlbumKeys, setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -176,12 +176,15 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
 test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever`, {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions, trackModalActions }) => {
+  const requested = requestedAlbumKeys(page);
   await primeCopy(page, galleryActions);
   const { galleryPage } = galleryActions;
-  const [album] = await visibleAlbumNames(galleryPage);
   // Album Details was never opened online; its close X (a CSS mask image) is kept by the save alone.
   await expect.poll(() => keptStaticPaths(page), { timeout: 15_000 }).toContain('/static/images/icons/tabler-x.svg');
   await context.setOffline(true);
+  // Details the gallery already asked for (its prewarm of visible albums) open offline as they are,
+  // so the album is chosen once offline, among those whose details were never asked for.
+  const album = await albumNeverRequested(galleryActions, requested);
   const failedAssets = failedStaticRequests(page);
 
   await galleryActions.clickAlbumDetailsByAlbumName(album);

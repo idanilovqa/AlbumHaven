@@ -624,6 +624,63 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
     )
 
 
+def test_live_real_changes_run_every_loose_track_trigger_function_with_overrides(watcher_repair_inventory):
+    """Case 64 (phase 1 on sandbox2's data, 42703): a real album-tag change failed in the file trigger, which
+    read a column exception_overrides does not have. With overrides present (an object and a bare-string
+    payload), a real file change, a track update and an artist rename each run 64's functions without error,
+    mark their track, and the drained store equals a full rebuild."""
+    from music_app.services import loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, 5)
+    repository = _prepare_store(fixture)
+
+    def setup_sql(sql, params=None):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            return connection.execute(sql, params or {})
+
+    def track_of(entry):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            return connection.execute(
+                """select tracks.id, tracks.library_id, tracks.artist_id from library.local_track_files files
+                   join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %(path)s""",
+                {"path": entry["path"]},
+            ).fetchone()
+
+    # Tag changes go to loose 0 (keyed override) and loose 1 (none); the track and artist edits to loose 2,
+    # whose override names its track, so a tag change cannot replace the track they edit.
+    keyed, by_track = track_of(loose_entries[0]), track_of(loose_entries[2])
+    setup_sql("""insert into library.exception_overrides (library_id, track_key, override_payload)
+                 values (%(library)s, %(path)s, '{"exception_type": "Interview"}'::jsonb)""",
+              {"library": keyed["library_id"], "path": loose_entries[0]["path"]})
+    # The loader also reads a bare JSON string payload as the exception type.
+    setup_sql("""insert into library.exception_overrides (library_id, track_id, override_payload)
+                 values (%(library)s, %(track)s, '"Non-album rarity"'::jsonb)""",
+              {"library": by_track["library_id"], "track": by_track["id"]})
+    loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
+    assert _marks(fixture) == 0
+
+    def marked_by(step, action):
+        action()
+        assert _marks(fixture) >= 1, f"{step} marks its track"
+        drained = _loose_payload(repository)
+        loose_track_store.build(repository._inventory_repository, repository._owned_connection_context)
+        assert drained == _loose_payload(repository), f"after {step}, the drained store differs from a full rebuild"
+
+    for index, entry in enumerate(loose_entries[:2]):
+        tagged = {**entry, "album": f"Real Album {index}", "mtime": entry["mtime"] + 1}
+        marked_by(f"a real album-tag change ({index})", lambda tagged=tagged: (
+            fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={tagged["path"]: tagged})
+        ))
+    marked_by("a track update", lambda: setup_sql(
+        "update library.local_tracks set title = title || ' (edit)' where id = %(track)s", {"track": by_track["id"]},
+    ))
+    marked_by("an artist rename", lambda: setup_sql(
+        "update library.local_artists set name = name || ' (renamed)' where id = %(artist)s", {"artist": by_track["artist_id"]},
+    ))
+
+
 def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_repair_inventory):
     """Case 64's deciding test: after each change the drained store reads the same as a full rebuild."""
     from music_app.services import loose_track_store

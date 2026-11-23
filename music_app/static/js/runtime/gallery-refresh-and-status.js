@@ -3,6 +3,8 @@
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
+// Idle status polls that may each refetch a view whose gallery projection was stale (about 2 minutes).
+const STALE_PROJECTION_VIEW_REFRESH_LIMIT = 40;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -1505,6 +1507,17 @@ async function fetchAndRender(url, push = true, options = {}) {
         && appliedInventoryMutationRevision >= observedInventoryMutationRevision
       ) {
         state.ui.pendingInventoryMutationViewRefresh = false;
+      }
+    }
+    if (responseProjectionIsCurrent) {
+      state.ui.staleProjectionViewRefreshCount = 0;
+    } else {
+      // The library change is not published in the gallery yet, and the status revision has
+      // already moved for it, so nothing else would ask again: the next idle poll refetches.
+      const staleProjectionViewRefreshCount = Number(state.ui.staleProjectionViewRefreshCount || 0);
+      if (staleProjectionViewRefreshCount < STALE_PROJECTION_VIEW_REFRESH_LIMIT) {
+        state.ui.staleProjectionViewRefreshCount = staleProjectionViewRefreshCount + 1;
+        state.ui.pendingInventoryMutationViewRefresh = true;
       }
     }
     finishPendingViewTransition(requestId);

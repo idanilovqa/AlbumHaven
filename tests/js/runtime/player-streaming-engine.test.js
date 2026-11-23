@@ -8262,6 +8262,38 @@ for (const [received, kind] of [[100_000, 'whose received audio can be spliced']
   });
 }
 
+// Hosted FTC-PLAYBACK-OFFLINE-002 on 2ecca92bb: paused through an outage after the song had played,
+// the socket that died without closing was given up, and a press on another song then played the
+// paused song again instead of the pressed one.
+for (const order of ['given up before the press', 'given up after the press']) {
+  test(`paused with received audio, a silent socket ${order} leaves the pressed song, never the paused one, to play`, async () => {
+    const harness = encodedHarness();
+    const paused = await startLocallySeekable(harness, 100_000);
+    await harness.api.pause();
+    await harness.settle();
+
+    if (order === 'given up before the press') {
+      checkLivenessUntil(harness, 1_500, 6_500);
+      await settleTwice(harness);
+    }
+    void harness.api.start(makeTrack('02.mp3'));
+    await settleTwice(harness);
+    if (order === 'given up after the press') {
+      checkLivenessUntil(harness, 1_500, 6_500);
+      await settleTwice(harness);
+    }
+    await settleTwice(harness);
+    await settleTwice(harness);
+
+    assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is given up');
+    const later = harness.sockets.slice(1).flatMap((socket) => socket.sent.filter(({ type }) => type === 'open'));
+    assert.deepEqual(later.map(({ path }) => path), [makeTrack('02.mp3').path], 'one open, of the pressed song only');
+    assert.equal(harness.engine.roles.current?.track?.path, makeTrack('02.mp3').path);
+    assert.notEqual(harness.engine.roles.current?.streamId, paused.streamId);
+    assert.notEqual(harness.api.snapshot().mode, 'error');
+  });
+}
+
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);

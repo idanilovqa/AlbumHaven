@@ -384,7 +384,7 @@ def _table_rows(fixture, drain_connection):
     return previous
 
 
-def _one_loose_edit_drain(fixture, title):
+def _one_loose_edit_drain(fixture, title, phase=lambda _name: None):
     """Rows the drain of one loose file's edit read and wrote, per table."""
     import psycopg
     from psycopg.rows import dict_row
@@ -394,36 +394,92 @@ def _one_loose_edit_drain(fixture, title):
     repository = browse.PostgresLibraryBrowseRepository({**fixture.config, problematic_index.ENABLED_KEY: "1"})
     # Nothing waits before the edit: the deploy step drains every group the bulk add marked.
     import time
-    began = time.perf_counter()
+    phase("deploy step start")
     problematic_index.prepare_for_serving(repository)
-    print(f"timing: prepare_for_serving took {time.perf_counter() - began:.1f} s", flush=True)
+    phase("deploy step done")
     _assert_read_is_a_full_rebuild(fixture)
+    phase("full-rebuild comparison done")
     _watcher_pass(fixture, active=[{**fixture.strays["A"], "title": title}])
     with psycopg.connect(fixture.database_url, row_factory=dict_row, autocommit=True) as connection:
         library_id = _library_id(fixture)
         groups = connection.execute(problematic_index._MARKED_GROUPS_SQL, (library_id, "", 100)).fetchall()
         assert len(groups) == 1
         before = _table_rows(fixture, connection)
+        phase("drain start")
         problematic_index._drain_groups(repository, connection, library_id, groups)
+        phase("drain done")
         after = _table_rows(fixture, connection)
     return {table: (after[table][0] - before.get(table, (0, 0))[0], after[table][1] - before.get(table, (0, 0))[1])
             for table in after if after[table] != before.get(table)}
 
 
+def _seed_loose_files(fixture, prefix, count):
+    """``count`` loose files, each in a folder of its own, in one INSERT per table (generate_series): clones
+    of stray A's track and file rows, every column but the identity and generated ones read from the catalog.
+    Every row trigger still fires; only the per-file scan path is skipped."""
+    source_path = fixture.strays["A"]["path"]
+
+    def columns(connection, table):
+        return [row["column_name"] for row in connection.execute(
+            """select column_name from information_schema.columns
+               where table_schema = 'library' and table_name = %s
+                 and is_generated = 'NEVER' and is_identity = 'NO' order by ordinal_position""", (table,)).fetchall()]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        track_columns, file_columns = columns(connection, "local_tracks"), columns(connection, "local_track_files")
+        source = connection.execute(
+            "select id, track_id from library.local_track_files where private_path = %s", (source_path,)).fetchone()
+        folder = "'" + prefix + " ' || lpad(n::text, 4, '0')"
+        track_values = ", ".join(
+            f"source.track_key || '::{prefix}::' || n" if column == "track_key" else f"source.{column}"
+            for column in track_columns)
+        connection.execute(
+            f"""insert into library.local_tracks ({", ".join(track_columns)})
+                select {track_values} from library.local_tracks source, generate_series(1, %(count)s) n
+                where source.id = %(track)s""",
+            {"count": count, "track": source["track_id"]})
+        overrides = {
+            "track_id": "tracks.id",
+            "private_path": f"replace(source.private_path, 'Strays A', {folder})",
+            "relative_path": f"replace(source.relative_path, 'Strays A', {folder})",
+        }
+        file_values = ", ".join(overrides.get(column, f"source.{column}") for column in file_columns)
+        connection.execute(
+            f"""insert into library.local_track_files ({", ".join(file_columns)})
+                select {file_values}
+                from library.local_track_files source
+                cross join generate_series(1, %(count)s) n
+                join library.local_tracks tracks on tracks.track_key = (
+                  select track_key from library.local_tracks where id = source.track_id) || '::{prefix}::' || n
+                where source.id = %(file)s""",
+            {"count": count, "file": source["id"]})
+
+
 def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(loose_library):
-    """6.5's fourth condition, counted from the database's own table statistics."""
+    """6.5's fourth condition, counted from the database's own table statistics. Seeding is set-based."""
+    import faulthandler
+    import sys
     import time
 
+    # Fail fast: a hang dumps every thread's stack and ends the run instead of using up the slot.
+    faulthandler.dump_traceback_later(600, exit=True)
     fixture = loose_library
     began = time.perf_counter()
-    _watcher_pass(fixture, active=[fixture.stray(f"Small {number:02}") for number in range(17)])
-    print(f"timing: 17 strays added in {time.perf_counter() - began:.1f} s", flush=True)
-    small = _one_loose_edit_drain(fixture, "Edited at 20")
-    print(f"timing: drain at 20 done at {time.perf_counter() - began:.1f} s", flush=True)
-    _watcher_pass(fixture, active=[fixture.stray(f"Large {number:04}") for number in range(2000)])
-    print(f"timing: 2,000 strays added at {time.perf_counter() - began:.1f} s", flush=True)
-    large = _one_loose_edit_drain(fixture, "Edited at 2020")
-    print(f"timing: drain at 2,020 done at {time.perf_counter() - began:.1f} s", flush=True)
+
+    def phase(name):
+        print(f"timing: {name} at {time.perf_counter() - began:.1f} s", file=sys.stderr, flush=True)
+
+    try:
+        _seed_loose_files(fixture, "Small", 17)
+        phase("17 loose files seeded")
+        small = _one_loose_edit_drain(fixture, "Edited at 20", phase)
+        phase("drain at 20 done")
+        _seed_loose_files(fixture, "Large", 2000)
+        phase("2,000 loose files seeded")
+        large = _one_loose_edit_drain(fixture, "Edited at 2020", phase)
+        phase("drain at 2,020 done")
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
     totals = {name: (sum(read for read, _ in rows.values()), sum(written for _, written in rows.values()))
               for name, rows in (("20", small), ("2020", large))}

@@ -216,8 +216,6 @@ def test_live_a_save_reads_its_artist_component_at_a_small_constant_per_album(li
 def _counting_adapter(fixture):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
-    counted = []
-
     class Counting:
         def __init__(self, connection):
             self._connection = connection
@@ -232,10 +230,38 @@ def _counting_adapter(fixture):
         def __exit__(self, *exc):
             return self._connection.__exit__(*exc)
 
-        def execute(self, sql, *args, **kwargs):
-            counted.append(" ".join(str(sql).split())[:80])
-            return self._connection.execute(sql, *args, **kwargs)
+        def _inventory_rows_read(self):
+            # This transaction's own reads of the inventory tables, visible at once in the same session.
+            return self._connection.execute(
+                """select coalesce(sum(coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0)), 0)::bigint as n
+                   from pg_stat_xact_user_tables
+                   where schemaname = 'library' and relname in ('local_albums', 'local_tracks', 'local_track_files')"""
+            ).fetchone()["n"]
 
+        def execute(self, sql, *args, **kwargs):
+            statement = " ".join(str(sql).split())
+            counted.append(statement[:80])
+            try:
+                before = self._inventory_rows_read()
+            except Exception:
+                before = None
+            cursor = self._connection.execute(sql, *args, **kwargs)
+            if before is not None:
+                try:
+                    read = self._inventory_rows_read() - before
+                except Exception:
+                    read = 0
+                if read >= 200:
+                    counted.heavy.append((read, statement[:240]))
+            return cursor
+
+    class Counted(list):
+        def clear(self):
+            super().clear()
+            self.heavy = []
+
+    counted = Counted()
+    counted.clear()
     adapter = PostgresScanCacheAdapter(fixture.config, connect=lambda url: Counting(isolatedPostgres._connect(url)))
     return adapter, counted
 
@@ -249,7 +275,10 @@ def _measure_save(fixture, title, adapter, counted):
     seconds = round(time.perf_counter() - began, 3)
     after = _rows_read(fixture)
     tables = {table: after.get(table, 0) - before.get(table, 0) for table in after}
-    return len(counted), sum(tables.values()), seconds, {table: rows for table, rows in tables.items() if rows}
+    for read, statement in sorted(counted.heavy, reverse=True):
+        print(f"edits always save, {title!r}: {read} inventory rows read by: {statement}")
+    statements = list(counted)
+    return len(statements), sum(tables.values()), seconds, {table: rows for table, rows in tables.items() if rows}
 
 
 CUSTOM_SCOPES = (

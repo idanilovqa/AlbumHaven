@@ -1920,6 +1920,7 @@ def test_refresh_library_for_state_runs_without_flask_context(config, logger, li
         state_module._run_mbid_assertion_follow_up,
         logger,
         {"artist_names": ["Stereolab"], "scan_run_ref": "scan-9"},
+        config,
     )]
     assert all(not hasattr(arg, "app_context") for arg in mbid_submissions[0])
 

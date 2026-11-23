@@ -570,6 +570,12 @@ def queue_gallery_scope_first_build(config, *, connect=None, view_state, generat
     )
 
 
+def queue_journaled_relation_drain(config):
+    """The owner of a committed write's journaled albums (library.local_relation_dirty_albums) outside a scan,
+    the watcher, a tag save and startup: the keyed incremental drain, queued off the response path."""
+    return schedule_gallery_projection_refresh(config, incremental_membership=True)
+
+
 def schedule_gallery_projection_refresh(
     config, *, connect=None, view_state=None, incremental_membership=False, first_build_generation=None,
 ):

@@ -39,7 +39,7 @@ class _Database:
             rows = [{"private_path": path} for path in params["paths"] if path in self.known]
         else:
             rows = []
-        return SimpleNamespace(fetchall=lambda: rows, fetchone=lambda: rows[0] if rows else None)
+        return SimpleNamespace(fetchall=lambda: rows, fetchone=lambda: rows[0] if rows else None, rowcount=len(rows))
 
 
 def _library(tmp_path, other_albums=0):

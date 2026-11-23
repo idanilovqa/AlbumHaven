@@ -507,18 +507,29 @@ def run_cover_jobs(
 ) -> dict[str, object]:
     # Every album's cover commit in this run, from any job worker, shares one
     # Postgres connection (one transaction each), not one connection per album.
-    with shared_scan_cache_connection(config):
-        return _run_cover_jobs(
-            get_state=get_state, config=config, logger=logger, cache_lock=cache_lock, jobs=jobs,
-            file_cache=file_cache, separate_release_keys=separate_release_keys,
-            image_extensions=image_extensions, user_agent=user_agent, cover_cache=cover_cache,
-            scan_generation=scan_generation, cover_generation=cover_generation,
-            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
-            force_search=force_search, allow_apple_web_fallback=allow_apple_web_fallback,
-            allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
-            negative_cache_ttl_seconds=negative_cache_ttl_seconds, job_workers=job_workers,
-            republish_changed_albums_only=republish_changed_albums_only,
-        )
+    processed = True  # a failed run may already have committed albums
+    try:
+        with shared_scan_cache_connection(config):
+            result = _run_cover_jobs(
+                get_state=get_state, config=config, logger=logger, cache_lock=cache_lock, jobs=jobs,
+                file_cache=file_cache, separate_release_keys=separate_release_keys,
+                image_extensions=image_extensions, user_agent=user_agent, cover_cache=cover_cache,
+                scan_generation=scan_generation, cover_generation=cover_generation,
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                force_search=force_search, allow_apple_web_fallback=allow_apple_web_fallback,
+                allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
+                negative_cache_ttl_seconds=negative_cache_ttl_seconds, job_workers=job_workers,
+                republish_changed_albums_only=republish_changed_albums_only,
+            )
+        # Not "changed": a run aborted by a newer scan or cover generation reports False after committing albums.
+        processed = bool(result.get("processed"))
+        return result
+    finally:
+        if processed:
+            # The run's committed albums are journaled for relations (migration 0108): one keyed drain per run.
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+            queue_journaled_relation_drain(config)
 
 
 def _run_cover_jobs(

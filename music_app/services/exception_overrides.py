@@ -13,7 +13,10 @@ def load_exception_overrides(config: dict[str, object]) -> dict[str, str]:
 def save_exception_overrides(config: dict[str, object], overrides: dict[str, str]) -> None:
     select_runtime_persistence_adapter("exception_overrides", config)
     RuleStatePostgresAdapter(config).save_exception_overrides(overrides)
+    from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
     from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
+
+    queue_journaled_relation_drain(config)
 
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
@@ -63,7 +66,10 @@ def set_track_exception_overrides(
 
     select_runtime_persistence_adapter("exception_overrides", config)
     RuleStatePostgresAdapter(config).upsert_exception_overrides(persisted_updates)
+    from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
     from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
+
+    queue_journaled_relation_drain(config)
 
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),

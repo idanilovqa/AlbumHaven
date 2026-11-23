@@ -98,6 +98,7 @@ class MissingAlbumRescan:
         search_seconds: float = _DEFAULT_SEARCH_SECONDS,
         searches: MissingAlbumSearches | None = None,
     ) -> None:
+        self._config = config
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         self._reconcile = reconcile
         self._roots = {
@@ -234,9 +235,11 @@ class MissingAlbumRescan:
         old, new, relative = (list(column) for column in zip(*moves))
         with self._connect(self._database_url) as connection:
             connection.execute(inventory_publication_advisory_lock_sql())
-            connection.execute(_REPOINT_SQL, {
+            repointed = connection.execute(_REPOINT_SQL, {
                 "old": old, "new": new, "relative": relative, "root_id": destination_root_id,
-            })
+            }).rowcount
+        if repointed:
+            self._hand_journaled_albums_to_owner()
 
     def _album_files(self, album_key: str) -> list[dict[str, object]]:
         with self._connect(self._database_url) as connection:
@@ -244,7 +247,15 @@ class MissingAlbumRescan:
 
     def _record_reason(self, album_key: str, reason: str) -> None:
         with self._connect(self._database_url) as connection:
-            connection.execute(_RECORD_REASON_SQL, {"album_key": album_key, "reason": reason})
+            recorded = connection.execute(_RECORD_REASON_SQL, {"album_key": album_key, "reason": reason}).rowcount
+        if recorded:
+            self._hand_journaled_albums_to_owner()
+
+    def _hand_journaled_albums_to_owner(self) -> None:
+        """The committed rows journal their album for relations (migration 0108); the keyed drain owns it."""
+        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+        queue_journaled_relation_drain(self._config)
 
 
 _ALBUM_FILES_SQL = """

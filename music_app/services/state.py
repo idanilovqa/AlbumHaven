@@ -1510,6 +1510,7 @@ def refresh_library_for_state(
                 _run_mbid_assertion_follow_up,
                 logger,
                 kwargs,
+                config,
             ),
         ),
         queue_musicbrainz_enrichment=config.get(
@@ -1748,9 +1749,15 @@ def _hydrate_library_state_worker(
                 logger.exception("Root browse prewarm failed after library hydration")
 
 
-def _run_mbid_assertion_follow_up(logger, kwargs: dict[str, object]) -> None:
+def _run_mbid_assertion_follow_up(logger, kwargs: dict[str, object], config: dict[str, object] | None = None) -> None:
     try:
-        run_post_scan_artist_mbid_assertion_follow_up(**kwargs)
+        result = run_post_scan_artist_mbid_assertion_follow_up(**kwargs)
     except Exception:
         if logger is not None:
             logger.exception("Post-scan MBID assertion follow-up failed")
+        return
+    if config is not None and int((result or {}).get("artist_count") or 0):
+        # Its upsert sets local_artists.name, which journals the artists' albums for relations (migration 0108).
+        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+        queue_journaled_relation_drain(config)

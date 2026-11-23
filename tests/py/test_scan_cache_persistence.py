@@ -2065,6 +2065,46 @@ def test_a_cover_look_up_save_hands_its_journaled_album_to_the_relation_owner(mo
     assert drained == [config], "the queued owner drains the journaled album with no browse request"
 
 
+def test_a_cover_save_owner_returns_quietly_before_the_relation_projection_is_initialized(monkeypatch, caplog):
+    """6.5: startup owns initialization at the incremental builder version. Until then the cover-save owner
+    has nothing to drain: it returns without an exception (nothing logged) and builds nothing."""
+    from concurrent.futures import Future
+
+    from music_app.services import cache, gallery_projection_postgres as gallery, scoped_relation_projection
+
+    submitted = []
+
+    class Executor:
+        def submit(self, action):
+            future = Future()
+            submitted.append((action, future))
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    monkeypatch.setattr(gallery, "_PENDING", {})
+    adapter = SimpleNamespace(persist_cover_selection=lambda **_kwargs: {"album_rows_updated": 1})
+    monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda _config, **_kwargs: {"initialized": False})
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("an uninitialized projection was rebuilt by a cover save"))
+    monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("an uninitialized projection was rebuilt by a cover save"))
+
+    cache.persist_cover_selection_for_tracks_for_config(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://cover-save-uninitialized"},
+        {"/music/Artist/Album/01.flac"}, Path("/music/Artist/Album/cover.jpg"), cover_selection_origin="user",
+    )
+
+    assert len(submitted) == 1
+    action, future = submitted[0]
+    with caplog.at_level("ERROR"):
+        future.set_result(action())
+    assert future.exception() is None
+    assert not [record for record in caplog.records if record.levelname in {"ERROR", "CRITICAL"}], \
+        "the owner logged an exception for a projection startup has not initialized yet"
+
+
 @pytest.mark.parametrize("legacy", [{"expected_cover_selection_origin": "automatic"}, {"expected_cover_revision": "old"}, {"expected_cover_selection_origin": "invalid", "expected_cover_revision": "old"}])
 def test_legacy_expected_cover_state_still_rejects_partial_or_invalid_values(legacy):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter

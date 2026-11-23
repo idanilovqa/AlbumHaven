@@ -173,10 +173,12 @@ def test_repointed_tracks_hand_their_album_to_the_owner(owners, tmp_path):
     _assert_owner_after_commit(owners)
 
 
-@pytest.mark.parametrize("outcome", ["changed", "unchanged", "failed"])
+@pytest.mark.parametrize("outcome", ["changed", "aborted", "unchanged", "failed"])
 def test_an_automatic_cover_run_hands_its_albums_to_the_owner(monkeypatch, owners, outcome):
     """Automatic, scan and selected-album cover runs commit through persist_cover_selection_in_shared_transaction;
-    one owner per run, after its shared connection is released (a failed run may have committed albums)."""
+    one owner per run that processed a job, after its shared connection is released. A run aborted by a newer
+    scan or cover generation reports changed=False after committing albums, and a failed run may have committed
+    some, so both are owned too; a run with no job queues nothing."""
     from music_app.services import cover_refresh_execution
 
     @contextmanager
@@ -187,7 +189,7 @@ def test_an_automatic_cover_run_hands_its_albums_to_the_owner(monkeypatch, owner
     def run(**_kwargs):
         if outcome == "failed":
             raise RuntimeError("provider failed")
-        return {"changed": outcome == "changed"}
+        return {"changed": outcome == "changed", "processed": 0 if outcome == "unchanged" else 2}
 
     monkeypatch.setattr(cover_refresh_execution, "shared_scan_cache_connection", shared)
     monkeypatch.setattr(cover_refresh_execution, "_run_cover_jobs", run)
@@ -201,7 +203,7 @@ def test_an_automatic_cover_run_hands_its_albums_to_the_owner(monkeypatch, owner
         cover_refresh_execution.run_cover_jobs(**arguments)
 
     if outcome == "unchanged":
-        assert [event for event in owners if event[0] == "owner"] == [], "a run that changed nothing queues nothing"
+        assert [event for event in owners if event[0] == "owner"] == [], "a run with no job queues nothing"
         return
     assert [event for event in owners if event[0] == "owner"] == [("owner", _CONFIG, {"incremental_membership": True})]
 

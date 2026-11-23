@@ -645,8 +645,9 @@ def _cte_body(sql: str, name: str) -> tuple[str, str]:
 def test_a_drain_batch_reads_overrides_in_materialized_steps_that_no_outer_row_can_rerun():
     """Case 55: a folder batch's overrides are read once per statement. batch_keys, override_hits,
     exception_candidates and their ranking are each AS MATERIALIZED; exception_overrides is read only inside
-    override_hits, as a set join of the batch keys (no lateral, so no per-key re-scan of the table) that refers
-    to nothing but batch_keys and bootstrap_context; nothing after it reads exception_overrides again."""
+    override_hits, one scan per branch keyed by the batch's keys as an array (no join to the keys and no lateral,
+    so nothing re-scans the table per key), referring to nothing but batch_keys and bootstrap_context; nothing
+    after it reads exception_overrides again."""
     sql = " ".join(inventory_module._non_album_candidates_sql(
         unassigned_only=True, membership_problems_only=True, all_roots=True, membership_folders=True,
     ).lower().split()).replace(" ( ", " (").replace(" )", ")")
@@ -655,7 +656,8 @@ def test_a_drain_batch_reads_overrides_in_materialized_steps_that_no_outer_row_c
         keyword, _body = _cte_body(sql, name)
         assert keyword == "materialized", f"{name} must be AS MATERIALIZED"
     _keyword, hits = _cte_body(sql, "override_hits")
-    assert hits.count("join library.exception_overrides overrides") == 2
+    assert hits.count("from library.exception_overrides overrides") == 2, "one scan per branch"
+    assert hits.count("= any(array(select batch_keys.") == 2, "each branch keyed by the batch's array"
     assert sql.count("library.exception_overrides") == hits.count("library.exception_overrides"), (
         "exception_overrides is read only inside override_hits")
     outer = set(re.findall(r"\b([a-z_]+)\.(?:private_path|track_id|library_id)\b", hits)) - {"overrides"}

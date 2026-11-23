@@ -20,7 +20,8 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from threading import Lock
 from typing import Any
 
@@ -412,11 +413,24 @@ def _worker_connection(repository: Any) -> Any:
     return psycopg.connect(repository._database_url, row_factory=dict_row, autocommit=True)
 
 
-def _locked(connection: Any, library_id: int) -> bool:
-    row = connection.execute(
-        "select pg_try_advisory_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
-    ).fetchone()
-    return bool(_value(row, "locked"))
+@contextmanager
+def _evaluation_lock(repository: Any, *, deploy_step: bool = False) -> Iterator[tuple[Any, int | None, bool]]:
+    """(connection, library id, whether this pass holds the evaluation lock), on the worker's own
+    connection; the lock is released on every path."""
+    with _worker_connection(repository) as connection:
+        library_id = _library_id(connection)
+        locked = library_id is not None and bool(_value(connection.execute(
+            "select pg_try_advisory_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
+        ).fetchone(), "locked"))
+        if locked and deploy_step:
+            # Maintenance holds the lock above too; this one says a deploy step runs, so an app
+            # restarted meanwhile waits outside. Closing the connection releases it.
+            connection.execute("select pg_advisory_lock(%s, %s::integer)", (_STEP_LOCK_NAMESPACE, library_id))
+        try:
+            yield connection, library_id, locked
+        finally:
+            if locked:
+                connection.execute("select pg_advisory_unlock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
 
 
 def _locked_for_transaction(connection: Any, library_id: int) -> bool:
@@ -424,10 +438,6 @@ def _locked_for_transaction(connection: Any, library_id: int) -> bool:
         "select pg_try_advisory_xact_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
     ).fetchone()
     return bool(_value(row, "locked"))
-
-
-def _unlock(connection: Any, library_id: int) -> None:
-    connection.execute("select pg_advisory_unlock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
 
 
 def _enabled(config: Mapping[str, object]) -> bool:
@@ -780,20 +790,13 @@ def prepare_for_serving(repository: Any, *, rebuild_duplicates: bool = False,
                         report: Callable[[str, int, int], None] | None = None) -> None:
     """The deploy step (scripts/prepare_duplicate_results.py): what maintenance does, in the
     foreground, raising instead of retrying later. A ready backfill is not redone."""
-    with _worker_connection(repository) as connection:
-        library_id = _library_id(connection)
+    with _evaluation_lock(repository, deploy_step=True) as (connection, library_id, locked):
         if library_id is None:
             raise PreparationError("No Local Library exists in this database.")
-        if not _locked(connection, library_id):
+        if not locked:
             raise PreparationError("Another process is evaluating the index: stop every writer first.")
-        # Maintenance holds the lock above too; this one says a deploy step runs, so an app
-        # restarted meanwhile waits outside. Closing the connection releases it.
-        connection.execute("select pg_advisory_lock(%s, %s::integer)", (_STEP_LOCK_NAMESPACE, library_id))
-        try:
-            held, _free = _bring_up_to_date(repository, connection, library_id, rebuild_duplicates=rebuild_duplicates,
-                                            report=report, walks=OUTRUN_RETRIES + 1)
-        finally:
-            _unlock(connection, library_id)
+        held, _free = _bring_up_to_date(repository, connection, library_id, rebuild_duplicates=rebuild_duplicates,
+                                        report=report, walks=OUTRUN_RETRIES + 1)
     if held:
         raise PreparationError(
             f"{held} changed album(s) were held or marked again by a writer during this pass: stop every writer first.")
@@ -944,19 +947,15 @@ def _maintain(repository: Any) -> None:
         _RUNNING.add(repository._database_url)
     free = 0
     try:
-        with _worker_connection(repository) as connection:
-            library_id = _library_id(connection)
-            if library_id is None or not _locked(connection, library_id):
+        with _evaluation_lock(repository) as (connection, library_id, locked):
+            if not locked:
                 return
-            try:
-                _held, free = _bring_up_to_date(repository, connection, library_id)
-                first = connection.execute(
-                    """select item_key from library.problematic_index_items where library_id = %s
-                       order by sort_name, sort_artist, sort_year, sort_key limit 1""",
-                    (library_id,),
-                ).fetchone()
-            finally:
-                _unlock(connection, library_id)
+            _held, free = _bring_up_to_date(repository, connection, library_id)
+            first = connection.execute(
+                """select item_key from library.problematic_index_items where library_id = %s
+                   order by sort_name, sort_artist, sort_year, sort_key limit 1""",
+                (library_id,),
+            ).fetchone()
         # The first page opens on this album's detail: building it once per process warms the
         # connection pool and alias maps a restarted server would otherwise pay on first open.
         if first is not None and repository._database_url not in _WARMED:

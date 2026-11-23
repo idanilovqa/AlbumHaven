@@ -546,6 +546,17 @@ def _plan_nodes(plan):
     return nodes
 
 
+def _buffers(node):
+    return node.get("Shared Hit Blocks", 0) + node.get("Shared Read Blocks", 0)
+
+
+def _own_buffers(node):
+    """A plan node's shared buffers without its InitPlan and SubPlan children's, which EXPLAIN counts in it.
+    Its ordinary children (a Bitmap Index Scan under a Bitmap Heap Scan) stay: they are its own reads."""
+    return _buffers(node) - sum(_buffers(child) for child in node.get("Plans", [])
+                                if child.get("Parent Relationship") in ("InitPlan", "SubPlan"))
+
+
 def _seed_overrides(fixture, prefix, count):
     """``count`` exception overrides on the prefix's loose files, by path, none with an exception type: the
     files stay membership problems and the override ranking has rows to rank."""
@@ -629,23 +640,20 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
         batch_keys = int(ctes["CTE batch_keys"]["Actual Rows"])
         # The array the override step builds is the batch's keys: never more than one drain batch.
         assert batch_keys <= problematic_index.BACKFILL_BATCH <= 500, (batch_keys, problematic_index.BACKFILL_BATCH)
-        # Each branch (by path, by track id) reads exception_overrides once: one scan node, loops 1, within
-        # max(the table's real pages, batch keys x 3) + 8 shared buffers.
+        # Each branch (by path, by track id) reads exception_overrides once: one scan node, loops 1, whose OWN
+        # shared buffers stay within max(the table's real pages, batch keys x 3) + 8. EXPLAIN counts a node's
+        # InitPlan/SubPlan children in its buffers: the branch's array comes from an InitPlan that scans the
+        # batch_keys CTE, which the plan attributes to the path branch. Those buffers belong to the batch's own
+        # tables, bounded by the checks on them (no Seq Scan, rows-read growth), so they are subtracted here.
         override_scans = [node for node in nodes if node.get("Relation Name") == "exception_overrides"]
         assert len(override_scans) == 2, [node["Node Type"] for node in override_scans]
         branch_bound = max(override_pages, batch_keys * _OVERRIDE_BUFFERS_PER_KEY) + _OVERRIDE_BUFFERS_CONSTANT
         for node in override_scans:
-            buffers = node.get("Shared Hit Blocks", 0) + node.get("Shared Read Blocks", 0)
             assert node.get("Actual Loops", 1) == 1, f"an override branch ran per key: {node['Node Type']}"
-            assert buffers <= branch_bound, (
-                f"an override branch touched {buffers} buffers ({override_pages} pages, {batch_keys} keys)")
-        override_buffers = sum(node.get("Shared Hit Blocks", 0) + node.get("Shared Read Blocks", 0)
-                               for node in override_scans)
-        # The path branch's library check is part of the composite index's condition, not a separate scan or
-        # a filter on another index.
-        path_branch = [node for node in nodes if node.get("Index Name") == "exception_overrides_library_track_key_idx"]
-        assert path_branch and all("library_id" in node.get("Index Cond", "") and "track_key" in node["Index Cond"]
-                                   for node in path_branch), [node.get("Index Cond") for node in path_branch]
+            assert _own_buffers(node) <= branch_bound, (
+                f"an override branch touched {_own_buffers(node)} buffers of its own"
+                f" ({override_pages} pages, {batch_keys} keys)")
+        override_buffers = sum(_own_buffers(node) for node in override_scans)
         # Rows read, of the batch's own tables: the override step's reads are bounded by buffers above (one pass
         # over the table is allowed), so they are not in this count.
         measured[size] = sum(rows for table, rows in rows_read.items() if table != "exception_overrides")

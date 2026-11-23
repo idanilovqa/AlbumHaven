@@ -332,9 +332,10 @@ def test_live_a_save_never_hangs_behind_a_held_inventory_lock(edit_route):
         holder.join(30)
 
     assert elapsed < LOCK_CEILING_SECONDS + 5, f"The save hung {elapsed:.1f} s behind the inventory lock."
-    if status != 200:
-        assert payload.get("error"), f"The save failed without a readable message: {status} {payload}"
-        assert not _shows_a_local_path(edit_route, payload), f"The failure shows a local path: {payload}"
+    # Saved, finishing: an accepted save whose task the client keeps watching, never a failure.
+    assert status in (200, 202) and payload.get("ok") is True, f"The save was reported failed: {status} {payload}"
+    if status == 202:
+        assert payload.get("save_task_status") == "finishing", payload
     # 6.5: past the ceiling the edit is "saved, finishing". Its files are written and its intent is
     # stored, and the background owner completes it once the lock frees, with no restart.
     assert _seconds_until_album_titled(edit_route, "Renamed Behind The Lock") < 10, (

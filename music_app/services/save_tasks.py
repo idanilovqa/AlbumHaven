@@ -1285,12 +1285,6 @@ def queue_finalize_save_task(*, wait_for_completion: bool = False, **kwargs) -> 
         raise
 
 
-# Placeholder wording (6.5, 11-23, row B2): new UI text, pending the owner's approval.
-EDIT_SAVE_FINISHING_MESSAGE = (
-    "Your edit is saved. The library is busy publishing a scan, so it will finish updating shortly."
-)
-
-
 def queue_finalize_structural_tag_edit_save_task(
     *,
     wait_for_completion: bool = False,
@@ -1305,7 +1299,7 @@ def queue_finalize_structural_tag_edit_save_task(
         except EditSaveLockBusy:
             # The request answers "saved, finishing"; the same finalize completes the stored intent in
             # the background as soon as the lock frees, holding the save's reservation until then.
-            update_save_task(kwargs["task_id"], status="finishing", error=EDIT_SAVE_FINISHING_MESSAGE)
+            update_save_task(kwargs["task_id"], status="finishing")
             _submit_structural_finalize(kwargs)
         return
     _submit_structural_finalize(kwargs)

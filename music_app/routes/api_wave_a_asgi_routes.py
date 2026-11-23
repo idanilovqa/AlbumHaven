@@ -1449,6 +1449,11 @@ def _authoritative_edit_tags_response(
     response["timings"] = response_timings
     task = save_task_result(task_id)
     status = str(task.get("status") or "missing")
+    if status == "finishing":
+        # Saved, finishing (6.5, row B2): the files are written and the intent is stored; the save completes
+        # in the background when the inventory lock frees. The client keeps the edit and watches the task,
+        # as for any save task that hasn't completed yet.
+        return {**response, "save_task_status": status}, 202
     if status != "completed":
         error = str(task.get("error") or "").strip()
         if not error:
@@ -1469,10 +1474,6 @@ def _authoritative_edit_tags_response(
         for key in ("failure_stage", "edit_outcome"):
             if key in task:
                 failure_response[key] = task[key]
-        if status == "finishing":
-            # Saved, finishing (6.5, row B2): the files are written and the intent is stored; the save
-            # completes in the background when the inventory lock frees. Not a failure.
-            return {**failure_response, "finishing": True}, 202
         return failure_response, 500
 
     for key in (

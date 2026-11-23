@@ -204,3 +204,26 @@ def test_a_skipped_mark_is_cleared_after_its_writer_rolls_back(index):
 
     assert index.module.refresh(index.repository) is True
     assert index.marks() == []
+
+
+def test_prepare_for_serving_drains_a_mark_set_again_during_its_pass(index, monkeypatch):
+    """A mark set again during the pass is no writer's hold: the deploy step evaluates it again and serves."""
+    first, *rest = index.albums
+    index.committed_marks(first, *rest)
+    drain = index.module._drain
+    marked_again = []
+
+    def mark_again_once(repository, connection, library_id, marks, **options):
+        cleared = drain(repository, connection, library_id, marks, **options)
+        if not marked_again:
+            marked_again.append(first)
+            index.committed_marks(first)  # a new xid, committed after this pass read the old one
+        return cleared
+
+    monkeypatch.setattr(index.module, "_drain", mark_again_once)
+
+    index.module.prepare_for_serving(index.repository)
+
+    assert marked_again == [first]
+    assert index.marks() == []
+    assert index.module.serving_readiness(index.repository)["changed_albums_waiting"] == 0

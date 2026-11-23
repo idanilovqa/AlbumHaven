@@ -620,7 +620,7 @@ def _backfill_duplicate_results(repository: Any, connection: Any, library_id: in
 
 def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebuild_duplicates: bool = False,
                       report: Callable[[str, int, int], None] | None = None) -> int:
-    """Backfill what is not ready, then evaluate every marked album once; how many marks it left to a writer.
+    """Backfill what is not ready, then evaluate every marked album; how many marks are left after it.
 
     The caller holds the lock. A held mark stays for a later pass instead of being waited for."""
     if rebuild_duplicates:
@@ -639,27 +639,45 @@ def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebu
     if _duplicate_results_state(connection, library_id) != "ready":
         _backfill_duplicate_results(repository, connection, library_id, report)
     _DUPLICATES_READY.add(repository._database_url)
-    evaluated = outrun = held = 0
-    after = -1  # mark 0 (the loose files) comes first
-    while marks := connection.execute(
-        """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
-           where library_id = %s and album_id > %s order by album_id limit %s""",
-        (library_id, after, BACKFILL_BATCH),
-    ).fetchall():
-        try:
-            cleared = _drain(repository, connection, library_id, marks)
-        except Exception as error:
-            # serialization_failure: a save wrote these rows after this pass's snapshot.
-            if getattr(error, "sqlstate", None) != "40001" or outrun >= OUTRUN_RETRIES:
-                raise
-            outrun += 1
-            continue
-        held += len(marks) - cleared
-        after = int(_value(marks[-1], "album_id"))
-        evaluated += len(marks)
-        if report:
-            report("Changed albums", evaluated, evaluated)
-    return held
+    evaluated = outrun = 0
+    # Walks by key, each mark tried once per walk. A mark set again during a walk (by this pass's own writes
+    # or a late writer) is free to take afterwards, so another walk evaluates it; a mark a writer still
+    # holds is not, so it never makes the pass wait or spin.
+    for _walk in range(OUTRUN_RETRIES + 1):
+        after = -1  # from the lowest mark (0, the loose files, while it is still stored)
+        while marks := connection.execute(
+            """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
+               where library_id = %s and album_id > %s order by album_id limit %s""",
+            (library_id, after, BACKFILL_BATCH),
+        ).fetchall():
+            try:
+                _drain(repository, connection, library_id, marks)
+            except Exception as error:
+                # serialization_failure: a save wrote these rows after this pass's snapshot.
+                if getattr(error, "sqlstate", None) != "40001" or outrun >= OUTRUN_RETRIES:
+                    raise
+                outrun += 1
+                continue
+            after = int(_value(marks[-1], "album_id"))
+            evaluated += len(marks)
+            if report:
+                report("Changed albums", evaluated, evaluated)
+        if not _free_marks(connection, library_id):
+            break
+    return int(_value(connection.execute(
+        "select count(*) as marks from library.problematic_index_dirty_albums where library_id = %s",
+        (library_id,),
+    ).fetchone(), "marks"))
+
+
+def _free_marks(connection: Any, library_id: int) -> int:
+    """Marks no writer holds now: the lock test ends with its statement, so it never waits or keeps a lock."""
+    return int(_value(connection.execute(
+        f"""select count(*) as marks from (
+              select album_id from library.problematic_index_dirty_albums
+              where library_id = %s {_TAKE_FREE_MARKS}) free""",
+        (library_id,),
+    ).fetchone(), "marks"))
 
 
 def prepare_for_serving(repository: Any, *, rebuild_duplicates: bool = False,

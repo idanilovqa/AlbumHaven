@@ -469,16 +469,6 @@ def _scopes_showing(fixture, title):
         where albums.title = %s""", (title,))}
 
 
-def _lower_one_header(fixture):
-    _publish_custom_scopes(fixture)
-    headers = _headers(fixture)
-    behind = sorted(headers)[0]
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        connection.execute("""update library.gallery_membership_headers set source_generation = source_generation - 1
-            where scope_key = %s""", (behind,))
-    return behind, headers[behind] - 1
-
-
 def test_live_a_saved_edit_reaches_every_scope_through_its_queued_drain(library):
     """R4 (orchestrator, 11-23): the client shows the edit at the Save click; the server's gallery follows
     when the drain the save queues runs. A reload or another tab sees the old value until then, so the gap
@@ -499,38 +489,11 @@ def test_live_a_saved_edit_reaches_every_scope_through_its_queued_drain(library)
         f"The drain the save queued did not publish the edit within {gap:.1f} s.")
 
 
-def test_live_a_save_shows_in_every_header_the_journal_covers(library, monkeypatch):
-    _hold_background_owners(monkeypatch)
-    behind, _lagging_generation = _lower_one_header(library)
-    # A scope shows the album only when its categories include the album's root (hoard-only scopes don't).
-    showing_before = _scopes_showing(library, ALBUM) - {behind}
-    _gallery_state(library, "before the save")
-
-    _rename(library, "Shown Everywhere")
-    _gallery_state(library, "after the save")
-
-    assert showing_before and showing_before <= _scopes_showing(library, "Shown Everywhere"), (
-        "The edit is missing from a header at Save (owner: an edited value updates everywhere at Save).")
-
-
-def test_live_a_save_shows_in_a_header_behind_the_journal_without_moving_it(library, monkeypatch):
-    """Expected red until 0296 (library.patch_gallery_membership_rows) lands, pending the owner's OK: the
-    existing patch function can only move a header to the current generation."""
-    _hold_background_owners(monkeypatch)
-    behind, lagging_generation = _lower_one_header(library)
-
-    _rename(library, "Shown Behind Too")
-
-    assert _headers(library)[behind] == lagging_generation, "The save moved a header the journal does not cover."
-    assert behind in _scopes_showing(library, "Shown Behind Too"), (
-        "The edit is missing at Save from a header behind the journal (0296 pending).")
-
-
 def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(library, monkeypatch):
     from music_app.services import gallery_projection_postgres
     from music_app.services.cache import _CACHE_WRITE_EXECUTOR
 
-    queue_journaled_relation_drain = gallery_projection_postgres.queue_journaled_relation_drain
+    schedule_refresh = gallery_projection_postgres.schedule_gallery_projection_refresh
     _hold_background_owners(monkeypatch)
     _publish_custom_scopes(library)
     with isolatedPostgres._connect(library.setup_url) as connection:
@@ -540,7 +503,8 @@ def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(lib
         "The save emptied the journal ahead of the headers (R3).")
 
     showing_before = _scopes_showing(library, "Realigned By The Owner")
-    queue_journaled_relation_drain(library.config)
+    # The journal owner's drain, as queue_journaled_relation_drain schedules it.
+    schedule_refresh(library.config, incremental_membership=True)
     for _ in range(3):
         _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=60)
 

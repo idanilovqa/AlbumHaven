@@ -554,39 +554,39 @@ def _non_album_candidates_sql(
               or library.local_track_files.private_path = any(%(private_paths)s::text[])
             )
         """
-    # A batch's overrides are looked up once per statement, one probe per distinct key of the batch, inside a
-    # materialized CTE that nothing outer can re-run (case 55): per folder or per file they ran once per loop.
+    # A batch's overrides are read once per statement, inside a materialized CTE that nothing outer can re-run
+    # (case 55): per folder or per file they ran once per loop.
     batch_override_ctes = """
         batch_keys as materialized (
           select distinct active_track_files.private_path, active_track_files.track_id
           from active_track_files
         ),
-        -- The batch's overrides, as one set join of its keys to exception_overrides, run once (6.5): the
-        -- planner may hash-join one pass over the table or probe the (library_id, track_key) and track_id
-        -- indexes per key, but no lateral re-scans the table per key (a fenced lateral was seq-scanned per key
-        -- once the table had statistics: keys x table).
+        -- The batch's overrides, read once per branch (6.5): each branch is one scan of exception_overrides
+        -- keyed by the whole batch as an array, so it has no outer row to repeat for. A join to the keys was
+        -- planned as a nested loop inside this CTE (a Seq Scan, or index probes, per key). The array is one
+        -- drain batch at most (BACKFILL_BATCH keys). The keys are the rows' own track_key and track_id, which
+        -- exception_candidates matches to the batch's files.
         override_hits as materialized (
-          select batch_keys.private_path as key_path, null::bigint as key_track_id,
+          select overrides.track_key as key_path, null::bigint as key_track_id,
             overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at,
             0 as match_priority
-          from batch_keys
-          join library.exception_overrides overrides
-            on overrides.library_id = (select bootstrap_context.library_id from bootstrap_context)
-           and overrides.track_key = batch_keys.private_path
+          from library.exception_overrides overrides
+          -- (library_id, track_key) together: the Index Cond of exception_overrides_library_track_key_idx.
+          where overrides.library_id = (select bootstrap_context.library_id from bootstrap_context)
+            and overrides.track_key = any(array(select batch_keys.private_path from batch_keys))
 
           union all
 
-          select null::text as key_path, batch_keys.track_id as key_track_id,
+          select null::text as key_path, overrides.track_id as key_track_id,
             overrides.id, overrides.track_key, overrides.override_payload, overrides.updated_at,
             1 as match_priority
-          from batch_keys
-          join library.exception_overrides overrides
-            on overrides.track_id = batch_keys.track_id
-          -- The "+ 0" is deliberate, not redundant: it is what keeps library_id_idx from driving this join. An
-          -- expression on the column cannot use that index, so the library check stays a filter on the rows
-          -- track_id_idx finds; without statistics library_id_idx tied with track_id_idx and read every override
-          -- of the library. Do not simplify it away.
-          where overrides.library_id + 0 = (select bootstrap_context.library_id from bootstrap_context)
+          from library.exception_overrides overrides
+          where overrides.track_id = any(array(select batch_keys.track_id from batch_keys))
+            -- The "+ 0" is deliberate, not redundant: it is what keeps library_id_idx from driving this scan.
+            -- An expression on the column cannot use that index, so the library check stays a filter on the
+            -- rows track_id_idx finds; without statistics library_id_idx tied with track_id_idx and read every
+            -- override of the library. Do not simplify it away.
+            and overrides.library_id + 0 = (select bootstrap_context.library_id from bootstrap_context)
         ),
         """ if membership_folders else ""
     exception_candidates = """

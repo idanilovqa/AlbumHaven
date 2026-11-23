@@ -3020,9 +3020,41 @@ test('library Loose Tracks shows the rows already stored, keeps asking with the 
   assert.equal(page.live.size, 0, 'no retry once the store is ready');
 });
 
-test('the note under partial Loose Tracks renders nothing until the owner approves its wording', () => {
+// Owner approved note A (2026-11-22): "Still indexing loose tracks, so more may appear."
+test('a partial Loose Tracks page notes under the table that more may appear, and a ready one does not', () => {
   const { context } = loadHelper();
-  assert.equal(context.buildLooseTracksPartialNoteHtml(), '');
+  loadLooseTracksHeaderOwners(context);
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.state.ui = {};
+  const note = 'Still indexing loose tracks, so more may appear.';
+  const tracks = [{ path: 'D:/Music/Loose.flac', title: 'Loose', artist: 'Artist', duration_seconds: 60 }];
+
+  context.state.view = { library_non_album_tracks: tracks };
+  context.state.view.library_non_album_tracks_partial_scope = context.getLibraryNonAlbumScopeKey();
+  context.fetch = () => new Promise(() => {}); // a partial page with no armed retry asks once more
+  context.openNonAlbumModal({ libraryWide: true });
+  assert.match(table.innerHTML, /Loose/);
+  assert.equal(table.innerHTML.split(note).length - 1, 1, 'the exact note, once, under the table');
+  assert.ok(table.innerHTML.indexOf(note) > table.innerHTML.indexOf('Loose'), 'below the rows');
+
+  context.state.view = { library_non_album_tracks: tracks };
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
+  context.openNonAlbumModal({ libraryWide: true });
+  assert.match(table.innerHTML, /Loose/);
+  assert.equal(table.innerHTML.includes(note), false, 'no note once the list is ready');
 });
 
 test('a Loose Tracks page that is still preparing does not ask again until its retry fires', async () => {

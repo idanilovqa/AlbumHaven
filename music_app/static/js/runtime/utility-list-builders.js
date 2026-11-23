@@ -2823,8 +2823,9 @@ async function watchSaveTask(taskId, context = {}) {
     await waitForBrowserTimeout(500);
   }
   if (!mutationWasSuperseded()) {
+    // Owner (2026-11-23), their words: "Tags still updating: your edits remain queued."
     showRepairAlert(
-      'Tag changes are still being finalized. Your edits remain queued.',
+      'Your edits remain queued.',
       'info',
       8000,
       { title: 'Tags still updating', dismissible: true },

@@ -5219,7 +5219,7 @@ test('watchSaveTask keeps optimistic state without an error when polling exhaust
   assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
     [
-      'Tag changes are still being finalized. Your edits remain queued.',
+      'Your edits remain queued.',
       'info',
       8000,
       { title: 'Tags still updating', dismissible: true },

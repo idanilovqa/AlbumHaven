@@ -1260,7 +1260,7 @@ class EditTagsTracksNotInLibrary(ValueError):
     """Requested tracks the library no longer holds, named for the user, never by path."""
 
     def __init__(self, names: list[str]):
-        # Placeholder wording (6.5, 11-23): new UI text, pending the owner's approval.
+        # Owner (2026-11-23): "Name the songs". The failed-save alert shows this text.
         super().__init__(
             "These tracks are no longer in the library: " + ", ".join(names) + ". Reload the album and try again."
         )
@@ -2002,7 +2002,7 @@ async def _run_edit_tags_payload(
                 _postgres_exception_only_edit_state, request, payload
             )
         except EditTagsTracksNotInLibrary as exc:
-            return ({"ok": False, "error": str(exc)}, 409)
+            return ({"ok": False, "code": "tracks_not_in_library", "error": str(exc)}, 409)
         except ValueError as exc:
             return ({"ok": False, "error": str(exc)}, 400)
         get_state = lambda: postgres_edit_state

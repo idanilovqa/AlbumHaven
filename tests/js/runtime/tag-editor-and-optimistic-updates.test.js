@@ -3218,6 +3218,63 @@ test(`FTC-TAGS-040 manual tag edit keeps the editor closed after a logged ${stag
 });
 }
 
+// Owner (2026-11-23), "Name the songs": tracks the library no longer holds are named in the alert by the
+// server's text (track titles, never paths); any other refusal keeps the generic message.
+for (const [code, expected] of [
+  ['tracks_not_in_library', 'These tracks are no longer in the library: Second Song. Reload the album and try again.'],
+  ['some_other_refusal', 'Failed to edit tags.'],
+]) {
+test(`a save refused with ${code} shows ${expected === 'Failed to edit tags.' ? 'the generic message' : 'the named songs'}`, async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\02 - Second Song.flac';
+  const album = {
+    key: 'artist::album::2000',
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album', title: 'Second Song' }],
+  };
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { title: 'Renamed Song' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return {
+        ok: false,
+        status: 409,
+        async json() {
+          return {
+            ok: false,
+            code,
+            error: 'These tracks are no longer in the library: Second Song. Reload the album and try again.',
+          };
+        },
+      };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(alerts.at(-1)[0], expected);
+  assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\\\Music/);
+});
+}
+
 test('a failed tag edit whose files could not be put back says those files keep the new tags', async () => {
   const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\01 - Track.flac';
   const album = {

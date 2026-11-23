@@ -896,6 +896,7 @@ async function confirmManualTagEdit() {
   let failedSaveTaskError = '';
   let failedSaveStage = '';
   let failedSaveKeptNewTags = false;
+  let failedRefusalText = '';
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
   // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
@@ -950,6 +951,9 @@ async function confirmManualTagEdit() {
         }
       }
       failedSaveKeptNewTags = data.edit_outcome === 'recovery_pending';
+      // Owner (2026-11-23), "Name the songs": a refusal for tracks the library no longer holds shows the
+      // server's text, which names them by title, never by path.
+      if (data.code === 'tracks_not_in_library') failedRefusalText = String(data.error || '').trim();
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -1128,7 +1132,7 @@ async function confirmManualTagEdit() {
         ? 'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.'
         // Owner (2026-11-22), their words: a file that can't be written. The path and error stay in View details.
         : (failedSaveStage === 'media_write' ? 'Save failed: Read-only files' : '')
-          || failedSaveTaskError || 'Failed to edit tags.',
+          || failedRefusalText || failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {

@@ -39,10 +39,9 @@ def _library_id(fixture):
     return _rows(fixture, "select id from library.libraries where library_kind = 'local' limit 1")[0]["id"]
 
 
-def _hold_library_wide_marker(fixture, monkeypatch):
-    """Another transaction journals a library-wide change (album 0, as a detached-track write does) and
-    commits it. Its owner hasn't drained it yet: the journal owner's drain, which a write queues in the
-    background, is recorded instead of run, so the check is about the user's write alone."""
+def _hold_background_owners(monkeypatch):
+    """Record, instead of run, the background owners a write queues (the journal owner's drain and the
+    gallery refresh), so a check observes the user's write alone and never races its owner."""
     from music_app.services import gallery_projection_postgres
 
     queued = []
@@ -50,6 +49,13 @@ def _hold_library_wide_marker(fixture, monkeypatch):
                         lambda _config: queued.append("journaled drain"))
     monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
                         lambda _config, **_kwargs: queued.append("gallery refresh"))
+    return queued
+
+
+def _hold_library_wide_marker(fixture, monkeypatch):
+    """Another transaction journals a library-wide change (album 0, as a detached-track write does) and
+    commits it. Its owner hasn't drained it yet; the user's write alone is observed."""
+    queued = _hold_background_owners(monkeypatch)
     _rows(fixture, "select library.mark_relation_album_dirty(%s, 0)", (_library_id(fixture),))
     assert _markers(fixture) == 1
     return queued
@@ -161,6 +167,7 @@ def test_live_keeping_a_missing_album_commits_while_another_transaction_holds_a_
 def test_live_a_save_with_the_baseline_not_ready_commits_with_no_full_prepare_and_no_wait(library, monkeypatch):
     from music_app.services import gallery_projection_postgres, scoped_relation_projection
 
+    _hold_background_owners(monkeypatch)
     calls = []
     monkeypatch.setattr(scoped_relation_projection, "tag_edit_baseline_ready", lambda *_a, **_k: False)
     monkeypatch.setattr(gallery_projection_postgres, "ensure_gallery_projection_ready",
@@ -382,6 +389,10 @@ def _seed_albums(fixture, count, *, tag="bulk", own_artist=True):
                 join library.local_tracks tracks on tracks.track_key = (
                   select track_key from library.local_tracks where id = source.track_id) || {suffix} || n
                 where source.id = %(file)s""", {"count": count, "file": source["file_id"]})
+        # Statistics, as production's tables have: without them the planner treats the seeded tables as
+        # tiny and scans them, which would read as a save's library-wide work.
+        connection.execute("analyze library.local_artists, library.local_albums, library.local_tracks, "
+                           "library.local_track_files")
     _finish_live_reconciliation(fixture.config)
 
 
@@ -445,21 +456,24 @@ def _lower_one_header(fixture):
     return behind, headers[behind] - 1
 
 
-def test_live_a_save_shows_in_every_header_the_journal_covers(library):
+def test_live_a_save_shows_in_every_header_the_journal_covers(library, monkeypatch):
+    _hold_background_owners(monkeypatch)
     behind, _lagging_generation = _lower_one_header(library)
+    # A scope shows the album only when its categories include the album's root (hoard-only scopes don't).
+    showing_before = _scopes_showing(library, ALBUM) - {behind}
     _gallery_state(library, "before the save")
 
     _rename(library, "Shown Everywhere")
     _gallery_state(library, "after the save")
 
-    covered = set(_headers(library)) - {behind}
-    assert covered <= _scopes_showing(library, "Shown Everywhere"), (
+    assert showing_before and showing_before <= _scopes_showing(library, "Shown Everywhere"), (
         "The edit is missing from a header at Save (owner: an edited value updates everywhere at Save).")
 
 
-def test_live_a_save_shows_in_a_header_behind_the_journal_without_moving_it(library):
+def test_live_a_save_shows_in_a_header_behind_the_journal_without_moving_it(library, monkeypatch):
     """Expected red until 0296 (library.patch_gallery_membership_rows) lands, pending the owner's OK: the
     existing patch function can only move a header to the current generation."""
+    _hold_background_owners(monkeypatch)
     behind, lagging_generation = _lower_one_header(library)
 
     _rename(library, "Shown Behind Too")
@@ -469,10 +483,12 @@ def test_live_a_save_shows_in_a_header_behind_the_journal_without_moving_it(libr
         "The edit is missing at Save from a header behind the journal (0296 pending).")
 
 
-def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(library):
+def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(library, monkeypatch):
+    from music_app.services import gallery_projection_postgres
     from music_app.services.cache import _CACHE_WRITE_EXECUTOR
-    from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
 
+    queue_journaled_relation_drain = gallery_projection_postgres.queue_journaled_relation_drain
+    _hold_background_owners(monkeypatch)
     _publish_custom_scopes(library)
     with isolatedPostgres._connect(library.setup_url) as connection:
         connection.execute("update library.gallery_membership_headers set source_generation = source_generation - 1")
@@ -480,6 +496,7 @@ def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(lib
     assert _rows(library, "select count(*) as n from library.local_relation_dirty_albums where album_id > 0")[0]["n"] >= 1, (
         "The save emptied the journal ahead of the headers (R3).")
 
+    showing_before = _scopes_showing(library, "Realigned By The Owner")
     queue_journaled_relation_drain(library.config)
     for _ in range(3):
         _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=60)
@@ -487,7 +504,8 @@ def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(lib
     current = _generation(library)
     assert set(_headers(library).values()) == {current}, f"A header stayed behind after the owner's drain: {_headers(library)}."
     assert _rows(library, "select count(*) as n from library.local_relation_dirty_albums")[0]["n"] == 0
-    assert _scopes_showing(library, "Realigned By The Owner") == set(_headers(library))
+    assert showing_before <= _scopes_showing(library, "Realigned By The Owner")
+    assert _scopes_showing(library, "Realigned By The Owner"), "The owner's drain did not publish the edit."
 
 
 # 6.5's conditions on R1 and R5.

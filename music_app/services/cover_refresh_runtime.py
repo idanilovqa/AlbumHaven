@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import partial
 import time
 
-from music_app.services.cover_provider_cache import CoverSearchCache
+from music_app.services.cover_provider_cache import CoverSearchCache, cover_cache_writable
 from music_app.services.library_album_index import library_album_index
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 
@@ -206,7 +206,9 @@ def build_cover_refresh_context(
             config,
         ),
         separate_release_keys=set(library_state.get("separate_release_keys") or set()),
-        cover_cache=CoverSearchCache(config.get("ALBUM_HAVEN_APP_DATABASE_URL")),
+        cover_cache=CoverSearchCache(
+            config.get("ALBUM_HAVEN_APP_DATABASE_URL"), writable=cover_cache_writable(config),
+        ),
         image_extensions=config["IMAGE_EXTENSIONS"],
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
         scan_generation=int(library_state.get("scan_generation") or 0),
@@ -602,7 +604,9 @@ def start_manual_cover_refresh(
             library_state=library_state,
             file_cache=file_cache,
             separate_release_keys=set(library_state.get("separate_release_keys") or set()),
-            cover_cache=CoverSearchCache(config.get("ALBUM_HAVEN_APP_DATABASE_URL")),
+            cover_cache=CoverSearchCache(
+                config.get("ALBUM_HAVEN_APP_DATABASE_URL"), writable=cover_cache_writable(config),
+            ),
             image_extensions=config["IMAGE_EXTENSIONS"],
             user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
             scan_generation=scan_generation,

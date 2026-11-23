@@ -74,11 +74,12 @@ class CoverSearchCache:
     """Cover provider answers, one `library.cover_provider_cache_entries` row per query key (migration 0293).
 
     `get` reads one row by its primary key; `set` stages an answer and `save` upserts only the staged keys, so
-    no lookup or save loads or rewrites the whole cache. Without a database URL, answers live in this
-    process only: nothing is persisted to a file."""
+    no lookup or save loads or rewrites the whole cache. Without a database URL, or in a browse-only app
+    (`writable=False`), new answers live in this process only: nothing is written to a file or the database."""
 
-    def __init__(self, database_url: str | None = None, *, connect=None):
+    def __init__(self, database_url: str | None = None, *, connect=None, writable: bool = True):
         self.database_url = str(database_url or "").strip()
+        self.writable = writable
         self._connect = connect or leased_connection
         self._staged: dict[str, dict[str, object]] = {}
         self._lock = threading.Lock()
@@ -104,7 +105,7 @@ class CoverSearchCache:
             self._staged[key] = dict(value)
 
     def save(self) -> None:
-        if not self.database_url:
+        if not self.database_url or not self.writable:
             return
         with self._lock:
             staged = dict(self._staged)
@@ -146,13 +147,24 @@ def _row_payload(row: object) -> object:
     return row[0]
 
 
+def cover_cache_writable(config) -> bool:
+    """A browse-only app reads provider answers but never writes them (the shared-database writer rule)."""
+    return config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True
+
+
+def configure_shared_cover_search_cache(config) -> None:
+    """Points the process cache that provider helpers use at this app's database and writer role."""
+    _MUSICBRAINZ_RELEASE_DISK_CACHE.database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    _MUSICBRAINZ_RELEASE_DISK_CACHE.writable = cover_cache_writable(config)
+
+
 def import_cover_search_cache_file(config, *, connect=None, stop_requested=None) -> dict[str, object]:
     """One-time startup backfill of an existing cover_search_cache.json into Postgres, in logged batches.
 
     Rows already in Postgres win. A finished import is recorded, so later startups read only that one row.
     The file is left in place and no longer read."""
     database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-    if not database_url or config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+    if not database_url or not cover_cache_writable(config):
         return {"status": "skipped"}
     connector = connect or leased_connection
     with connector(database_url) as connection:

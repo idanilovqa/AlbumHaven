@@ -457,7 +457,10 @@ def create_asgi_app():
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.runtime_asset_versions import runtime_asset_version_cache
     from music_app.services.postgres_connections import prewarm_connection_pool
-    from music_app.services.cover_provider_cache import import_cover_search_cache_file
+    from music_app.services.cover_provider_cache import (
+        configure_shared_cover_search_cache,
+        import_cover_search_cache_file,
+    )
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
@@ -570,6 +573,7 @@ def create_asgi_app():
             _app.state.generated_preview_relocation.start()
         else:
             _app.state.cover_preview_backfill.start()
+        configure_shared_cover_search_cache(runtime.config)
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,

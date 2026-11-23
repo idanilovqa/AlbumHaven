@@ -106,6 +106,33 @@ def test_save_upserts_only_the_staged_keys_once_and_a_clean_save_writes_nothing(
     assert _jsonb_object(params[0]) == {"artist::album": {"url": "https://images.example/cover.jpg"}}
 
 
+def test_a_browse_only_app_reads_answers_but_never_writes_them():
+    connection = _Connection({"stored::album": {"missing": True}})
+    cache = CoverSearchCache("postgresql://cache", connect=connection, writable=False)
+
+    cache.set("artist::album", {"url": "https://images.example/cover.jpg"})
+    cache.save()
+
+    assert cache.get("artist::album") == {"url": "https://images.example/cover.jpg"}
+    assert cache.get("stored::album") == {"missing": True}
+    assert [sql for sql, _ in connection.statements] == [
+        "select payload from library.cover_provider_cache_entries where cache_key = %s",
+    ]
+
+
+def test_the_process_cache_follows_the_app_database_and_writer_role(monkeypatch):
+    shared = CoverSearchCache()
+    monkeypatch.setattr(cover_provider_cache, "_MUSICBRAINZ_RELEASE_DISK_CACHE", shared)
+
+    cover_provider_cache.configure_shared_cover_search_cache(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": " postgresql://app ", "SHARED_LIBRARY_BROWSE_ONLY": True},
+    )
+    assert (shared.database_url, shared.writable) == ("postgresql://app", False)
+
+    cover_provider_cache.configure_shared_cover_search_cache({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"})
+    assert shared.writable is True
+
+
 def test_a_failed_write_keeps_the_staged_answer_for_the_next_save(caplog):
     connection = _Connection(fail=True)
     cache = CoverSearchCache("postgresql://cache", connect=connection)

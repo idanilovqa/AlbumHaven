@@ -1014,20 +1014,13 @@ class PostgresLibraryBrowseRepository:
                 )
                 if projection is None:
                     if root_alias_to_canonical is None:
-                        relation_alias_maps = self._load_relation_alias_maps(
-                            connection=connection,
-                        )
+                        relation_alias_maps = self._read_relation_alias_maps(connection)
                         root_alias_to_canonical = _root_browse_alias_to_canonical(
                             relation_alias_maps["alias_to_canonical"]
                         )
-                        missing_album_rows = self._load_missing_album_rows(
-                            connection=connection,
-                        )
+                        missing_album_rows = self._read_missing_album_rows(connection)
                     rows = _canonicalize_artist_rows(
-                        self._load_root_sidebar_rows(
-                            view_state,
-                            connection=connection,
-                        ),
+                        self._read_root_sidebar_rows(connection, view_state),
                         root_alias_to_canonical,
                     )
                     missing_albums = _missing_album_projection_payloads(
@@ -3858,14 +3851,13 @@ class PostgresLibraryBrowseRepository:
         connection: Any | None = None,
     ) -> list[object]:
         if connection is not None:
-            cursor = connection.execute(_root_sidebar_sql(), _root_sidebar_params(view_state))
-            return list(cursor.fetchall())
+            return self._read_root_sidebar_rows(connection, view_state)
         with self._connect_to_database() as owned_connection:
-            cursor = owned_connection.execute(
-                _root_sidebar_sql(),
-                _root_sidebar_params(view_state),
-            )
-            return list(cursor.fetchall())
+            return self._read_root_sidebar_rows(owned_connection, view_state)
+
+    def _read_root_sidebar_rows(self, connection: Any, view_state: Mapping[str, object]) -> list[object]:
+        cursor = connection.execute(_root_sidebar_sql(), _root_sidebar_params(view_state))
+        return list(cursor.fetchall())
 
     def _load_selected_artist_rows(
         self,
@@ -4065,6 +4057,22 @@ class PostgresLibraryBrowseRepository:
         after: tuple[str, str, str, str] | None = None,
         connection: Any | None = None,
     ) -> list[object]:
+        options = dict(artist_names=artist_names, album_keys=album_keys, limit=limit, after=after)
+        if connection is not None:
+            return self._read_missing_album_rows(connection, album_key, **options)
+        with self._browse_connection_context() as owned_connection:
+            return self._read_missing_album_rows(owned_connection, album_key, **options)
+
+    def _read_missing_album_rows(
+        self,
+        connection: Any,
+        album_key: str | None = None,
+        *,
+        artist_names: list[str] | None = None,
+        album_keys: list[str] | None = None,
+        limit: int | None = None,
+        after: tuple[str, str, str, str] | None = None,
+    ) -> list[object]:
         params = {"album_key": str(album_key or "").strip() or None}
         if limit is not None:
             if limit < 1:
@@ -4075,50 +4083,44 @@ class PostgresLibraryBrowseRepository:
         if artist_names is not None:
             params["artist_keys"] = [local_inventory_identity_key(artist) for artist in artist_names]
 
-        def load_rows(active_connection: Any) -> list[object]:
-            selected_album_keys = album_keys
-            use_exact_page_order = (
-                limit is not None
-                and params["album_key"] is None
-                and album_keys is None
-                and artist_names is None
-            )
-            if use_exact_page_order:
-                selected_album_keys = [
-                    str(row.get("key") or "")
-                    for row in sorted(
-                        (
-                            _row_mapping(row)
-                            for row in active_connection.execute(
-                                 _missing_album_order_sql(after=after is not None),
-                                 {
-                                     "limit": limit,
-                                     "after_name": (after or ("", "", "", ""))[0],
-                                     "after_artist": (after or ("", "", "", ""))[1],
-                                     "after_year": (after or ("", "", "", ""))[2],
-                                     "after_key": (after or ("", "", "", ""))[3],
-                                 },
-                            ).fetchall()
-                        ),
-                        key=_problematic_summary_sort_key,
-                    )[:limit]
-                ]
-                if not selected_album_keys:
-                    return []
-                params["album_keys"] = selected_album_keys
-            return list(active_connection.execute(
-                _missing_albums_sql(
-                    scoped_artists=artist_names is not None,
-                    scoped_albums=selected_album_keys is not None,
-                    bounded=limit is not None and not use_exact_page_order,
-                ),
-                params,
-            ).fetchall())
-
-        if connection is not None:
-            return load_rows(connection)
-        with self._browse_connection_context() as owned_connection:
-            return load_rows(owned_connection)
+        selected_album_keys = album_keys
+        use_exact_page_order = (
+            limit is not None
+            and params["album_key"] is None
+            and album_keys is None
+            and artist_names is None
+        )
+        if use_exact_page_order:
+            selected_album_keys = [
+                str(row.get("key") or "")
+                for row in sorted(
+                    (
+                        _row_mapping(row)
+                        for row in connection.execute(
+                             _missing_album_order_sql(after=after is not None),
+                             {
+                                 "limit": limit,
+                                 "after_name": (after or ("", "", "", ""))[0],
+                                 "after_artist": (after or ("", "", "", ""))[1],
+                                 "after_year": (after or ("", "", "", ""))[2],
+                                 "after_key": (after or ("", "", "", ""))[3],
+                             },
+                        ).fetchall()
+                    ),
+                    key=_problematic_summary_sort_key,
+                )[:limit]
+            ]
+            if not selected_album_keys:
+                return []
+            params["album_keys"] = selected_album_keys
+        return list(connection.execute(
+            _missing_albums_sql(
+                scoped_artists=artist_names is not None,
+                scoped_albums=selected_album_keys is not None,
+                bounded=limit is not None and not use_exact_page_order,
+            ),
+            params,
+        ).fetchall())
 
     def _load_search_rows(
         self,
@@ -4248,13 +4250,15 @@ class PostgresLibraryBrowseRepository:
         }
 
     def _load_relation_alias_maps(self, *, connection: Any | None = None) -> dict[str, object]:
+        if connection is not None:
+            return self._read_relation_alias_maps(connection)
+        with self._browse_connection_context() as owned_connection:
+            return self._read_relation_alias_maps(owned_connection)
+
+    def _read_relation_alias_maps(self, connection: Any) -> dict[str, object]:
         from music_app.services.relation_projection_postgres import (
             relation_projection_stale_reason,
         )
-
-        if connection is None:
-            with self._browse_connection_context() as owned_connection:
-                return self._load_relation_alias_maps(connection=owned_connection)
 
         def fetch_one(cursor: Any) -> object | None:
             if callable(getattr(cursor, "fetchone", None)):

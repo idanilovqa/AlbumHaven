@@ -2868,8 +2868,8 @@ def test_postgres_root_source_totals_fall_back_for_missing_projection_scope(monk
     alias_loads = []
     monkeypatch.setattr(
         repository,
-        "_load_relation_alias_maps",
-        lambda **kwargs: alias_loads.append(kwargs["connection"]) or {
+        "_read_relation_alias_maps",
+        lambda connection: alias_loads.append(connection) or {
             "alias_to_canonical": {},
             "canonical_to_aliases": {},
         },
@@ -2877,8 +2877,8 @@ def test_postgres_root_source_totals_fall_back_for_missing_projection_scope(monk
     fallback_scopes = []
     monkeypatch.setattr(
         repository,
-        "_load_root_sidebar_rows",
-        lambda view_state, **_kwargs: fallback_scopes.append(
+        "_read_root_sidebar_rows",
+        lambda _connection, view_state: fallback_scopes.append(
             tuple(view_state["visible_library_categories"])
         ) or [
             {"artist_name": "Artist One", "album_ids": [101, 102], "album_count": 2},
@@ -2888,8 +2888,8 @@ def test_postgres_root_source_totals_fall_back_for_missing_projection_scope(monk
     missing_loads = []
     monkeypatch.setattr(
         repository,
-        "_load_missing_album_rows",
-        lambda **kwargs: missing_loads.append(kwargs["connection"]) or [
+        "_read_missing_album_rows",
+        lambda connection, *_args, **_kwargs: missing_loads.append(connection) or [
             _missing_browse_row(
                 album_id=104,
                 title="Missing Album",

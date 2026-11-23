@@ -70,7 +70,7 @@ def test_gallery_patch_reads_only_affected_album_membership(monkeypatch):
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def _load_missing_album_rows(self, *, album_keys, connection):
+        def _read_missing_album_rows(self, connection, *, album_keys):
             assert album_keys == ["new artist::new", "old artist::old"]
             return [{'key': 'old artist::old', 'album_artist': 'missing alias', 'name': 'Old', 'year': 1980}]
 

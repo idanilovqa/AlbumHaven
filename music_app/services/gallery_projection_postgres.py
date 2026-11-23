@@ -140,7 +140,7 @@ def patch_gallery_membership_in_transaction(
             browse._root_gallery_membership_sql(candidate_albums_only=True),
             {**browse._root_sidebar_params(state), "gallery_album_ids": sorted(set(affected_album_ids))},
         ).fetchall() if keys else []
-        missing_rows = repository._load_missing_album_rows(album_keys=keys, connection=connection) if keys else []
+        missing_rows = repository._read_missing_album_rows(connection, album_keys=keys) if keys else []
         missing_payloads = browse._missing_album_projection_payloads(missing_rows, view_state=state)
         from music_app.services.scoped_relation_projection import _published_aliases
         row_aliases = _published_aliases(connection, context['library_id'], {

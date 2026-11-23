@@ -795,6 +795,8 @@ def test_live_a_header_whose_patch_is_refused_is_left_to_the_drain_while_the_oth
     fixture = library
     _hold_background_owners(monkeypatch)
     _publish_headers(fixture, _all_header_view_states()[:4])
+    holding_keys = _scopes_showing(fixture, ALBUM)
+    old_key = _rows(fixture, "select album_key from library.local_albums where title = %s", (ALBUM,))[0]["album_key"]
     _rename(fixture, "Patched Except One")
     album = _rows(fixture, "select id, album_key from library.local_albums where title = %s",
                   ("Patched Except One",))[0]
@@ -802,13 +804,14 @@ def test_live_a_header_whose_patch_is_refused_is_left_to_the_drain_while_the_oth
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
         context = gallery.gallery_projection_context(connection)
         headers = gallery._membership_headers(connection, {**context, "builder_version": gallery.BUILDER_VERSION})
-        holding = [header for header in headers if header["scope_key"] in _scopes_showing(fixture, ALBUM)]
+        holding = [header for header in headers if header["scope_key"] in holding_keys]
         assert len(holding) >= 2, "Too few headers hold the album to compare."
         behind = holding[0]["scope_key"]
         aliases = PostgresLibraryBrowseRepository(fixture.config)._load_relation_alias_maps(
             connection=connection)["alias_to_canonical"]
         publish_all = gallery._header_membership_publisher(
-            connection, fixture.config, context, [album["album_key"]], [album["id"]], aliases)
+            # The publication's affected keys: the album's key before and after the edit, as the journal has them.
+            connection, fixture.config, context, sorted({old_key, album["album_key"]}), [album["id"]], aliases)
         # One header's expected generation is behind its stored one, as if it changed meanwhile.
         refused = publish_all([
             (header, header["source_generation"] - 1 if header["scope_key"] == behind else header["source_generation"])

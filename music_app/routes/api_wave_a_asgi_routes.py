@@ -1256,6 +1256,27 @@ def _is_postgres_edit_tags_exception_only_response_request(
     return browse_selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES
 
 
+class EditTagsTracksNotInLibrary(ValueError):
+    """Requested tracks the library no longer holds, named for the user, never by path."""
+
+    def __init__(self, names: list[str]):
+        # Placeholder wording (6.5, 11-23): new UI text, pending the owner's approval.
+        super().__init__(
+            "These tracks are no longer in the library: " + ", ".join(names) + ". Reload the album and try again."
+        )
+
+
+def _edit_tags_track_names(payload: Mapping[str, object], paths: set[str]) -> list[str]:
+    """Each path's track title from the request's album, or the album's name: never the path."""
+    album = payload.get("album") if isinstance(payload.get("album"), Mapping) else {}
+    titles = {
+        str(track.get("path") or "").strip(): str(track.get("title") or "").strip()
+        for track in album.get("tracks") or [] if isinstance(track, Mapping)
+    }
+    fallback = str(album.get("name") or album.get("title") or "").strip() or "this album"
+    return sorted({titles.get(path) or fallback for path in paths})
+
+
 def _postgres_exception_only_edit_state(
     request: Request,
     payload: Mapping[str, object],
@@ -1279,12 +1300,18 @@ def _postgres_exception_only_edit_state(
     selected_file_entries = repository.build_track_file_entries_by_paths(
         inventory_paths
     )
+    if requested_paths - set(selected_file_entries):
+        # A scan's or watcher's publication may be adding them right now (6.5, row B4): wait for its
+        # commit once, then look again.
+        from music_app.services.scan_cache_persistence import edit_save_lock_wait_seconds
+
+        repository.wait_for_inventory_publication(
+            timeout_seconds=edit_save_lock_wait_seconds(_app_config(request)))
+        missed = inventory_paths - set(selected_file_entries)
+        selected_file_entries.update(repository.build_track_file_entries_by_paths(missed))
     unresolved_paths = requested_paths - set(selected_file_entries)
     if unresolved_paths:
-        raise ValueError(
-            "Postgres library inventory could not resolve requested track paths: "
-            + ", ".join(sorted(unresolved_paths))
-        )
+        raise EditTagsTracksNotInLibrary(_edit_tags_track_names(payload, unresolved_paths))
     # The selected inventory overlays the runtime cache, which is never copied.
     return {
         **library_state,
@@ -1967,6 +1994,8 @@ async def _run_edit_tags_payload(
             postgres_edit_state = await run_in_threadpool(
                 _postgres_exception_only_edit_state, request, payload
             )
+        except EditTagsTracksNotInLibrary as exc:
+            return ({"ok": False, "error": str(exc)}, 409)
         except ValueError as exc:
             return ({"ok": False, "error": str(exc)}, 400)
         get_state = lambda: postgres_edit_state

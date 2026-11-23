@@ -110,6 +110,23 @@ _TARGETED_TAG_EDIT_FIELDS = _TARGETED_MEDIA_EDIT_FIELDS | {"exception_type", "cu
 TARGETED_TAG_EDIT_FIELDS = _TARGETED_TAG_EDIT_FIELDS
 
 
+# Edits always save (6.5, 11-23, rows B2 and B4): the longest a user's save waits for the inventory
+# lock, which a scan's or startup build's publication holds while it writes.
+EDIT_SAVE_LOCK_WAIT_SECONDS = 60.0
+
+
+def edit_save_lock_wait_seconds(config: Mapping[str, object] | None) -> float:
+    try:
+        return max(0.1, float((config or {}).get("EDIT_TAGS_LOCK_WAIT_SECONDS") or EDIT_SAVE_LOCK_WAIT_SECONDS))
+    except (TypeError, ValueError):
+        return EDIT_SAVE_LOCK_WAIT_SECONDS
+
+
+def set_local_lock_wait(connection: Any, seconds: float) -> None:
+    """Bound this transaction's lock waits (SET LOCAL: it ends with the transaction)."""
+    connection.execute(f"set local lock_timeout = '{max(1, int(seconds * 1000))}ms'")
+
+
 class ScanCachePublicationSuperseded(RuntimeError):
     """Raised when a newer inventory mutation makes a prepared scan stale."""
 

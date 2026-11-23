@@ -4655,6 +4655,22 @@ class PostgresLibraryBrowseRepository:
             cursor = connection.execute(_utility_rules_sql(), {})
             return list(cursor.fetchall())
 
+    def wait_for_inventory_publication(self, *, timeout_seconds: float) -> bool:
+        """Wait, at most ``timeout_seconds``, for a publication holding the inventory lock to commit.
+        Takes and releases the lock in one short transaction; returns False when the wait ran out."""
+        from music_app.services.relation_projection_postgres import inventory_publication_advisory_lock_sql
+        from music_app.services.scan_cache_persistence import set_local_lock_wait
+
+        try:
+            with self._connect_to_database() as connection:
+                set_local_lock_wait(connection, timeout_seconds)
+                connection.execute(inventory_publication_advisory_lock_sql())
+            return True
+        except Exception as error:
+            if getattr(error, "sqlstate", None) == "55P03":  # lock_not_available
+                return False
+            raise
+
     def _connect_to_database(self) -> Any:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres library browse.")

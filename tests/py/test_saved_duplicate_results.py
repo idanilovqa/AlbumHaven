@@ -95,7 +95,9 @@ def test_live_a_save_stores_both_albums_results_while_maintenance_is_held(librar
 
     with psycopg.connect(library.url, autocommit=True, row_factory=dict_row) as maintenance:
         library_id = library.sql("select library_id from library.local_albums limit 1")[0][0]
-        assert problematic_index._locked(maintenance, library_id)
+        assert maintenance.execute(  # what a maintenance pass holds for its whole run
+            "select pg_try_advisory_lock(%s, %s::integer) as locked", (problematic_index._LOCK_NAMESPACE, library_id),
+        ).fetchone()["locked"]
 
         library.save(second, album="Same Réléase")
         assert library.marked(first, second) == [True, True], "Forming a pair marks both at commit."

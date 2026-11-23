@@ -9,7 +9,7 @@ const contractSource = fs.readFileSync(path.join(runtimeDir, 'playback-engine.js
 
 const OPERATIONS = {
   pause: ['pauseStreamingPlayback', []],
-  resume: ['resumeStreamingPlayback', [7, 'started', 'role']],
+  resume: ['resumeStreamingPlayback', [7, 'started', 'role', 'first-sound']],
   seek: ['seekStreamingPlayback', [42]],
   continuity: ['scheduleStreamingContinuity', ['track', { kind: 'long-loop' }]],
   setLoop: ['setStreamingLoop', [true, 1, 2]],
@@ -51,7 +51,7 @@ test('outside native playback every player call reaches the browser engine with 
     'pauseBrowserStreaming', 'resumeBrowserStreaming', 'seekBrowserStreaming', 'scheduleBrowserStreamingContinuity',
     'setBrowserStreamingLoop', 'stopBrowserStreaming', 'getBrowserStreamingSnapshot', 'failBrowserStreaming',
   ]);
-  assert.deepEqual(calls[1], ['resumeBrowserStreaming', 7, 'started', 'role']);
+  assert.deepEqual(calls[1], ['resumeBrowserStreaming', 7, 'started', 'role', 'first-sound']);
   assert.deepEqual(calls[4], ['setBrowserStreamingLoop', true, 1, 2]);
   const engine = context.currentPlaybackEngine();
   assert.equal(engine.holdsOwnClaim, false);

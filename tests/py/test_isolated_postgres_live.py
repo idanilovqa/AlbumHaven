@@ -572,16 +572,44 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
         CountingConnection, OperationCounts, _checked_in_entries, measure_scale_pair,
     )
 
+    import sys
+    from time import monotonic
+
     fixture = watcher_repair_inventory
     _apply_case64_draft(fixture)
     waiting = loose_track_store.INLINE_DRAIN_LIMIT
+    synthetic_base = 9_000_000_000
+    started = monotonic()
+
+    def phase(name, stored):
+        # Written past pytest's capture, so a run that times out still shows where its time went.
+        print(f"[case64-drain-contract] stored={stored} {name} t={monotonic() - started:.1f}s",
+              file=sys.__stderr__, flush=True)
 
     def run(stored):
-        # A full seed replaces the library; preparing builds or drains it before anything is counted. ``stored``
-        # loose rows sit beside the INLINE_DRAIN_LIMIT marked ones, so 50 marks wait at both sizes.
-        _entries, loose_entries = _loose_library(fixture, 5, loose=stored + waiting)
+        # The library holds only the INLINE_DRAIN_LIMIT real loose tracks that get marked; the other ``stored``
+        # loose rows are written straight into the store, set-based, as copies of a real stored row. The
+        # contract is about stored rows: seeding a real library of that size ran the full-scan publication,
+        # the startup relation and gallery builds and a drain of every new track before anything was counted.
+        _entries, loose_entries = _loose_library(fixture, 5, loose=waiting)
         _prepare_store(fixture)
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute("delete from library.non_album_track_rows where track_id >= %s", (synthetic_base,))
+            connection.execute("""
+                insert into library.non_album_track_rows (library_id, track_id, track, updated_at)
+                select seed.library_id, %(base)s + n, jsonb_build_object('files', jsonb_build_array(
+                    (seed.track -> 'files' -> 0) || jsonb_build_object(
+                      'track_id', %(base)s + n, 'track_file_id', %(base)s + n,
+                      'private_path', (seed.track -> 'files' -> 0 ->> 'private_path') || '.stored-' || n,
+                      '_order', jsonb_build_array('zz stored', 'Stored ' || lpad(n::text, 6, '0'), '', %(base)s + n)))),
+                  now()
+                from (select library_id, track from library.non_album_track_rows
+                      where track_id < %(base)s order by track_id limit 1) seed,
+                  generate_series(1, %(stored)s) n
+            """, {"base": synthetic_base, "stored": stored})
+        phase("seed done", stored)
         before = _store_rows(fixture)
+        assert len(before) == stored + waiting
         changed = {
             entry["path"]: {**entry, "title": f"Changed {index}", "mtime": entry["mtime"] + 1}
             for index, entry in enumerate(loose_entries[:waiting])
@@ -602,7 +630,9 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
             return rows
 
         monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted_load)
+        phase("drain start", stored)
         _loose_payload(repository)  # the read request drains inline
+        phase("drain done", stored)
         after = _store_rows(fixture)
         assert _marks(fixture) == 0, "the read drained every waiting mark"
         assert len(loads) == 1 and len(loads[0]) == waiting, "one candidate load, keyed by the marked tracks"

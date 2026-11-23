@@ -23,7 +23,7 @@ const CONDITIONS = [
 
 // Report-only for now: no budget. Each sample must carry its evidence, a held Play may ask nothing before it
 // sounds, and held must sound sooner than a Play that pays the claim round trip.
-test(`${CASE_ID} Play after Pause within the pause hold sounds sooner than a Play that has to ask for the claim, at normal speed and with the CPU four times slower`, { tag: '@area:playback' }, async ({
+test(`${CASE_ID} Pressing Play within 12 seconds of Pause sounds sooner than pressing Play after those 12 seconds, on a normal and a 4x slower processor`, { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
   page,

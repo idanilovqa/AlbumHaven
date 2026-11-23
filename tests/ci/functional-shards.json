@@ -1305,7 +1305,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/playAfterPause.spec.js",
-              "case": "FTC-PLAYER-030 Play after Pause within the pause hold sounds sooner than a Play that has to ask for the claim, at normal speed and with the CPU four times slower",
+              "case": "FTC-PLAYER-030 Pressing Play within 12 seconds of Pause sounds sooner than pressing Play after those 12 seconds, on a normal and a 4x slower processor",
               "area": "playback"
             },
             {

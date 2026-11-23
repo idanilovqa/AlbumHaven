@@ -505,15 +505,16 @@ _FIRST_BATCH_SECONDS = 5.0
 
 
 class _ExplainingConnection:
-    """The drain's own connection, which first EXPLAINs the candidate statement it is given, under whatever
-    planner settings the loader has set for it."""
+    """The drain's own connection, which first runs EXPLAIN (ANALYZE) of the candidate statement it is given,
+    so the plan checked is the executed one: a plan flat in estimate but not in execution cannot hide. The
+    analyzed run reads the same rows as the real one, so each size's rows-read count doubles alike."""
 
     def __init__(self, connection, plans):
         self._connection, self._plans = connection, plans
 
     def execute(self, sql, params=None):
         if "eligible_track_file_ids" in str(sql):
-            self._plans.append(self._connection.execute("explain (format json) " + sql, params).fetchone())
+            self._plans.append(self._connection.execute("explain (analyze, format json) " + sql, params).fetchone())
         return self._connection.execute(sql, params)
 
     def __getattr__(self, name):

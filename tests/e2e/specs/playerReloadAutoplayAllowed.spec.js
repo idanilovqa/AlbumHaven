@@ -2,6 +2,7 @@ import { expect, test } from '../support/baseFixtures.js';
 import {
   PLAYBACK_START_TIMING_BUDGET,
   assertSustainedPlaybackContract,
+  clickToSoundTiming,
   expectTimingBudget,
   measureSustainedPlaybackWindow,
 } from '../helpers/index.js';
@@ -97,11 +98,19 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
     // parity-check: allow-read-only-measurement-evaluate -- use the browser monotonic clock for playback latency
     const explicitPlayStartedAtMs = await page.evaluate(() => performance.now());
     await globalPlayerActions.resumeIfPaused();
+    // parity-check: allow-read-only-measurement-evaluate -- the player shows playing by now, on the same monotonic clock
+    const explicitPlayShownAtMs = await page.evaluate(() => performance.now());
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({
       after: explicitPlayMark,
       path: playedTrack.path,
     });
-    const explicitPlayStartupMs = evidence.observedAtMs - explicitPlayStartedAtMs;
+    // Press to sound ends at the song's first rendered frame, as click to sound does.
+    const { elapsedMs: explicitPlayStartupMs } = clickToSoundTiming({
+      path: playedTrack.path,
+      startedAtMs: explicitPlayStartedAtMs,
+      stateCompletedAtMs: explicitPlayShownAtMs,
+      evidence,
+    });
   expectTimingBudget(
     expect,
     explicitPlayStartupMs,

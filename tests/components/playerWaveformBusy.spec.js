@@ -38,6 +38,10 @@ async function mountWaveformPlayer(page) {
       },
     };
     window.getStreamingPlaybackSnapshot = () => ({ generation: 7, duration: 200, currentTime: 0 });
+    // The shown song is player-loop-playback.js's: here the current track, sounding.
+    window.resolveShownPlayerTrack = (playback) => ({
+      track: window.state.player.current, live: true, currentTime: playback.currentTime, duration: playback.duration,
+    });
   }, { current: trackPath });
   for (const file of ['player-waveform-peaks.js', 'player-and-waveform.js']) {
     await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });

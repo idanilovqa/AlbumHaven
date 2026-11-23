@@ -11,6 +11,7 @@ import subprocess
 import sys
 from typing import Awaitable, Callable
 
+from music_app.services import playback_timing
 from music_app.services.child_process import ChildProcess, start_child_process
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
 
@@ -454,7 +455,9 @@ class WaveformPeaksRegistry:
         cancel_event: asyncio.Event,
         cache_identity: dict[str, object] | None,
     ) -> WaveformPeaks:
-        peaks = await self._builder(path, bins=bins, cancel_event=cancel_event)
+        peaks = await playback_timing.timed_waveform_build(
+            self._builder(path, bins=bins, cancel_event=cancel_event)
+        )
         repository = self._cache_repository
         if repository is None or cache_identity is None or cancel_event.is_set():
             return peaks

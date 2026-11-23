@@ -88,6 +88,7 @@ export {
 export {
   MAX_PLAYBACK_START_DEGRADATION_MS,
   PLAYBACK_START_TIMING_BUDGET,
+  clickToSoundTiming,
   evaluatePlaybackStartBudget,
   measureAlbumTrackPlaybackStart,
   observePlaybackTrackTraffic,
@@ -95,6 +96,10 @@ export {
 } from './playbackStartPerformanceHelpers.js';
 export {
   assertActiveReplacementContract,
+  assertSwitchKeepsSongSounding,
+  assertTitleFollowsSound,
+  findPromotedPreparedReplacement,
+  observeSwitchPresentation,
   assertAudibleBoundaryCapture,
   assertNearEndSeekContract,
   assertGaplessBoundaryCapture,

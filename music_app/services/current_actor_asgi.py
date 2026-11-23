@@ -9,6 +9,7 @@ import threading
 from fastapi import Request
 from starlette.concurrency import run_in_threadpool
 
+from music_app.services import playback_timing
 from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
 from music_app.services.current_actor import CurrentActor
 from music_app.services.current_actor_postgres import PostgresCurrentActorResolver
@@ -28,7 +29,9 @@ async def current_actor_from_request(request: Request, *, refresh: bool = False)
     resolver = _resolver(request)
     raw_session_token = request.cookies.get(_SESSION_COOKIE)
     if refresh:
-        actor = await run_in_threadpool(resolver.resolve, raw_session_token)
+        actor = await run_in_threadpool(
+            playback_timing.timed_work("refresh", resolver.resolve), raw_session_token
+        )
     else:
         inflight = getattr(request.app.state, "current_actor_inflight", None)
         if inflight is None:

@@ -163,6 +163,7 @@ function loadHelper(overrides = {}) {
   });
   const context = {
     HTMLElement: FakeElement,
+    performance: { now: () => 0 },
     state: {
       player: {
         current: { src: '/track?path=song.flac' },
@@ -357,6 +358,91 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   context.isPlaybackLockedByAnotherTab = () => false;
   context.updatePlayerUi();
   assert.equal(time.textContent, '10 - 20');
+});
+
+// Pressing another song while one plays keeps the player's title, time, cover and waveform until the
+// pressed song sounds, then they change together. For every song, playing or paused. The pressed row
+// shows the press at once: rows read the selection, and that is unchanged.
+for (const paused of [false, true]) {
+  test(`a press keeps the player's title, time and cover on the ${paused ? 'paused' : 'playing'} song until the pressed song sounds`, async () => {
+    const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A', coverRef: 'old.jpg' };
+    const newTrack = {
+      src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A', coverRef: 'new.jpg', durationSeconds: 180,
+    };
+    const title = new FakeElement();
+    const time = new FakeElement();
+    const timeline = new FakeElement();
+    const coverButton = new FakeElement();
+    coverButton.style = { backgroundImage: '' };
+    class LoadedImage {
+      set src(value) {
+        this.loaded = value;
+        this.onload?.();
+      }
+    }
+    const snapshot = { currentTime: 75, duration: 200, paused, ended: false, src: oldTrack.src, mode: paused ? 'paused' : 'playing' };
+    let finishStart;
+    const { context } = loadHelper({
+      Image: LoadedImage,
+      getPlayerElements: () => ({ title, time, timeline, coverButton }),
+      getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+      canStartPlaybackInThisTab: () => true,
+      startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    });
+    const shown = () => ({ title: title.textContent, time: time.textContent, cover: coverButton.style.backgroundImage });
+    context.state.player.current = oldTrack;
+    context.updatePlayerUi();
+    const before = shown();
+    assert.deepEqual(before, { title: 'A - Old', time: '75 / 200', cover: 'url("/cover/old.jpg")' });
+
+    const playing = context.playTrackFromPayload(newTrack);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.state.player.selectedTrack, newTrack, 'the pressed row shows the press at once');
+    assert.deepEqual(shown(), before, 'the press itself leaves the player as it was');
+
+    // The engine starts the pressed song: its clock at its start, nothing of it heard yet.
+    Object.assign(snapshot, { currentTime: 0, duration: 180, paused: false, src: newTrack.src, mode: 'starting' });
+    context.updatePlayerUi();
+    assert.deepEqual(shown(), before, 'never the pressed song\'s start under the old title');
+    assert.equal(timeline.value, '75', 'the seek bar stays where the shown song was');
+
+    finishStart({ role: 'current', streamId: 2, generation: 2, track: newTrack });
+    await playing;
+    assert.equal(context.state.player.current, newTrack);
+    assert.deepEqual(shown(), before, 'a start that returns has not sounded');
+
+    // Its first frame sounds: everything changes in that one redraw.
+    Object.assign(snapshot, { currentTime: 1, mode: 'playing' });
+    await context.handleStreamingPlaybackFirstFrame({ generation: 2, streamId: 2, trackPath: newTrack.path });
+    assert.deepEqual(shown(), { title: 'A - New', time: '1 / 180', cover: 'url("/cover/new.jpg")' });
+  });
+}
+
+// A switch that hands over at a boundary: the playing song sounds on after the press returns, and its
+// time keeps running under its own title until the pressed song takes over.
+test('while the playing song still sounds after a switch returns, the player runs on with it', () => {
+  const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A' };
+  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A', durationSeconds: 180 };
+  const title = new FakeElement();
+  const time = new FakeElement();
+  const snapshot = { currentTime: 75, duration: 200, paused: false, ended: false, src: oldTrack.src, mode: 'playing' };
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title, time }),
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+  });
+  context.state.player.current = oldTrack;
+  context.updatePlayerUi();
+
+  context.state.player.current = newTrack;
+  snapshot.currentTime = 77;
+  context.updatePlayerUi();
+  assert.equal(title.textContent, 'A - Old');
+  assert.equal(time.textContent, '77 / 200');
+
+  Object.assign(snapshot, { currentTime: 0, duration: 180, src: newTrack.src });
+  context.updatePlayerUi();
+  assert.equal(title.textContent, 'A - New');
+  assert.equal(time.textContent, '0 / 180');
 });
 
 test('playback held by another tab or lost to the server disables the scissors for this tab', () => {
@@ -568,7 +654,7 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(pausedOffsets, [12]);
   assert.deepEqual(scrobbles, [pausedSession]);
   assert.deepEqual(ownershipReleases, [{ status: 'paused', track }]);
-  assert.equal(uiUpdates, 1);
+  assert.equal(uiUpdates, 2, 'once as the music stops, once the claim is given back');
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
   await new Promise((resolve) => setImmediate(resolve));
@@ -576,7 +662,7 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(ownershipClaims, [track]);
   assert.deepEqual(listenResumes, [{ track, startSeconds: 12 }]);
   assert.deepEqual(nowPlaying, [{ track, session: resumedSession }]);
-  assert.equal(uiUpdates, 2);
+  assert.equal(uiUpdates, 3);
 });
 
 test('global-player handoff shares its pending pause until streaming ownership is released', async () => {
@@ -711,6 +797,55 @@ test('pause awaiting an old scrobble cannot checkpoint a newer playing session',
   assert.strictEqual(context.state.player.listenSession, playingSession);
 });
 
+// Offline, Pause silenced the music but the button kept showing
+// Pause while the listen checkpoint and the claim give-back waited on the network.
+test('pause shows Play at once while its listen checkpoint and claim give-back wait on the network', async () => {
+  let finish;
+  const pending = { promise: new Promise((resolve) => { finish = resolve; }), resolve: (value) => finish(value) };
+  const snapshot = { currentTime: 40, duration: 300, paused: false, ended: false, src: '/track?path=song.flac' };
+  const { context, playButton } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: () => { snapshot.paused = true; },
+    persistPausedListenSession: () => pending.promise,
+    releasePlaybackOwnership: async () => true,
+  });
+  context.updatePlayerUi = () => { context.renderGlobalPlayerPlayGlyph(playButton, snapshot.paused); };
+  context.attachPlayerEvents();
+  context.updatePlayerUi();
+  assert.equal(playButton.getAttribute('data-player-glyph'), 'pause');
+  playButton.dispatch('click');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(playButton.getAttribute('data-player-glyph'), 'play');
+  pending.resolve(true);
+});
+
+// Offline, the checkpoint's lost request showed "Listening history could not be
+// saved". With no answer the listen stays open and is saved with the next checkpoint instead.
+for (const failure of ['network', 'abort']) {
+  test(`pause checkpoint with no answer (${failure}) keeps the listen and shows no alert`, async () => {
+    const warnings = [];
+    const releases = [];
+    const session = { id: 'offline-session' };
+    const ownership = { requestVersion: 1 };
+    const { context } = loadHelper({
+      getPlaybackOwnershipState: () => ownership,
+      getPlayerPlaybackSnapshot: () => ({ currentTime: 40, duration: 300, paused: false }),
+      pauseStreamingPlayback: async () => true,
+      persistPausedListenSession: async () => {
+        throw failure === 'network' ? new TypeError('Failed to fetch')
+          : Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+      },
+      showToast: (...args) => { warnings.push(args); },
+      releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },
+    });
+    context.state.player.listenSession = session;
+    assert.equal(await context.pausePlayerPlaybackForHandoff(), false);
+    assert.deepEqual(warnings, []);
+    assert.equal(releases.length, 1);
+    assert.strictEqual(context.state.player.listenSession, session);
+  });
+}
+
 for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
   test(`pause checkpoint ${outcome} reports only a current genuine save failure`, async () => {
     const ownership = { requestVersion: 1 };
@@ -725,7 +860,7 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
       persistPausedListenSession: async () => {
         if (outcome === 'nothing-to-save') return false;
         if (outcome === 'superseded-failure') ownership.requestVersion += 1;
-        throw new Error('checkpoint rejected');
+        throw Object.assign(new Error('checkpoint rejected'), { status: 400 });
       },
       showToast: (...args) => { warnings.push(args); },
       releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },
@@ -1530,7 +1665,9 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
   assert.deepEqual(scheduled, [adjacent], 'the promoted current prepares its adjacent queued-next once');
   assert.deepEqual(listenTracks, [replacement]);
   assert.deepEqual(nowPlayingTracks, [replacement]);
-  assert.deepEqual(uiCurrentPaths, [replacement.path, replacement.path]);
+  // Made current, its first frame (the player changes to it as it sounds), and the press's end; the
+  // repeated first frames redraw nothing.
+  assert.deepEqual(uiCurrentPaths, [replacement.path, replacement.path, replacement.path]);
   assert.equal(audio.playCalls, 0, 'reconciliation never returns to native audio playback');
 });
 

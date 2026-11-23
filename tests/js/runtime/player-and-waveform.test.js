@@ -110,6 +110,27 @@ test('updateWaveformAppearance publishes the effective seekbar presentation', as
   assert.equal(wrapClasses.has('is-waveform'), true);
 });
 
+// The playing song's waveform never disappears for a moment at a switch: it stays until the new song
+// plays.
+test('a pressed song that has not sounded yet leaves the playing song its waveform', async () => {
+  const canvas = { hidden: false };
+  const { context } = loadRuntime();
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.setPlayerSeekbarPresentation = () => {};
+  const drawn = [];
+  context.drawWaveformOnCanvas = (_canvas, waveform) => drawn.push(waveform);
+  const peaks = { left: [0.5], right: [0.5] };
+  Object.assign(context.state.player, {
+    current: { path: 'old.flac' }, selectedTrack: { path: 'new.flac' },
+  });
+  context.state.player.appearance.seekbarMode = 'waveform';
+  context.state.player.waveform.compactPeaks = { path: 'old.flac', data: peaks };
+
+  await context.updateWaveformAppearance();
+
+  assert.deepEqual(drawn, [peaks]);
+});
+
 test('saved-loop waveform settings refresh even without a main-player track', async () => {
   const modes = [];
   const { context } = loadRuntime();
@@ -162,6 +183,38 @@ test('loaded track uses its resolved album cover when the track payload omits ar
     `url("/cover/${encodeURIComponent(album.cover_ref)}")`,
   );
   assert.equal(coverButton.hidden, false);
+});
+
+// Pressing another song while one plays keeps the player's title, time, cover and waveform until the
+// pressed song sounds, then they change together.
+test('a pressed song whose peaks load before it sounds leaves the playing song its waveform until then', async () => {
+  const canvas = { hidden: false };
+  const { context } = loadRuntime();
+  const old = { src: 'old', path: 'old.flac' };
+  const next = { src: 'new', path: 'new.flac' };
+  const oldPeaks = { left: [0.2], right: [0.2] };
+  const newPeaks = { left: [0.9], right: [0.9] };
+  const snapshot = { src: 'old', currentTime: 100, duration: 200, mode: 'playing' };
+  const drawn = [];
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.getPlayerPlaybackSnapshot = () => ({ ...snapshot });
+  context.setPlayerSeekbarPresentation = () => {};
+  context.drawWaveformOnCanvas = (_canvas, data, progress) => drawn.push({ data, progress });
+  context.state.player.appearance.seekbarMode = 'waveform';
+  context.state.player.current = old;
+  context.state.player.waveform.compactPeaks = { path: old.path, data: oldPeaks };
+  await context.updateWaveformAppearance();
+
+  context.state.player.current = next;
+  context.state.player.waveform.compactPeaks = { path: next.path, data: newPeaks };
+  Object.assign(snapshot, { src: 'new', currentTime: 0, duration: 180, mode: 'starting' });
+  await context.updateWaveformAppearance();
+  assert.deepEqual(drawn.slice(1), [{ data: oldPeaks, progress: 0.5 }],
+    'the playing song\'s, where it was');
+
+  snapshot.mode = 'playing';
+  await context.updateWaveformAppearance();
+  assert.deepEqual(drawn.at(-1), { data: newPeaks, progress: 0 }, 'the pressed song\'s once it sounds');
 });
 
 function loadRuntime(overrides = {}) {

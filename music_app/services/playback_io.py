@@ -12,9 +12,14 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Callable, TypeVar
 
+from music_app.services import playback_timing
+
 _T = TypeVar("_T")
 _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="playback-io")
 
 
 async def run_playback_io(function: Callable[..., _T], *args: object) -> _T:
-    return await asyncio.get_running_loop().run_in_executor(_EXECUTOR, partial(function, *args))
+    work = partial(function, *args)
+    if playback_timing.ENABLED:
+        work = playback_timing.watched_thread_work(work)
+    return await asyncio.get_running_loop().run_in_executor(_EXECUTOR, work)

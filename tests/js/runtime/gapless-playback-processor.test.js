@@ -585,6 +585,26 @@ test('prepared seek cuts over on the render clock without a silent frame', () =>
   assert.equal(fixture.events('first-frame').at(-1).streamId, 42);
 });
 
+// A seek never stops playback, resets the head to the start or dims Play. The
+// worklet cut over to the seek's stream; the engine, not yet told, still delivered the old stream's
+// next chunk as current, and the worklet rejected it, which stopped playback.
+test('a chunk or end of the stream a seek just replaced is dropped, and the seek plays on', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(256).fill(0.25) });
+  play(fixture);
+  assertRenderedNonSilentStereo(fixture);
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: Array(256).fill(-0.25) });
+  fixture.send({ type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 144_000 });
+  assertRenderedNonSilentStereo(fixture);
+  assert.equal(fixture.events('seek-boundary').length, 1);
+
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 1, left: Array(128).fill(0.25) });
+  fixture.send({ type: 'eos', generation: fixture.generation, streamId: 41, role: 'current', emittedFrames: 384, authoritativeTotalFrames: 384 });
+
+  assert.deepEqual(fixture.events('protocol-reject'), [], 'the replaced stream is not a protocol error');
+  assert.deepEqual(renderQuantum(fixture).left, Array(128).fill(-0.25), 'the seek keeps playing');
+});
+
 test('buffered forward seek cuts within unread current PCM and preserves queued continuity', () => {
   const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
   enqueue(fixture, {
@@ -910,6 +930,79 @@ test('initial playback waits for its configured PCM cushion before rendering the
   assert.deepEqual(rendered.left, Array(QUANTUM_FRAMES).fill(0.25));
   assert.equal(fixture.events('first-frame').length, 1);
   assert.equal(fixture.events('underrun').length, 0);
+});
+
+function primedSeekFixture() {
+  const fixture = createProcessor({
+    currentCapacityFrames: 512,
+    continuityCapacityFrames: 512,
+    startupBufferFrames: QUANTUM_FRAMES * 3,
+  });
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(QUANTUM_FRAMES * 3).fill(0.25) });
+  play(fixture);
+  assertRenderedNonSilentStereo(fixture);
+  fixture.send({ type: 'reserve-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0 });
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: Array(QUANTUM_FRAMES).fill(-0.5) });
+  return fixture;
+}
+
+test('a primed replacement plays at its cutover without waiting for the startup cushion', () => {
+  const fixture = primedSeekFixture();
+  fixture.send({
+    type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0, primed: true,
+  });
+
+  assert.deepEqual(renderQuantum(fixture).left, Array(QUANTUM_FRAMES).fill(-0.5));
+  assert.equal(fixture.events('seek-boundary').length, 1);
+  assert.equal(fixture.events('first-frame').length, 2);
+});
+
+test('an unprimed seek target still waits for the startup cushion after its cutover', () => {
+  const fixture = primedSeekFixture();
+  fixture.send({ type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0 });
+
+  assertRenderedSilence(fixture);
+  assert.equal(fixture.events('seek-boundary').length, 1);
+  assert.equal(fixture.events('first-frame').length, 1);
+});
+
+function drainedPrimedSeekFixture() {
+  const fixture = primedSeekFixture();
+  for (let quantum = 0; quantum < 3; quantum += 1) renderQuantum(fixture);
+  assert.equal(fixture.events('buffering-start').length, 1, 'the old song ran dry while the switch waited');
+  return fixture;
+}
+
+test('a primed replacement plays at its cutover although the old song ran dry waiting for it', () => {
+  const fixture = drainedPrimedSeekFixture();
+  fixture.send({
+    type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0, primed: true,
+  });
+
+  assert.deepEqual(renderQuantum(fixture).left, Array(QUANTUM_FRAMES).fill(-0.5));
+  assert.deepEqual(fixture.events('buffering-end').map(({ streamId }) => streamId), [42]);
+  const types = fixture.port.events.map(({ type }) => type);
+  assert.ok(types.indexOf('seek-boundary') < types.indexOf('buffering-end'),
+    'the engine knows the new stream before it hears that it stopped buffering');
+});
+
+test('an unprimed seek target still refills after the old audio ran dry', () => {
+  const fixture = drainedPrimedSeekFixture();
+  fixture.send({ type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0 });
+
+  assertRenderedSilence(fixture);
+  assert.equal(fixture.events('buffering-end').length, 0);
+});
+
+test('a silenced player stays silent and reports no resumed audio when a primed replacement cuts over', () => {
+  const fixture = drainedPrimedSeekFixture();
+  fixture.send({ type: 'pause', generation: fixture.generation });
+  fixture.send({
+    type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0, primed: true,
+  });
+
+  for (let quantum = 0; quantum < 3; quantum += 1) assertRenderedSilence(fixture);
+  assert.equal(fixture.events('buffering-end').length, 0);
 });
 
 test('reserved seek retains the outgoing window from seek intent while preparation catches up', () => {
@@ -1747,6 +1840,15 @@ test('whole-track repeat promotes a frame-zero head without duplicating the boun
   assert.equal(fixture.events('underrun').length, 0);
 });
 
+test('a position says when it was rendered, so a late page can tell', () => {
+  const fixture = createProcessor();
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(256).fill(0.25) });
+  play(fixture);
+  assertRenderedNonSilentStereo(fixture);
+
+  assert.equal(fixture.events('position').at(-1).contextTime, fixture.events('first-frame').at(-1).contextTime);
+});
+
 test('stop clears playback and reports the exact rendered position', () => {
   const fixture = createProcessor();
   enqueue(fixture, {
@@ -1802,6 +1904,45 @@ test('processor partial underrun credits preceding frames before ending the meas
   assert.equal(receiver.session.measurement.total,2+32/48000);
   assert.equal(receiver.session.measurement.longest,2+32/48000);
   assert.equal(receiver.session.measurement.contiguous,0);
+});
+
+test('a spliced stream of the same track continues the timeline where the cut stream ended', () => {
+  const fixture = createProcessor();
+  const beforeCut = sequence(1, 64);
+  const afterCut = sequence(101, 64);
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: beforeCut });
+  markEos(fixture, { streamId: 41, role: 'current', emittedFrames: 64, authoritativeTotalFrames: 5_064 });
+  fixture.send({ type: 'expect-continuity', generation: fixture.generation, active: true, timelineStartFrame: 5_064 });
+  play(fixture);
+
+  // The splice stream is late: the cut stream's end waits for it instead of ending the track.
+  const silence = Array(64).fill(0);
+  assertRenderedStereo(fixture, [...beforeCut, ...silence], [...beforeCut.map((value) => -value), ...silence]);
+  assert.equal(fixture.events('ended').length, 0);
+  assert.equal(fixture.events('underrun').length, 1);
+
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: afterCut });
+  // It starts at its first frame: nothing skipped or repeated.
+  assertRenderedStereo(fixture, [...afterCut, ...silence], [...afterCut.map((value) => -value), ...silence]);
+
+  const [boundary] = fixture.events('boundary');
+  assert.equal(boundary.incomingStreamId, 42);
+  assert.equal(boundary.timelineFrame, 5_064 + 64, 'the timeline continues from the splice frame');
+  assert.equal(fixture.events('position').at(-1).timelineFrame, 5_064 + 64);
+});
+
+test('a later successor after a splice starts its own timeline at zero again', () => {
+  const fixture = createProcessor();
+  fixture.send({ type: 'expect-continuity', generation: fixture.generation, active: true, timelineStartFrame: 5_000 });
+  fixture.send({ type: 'expect-continuity', generation: fixture.generation, active: true });
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: sequence(1, 64) });
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: sequence(101, 64) });
+  markEos(fixture, { streamId: 41, role: 'current', emittedFrames: 64 });
+  play(fixture);
+
+  assertRenderedStereo(fixture, [...sequence(1, 64), ...sequence(101, 64)]);
+
+  assert.equal(fixture.events('boundary')[0].timelineFrame, 64);
 });
 
 test('bounded interaction: worklet seek commands copy one fixed boundary capture after 10,000 rendered quanta', async () => {

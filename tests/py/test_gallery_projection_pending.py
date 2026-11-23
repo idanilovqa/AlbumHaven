@@ -244,7 +244,8 @@ def test_requests_after_a_failed_common_refresh_schedule_and_publish_nothing(mon
 
 
 def test_the_next_source_change_recovers_a_common_scope_once(monkeypatch):
-    """(c) After a failed refresh, the next committed watcher change schedules exactly one refresh."""
+    """(c) Guard, not a red (passes before and after 6.5 option 1): after a failed refresh, the next committed
+    watcher change schedules exactly one refresh. Option 1 keeps this owner path unchanged; it pins it."""
     from music_app.services import state as state_service
 
     scheduled = []
@@ -536,9 +537,66 @@ def test_a_first_build_before_relations_are_initialized_still_fails_at_its_gener
     assert first_builds.builds == []
 
 
+@pytest.mark.parametrize("queue_projection_refresh", [True, False])
+@pytest.mark.parametrize("stale_relations", [True, False], ids=["stale-relations", "bounded-gallery"])
+def test_a_live_computed_page_never_publishes_or_schedules_while_relations_are_stale_or_bounded(
+    monkeypatch, queue_projection_refresh, stale_relations,
+):
+    """6.5 option 1, red at 9ef34a73d: a shared browse-only request with no published page computes it live.
+    While the relations are stale or the gallery is bounded, it neither schedules the common-scope refresh
+    (before, with queue_projection_refresh) nor publishes its live snapshot (before, without it: a snapshot of
+    stale relations published as the scope's page)."""
+    from tests.py.test_library_browse_postgres import _browse_album_row
+
+    rows = [_browse_album_row(artist="Live Artist", album_id=1, album_key="live-album", title="Live Album")]
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if sql in (browse._root_gallery_membership_sql(), browse._root_gallery_page_rows_sql()):
+                result = rows
+            else:
+                assert sql.startswith("SET TRANSACTION")
+                result = []
+            return SimpleNamespace(fetchall=lambda: result)
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-live-stale", "SHARED_LIBRARY_BROWSE_ONLY": True},
+        connect=lambda _: Connection(), album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(gallery, "gallery_projection_context", lambda _: {"library_id": 1, "generation": 2})
+    monkeypatch.setattr(gallery, "load_gallery_projection_page", lambda *_a, **_k: None)
+    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+                        lambda *_a, **_k: pytest.fail("a request scheduled the common-scope refresh"))
+    monkeypatch.setattr(gallery, "queue_gallery_projection_snapshot",
+                        lambda *_a, **_k: pytest.fail("a request published a live snapshot while stale or bounded"))
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_: {
+        "alias_to_canonical": {}, "canonical_to_aliases": {},
+        **({"projection_stale_reason": "relations_stale"} if stale_relations else {}),
+    })
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_: [])
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_: [])
+    monkeypatch.setattr(repository._inventory_repository, "load_support_state",
+                        lambda **_: {"ignored_version_keys": [], "manual_version_links": {}})
+    monkeypatch.setattr(browse, "_queue_display_cover_variants_for_groups", lambda *_: None)
+
+    payload = repository.build_root_startup_preview_payload(
+        query_params={"gallery_page_size": "8"}, bounded_gallery_only=not stale_relations,
+        queue_projection_refresh=queue_projection_refresh,
+    )
+
+    assert payload["album_count"] == 1, "the live-computed page is still served"
+
+
 def test_a_request_with_a_published_common_scope_never_publishes_a_live_snapshot(monkeypatch):
-    """main's live-compute publication (library_browse_postgres.py, queue_gallery_projection_snapshot) is never
-    taken once a common scope is published."""
+    """Guard (passes before and after 6.5 option 1): a request served from a published common scope never takes
+    main's live-compute publication (queue_gallery_projection_snapshot) and schedules nothing. The red for the
+    live-snapshot change is the stale-or-bounded test above."""
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-published-common-scope"}
     repository, _context = _pending_repository(monkeypatch, config)
 

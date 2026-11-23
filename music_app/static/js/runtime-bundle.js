@@ -5920,6 +5920,8 @@ const state = {
       },
       diagnostics: {
         firstFrameAtMs: 0,
+        resumedAtMs: 0,
+        resumeFirstFrameAtMs: 0,
         bufferedFrames: { current: 0, continuity: 0 },
         inFlightFrames: { current: 0, continuity: 0 },
         underruns: 0,
@@ -8712,6 +8714,11 @@ function recordStreamingRenderedPcmEvidence(roleState, message) {
     if (Number.isFinite(sample)) evidence.samples.push(sample);
   }
   if (message.audible === true) engine.audibleStreamId = roleState.streamId;
+  // The first non-silent frames of the current song rendered after a resume, on the page clock.
+  if (engine.diagnostics.resumedAtMs > 0 && !engine.diagnostics.resumeFirstFrameAtMs
+      && roleState.role === 'current' && message.frames > 0 && message.nonZeroSamples > 0) {
+    engine.diagnostics.resumeFirstFrameAtMs = performance.now();
+  }
   if (roleState.streamId === engine.audibleStreamId || message.audible === true) {
     engine.diagnostics.renderedPcmEvidence = evidence;
   }
@@ -11272,6 +11279,8 @@ async function startBrowserStreamingTrack(track, {
   engine.waveformReadyIdentity = null;
   engine.mode = 'starting';
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.resumedAtMs = 0;
+  engine.diagnostics.resumeFirstFrameAtMs = 0;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
@@ -11450,6 +11459,9 @@ async function resumeBrowserStreaming(
     engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   }
   syncStreamingSoundPermission(node);
+  // Diagnostics: a resume's first audible frame is stamped when the processor reports it ([recordStreamingRenderedPcmEvidence]).
+  engine.diagnostics.resumedAtMs = performance.now();
+  engine.diagnostics.resumeFirstFrameAtMs = 0;
   node.port.postMessage({ type: 'play', generation });
   engine.snapshot.paused = false;
   maybeGrantDeferredReplacementCredit();
@@ -11759,6 +11771,8 @@ async function cleanupStreamingResources(reason, {
     delete engine.diagnostics.lastError;
   }
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.resumedAtMs = 0;
+  engine.diagnostics.resumeFirstFrameAtMs = 0;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };

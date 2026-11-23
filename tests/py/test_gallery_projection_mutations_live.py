@@ -548,8 +548,11 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
         assert not pending, "Failed refresh did not release its single-flight slot"
         repository.build_root_startup_preview_payload()
         assert len(refreshes) == 2
-    # Journal replay publishes membership atomically; the outer refresh must reuse it.
-    assert refreshes[-1].result(timeout=10) == {"built": 0}
+    # Keep last families (431e0375b): while a relation rebuild is pending, the refresh publishes both root
+    # scopes with the last families, rebuilds relations, then republishes both once the relation publication
+    # moves the source generation, so 2 scopes x 2 publications. (Before 431e0375b relations were rebuilt
+    # first and the refresh reused the replayed membership: built 0.)
+    assert refreshes[-1].result(timeout=10) == {"built": 4}
     assert len(attempts) == (2 if fail_first else 1)
     assert not repository._load_relation_alias_maps().get("projection_stale_reason")
     with isolatedPostgres._connect(fixture.runtime_url) as connection:

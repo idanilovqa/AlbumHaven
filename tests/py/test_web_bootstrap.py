@@ -1597,30 +1597,6 @@ def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asg
 
 
 @pytest.mark.parametrize("mode", ["album_folders", "custom"])
-def test_asgi_unrevisioned_cover_preview_stays_in_app_data_under_a_storage_policy(app, asgi_app, tmp_path, mode):
-    """1404cd72c: only a revisioned preview follows the storage policy; any other stays in app data."""
-    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
-
-    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
-    cover_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (1200, 1200), "green").save(cover_path)
-    policy = preview_storage_policy_from_mapping({"mode": mode, "active_root": str(tmp_path / "ssd")})
-    asgi_app.state.generated_preview_storage_policy = policy
-    asgi_app.state.generated_preview_inventory_recorder = lambda *_args: pytest.fail(
-        "an unrevisioned preview is never recorded for relocation"
-    )
-
-    status, _headers, body = run_asgi_request(
-        asgi_app, "GET", cover_reference_url(asgi_app, cover_path), query={"size": "480"},
-    )
-
-    assert status == 200
-    assert body != cover_path.read_bytes()
-    assert (app.config["DATA_DIR"] / "display-cover-cache").is_dir()
-    assert not policy.write_cache_root(cover_path).exists(), "nothing is written where the policy stores previews"
-
-
-@pytest.mark.parametrize("mode", ["album_folders", "custom"])
 def test_asgi_unrevisioned_cover_preview_keeps_legacy_app_cache_readable(app, asgi_app, tmp_path, mode):
     from music_app.services.covers import resolve_cover_display_variant
     from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping

@@ -166,7 +166,8 @@ def test_override_missing_key_and_explicit_null_change_effective_missing_members
     assert fixture.first_album_key not in {row["album_key"] for row in repository._load_missing_album_rows()}
 
 
-def test_lowest_id_track_override_fallback_and_file_delete_invalidate(gallery_inventory):
+def test_newest_track_override_wins_and_file_delete_invalidates(gallery_inventory):
+    """eea310882: of two track overrides (no path override), the newest decides, as in the loader."""
     fixture = gallery_inventory
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     with isolatedPostgres._connect(fixture.setup_url) as writer:
@@ -174,14 +175,15 @@ def test_lowest_id_track_override_fallback_and_file_delete_invalidate(gallery_in
         writer.execute("update library.local_track_files set metadata="
                        "jsonb_set(metadata,'{scan_cache,stale}','true'::jsonb) where private_path=%s",
                        (fixture.first["path"],))
-        for key, value in (("proof-low", "non-album rarity"), ("proof-high", None)):
+        for key, value in (("proof-older", None), ("proof-newer", "non-album rarity")):
             writer.execute("""insert into library.exception_overrides(library_id,track_id,track_key,override_payload)
                 select library_id,id,%s,%s from library.local_tracks where track_key=%s""",
                 (key, Jsonb({"exception_type": value}), fixture.first["path"]))
+    # The newer rarity override excludes the album from missing albums.
     assert fixture.first_album_key not in {row["album_key"] for row in repository._load_missing_album_rows()}
     with isolatedPostgres._connect(fixture.setup_url) as writer:
         before = generation(writer, fixture.context["library_id"])
-        writer.execute("delete from library.exception_overrides where track_key='proof-low'")
+        writer.execute("delete from library.exception_overrides where track_key='proof-newer'")
         assert generation(writer, fixture.context["library_id"]) == before + 1
     assert fixture.first_album_key in {row["album_key"] for row in repository._load_missing_album_rows()}
     with isolatedPostgres._connect(fixture.setup_url) as writer:

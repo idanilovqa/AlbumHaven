@@ -826,12 +826,21 @@ def _pool_lease(node: ast.Call, module: Module) -> str | None:
 
 
 def _session_state(nodes) -> tuple[str, int] | None:
-    """The first SQL text among `nodes` that leaves state on the server session."""
+    """The first SQL text among `nodes` that leaves state on the server session. An f-string is one
+    text, each placeholder standing as an identifier: `update {table} set x = 1` sets no session
+    state and `set {name} = 0` does, though neither fragment says so alone."""
+    nodes = list(nodes)
+    fragments = {id(part) for node in nodes if isinstance(node, ast.JoinedStr) for part in node.values}
     for node in nodes:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            for kind, pattern in SESSION_STATE_SQL.items():
-                if pattern.search(node.value):
-                    return kind, node.lineno
+        if isinstance(node, ast.JoinedStr):
+            text = "".join(part.value if isinstance(part, ast.Constant) else "placeholder" for part in node.values)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in fragments:
+            text = node.value
+        else:
+            continue
+        for kind, pattern in SESSION_STATE_SQL.items():
+            if pattern.search(text):
+                return kind, node.lineno
     return None
 
 

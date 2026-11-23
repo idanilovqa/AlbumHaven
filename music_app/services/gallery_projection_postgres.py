@@ -539,19 +539,52 @@ def queue_gallery_projection_snapshot(config, context, view_state, snapshot, *, 
         config, context, view_state, snapshot, connect=connect), trailing=True, generation=context["generation"])
 
 
-def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None, incremental_membership=False):
+def is_common_gallery_scope(view_state) -> bool:
+    """The two root scopes that startup builds and scans, the watcher and tag saves refresh."""
     from music_app.services.library_browse_postgres import _root_sidebar_view_state
 
+    return gallery_projection_scope_key(view_state) in {
+        gallery_projection_scope_key(_root_sidebar_view_state(params))
+        for params in ({}, {"gallery_scope": "new_arrivals"})
+    }
+
+
+# (database URL, scope key) -> source generation at which a custom scope's first build failed.
+_FAILED_FIRST_BUILDS: dict[tuple[str, str], int] = {}
+
+
+def queue_gallery_scope_first_build(config, *, connect=None, view_state, generation, incremental_membership=False):
+    """A paged request's only build (6.5, option 1): the first build of a never-built custom scope, for that
+    scope alone and single-flight. After a failure it is not queued again until the source generation moves;
+    once the scope has a header, only its owners refresh it."""
+    if is_common_gallery_scope(view_state):
+        return None
+    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
+    scope_key = gallery_projection_scope_key(view_state)
+    with _PENDING_LOCK:
+        if (_FAILED_FIRST_BUILDS.get((database_url, scope_key)) == generation
+                or (database_url, ("refresh", scope_key)) in _PENDING):
+            return None  # failed at this generation, or already building (no trailing rebuild behind it)
+    future = schedule_gallery_projection_refresh(
+        config, connect=connect, view_state=view_state, incremental_membership=incremental_membership,
+    )
+    if future is not None:
+        def remember_failure(completed):
+            if completed.exception() is not None:
+                with _PENDING_LOCK:
+                    _FAILED_FIRST_BUILDS[(database_url, scope_key)] = generation
+
+        future.add_done_callback(remember_failure)
+    return future
+
+
+def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None, incremental_membership=False):
     key = "refresh"
     options = {"connect": connect}
     if view_state is not None:
         scope = {**view_state, "visible_library_categories": list(view_state.get("visible_library_categories") or [])}
         scope_key = gallery_projection_scope_key(scope)
-        common_keys = {
-            gallery_projection_scope_key(_root_sidebar_view_state(params))
-            for params in ({}, {"gallery_scope": "new_arrivals"})
-        }
-        if scope_key not in common_keys:
+        if not is_common_gallery_scope(scope):
             key = ("refresh", scope_key)
             options["view_state"] = scope
     def refresh():

@@ -1237,10 +1237,7 @@ class PostgresLibraryBrowseRepository:
         *,
         query_params: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        from music_app.services.gallery_projection_postgres import (
-            load_gallery_projection_sidebar,
-            schedule_gallery_projection_refresh,
-        )
+        from music_app.services.gallery_projection_postgres import load_gallery_projection_sidebar
 
         with self._browse_connection_context() as connection:
             connection.execute(
@@ -1251,7 +1248,7 @@ class PostgresLibraryBrowseRepository:
                 _root_sidebar_view_state(query_params),
             )
         if projected is None:
-            schedule_gallery_projection_refresh(self._config, connect=self._connect)
+            # The scope's owners (startup, scans, the watcher, tag saves) build it; a request never does (6.5).
             raise GalleryProjectionPending("Gallery is being prepared.")
         artists_sidebar, album_count = projected
         return {
@@ -1281,7 +1278,7 @@ class PostgresLibraryBrowseRepository:
             _root_gallery_page_size(query_params or {})
         from music_app.services.gallery_projection_postgres import (
             gallery_projection_context, load_gallery_projection_page, queue_gallery_projection_snapshot,
-            schedule_gallery_projection_refresh,
+            queue_gallery_scope_first_build,
         )
         projection_context = None
         prepared_snapshot = None
@@ -1307,9 +1304,12 @@ class PostgresLibraryBrowseRepository:
                 and (not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
                      or projection_context.get("incremental_membership"))
             )
-            if refresh_projection and queue_projection_refresh:
-                schedule_gallery_projection_refresh(
+            # A stale or missing common scope is refreshed by its owners (startup, scans, the watcher, tag
+            # saves), never a request (6.5). Only a never-built custom scope queues its own first build.
+            if refresh_projection and cached_page is None and queue_projection_refresh:
+                queue_gallery_scope_first_build(
                     self._config, connect=self._connect, view_state=view_state,
+                    generation=projection_context.get("generation"),
                     incremental_membership=bool(projection_context.get("incremental_membership")),
                 )
             if refresh_projection and cached_page is None:
@@ -1486,11 +1486,12 @@ class PostgresLibraryBrowseRepository:
             finally:
                 connection_stack.close()
 
-        if queue_projection_refresh and (
-            relation_alias_maps.get("projection_stale_reason") or bounded_gallery_only
+        # A stale projection is refreshed by its owners, never a request (6.5); main's live-computed snapshot
+        # publication below is kept, and never taken while the relations are stale or the gallery is bounded.
+        if (
+            prepared_snapshot is not None and projection_context
+            and not (relation_alias_maps.get("projection_stale_reason") or bounded_gallery_only)
         ):
-            schedule_gallery_projection_refresh(self._config, connect=self._connect)
-        elif prepared_snapshot is not None and projection_context:
             queue_gallery_projection_snapshot(
                 self._config, projection_context, view_state, prepared_snapshot, connect=self._connect)
 

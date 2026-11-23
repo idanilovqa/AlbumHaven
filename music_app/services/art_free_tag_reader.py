@@ -23,9 +23,11 @@ _FLAC_PADDING_BLOCK = 1
 class _ArtFreeView(io.RawIOBase):
     """Read-only file: a rebuilt tag prefix followed by the real file's tail."""
 
-    def __init__(self, handle, name: str, prefix: bytes, real_tail_start: int, real_size: int):
+    def __init__(self, handle, name: str, prefix: bytes, real_tail_start: int, real_size: int, *,
+                 owns_handle: bool):
         super().__init__()
         self._handle = handle
+        self._owns_handle = owns_handle
         self.name = name
         self._prefix = prefix
         self._tail_start = real_tail_start
@@ -64,7 +66,8 @@ class _ArtFreeView(io.RawIOBase):
 
     def close(self) -> None:
         try:
-            self._handle.close()
+            if self._owns_handle:
+                self._handle.close()
         finally:
             super().close()
 
@@ -135,12 +138,13 @@ def _flac_prefix(handle) -> tuple[bytes, int] | None:
     return bytes(rebuilt), position
 
 
-def open_art_free(path: Path):
-    """An art-free view of an ID3v2 or FLAC file, or None to use the real file."""
-    try:
-        handle = open(path, "rb")
-    except OSError:
-        return None
+def art_free_view(handle, path: Path):
+    """An art-free view of the open ID3v2 or FLAC file ``handle``, or None to read the real file. The view
+    reads through ``handle`` and never closes it: the caller owns the handle and closes it once."""
+    return _art_free_view(handle, path, owns_handle=False)
+
+
+def _art_free_view(handle, path: Path, *, owns_handle: bool):
     try:
         real_size = handle.seek(0, io.SEEK_END)
         handle.seek(0)
@@ -152,10 +156,21 @@ def open_art_free(path: Path):
         else:
             rebuilt = None
         if rebuilt is None:
-            handle.close()
             return None
         prefix, tail_start = rebuilt
-        return io.BufferedReader(_ArtFreeView(handle, str(path), prefix, tail_start, real_size))
+        return io.BufferedReader(_ArtFreeView(handle, str(path), prefix, tail_start, real_size,
+                                              owns_handle=owns_handle))
     except Exception:
-        handle.close()
         return None
+
+
+def open_art_free(path: Path):
+    """An art-free view of an ID3v2 or FLAC file that owns its own handle, or None to use the real file."""
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        return None
+    view = _art_free_view(handle, path, owns_handle=True)  # closing the view closes the handle
+    if view is None:
+        handle.close()
+    return view

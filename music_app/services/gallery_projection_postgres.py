@@ -656,11 +656,11 @@ def schedule_gallery_projection_refresh(
         from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
 
         if first_build:
+            if not incremental_membership:
+                return ensure_gallery_projection_ready(config, **options)  # options carry the one scope
             # Read-only and lock-free (fix 3): a request never drains the journal or publishes relations.
             if not _first_build_ready(config, connect):
                 return {"built": 0, "deferred": "relation_changes_pending"}
-            if not incremental_membership:
-                return ensure_gallery_projection_ready(config, **options)
             return build_missing_custom_scope() or {"built": 0}
         if not incremental_membership:
             return ensure_gallery_projection_ready(config, **options)

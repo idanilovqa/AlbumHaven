@@ -221,6 +221,17 @@ def test_candidate_filters_are_batched_deduplicated_bounded_and_parameterized(
     assert r"D:\\a.flac" not in sql
 
 
+# Case 64: the loader's qualifying predicate moved, verbatim, into library.loose_track_qualifies (the case 64
+# migration), which the Loose Tracks store's triggers call too. Its arguments carry the effective album in the
+# shaper's order (the file's scanned album, then the track's, then the album title) and the ranked override
+# (its exception type, then its payload), so an override's exception type still qualifies an album track.
+_QUALIFIES_CALL = (
+    "library.loose_track_qualifies( library.local_track_files.scan_file_album, "
+    "library.local_tracks.metadata ->> 'album', library.local_albums.title, library.local_track_files.metadata, "
+    "exception_override.exception_type, exception_override.override_payload )"
+)
+
+
 def test_candidate_query_includes_only_loose_tracks_or_meaningfully_overridden_album_tracks():
     sql = inventory_module._non_album_candidates_sql().lower()
     normalized_sql = " ".join(sql.split())
@@ -237,11 +248,7 @@ def test_candidate_query_includes_only_loose_tracks_or_meaningfully_overridden_a
         eligible_track_file_scope,
     )
     assert " ~ " in eligible_track_file_scope
-    assert (
-        "coalesce( library.local_track_files.scan_file_album, "
-        "library.local_tracks.metadata ->> 'album', library.local_albums.title, '' )"
-    ) in normalized_sql
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in normalized_sql
     assert "nullif(btrim(ranked_exception_overrides.override_payload ->> 'exception_type'), '')" in sql
     assert "jsonb_typeof(ranked_exception_overrides.override_payload) = 'string'" in sql
     assert "then nullif(btrim(ranked_exception_overrides.override_payload #>> '{}'), '')" in sql
@@ -268,7 +275,7 @@ def test_candidate_query_does_not_treat_a_detached_track_with_a_real_album_as_no
         normalized_sql,
     )
     assert " ~ " in normalized_sql
-    assert "exception_override.exception_type is not null" in normalized_sql
+    assert _QUALIFIES_CALL in normalized_sql
 
 
 def test_candidate_query_excludes_stale_files_and_files_belonging_to_inactive_roots():
@@ -323,7 +330,7 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_requi
     assert "library.local_track_files.scan_file_album" in sql
     assert "library.local_tracks.metadata ->> 'album'" in sql
     assert "library.local_albums.title" in sql
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in " ".join(sql.split())
     assert "active_track_files.private_path," in sql
     assert "active_track_files.id\n        limit %(limit)s" in sql
 
@@ -403,7 +410,7 @@ def test_candidate_query_prefilters_active_files_through_four_indexed_eligibilit
     assert "where ranked_exception_overrides.match_rank = 1" in sql
     assert "library.local_tracks.album_id is null" not in sql
     assert "library.local_track_files.scan_file_album" in loose_track_path
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in " ".join(sql.split())
 
 
 def test_candidate_query_selects_private_path_override_before_track_id_then_newest_and_id():

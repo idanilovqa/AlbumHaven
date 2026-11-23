@@ -921,6 +921,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
       'FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here',
+      'FTC-PLAYER-030 Play after Pause within the pause hold sounds sooner than a Play that has to ask for the claim, at normal speed and with the CPU four times slower',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
     ].sort(),
   );

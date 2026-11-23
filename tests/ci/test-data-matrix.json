@@ -2,6 +2,24 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/playAfterPause.spec.js",
+    "case": "FTC-PLAYER-030 Play after Pause within the pause hold sounds sooner than a Play that has to ask for the claim, at normal speed and with the CPU four times slower",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": ["playback:play-after-pause-timing"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["held-play-asks-nothing-before-sound", "held-sounds-sooner-than-round-trip", "audible-resumed-track"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:play-after-pause-timing",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/playbackTakeover.spec.js",
     "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
     "profile": "functional-core",

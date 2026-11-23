@@ -416,6 +416,8 @@ export class GlobalPlayerActions {
   async togglePlaybackWithSpace(expectedState, options = {}) {
     await this.globalPlayer.timeline.focus();
     await expect(this.globalPlayer.timeline).toBeFocused();
+    // A timed press marks its start here, after focus and just before the key.
+    if (typeof options.beforePress === 'function') await options.beforePress();
     await this.globalPlayer.timeline.press('Space');
     await this.waitForPlaybackState(expectedState, options);
     return this.readCurrentPlaybackSummary();

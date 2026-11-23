@@ -1304,6 +1304,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/playAfterPause.spec.js",
+              "case": "FTC-PLAYER-030 Play after Pause within the pause hold sounds sooner than a Play that has to ask for the claim, at normal speed and with the CPU four times slower",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/settingsIntegrations.functional.spec.js",
               "case": "FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import",
               "area": "integrations"

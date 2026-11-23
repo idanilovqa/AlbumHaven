@@ -1402,7 +1402,21 @@ def load_relation_alias_source_rows_sql() -> str:
     """
 
 
-def load_relation_source_rows_sql(*, scoped: bool = False) -> str:
+def load_relation_source_rows_sql() -> str:
+    """Every live relation source row of the library (library-scale: registered)."""
+    return _relation_source_rows_sql(scoped=False)
+
+
+def load_scoped_relation_source_rows(connection: Any, album_ids) -> list:
+    """The relation source rows of these albums only (affected-set, 6.5 11-23). The album-id filter is
+    mandatory: no ids raises, never a library read."""
+    ids = sorted({int(value) for value in (album_ids or ())})
+    if not ids:
+        raise ValueError("A scoped relation source load needs its album ids.")
+    return connection.execute(_relation_source_rows_sql(scoped=True), {"album_ids": ids}).fetchall()
+
+
+def _relation_source_rows_sql(*, scoped: bool) -> str:
     sql = """
         with bootstrap_context as (
           select library.libraries.id as library_id

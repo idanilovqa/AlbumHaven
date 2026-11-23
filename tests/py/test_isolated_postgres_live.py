@@ -3123,13 +3123,11 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             ).fetchall()
         assert unrelated_relation_entries
 
-        source_query = relations.load_relation_source_rows_sql
-
-        def scoped_source_query(*, scoped=False):
-            assert scoped, "a targeted rename must not reload the full relation inventory"
-            return source_query(scoped=True)
-
-        monkeypatch.setattr(relations, "load_relation_source_rows_sql", scoped_source_query)
+        # The scoped publication reads only load_scoped_relation_source_rows; the full loader is forbidden.
+        monkeypatch.setattr(
+            relations, "load_relation_source_rows_sql",
+            lambda: pytest.fail("a targeted rename must not reload the full relation inventory"),
+        )
         monkeypatch.setattr(
             persistence, "load_relation_source_rows_sql",
             lambda: pytest.fail("a targeted rename must not rebuild the full relation inventory"),

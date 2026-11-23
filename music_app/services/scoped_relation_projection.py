@@ -12,7 +12,7 @@ from time import perf_counter
 from music_app.services.relation_projection_builder import (
     CURRENT_ALIAS_POLICY, LEGACY_ALIAS_POLICY,
     _album_facts, _display_choice, _is_va_name, _low_value_artist_key,
-    _normalize_key, build_postgres_relation_views, serialized_family_key,
+    _normalize_key, build_component_relation_views, build_postgres_relation_views, serialized_family_key,
 )
 from music_app.services.edit_tag_timings import persistence_stage
 from music_app.services.relation_projection_postgres import _first_row
@@ -262,12 +262,12 @@ def _load_affected_component(connection, library_id, old, new, cancel_requested,
         related = connection.execute("""select * from library.local_relation_album_facts
             where library_id=%s and connection_keys && %s::text[]""", (library_id, sorted(batch))).fetchall()
         component.update((row['album_id'], row) for row in related)
-        views = build_postgres_relation_views(
+        views = build_component_relation_views(
             [source for record in component.values() for source in record['source_rows']],
             cooperate=(lambda: relations._cooperate_with_foreground(cancel_requested)) if cancel_requested is not None else None)
         alias_views = [views]
         if include_compatibility:
-            alias_views.append(build_postgres_relation_views(
+            alias_views.append(build_component_relation_views(
                 [source for record in component.values() for source in record['source_rows']],
                 alias_policy=LEGACY_ALIAS_POLICY,
                 cooperate=(lambda: relations._cooperate_with_foreground(cancel_requested)) if cancel_requested is not None else None))
@@ -283,7 +283,7 @@ def _load_affected_component(connection, library_id, old, new, cancel_requested,
         for record in component.values():
             if target_keys.intersection(record['connection_keys']):
                 containers.update(key for key in record['connection_keys'] if key.startswith('container:'))
-    views = build_postgres_relation_views(
+    views = build_component_relation_views(
         [source for record in component.values() for source in record['source_rows']],
         cooperate=(lambda: relations._cooperate_with_foreground(cancel_requested)) if cancel_requested is not None else None)
     _restrict_component_views(views, names)
@@ -684,7 +684,7 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     if expected_gallery_generation is not None:
         prior_generations.append(expected_gallery_generation)
     with persistence_stage('relation_publication.album_facts'):
-        rows = connection.execute(relations.load_relation_source_rows_sql(scoped=True), {'album_ids': sorted(ids)}).fetchall()
+        rows = relations.load_scoped_relation_source_rows(connection, ids)
         current_keys = {row['id']: row['album_key'] for row in connection.execute(
             'select id,album_key from library.local_albums where library_id=%s and id=any(%s::bigint[])',
             (library_id, sorted(ids))).fetchall()}
@@ -720,7 +720,7 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     legacy_touched_entries = None
     if compatibility_state is not None:
         with persistence_stage('relation_publication.compatibility_patch'):
-            legacy_component = _restrict_component_views(build_postgres_relation_views(
+            legacy_component = _restrict_component_views(build_component_relation_views(
                 [source for record in component.values() for source in record['source_rows']],
                 alias_policy=LEGACY_ALIAS_POLICY,
             ), affected_names)

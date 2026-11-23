@@ -352,9 +352,9 @@ def test_identity_edit_with_publication_never_round_trips_global_relations(
     monkeypatch.setattr(persistence, "_commit_structural_relation_projection", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_family_projection_in_transaction", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_search_projection_in_transaction", unexpected_global_work)
-    scoped_source_sql = relations.load_relation_source_rows_sql(scoped=True)
-    monkeypatch.setattr(relations, "load_relation_source_rows_sql",
-                        lambda *, scoped=False: scoped_source_sql if scoped else unexpected_global_work())
+    # The scoped publication runs this text through load_scoped_relation_source_rows; the full loader is forbidden.
+    scoped_source_sql = relations._relation_source_rows_sql(scoped=True)
+    monkeypatch.setattr(relations, "load_relation_source_rows_sql", unexpected_global_work)
 
     result = adapter.persist_structural_tag_edit(
         changed_paths=selected,

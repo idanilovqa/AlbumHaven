@@ -214,11 +214,33 @@ def test_scoped_family_publication_deletes_only_affected_owner_links():
 
 
 def test_scoped_source_query_restricts_album_ids_before_locations_and_artist_aggregation():
-    full, targeted = load_relation_source_rows_sql(), load_relation_source_rows_sql(scoped=True)
+    from music_app.services.relation_projection_postgres import _relation_source_rows_sql
+
+    full, targeted = load_relation_source_rows_sql(), _relation_source_rows_sql(scoped=True)
     assert 'where library.local_tracks.album_id is not null' in full
     assert 'where library.local_tracks.album_id = any(%(album_ids)s::bigint[])' in targeted
     assert targeted.index('album_id = any(%(album_ids)s') < targeted.index('relation_locations as materialized')
     assert 'album_id is not null' not in targeted
+
+
+@pytest.mark.parametrize('album_ids', [None, [], ()])
+def test_a_scoped_source_load_refuses_to_run_without_album_ids(album_ids):
+    """6.5 (11-23): the scoped loader's album-id filter is mandatory; no ids is never a library read."""
+    from music_app.services.relation_projection_postgres import load_scoped_relation_source_rows
+
+    class NoConnection:
+        def execute(self, *_args, **_kwargs):
+            pytest.fail('A scoped load without album ids reached the database.')
+
+    with pytest.raises(ValueError, match='album ids'):
+        load_scoped_relation_source_rows(NoConnection(), album_ids)
+
+
+def test_a_component_relation_build_refuses_to_run_without_its_rows():
+    from music_app.services.relation_projection_builder import build_component_relation_views
+
+    with pytest.raises(ValueError, match='source rows'):
+        build_component_relation_views([])
 
 
 @pytest.mark.parametrize('artist', ['VA', 'Unknown Artist', 'Various Artists'])

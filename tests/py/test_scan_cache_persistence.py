@@ -682,9 +682,9 @@ def test_one_file_reconciliation_never_rebuilds_full_library_relations(monkeypat
     monkeypatch.setattr(persistence, "load_relation_source_rows_sql", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_family_projection_in_transaction", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_search_projection_in_transaction", unexpected_global_work)
-    scoped_source_sql = relations.load_relation_source_rows_sql(scoped=True)
-    monkeypatch.setattr(relations, "load_relation_source_rows_sql",
-                        lambda *, scoped=False: scoped_source_sql if scoped else unexpected_global_work())
+    # The scoped publication runs this text through load_scoped_relation_source_rows; the full loader is forbidden.
+    scoped_source_sql = relations._relation_source_rows_sql(scoped=True)
+    monkeypatch.setattr(relations, "load_relation_source_rows_sql", unexpected_global_work)
     connection = Connection(relation_ready=True)
     adapter = persistence.PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://targeted-reconciliation-test"},

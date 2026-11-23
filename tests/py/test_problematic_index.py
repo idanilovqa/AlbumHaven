@@ -36,3 +36,57 @@ def test_a_failed_maintenance_pass_backs_off_instead_of_restarting_on_every_poll
     assert len(submitted) == 1, "A pass is queued again once the back-off has passed."
     problematic_index._QUEUED.discard(repository._database_url)
     problematic_index._RETRY_NOT_BEFORE.pop(repository._database_url, None)
+
+
+def test_an_inline_refresh_drains_albums_and_loose_groups_on_leases_of_their_own(monkeypatch):
+    """Case 55: a read that finds marked albums and marked loose groups drains each on its own lease. On one
+    lease (not autocommit) the loose-group drain ran inside the transaction the album drain left open, its SET
+    TRANSACTION ISOLATION LEVEL failed, and Problematic Files stayed "indexing" after a stray joined an album or
+    an artist was renamed."""
+    from contextlib import contextmanager
+
+    leases, drained = [], []
+
+    class Lease:
+        def __init__(self):
+            self.committed = False
+
+        def __enter__(self):
+            leases.append(self)
+            return self
+
+        def __exit__(self, exc_type, *_exc):
+            self.committed = exc_type is None
+            return False
+
+    class Browse:
+        def execute(self, sql, params=None):
+            if "problematic_index_dirty_albums" in sql:
+                return SimpleNamespace(fetchall=lambda: [{"album_id": 7, "marked_xid": "1"}])
+            return SimpleNamespace(fetchall=lambda: [{"item_key": "loose", "root_id": 1, "folder": "f",
+                                                      "marked_xid": "1"}])
+
+    @contextmanager
+    def browse_lease():
+        yield Browse()
+
+    repository = SimpleNamespace(
+        _config={problematic_index.ENABLED_KEY: "1"},
+        _use_shared_connection_pool=True,
+        _database_url="postgresql://fixture/refresh-leases",
+        _browse_connection_context=browse_lease,
+        _connect_to_database=Lease,
+    )
+    monkeypatch.setattr(problematic_index, "_library_id", lambda _connection: 1)
+    monkeypatch.setattr(problematic_index, "_state", lambda _connection, _library_id: "ready")
+    monkeypatch.setattr(problematic_index, "_drain",
+                        lambda _repository, connection, *_a, **_k: drained.append(("albums", connection)))
+    monkeypatch.setattr(problematic_index, "_drain_groups",
+                        lambda _repository, connection, *_a, **_k: drained.append(("groups", connection)))
+
+    assert problematic_index.refresh(repository) is True
+
+    assert [kind for kind, _connection in drained] == ["albums", "groups"]
+    assert drained[0][1] is not drained[1][1], "the two drains never share one lease's implicit transaction"
+    assert all(lease.committed for lease in leases), "each drain's lease is committed when it ends"
+    problematic_index._READY.discard(repository._database_url)

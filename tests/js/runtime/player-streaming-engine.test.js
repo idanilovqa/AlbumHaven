@@ -6618,6 +6618,29 @@ test('the audio thread gets a port from a Worker that only this tab\u2019s takeo
   assert.deepEqual(relayed, ['silence']);
 });
 
+// A pause keeps the claim a while; a plain press on another device asks this paused tab to yield, under one
+// contract shared with the phone and the server.
+test('the socket says it answers a yield and hands one to the player', async () => {
+  const contract = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'fixtures', 'playback-handover-yield-v1.json'), 'utf8'));
+  const asked = [];
+  const harness = createEngineHarness({
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    yieldPausedPlaybackClaim: async (requestId) => { asked.push(requestId); },
+  });
+  await harness.api.start(makeTrack(), { startSeconds: 0 });
+  const socket = harness.sockets[0];
+  const [key, value] = contract.socketQuery.split('=');
+  assert.equal(new URL(socket.url).searchParams.get(key), value);
+
+  socket.receive(contract.ask);
+  await harness.settle();
+
+  assert.deepEqual(asked, [contract.ask.requestId]);
+  assert.equal(socket.sent.some((message) => String(message.type).startsWith('handover-')), false,
+    'the player answers, not the socket');
+});
+
 // The WebView prepares a socket when idle. Named as the phone, Play here elsewhere would ask it instead of
 // the native player: today's APK would never answer, a new one would be passed over for the newer socket.
 test('in the app the idle web socket does not speak for the native player', async () => {

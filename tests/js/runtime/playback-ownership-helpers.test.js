@@ -2516,3 +2516,129 @@ test('bounded interaction: playing lease renewals keep the claim without repaint
     growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
   });
 });
+
+// Play after Pause sounded up to 0.9 s later than before Play here, as the pause
+// gave the claim back and Play asked for it again. A pause now keeps the claim for its hold: Play within it
+// sounds at once and asks nothing. A plain press on another device meanwhile asks this tab to yield.
+const yieldContract = JSON.parse(fs.readFileSync(path.join(
+  __dirname, '..', '..', 'fixtures', 'playback-handover-yield-v1.json',
+), 'utf8'));
+
+function pausedHolder({ playing = false } = {}) {
+  const state = activeOwnershipState();
+  const clock = { now: 1_000 };
+  const requests = [];
+  const states = [];
+  const answers = [];
+  const intervals = [];
+  const playback = { paused: !playing };
+  const drains = [];
+  const { context } = loadHelper({
+    state,
+    performance: { now: () => clock.now },
+    setInterval: (callback, delay) => { intervals.push({ callback, delay }); return intervals.length; },
+    getPlayerPlaybackSnapshot: () => ({ paused: playback.paused, ended: false, currentTime: 42, duration: 195,
+      src: localTrack.src }),
+    pauseStreamingPlayback: async () => { playback.paused = true; },
+    drainStreamingOutput: () => new Promise((resolve) => { drains.push(resolve); }),
+    sendStreamingHandoverAnswer: (message) => { answers.push(message); return true; },
+    fetch: async (url, init = {}) => {
+      requests.push(`${init.method || 'GET'} ${url}`);
+      if (init.method === 'PUT') {
+        const body = JSON.parse(init.body);
+        states.push(body.state);
+        // A renewal keeps its token; a fresh claim is issued one.
+        return jsonResponse({ ...protocolFixture.valid.claimResponse, expiresAt: '2099-10-23T23:00:30Z',
+          ...(body.claimToken ? { claimToken: body.claimToken } : {}) });
+      }
+      return jsonResponse({ protocol: 1, is_playing_elsewhere: false });
+    },
+  });
+  state.player.ownership.activeClaim = {
+    claimToken: 'held-claim', path: localTrack.path, leaseDeadline: Infinity,
+    referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'held-ref' },
+    soundDeadline: Infinity, soundUntilWallMs: Date.now() + 300_000,
+  };
+  const settle = async () => {
+    for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  return { context, state, clock, requests, states, answers, intervals, playback, drains, settle };
+}
+
+test('a Play within the pause hold sounds on the held claim at once and asks the server nothing', async () => {
+  const { context, clock, requests, states, settle } = pausedHolder();
+  context.holdPlaybackClaimThroughPause();
+  await settle();
+  // The pause says so, so other devices see nothing playing; Play then asks nothing.
+  assert.deepEqual([requests, states], [['PUT /playback/state'], [yieldContract.pausedRenewalState]]);
+  clock.now += yieldContract.holdMs - 1;
+
+  assert.equal(context.canStartPlaybackInThisTab(localTrack), true, 'answered at once, with no request');
+  assert.ok(context.playbackSoundPermission().untilMs > Date.now(), 'its audio may sound now');
+  await settle();
+  assert.deepEqual(requests, ['PUT /playback/state']);
+});
+
+test('once the hold is over the heartbeat gives the claim back and Play asks the server again', async () => {
+  const { context, clock, requests, intervals, settle } = pausedHolder();
+  context.holdPlaybackClaimThroughPause();
+  context.startPlaybackOwnershipHeartbeat();
+  const tick = async (atMs) => {
+    clock.now = 1_000 + atMs;
+    intervals.at(-1).callback();
+    await settle();
+  };
+  for (const atMs of [4_000, 8_000, yieldContract.holdMs - 100]) await tick(atMs);
+  assert.deepEqual(requests.filter((request) => request.startsWith('DELETE')), [], 'kept for its hold');
+
+  await tick(yieldContract.holdMs + 3_900);
+  assert.deepEqual(requests.filter((request) => request.startsWith('DELETE')), ['DELETE /playback/state']);
+  assert.notEqual(context.canStartPlaybackInThisTab(localTrack), true);
+  await settle();
+  assert.equal(requests.at(-1), 'PUT /playback/state');
+});
+
+test('asked to yield while paused, it says so only once its output drained, then its next Play asks', async () => {
+  const { context, state, answers, drains, requests, settle } = pausedHolder();
+  context.holdPlaybackClaimThroughPause();
+
+  const answering = context.yieldPausedPlaybackClaim(yieldContract.ask.requestId);
+  await settle();
+  assert.deepEqual(answers, [], 'no word before what it rendered has left the output');
+  drains.forEach((drained) => drained());
+  await answering;
+
+  assert.equal(JSON.stringify(answers), JSON.stringify([yieldContract.silent]));
+  assert.equal(state.player.ownership.activeClaim, null, 'it dropped its claim as it said so');
+  assert.deepEqual(requests.filter((request) => request.startsWith('DELETE')), [],
+    'nothing is given back: the press elsewhere replaces it');
+  assert.notEqual(context.canStartPlaybackInThisTab(localTrack), true);
+  await settle();
+  assert.equal(requests.at(-1), 'PUT /playback/state');
+});
+
+test('a playing tab declines a yield at once and keeps its claim', async () => {
+  const { context, state, answers, drains } = pausedHolder({ playing: true });
+
+  await context.yieldPausedPlaybackClaim(yieldContract.ask.requestId);
+
+  assert.equal(JSON.stringify(answers), JSON.stringify([yieldContract.declined]));
+  assert.equal(drains.length, 0);
+  assert.equal(state.player.ownership.activeClaim.claimToken, 'held-claim');
+});
+
+test('a Play while its yield drains sounds on the held claim, and the yield declines', async () => {
+  const { context, state, answers, drains, playback, requests, settle } = pausedHolder();
+  context.holdPlaybackClaimThroughPause();
+  const answering = context.yieldPausedPlaybackClaim(yieldContract.ask.requestId);
+  await settle();
+
+  assert.equal(context.canStartPlaybackInThisTab(localTrack), true);
+  playback.paused = false;
+  drains.forEach((drained) => drained());
+  await answering;
+
+  assert.equal(JSON.stringify(answers), JSON.stringify([yieldContract.declined]));
+  assert.equal(state.player.ownership.activeClaim.claimToken, 'held-claim');
+  assert.deepEqual(requests, ['PUT /playback/state'], 'only the pause said so: Play asked nothing');
+});

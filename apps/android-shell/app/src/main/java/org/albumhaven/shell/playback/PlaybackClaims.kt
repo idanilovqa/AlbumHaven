@@ -33,7 +33,8 @@ sealed interface ClaimResponse {
 interface PlaybackClaimApi {
     /**
      * [takeover] (`playback.claim.takeover`) replaces another client's live claim of this account
-     * and library; only a fresh claim asks for it. [position] is reported for other clients.
+     * and library; only a fresh claim asks for it. [position] is reported for other clients. [paused]: a
+     * renewal of a claim kept through a pause, which other clients see as nothing playing.
      */
     fun acquire(
         clientId: String,
@@ -41,6 +42,7 @@ interface PlaybackClaimApi {
         track: ClaimTrack,
         takeover: Boolean = false,
         position: ClaimPosition? = null,
+        paused: Boolean = false,
     ): ClaimResponse
     /** Gives the claim back; false when the server never answered, so its lease may still run. */
     fun release(clientId: String, claimToken: String): Boolean
@@ -75,6 +77,9 @@ class PlaybackClaimOwner(
 
     /** The pending acquire replaces another client's claim: a Play press while that client plays. */
     private var takeover = false
+
+    /** The held claim is kept through a pause: its renewals say so until it plays again. */
+    private var paused = false
     private var epoch = 0L
     var acquiring = false
         private set
@@ -134,6 +139,8 @@ class PlaybackClaimOwner(
     fun acquire(claimTrack: ClaimTrack, takeOver: Boolean, onResult: (ClaimOutcome) -> Unit) {
         track = claimTrack
         releasedToken = null
+        // Played again: its next heartbeat says so. Play itself asks nothing of a claim still held.
+        paused = false
         if (token != null) {
             onResult(ClaimOutcome.GRANTED)
             return
@@ -183,6 +190,16 @@ class PlaybackClaimOwner(
         return held
     }
 
+    /**
+     * Paused, the held claim is kept for the pause hold instead of given back, and says so now: other
+     * devices then see nothing playing, and a press there asks this one to yield.
+     */
+    fun holdThroughPause() {
+        if (token == null || paused) return
+        paused = true
+        publishNow()
+    }
+
     /** The claim mirrors [claimTrack] at once. */
     fun updateTrack(claimTrack: ClaimTrack) {
         track = claimTrack
@@ -218,8 +235,9 @@ class PlaybackClaimOwner(
         nextRenewMs = now + HEARTBEAT_MS
         val requestEpoch = epoch
         val at = position()
+        val pausedNow = paused
         io.execute {
-            val response = call { api.acquire(clientId, held, claimTrack, false, at) }
+            val response = call { api.acquire(clientId, held, claimTrack, false, at, pausedNow) }
             post(Runnable { renewed(requestEpoch, now, response) })
         }
     }
@@ -276,6 +294,7 @@ class PlaybackClaimOwner(
     private fun drop() {
         epoch += 1
         token = null
+        paused = false
         scrobblingAvailable = null
         acquiring = false
         takeover = false

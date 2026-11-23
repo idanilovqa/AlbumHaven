@@ -30,6 +30,8 @@ SILENT_WITHOUT_SERVER_SECONDS = 300
 _SILENCE_MARGIN_SECONDS = 5
 # Kept in the claim's track, as its position is, and shown as neither.
 _PROMISE = "silentAfterMs"
+# Kept there too: its holder paused and keeps the claim for its pause hold. Other clients see nothing playing.
+_PAUSED = "paused"
 
 
 def _client(value):
@@ -132,6 +134,10 @@ class PostgresPlaybackClaims:
 
     def _state(self, row, client_id, path_for=None):
         here = row is not None and str(row["client_id"]) == client_id
+        # A holder that paused keeps its claim for its pause hold; to anyone else nothing plays, as before
+        # the hold, and a press there asks it to yield.
+        if row is not None and not here and row["track"].get(_PAUSED):
+            row = None
         elsewhere = row is not None and not here
         stored, position = self._stored(row["track"]) if row else (None, None)
         state = {"protocol": 1, "is_playing_here": here, "is_playing_elsewhere": elsewhere,
@@ -161,7 +167,10 @@ class PostgresPlaybackClaims:
         return self._state(row, client_id, actor if include_path else None)
 
     def acquire(self, actor, *, client_id, client_surface, track, claim_token=None, handoff=None,
-                takeover=False, position=None, silences_itself=False):
+                takeover=False, position=None, silences_itself=False, yielded_digest=None, paused=False):
+        """[yielded_digest]: the token digest of a holder that has just said nothing of it sounds and dropped
+        its claim; a start replaces that claim only while it is still that holder's. [paused]: a renewal of a
+        holder that paused and keeps its claim for its pause hold."""
         client_id = _client(client_id)
         if not isinstance(client_surface, str) or client_surface not in {"private_web", "mobile"}:
             raise PlaybackContractError()
@@ -174,7 +183,9 @@ class PostgresPlaybackClaims:
         track = self._track(actor, track)
         now = self._clock()
         heard = _position(position)
-        stored_track = {**track, **_promise(silences_itself),
+        if type(paused) is not bool or (paused and claim_token is None):
+            raise PlaybackContractError()
+        stored_track = {**track, **_promise(silences_itself), **({_PAUSED: True} if paused else {}),
                         **({"position": {**heard, "at": now.isoformat()}} if heard else {})}
         expires = now + timedelta(seconds=_CLAIM_LEASE_SECONDS)
         if handoff is not None and claim_token is None:
@@ -216,8 +227,8 @@ class PostgresPlaybackClaims:
                          client_id, digest, now)).fetchone()
             elif issued:
                 # Only over silence: no row, this client's own row (its grant's answer was lost, or it
-                # restarted), a page that said it was leaving, or a holder past the time it promised to fall
-                # silent by. Never over a holder that is only quiet.
+                # restarted), a holder that just said it is silent, a page that said it was leaving, or a
+                # holder past the time it promised to fall silent by. Never over a holder that is only quiet.
                 row = connection.execute(f"""insert into app.playback_claims
                     (account_id, library_id, client_id, client_surface, token_digest, expires_at, track)
                     values (%s, %s, %s, %s, %s, %s, %s::jsonb)
@@ -228,10 +239,11 @@ class PostgresPlaybackClaims:
                       pending_handoff_digest = null, pending_completion_digest = null,
                       pending_handoff_expires_at = null
                     where app.playback_claims.client_id = excluded.client_id
+                      or app.playback_claims.token_digest = %s
                       or {_silent("app.playback_claims.")}
                     returning client_id, client_surface, expires_at, track""",
                     (account_id, library_id, client_id, client_surface, digest, expires,
-                     json.dumps(stored_track), *_silent_bounds(now))).fetchone()
+                     json.dumps(stored_track), yielded_digest, *_silent_bounds(now))).fetchone()
                 if row is None:
                     leaving = connection.execute("""select pending_handoff_expires_at from app.playback_claims
                         where account_id = %s and library_id = %s""", (account_id, library_id)).fetchone()
@@ -395,11 +407,13 @@ class PostgresPlaybackClaims:
         its end."""
         track = dict(stored)
         track.pop(_PROMISE, None)
+        paused = track.pop(_PAUSED, None)
         heard = track.pop("position", None)
         if not heard:
             return track, None
         played = max(0, int((self._clock() - datetime.fromisoformat(heard["at"])).total_seconds() * 1000))
-        if played >= _CLAIM_LEASE_SECONDS * 1000:
+        # Paused, it stays where it paused.
+        if paused or played >= _CLAIM_LEASE_SECONDS * 1000:
             played = 0
         return track, _place(heard["ms"] + played, heard["ms"], heard["durationMs"])
 

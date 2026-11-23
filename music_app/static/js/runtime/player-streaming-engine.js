@@ -588,12 +588,13 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   return true;
 }
 
-// Which client this socket plays for, so Play here elsewhere can ask it. Never an engine's with its own
-// claim: in the app that client's socket is the native player's, and only it can answer.
+// Which client this socket plays for, so Play here elsewhere can ask it, and that it answers a yield
+// (`yields=1`: paused, whether nothing of it sounds). Never an engine's with its own claim: in the app
+// that client's socket is the native player's, and only it can answer.
 function streamingSocketClientQuery() {
   if (typeof currentPlaybackEngine === 'function' && currentPlaybackEngine().holdsOwnClaim) return '';
   const clientId = typeof getPlaybackOwnershipTabId === 'function' ? getPlaybackOwnershipTabId() : '';
-  return clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+  return clientId ? `?client_id=${encodeURIComponent(clientId)}&yields=1` : '';
 }
 
 // What sounds: the current role, which stays the old song until a switch cuts over. Its place is the
@@ -952,6 +953,16 @@ function handleStreamingControl(message) {
   }
   if (message.type === 'handover-done') {
     if (typeof settlePlaybackHandover === 'function') void settlePlaybackHandover();
+    return;
+  }
+  if (message.type === 'handover-yield') {
+    if (typeof yieldPausedPlaybackClaim === 'function') {
+      void Promise.resolve(yieldPausedPlaybackClaim(message.requestId)).catch((error) => {
+        console.warn('[AlbumHaven][Playback] A press elsewhere was not answered.', error);
+      });
+    } else {
+      sendStreamingHandoverAnswer({ type: 'handover-declined', requestId: message.requestId });
+    }
     return;
   }
   const roleState = streamingRoleForId(message.streamId);

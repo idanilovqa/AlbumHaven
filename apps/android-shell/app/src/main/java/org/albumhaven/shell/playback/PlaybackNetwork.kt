@@ -30,13 +30,14 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
         track: ClaimTrack,
         takeover: Boolean,
         position: ClaimPosition?,
+        paused: Boolean,
     ): ClaimResponse {
         val body = JSONObject()
             .put("protocol", 1)
             .put("clientId", clientId)
             .put("clientSurface", "mobile")
             .put("claimToken", claimToken ?: JSONObject.NULL)
-            .put("state", "playing")
+            .put("state", if (paused) "paused" else "playing")
             .put(
                 "track",
                 JSONObject()
@@ -190,9 +191,9 @@ class OkHttpPcmTransportFactory(
     private val client = client.newBuilder().pingInterval(PING_SECONDS, TimeUnit.SECONDS).build()
 
     override fun connect(listener: PcmTransportListener): PcmTransport {
-        // OkHttp upgrades an http(s) URL itself.
+        // OkHttp upgrades an http(s) URL itself. `yields=1`: paused, it answers whether nothing of it sounds.
         val request = session.authorize(Request.Builder(), withCsrf = false)
-            .url("${session.origin()}/playback/pcm" + if (clientId.isEmpty()) "" else "?client_id=$clientId")
+            .url("${session.origin()}/playback/pcm" + if (clientId.isEmpty()) "" else "?client_id=$clientId&yields=1")
             .build()
         val socket = client.newWebSocket(request, Adapter(listener))
         return object : PcmTransport {

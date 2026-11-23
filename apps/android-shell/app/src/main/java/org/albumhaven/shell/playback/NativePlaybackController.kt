@@ -481,6 +481,7 @@ class NativePlaybackController(
         guarded {
             claims.tick()
             maybeAnswerHandover()
+            maybeAnswerYield()
             maybeReconnect()
             maybeRecoverStalledStart()
             // A stream may buffer while the claim is requested; only the claim's holder is heard, and only within its
@@ -509,6 +510,8 @@ class NativePlaybackController(
         val next = listOfNotNull(
             claims.nextDeadlineMs(),
             handoverAnswer?.atMs,
+            pendingYield?.atMs,
+            pauseHoldUntilMs,
             reconnectAtMs,
             shutdownDeadlineMs,
             warmUntilMs?.let { minOf(it, lastWarmMs + KEEP_WARM_MS) },
@@ -664,6 +667,7 @@ class NativePlaybackController(
         timing.mark(StartTiming.Stage.GATE, clock())
         wantPlay = true
         releasePending = false
+        pauseHoldUntilMs = null
         startRetried = false
         // A replaced or resumed item reports loading, so its first frame is a fresh `playing`.
         setState(NativePlaybackState.LOADING)
@@ -959,7 +963,15 @@ class NativePlaybackController(
             endDrainUntilMs = null
             sink?.pause()
         }
-        retireClaim()
+        // The claim stays a while, so Play sounds at once and asks nothing; another device's press meanwhile
+        // asks this one, which yields once nothing of it sounds ([answerYield]).
+        if (claims.owned) {
+            releasePending = false
+            pauseHoldUntilMs = clock() + PAUSE_HOLD_MS
+            claims.holdThroughPause()
+        } else {
+            retireClaim()
+        }
         setState(NativePlaybackState.PAUSED)
     }
 
@@ -1163,6 +1175,11 @@ class NativePlaybackController(
                 return true
             }
             "handover-stop" -> Unit
+            "handover-yield" -> {
+                if (pausedOnClaim()) pendingYield = PendingYield(clock() + HANDOVER_DRAIN_MS, requestId)
+                else declineYield(requestId)
+                return true
+            }
             else -> return false
         }
         val wasPlaying = wantPlay
@@ -1208,6 +1225,44 @@ class NativePlaybackController(
     }
 
     private class HandoverAnswer(val atMs: Long, val text: String)
+
+    /** Paused within its hold, the claim still its own: the one state in which it yields to another device's press. */
+    private fun pausedOnClaim() = !wantPlay && claims.owned && pauseHoldUntilMs != null
+
+    /**
+     * A press on another device asked this paused one whether nothing of it sounds. Only from the output's
+     * real state, as for Play here: once the paused output's last buffer has left the device, a fade
+     * included, and only if it is still paused on its claim, it drops the claim and says so, so its own next
+     * Play asks the server. Played again meanwhile, or no longer holding the claim, it declines.
+     */
+    private fun maybeAnswerYield() {
+        val pending = pendingYield ?: return
+        if (clock() < pending.atMs) return
+        if (pausedOnClaim() && pausing()) {
+            pendingYield = PendingYield(clock() + HANDOVER_DRAIN_MS, pending.requestId)
+            return
+        }
+        pendingYield = null
+        if (!pausedOnClaim()) {
+            declineYield(pending.requestId)
+            return
+        }
+        pauseHoldUntilMs = null
+        releasePending = false
+        claims.handOver()
+        transport?.send(JSONObject().put("type", "handover-silent").put("requestId", pending.requestId).toString())
+    }
+
+    private fun declineYield(requestId: String) {
+        transport?.send(JSONObject().put("type", "handover-declined").put("requestId", requestId).toString())
+    }
+
+    private class PendingYield(val atMs: Long, val requestId: String)
+
+    private var pendingYield: PendingYield? = null
+
+    /** Until when a pause keeps the claim; null when it holds none for a pause. */
+    private var pauseHoldUntilMs: Long? = null
 
     private var handoverAnswer: HandoverAnswer? = null
 
@@ -1279,6 +1334,7 @@ class NativePlaybackController(
 
     /** Pause, stop, end and errors release ownership once the listen writes for them drain. */
     private fun retireClaim() {
+        pauseHoldUntilMs = null
         if (!claims.owned) {
             releasePending = false
             claims.release()
@@ -1288,6 +1344,7 @@ class NativePlaybackController(
     }
 
     private fun maybeRelease() {
+        pauseHoldUntilMs?.let { until -> if (clock() >= until) retireClaim() }
         // Released is what lets another device sound: never during this one's fade.
         if (!releasePending || effectsInFlight > 0 || pausing()) return
         releasePending = false
@@ -1517,6 +1574,8 @@ class NativePlaybackController(
         const val END_DRAIN_MARGIN_MS = 500L
         /** What a paused output may still have in the device's own buffers; not measured on a device. */
         const val HANDOVER_DRAIN_MS = 250L
+        /** How long a pause keeps the claim, so Play sounds at once with no request; the web's is the same. */
+        const val PAUSE_HOLD_MS = 12_000L
         /** How long an owned start may wait for its first PCM before it is reopened, then failed. */
         const val START_STALL_MS = 15_000L
         /** How long a shutdown keeps the claim for the listen writes still in flight. */

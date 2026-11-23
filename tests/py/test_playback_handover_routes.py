@@ -20,9 +20,19 @@ class Claims:
     """The claim service as the routes use it: one live claim of the holder."""
 
     replaced: list = []
+    started: list = []
 
     def __init__(self, _config):
         pass
+
+    def acquire(self, actor, *, client_id, client_surface, track, claim_token=None, handoff=None,
+                takeover=False, position=None, silences_itself=False, yielded_digest=None, paused=False):
+        # The holder's claim is replaced only over its own token, once it said nothing of it sounds.
+        if yielded_digest != b"held":
+            raise PlaybackContractError(409)
+        Claims.started.append({"client_id": client_id, "yielded_digest": yielded_digest})
+        return {"protocol": 1, "claimToken": "taker-token", "expiresAt": "later", "leaseMs": 30_000,
+                "playbackState": {"is_playing_here": True}}
 
     def holder(self, actor):
         return {"account_id": actor.account_id, "library_id": 1, "client_id": HOLDER, "digest": b"held",
@@ -49,6 +59,7 @@ def handover_app(playback_app, monkeypatch):  # noqa: F811
         return {}
 
     Claims.replaced = []
+    Claims.started = []
     monkeypatch.setattr(playback_control_asgi, "PostgresPlaybackClaims", Claims)
     monkeypatch.setattr(playback_control_asgi, "_scrobbling_status", no_scrobbling)
     monkeypatch.setattr(playback_control_asgi, "HANDOVER_ANSWER_SECONDS", 0.8)
@@ -292,6 +303,19 @@ def test_a_renewal_looks_lastfm_up_and_issues_nothing_for_a_reference_it_has(cla
     assert claim_app.acquired[0]["silences_itself"] is False, "an old page makes no promise"
 
 
+def test_a_renewal_kept_through_a_pause_says_so_with_the_shared_contracts_state(claim_app):
+    import json
+    from pathlib import Path
+
+    contract = json.loads((Path(__file__).parents[1] / "fixtures" / "playback-handover-yield-v1.json").read_text())
+    status, _ = claim(claim_app, SOUNDING, claimToken="held", state=contract["pausedRenewalState"])
+
+    assert status == 200
+    assert claim_app.acquired[0]["paused"] is True
+    assert claim(claim_app, SOUNDING, claimToken="held")[0] == 200
+    assert claim_app.acquired[1]["paused"] is False
+
+
 def test_only_a_browser_names_its_song_by_a_path(claim_app):
     status, _ = claim(claim_app, NAMED_BY_PATH, clientSurface="mobile")
 
@@ -323,5 +347,88 @@ def test_a_malformed_promise_is_refused_before_the_playing_tab_is_asked_to_stop(
             assert status == 400
             with pytest.raises(asyncio.TimeoutError):
                 await asyncio.wait_for(holder.receive_json(), 0.2)
+
+    asyncio.run(scenario())
+
+
+# A holder that paused keeps its claim a few seconds so its own Play sounds at once. A plain press on another
+# device meanwhile asks it over its socket, and starts within that round trip only on its word of silence.
+def start_song(app):
+    return run_asgi_request_async(app, "PUT", "/playback/state", json_body={
+        "protocol": 1, "state": "playing", "clientId": TAKER, "clientSurface": "private_web",
+        "track": {**SOUNDING, "playbackRef": "pressed"}, "silencesItself": True,
+    })
+
+
+def test_a_press_while_another_client_is_paused_starts_on_its_word_that_nothing_sounds(handover_app):
+    async def scenario():
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}&yields=1") as holder:
+            pressing = asyncio.create_task(start_song(handover_app))
+            asked = await holder.receive_json()
+            assert set(asked) == {"type", "requestId"} and asked["type"] == "handover-yield"
+            await holder.send_json({"type": "handover-silent", "requestId": asked["requestId"]})
+            status, _, body = await pressing
+            assert (status, decode_json(body)["claimToken"]) == (200, "taker-token")
+            assert Claims.started == [{"client_id": TAKER, "yielded_digest": b"held"}], "over that holder only"
+            assert Claims.replaced == [], "the press starts its own song: nothing is taken over"
+            assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"],
+                                                   "takenOver": True}
+
+    asyncio.run(scenario())
+
+
+def test_a_press_while_another_client_plays_is_refused_as_soon_as_it_declines(handover_app, monkeypatch):
+    from music_app.routes import playback_control_asgi
+
+    monkeypatch.setattr(playback_control_asgi, "YIELD_ANSWER_SECONDS", 30)
+
+    async def scenario():
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}&yields=1") as holder:
+            pressing = asyncio.create_task(start_song(handover_app))
+            asked = await holder.receive_json()
+            await holder.send_json({"type": "handover-declined", "requestId": asked["requestId"]})
+            status, _, _ = await asyncio.wait_for(pressing, 5)
+            assert status == 409
+            assert Claims.started == []
+            assert await holder.receive_json() == {"type": "handover-done", "requestId": asked["requestId"],
+                                                   "takenOver": False}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("socket_path", [f"/playback/pcm?client_id={HOLDER}", None])
+def test_an_older_app_or_a_holder_without_a_socket_is_never_taken_as_silent(handover_app, monkeypatch, socket_path):
+    # An installed app of an older build does not know the question and is never asked: refused as before.
+    from music_app.routes import playback_control_asgi
+
+    monkeypatch.setattr(playback_control_asgi, "YIELD_ANSWER_SECONDS", 30)
+
+    async def scenario():
+        if socket_path is None:
+            status, _, _ = await asyncio.wait_for(start_song(handover_app), 5)
+            assert status == 409
+        else:
+            async with websocket_session(handover_app, socket_path) as old_app:
+                status, _, _ = await asyncio.wait_for(start_song(handover_app), 5)
+                assert status == 409
+                assert old_app._outgoing.empty(), "asked nothing"
+        assert Claims.started == []
+
+    asyncio.run(scenario())
+
+
+def test_a_paused_holder_that_cannot_answer_in_time_is_no_proof(handover_app, monkeypatch):
+    from music_app.routes import playback_control_asgi
+
+    monkeypatch.setattr(playback_control_asgi, "YIELD_ANSWER_SECONDS", 0.2)
+
+    async def scenario():
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}&yields=1") as holder:
+            pressing = asyncio.create_task(start_song(handover_app))
+            asked = await holder.receive_json()
+            assert asked["type"] == "handover-yield"
+            status, _, _ = await pressing
+            assert status == 409
+            assert Claims.started == [], "a timeout is no proof of silence"
 
     asyncio.run(scenario())

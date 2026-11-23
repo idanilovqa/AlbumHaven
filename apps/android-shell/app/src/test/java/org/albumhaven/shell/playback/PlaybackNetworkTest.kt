@@ -110,6 +110,17 @@ class PlaybackNetworkTest {
     }
 
     @Test
+    fun aRenewalOfAClaimKeptThroughAPauseSaysItIsPaused() {
+        server.enqueue(MockResponse.Builder().code(200).body("""{"protocol":1,"claimToken":"held"}""").build())
+        HttpPlaybackClaimApi(client, session()).acquire(TEST_CLIENT_ID, "held", track, paused = true)
+
+        val body = JSONObject(server.takeRequest(5, TimeUnit.SECONDS)!!.body!!.utf8())
+        val contract = JSONObject(java.io.File("../../../tests/fixtures/playback-handover-yield-v1.json").readText())
+        assertEquals(contract.getString("pausedRenewalState"), body.getString("state"))
+        assertEquals("held", body.getString("claimToken"))
+    }
+
+    @Test
     fun heartbeatSendsTheHeldTokenAndMapsRefusals() {
         val api = HttpPlaybackClaimApi(client, session())
         server.enqueue(MockResponse.Builder().code(409).body("{}").build())
@@ -229,6 +240,10 @@ class PlaybackNetworkTest {
         val upgrade = server.takeRequest(5, TimeUnit.SECONDS)!!
         assertEquals("/playback/pcm", upgrade.url.encodedPath)
         assertEquals("the socket names the client Play here elsewhere asks", TEST_CLIENT_ID, upgrade.url.queryParameter("client_id"))
+        // The shared yield contract: a paused phone says it answers a press elsewhere; an older build never does.
+        val yieldContract = org.json.JSONObject(java.io.File("../../../tests/fixtures/playback-handover-yield-v1.json").readText())
+        val (key, value) = yieldContract.getString("socketQuery").split("=")
+        assertEquals(value, upgrade.url.queryParameter(key))
         assertTrue(upgrade.connectionIndex in warmed)
         socket.close()
         assertEquals(1000, listener.next())

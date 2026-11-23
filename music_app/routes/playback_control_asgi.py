@@ -44,6 +44,8 @@ _NOTIFICATION_ARTWORK_EDGE = 768
 _QUIET_STEP_LOG_MS = 1000
 # How long Play here waits for the playing client to say anything before it is refused.
 HANDOVER_ANSWER_SECONDS = 1.5
+# How long a plain press waits for a paused holder's word that nothing of it sounds: its output's drain.
+YIELD_ANSWER_SECONDS = 1.5
 ARTWORK_PREFIX = "/playback/artwork/"
 # A resume token never expires, and its payload names library files.
 redact_access_log_paths(ARTWORK_PREFIX)
@@ -169,10 +171,11 @@ async def acquire_playback(request: Request):
     # A first claim gates a start's first sound; a heartbeat renews one already held.
     async with timed_playback_step("claim", "renew", "scrobbling_ms") as timing:
         payload = await playback_payload(request)
-        if payload.get("state") != "playing":
+        # "paused": a renewal of a holder that keeps its claim through a pause.
+        if payload.get("state") not in ("playing", "paused"):
             raise HTTPException(400, "Invalid playback state.")
         if payload.get("confirm") is not None:
-            if (payload["confirm"] is not True or payload.get("takeover") is not True
+            if (payload["confirm"] is not True or payload.get("takeover") is not True or payload["state"] != "playing"
                     or type(payload.get("silencesItself", False)) is not bool
                     or payload.keys() - {"protocol", "state", "clientId", "clientSurface", "takeover", "confirm",
                                          "silencesItself"}):
@@ -181,18 +184,51 @@ async def acquire_playback(request: Request):
         renews = payload.get("claimToken") is not None
         timing["renew"] = timing["quiet"] = renews
         track, reference = await _claimed_track(request, payload)
-        result = await playback_call(PostgresPlaybackClaims(playback_config(request)).acquire,
-            request.state.current_actor, client_id=payload.get("clientId"),
-            client_surface=payload.get("clientSurface"), track=track,
-            claim_token=payload.get("claimToken"), handoff=payload.get("handoff"),
-            takeover=payload.get("takeover", False), position=payload.get("position"),
-            silences_itself=payload.get("silencesItself", False))
+        claims = PostgresPlaybackClaims(playback_config(request))
+
+        def acquire(**yielded):
+            return playback_call(claims.acquire, request.state.current_actor, client_id=payload.get("clientId"),
+                client_surface=payload.get("clientSurface"), track=track,
+                claim_token=payload.get("claimToken"), handoff=payload.get("handoff"),
+                takeover=payload.get("takeover", False), position=payload.get("position"),
+                silences_itself=payload.get("silencesItself", False), paused=payload["state"] == "paused",
+                **yielded)
+
+        try:
+            result = await acquire()
+        except HTTPException as refused:
+            # A start refused for a holder (no draining page to wait for) asks it once whether it is paused.
+            if refused.status_code != 409 or refused.headers or renews or payload.get("handoff") is not None:
+                raise
+            result = await _start_over_paused_holder(request, claims, payload.get("clientId"), acquire, refused)
         scrobbling = {}
         if renews:
             claimed_at = time.perf_counter()
             scrobbling = await _scrobbling_status(request)
             timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)
     return JSONResponse({**result, **reference, **scrobbling}, headers={"Cache-Control": "no-store"})
+
+
+async def _start_over_paused_holder(request, claims, client_id, acquire, refused):
+    """A holder that paused keeps its claim a few seconds, so its own Play sounds at once with no request. A
+    plain press elsewhere meanwhile asks it over its socket: it starts only on that holder's word that
+    nothing of it sounds (given from its output's real state, its claim dropped as it says so), and over that
+    holder's claim only. A holder that plays declines; one that cannot answer is no proof: refused as before.
+    """
+    hub = request.app.state.playback_pcm_registry.handover
+    observed = await playback_call(claims.holder, request.state.current_actor)
+    if observed["client_id"] in (None, client_id) or observed["silent"]:
+        raise refused
+    holder = (observed["account_id"], observed["library_id"], observed["client_id"])
+    taken = False
+    try:
+        if not await hub.yielded(*holder, timeout=YIELD_ANSWER_SECONDS):
+            raise refused
+        result = await acquire(yielded_digest=observed["digest"])
+        taken = True
+        return result
+    finally:
+        await hub.settled(*holder, taken=taken)
 
 
 async def _claimed_track(request, payload):

@@ -596,6 +596,10 @@ class _PlaybackPcmConnection:
         if command_type == "handover-silent" and set(control) == _HANDOVER_REQUEST_KEYS:
             self._registry.handover.silent(self.send_event, control["requestId"])
             return True
+        # A holder asked to yield that plays, or is about to.
+        if command_type == "handover-declined" and set(control) == _HANDOVER_REQUEST_KEYS:
+            self._registry.handover.declined(self.send_event, control["requestId"])
+            return True
         await self.reject(CLOSE_INVALID_CONTROL)
         return False
 
@@ -1256,8 +1260,14 @@ async def playback_pcm_socket(websocket: WebSocket) -> None:
     client_id = _socket_client_id(websocket)
     account_id = getattr(getattr(websocket.state, "current_actor", None), "account_id", None)
     if client_id and account_id is not None:
-        registry.handover.register(account_id, client_id, connection.send_event)
+        registry.handover.register(account_id, client_id, connection.send_event, yields=_socket_yields(websocket))
     await connection.run()
+
+
+def _socket_yields(websocket: WebSocket) -> bool:
+    """Whether the socket's client answers a yield (`?yields=1`): a paused holder asked whether nothing of it
+    sounds. An installed app of an older build never says so, and so is never asked."""
+    return getattr(websocket, "query_params", {}).get("yields", "") == "1"
 
 
 def _socket_client_id(websocket: WebSocket) -> str | None:

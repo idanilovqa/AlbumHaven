@@ -324,3 +324,102 @@ def test_a_holder_told_to_stop_that_never_answers_is_no_proof():
         assert await asyncio.wait_for(asking, 1) is None
 
     asyncio.run(scenario())
+
+
+# A plain press while another client of the account is paused with its claim: only that client's word that
+# nothing of it sounds lets the press start. Its own Play inside the hold then sounds at once, with no request.
+def yielded(hub, timeout=1.0):
+    return hub.yielded(ACCOUNT, LIBRARY, HOLDER, timeout=timeout)
+
+
+def test_a_paused_holder_that_says_it_is_silent_yields_and_is_asked_nothing_else():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send, yields=True)
+        asking = asyncio.create_task(yielded(hub))
+        request_id = await holder.request_id()
+        assert holder.sent == [{"type": "handover-yield", "requestId": request_id}]
+        assert hub.silent(holder.send, request_id)
+        assert await asking is True
+        await hub.settled(ACCOUNT, LIBRARY, HOLDER, taken=True)
+        await asyncio.sleep(0)
+        assert holder.sent[-1] == {"type": "handover-done", "requestId": request_id, "takenOver": True}
+
+    asyncio.run(scenario())
+
+
+def test_a_holder_that_plays_declines_and_the_press_is_refused_at_once():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send, yields=True)
+        asking = asyncio.create_task(yielded(hub, timeout=30))
+        assert hub.declined(holder.send, await holder.request_id())
+        assert await asyncio.wait_for(asking, 0.5) is False
+
+    asyncio.run(scenario())
+
+
+def test_a_client_that_never_said_it_yields_is_never_asked_and_never_counts_as_silent():
+    # An installed app of an older build does not know the question: its press elsewhere is refused as before.
+    async def scenario():
+        hub, old_app = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, old_app.send)
+        assert await asyncio.wait_for(yielded(hub, timeout=30), 0.5) is False
+        assert old_app.sent == []
+
+    asyncio.run(scenario())
+
+
+def test_no_socket_no_word_in_time_or_a_closed_socket_is_no_proof_of_silence():
+    async def scenario():
+        assert await asyncio.wait_for(yielded(PlaybackHandoverHub(), timeout=30), 0.5) is False
+        quiet_hub, quiet = PlaybackHandoverHub(), Socket()
+        quiet_hub.register(ACCOUNT, HOLDER, quiet.send, yields=True)
+        assert await yielded(quiet_hub, timeout=0.05) is False
+        closed_hub, closed = PlaybackHandoverHub(), Socket(fail=True)
+        closed_hub.register(ACCOUNT, HOLDER, closed.send, yields=True)
+        assert await asyncio.wait_for(yielded(closed_hub, timeout=30), 0.5) is False
+
+    asyncio.run(scenario())
+
+
+def test_a_yield_is_never_a_handover_its_holder_cannot_be_told_to_stop_or_answer_a_song():
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send, yields=True)
+        asking = asyncio.create_task(yielded(hub, timeout=0.1))
+        request_id = await holder.request_id()
+        assert not hub.wanted(holder.send, request_id)
+        assert not hub.answer(holder.send, answer(request_id))
+        assert await asking is False
+        assert [event["type"] for event in holder.sent] == ["handover-yield"]
+
+    asyncio.run(scenario())
+
+
+def test_the_yield_messages_are_the_contract_the_web_and_the_phone_share():
+    import json
+    from pathlib import Path
+
+    from music_app.routes import playback_stream_asgi
+
+    contract = json.loads((Path(__file__).parents[1] / "fixtures" / "playback-handover-yield-v1.json").read_text())
+    key, value = contract["socketQuery"].split("=")
+    assert playback_stream_asgi._socket_yields(type("Socket", (), {"query_params": {key: value}})())
+    assert not playback_stream_asgi._socket_yields(type("Socket", (), {"query_params": {}})())
+    assert set(contract["silent"]) == set(contract["declined"]) == playback_stream_asgi._HANDOVER_REQUEST_KEYS
+    assert contract["pausedRenewalState"] == "paused", "the state a renewal kept through a pause sends"
+
+    async def scenario():
+        hub, holder = PlaybackHandoverHub(), Socket()
+        hub.register(ACCOUNT, HOLDER, holder.send, yields=True)
+        asking = asyncio.create_task(yielded(hub))
+        request_id = await holder.request_id()
+        assert set(holder.sent[0]) == set(contract["ask"]) and holder.sent[0]["type"] == contract["ask"]["type"]
+        assert hub.silent(holder.send, request_id)
+        assert await asking is True
+        await hub.settled(ACCOUNT, LIBRARY, HOLDER, taken=True)
+        await asyncio.sleep(0)
+        assert set(holder.sent[-1]) == set(contract["done"])
+
+    asyncio.run(scenario())

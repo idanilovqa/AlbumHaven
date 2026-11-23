@@ -30,6 +30,8 @@ class _Ask:
     request_id: str = field(default_factory=lambda: str(uuid4()))
     waiting: int = 0
     stop: asyncio.Task | None = None
+    # "handover" for Play here; "handover-yield" asks a paused holder only whether nothing of it sounds.
+    kind: str = "handover"
 
 
 class PlaybackHandoverHub:
@@ -38,15 +40,20 @@ class PlaybackHandoverHub:
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
         self._sockets: dict[tuple[int, str], list[Send]] = {}
+        # Sockets whose client said it answers a yield; an installed app of an older build never does.
+        self._yielding: set[Send] = set()
         self._asks: dict[tuple[int, int, str], _Ask] = {}
         self._released: dict[tuple[int, int], tuple[float, str, bytes]] = {}
         self._asked: dict[tuple[int, int, str], tuple[Send, str]] = {}
         self._telling: set[asyncio.Task] = set()
 
-    def register(self, account_id: int, client_id: str, send: Send) -> None:
+    def register(self, account_id: int, client_id: str, send: Send, *, yields: bool = False) -> None:
         self._sockets.setdefault((account_id, client_id), []).append(send)
+        if yields:
+            self._yielding.add(send)
 
     def unregister(self, send: Send) -> None:
+        self._yielding.discard(send)
         for key, sockets in list(self._sockets.items()):
             if send in sockets:
                 sockets.remove(send)
@@ -101,18 +108,55 @@ class PlaybackHandoverHub:
                 # handed to the transport in one piece, and only the waits around that can be interrupted.
                 sending.cancel()
 
+    async def yielded(self, account_id: int, library_id: int, client_id: str, *, timeout: float) -> bool:
+        """A paused holder's word that nothing of it sounds, so a plain press elsewhere may start: True only on
+        its `handover-silent`. It says so only from its output's real state, dropping its claim as it does,
+        and declines while it plays. A client that never said it yields (an older installed app), no socket,
+        a closed one or no word within [timeout] is no proof, and nothing starts.
+        """
+        key = (account_id, library_id, client_id)
+        sockets = [send for send in self._sockets.get((account_id, client_id), ()) if send in self._yielding]
+        if not sockets or key in self._asks:
+            return False
+        loop = asyncio.get_running_loop()
+        ask = _Ask(key, sockets[-1], lambda _token: False, loop.create_future(), loop.create_future(),
+                   kind="handover-yield")
+        self._asks[key] = ask
+        ask.waiting = 1
+        sending = asyncio.create_task(self._send(ask))
+        try:
+            await asyncio.wait({ask.answered}, timeout=timeout)
+            return ask.answered.done() and ask.answered.result() is not None
+        finally:
+            # A Play here pressed meanwhile waits on the same word.
+            ask.waiting -= 1
+            if not ask.waiting:
+                del self._asks[key]
+            if not sending.done():
+                sending.cancel()
+
     async def _send(self, ask: _Ask) -> None:
         self._asked[ask.key] = (ask.send, ask.request_id)
         try:
-            await ask.send({"type": "handover", "requestId": ask.request_id})
+            await ask.send({"type": ask.kind, "requestId": ask.request_id})
         except Exception:  # A socket that cannot be written is a holder that cannot answer.
             if not ask.answered.done():
                 ask.answered.set_result(None)
 
-    def wanted(self, send: Send, request_id: object) -> bool:
-        """The holder's "still wanted?". Only a press that still waits tells it to stop."""
+    def declined(self, send: Send, request_id: object) -> bool:
+        """The asked holder plays, or is about to: the press that asked it to yield is refused."""
         for ask in self._asks.values():
-            if ask.send == send and ask.request_id == request_id and not ask.answered.done():
+            if (ask.kind == "handover-yield" and ask.send == send and ask.request_id == request_id
+                    and not ask.answered.done()):
+                ask.answered.set_result(None)
+                return True
+        return False
+
+    def wanted(self, send: Send, request_id: object) -> bool:
+        """The holder's "still wanted?". Only a Play here that still waits tells it to stop."""
+        for ask in self._asks.values():
+            if (ask.kind == "handover" and ask.send == send and ask.request_id == request_id
+                    and not ask.answered.done()):
                 if not ask.wanted.done():
                     ask.wanted.set_result(True)
                     ask.stop = asyncio.create_task(self._stop(ask))

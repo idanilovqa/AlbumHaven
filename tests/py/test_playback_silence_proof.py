@@ -438,3 +438,63 @@ def test_the_browser_and_the_app_silence_themselves_before_the_server_lets_anoth
     app_ms = int(re.search(r"SILENT_WITHOUT_SERVER_MS = ([\d_]+)L", app).group(1).replace("_", ""))
 
     assert web_ms == app_ms == claims.SILENT_WITHOUT_SERVER_SECONDS * 1000 == 300_000
+
+
+def test_a_start_replaces_a_holder_that_yielded_only_while_the_claim_is_still_that_holders(player):
+    holder, third, taker = str(uuid4()), str(uuid4()), str(uuid4())
+    player.start(holder, silences_itself=True)
+    yielded = player.service.holder(None)["digest"]
+
+    assert refused(lambda: player.start(taker, yielded_digest=issue_opaque_token().digest)) == 409
+    assert player.start(taker, yielded_digest=yielded)["playbackState"]["is_playing_here"] is True
+    # A third client's claim is never replaced by a word another holder gave.
+    player.start(third, yielded_digest=player.service.holder(None)["digest"])
+    assert refused(lambda: player.start(taker, yielded_digest=yielded)) == 409
+
+
+def test_a_holder_paused_on_its_claim_shows_nothing_playing_elsewhere_until_it_plays_again(player):
+    # The pause keeps the claim for its hold: other clients see what they saw when a pause gave it back.
+    holder, other = str(uuid4()), str(uuid4())
+    token = player.start(holder, silences_itself=True)["claimToken"]
+
+    player.start(holder, claim_token=token, silences_itself=True, paused=True)
+
+    seen = player.service.get(None, other)
+    assert (seen["is_playing_elsewhere"], seen["can_start_here"], seen["track"]) == (False, True, None)
+    assert seen["status_label"] == "Ready to play", "no label for a paused holder"
+    assert player.service.get(None, holder)["is_playing_here"] is True, "the holder still holds it"
+    assert refused(lambda: player.start(other)) == 409, "only the holder's word that it is silent lets it start"
+    player.start(holder, claim_token=token, silences_itself=True)
+    assert player.service.get(None, other)["is_playing_elsewhere"] is True
+
+
+@pytest.mark.parametrize("paused", ["yes", 1, None])
+def test_paused_is_a_boolean_and_only_a_renewal_says_it(player, paused):
+    holder = str(uuid4())
+    token = player.start(holder)["claimToken"]
+    assert refused(lambda: player.start(holder, claim_token=token, paused=paused)) == 400
+    assert refused(lambda: player.start(str(uuid4()), paused=True)) == 400
+
+
+def test_a_paused_holders_place_stays_where_it_paused(handing):
+    holder, taker = str(uuid4()), str(uuid4())
+    token = handing.start(holder, position={"ms": 30_000, "durationMs": 195_000})["claimToken"]
+    handing.start(holder, claim_token=token, paused=True, position={"ms": 31_000, "durationMs": 195_000})
+    handing.pass_time(10)
+
+    taken = handing.hand_over(taker, handing.service.holder(None), {"track": None, "position": None})
+
+    assert taken["position"] == {"ms": 31_000, "durationMs": 195_000}
+
+
+def test_a_paused_holder_that_died_in_its_hold_blocks_only_until_its_promise_lapses(player):
+    # Its socket is gone, so no press can ask it: nothing starts before the time it promised to fall silent by.
+    holder, other = str(uuid4()), str(uuid4())
+    token = player.start(holder, silences_itself=True)["claimToken"]
+    player.start(holder, claim_token=token, silences_itself=True, paused=True)
+
+    player.pass_time(304)
+    assert refused(lambda: player.start(other)) == 409
+
+    player.pass_time(1)
+    assert player.start(other)["playbackState"]["is_playing_here"] is True

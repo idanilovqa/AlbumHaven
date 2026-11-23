@@ -94,11 +94,13 @@ def _stub_seeded_album_tags(monkeypatch):
 
     def seeded_album_tags(path):
         path = Path(path)
+        # The same album identity the module's seeded tracks carry (_make_track).
+        track = _make_track(path)
         return {
             "path": str(path), "mtime": path.stat().st_mtime, "size": path.stat().st_size,
-            "album": "Tender Buttons", "album_artist": "Broadcast", "artist": "Broadcast", "year": 2004,
-            "title": path.stem, "track_number": 1, "disc_number": 1, "disc_number_raw": "1",
-            "duration_seconds": 180, "cover_path": None,
+            **{field: getattr(track, field) for field in (
+                "album", "album_artist", "artist", "year", "title", "track_number", "disc_number",
+                "disc_number_raw", "duration_seconds", "cover_path")},
         }
 
     monkeypatch.setattr(move_executor_module, "read_metadata_for_file", seeded_album_tags)

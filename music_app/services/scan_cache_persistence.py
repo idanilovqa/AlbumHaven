@@ -551,6 +551,7 @@ class PostgresScanCacheAdapter:
         expected_cover_mutation_revision: int | None = None,
         expected_inventory_mutation_revision: int | None = None,
         before_commit: Callable[[Any], object] | None = None,
+        rebase_under_lock: Callable[[dict[str, dict[str, object]]], dict[str, dict[str, object]]] | None = None,
     ) -> dict[str, object]:
         """Publish one targeted inventory mutation without rebuilding relations.
 
@@ -558,6 +559,12 @@ class PostgresScanCacheAdapter:
         (owner 2026-11-21), so no library-wide relation rebuild is left pending.
         Expected revisions reject a mutation prepared before a newer cover or
         inventory commit; `before_commit` runs inside its transaction.
+
+        ``rebase_under_lock`` (edits always save, row A11) instead takes the
+        latest persisted entries of the mutation's paths, loaded under the
+        inventory lock, and returns the entries to publish. Every inventory and
+        cover writer takes that lock, so nothing can land between that load and
+        this write, and the mutation is never superseded.
         """
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
@@ -603,7 +610,28 @@ class PostgresScanCacheAdapter:
             _ensure_bootstrap_context(connection)
             from music_app.services.gallery_projection_postgres import gallery_projection_context
             gallery_context_before = gallery_projection_context(connection)
-            if (
+            if rebase_under_lock is not None:
+                latest_rows = connection.execute(
+                    _load_file_entries_sql(targeted_paths=True),
+                    {"source": _SOURCE, "paths": sorted(incoming_track_paths)},
+                ).fetchall()
+                latest = dict(
+                    hydrated for row in latest_rows
+                    if (hydrated := _hydrated_file_entry(_row_mapping(row))) is not None
+                )
+                file_cache = _without_nul_file_entries({
+                    str(path): dict(entry)
+                    for path, entry in rebase_under_lock(latest).items()
+                    if str(path).strip() and isinstance(entry, dict)
+                })
+                if set(file_cache) - incoming_track_paths:
+                    raise ValueError("A rebased targeted mutation may only publish its own paths.")
+                incoming_track_paths = set(file_cache)
+                active_paths_by_root = {}
+                for path, entry in file_cache.items():
+                    active_root_id = str(entry.get("library_root_id") or normalized_root_id).strip()
+                    active_paths_by_root.setdefault(active_root_id, set()).add(path)
+            elif (
                 expected_cover_mutation_revision is not None
                 and _load_cover_mutation_revision(connection) != expected_cover_mutation_revision
             ) or (

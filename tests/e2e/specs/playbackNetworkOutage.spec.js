@@ -60,10 +60,8 @@ function framesAfterPress({ started, frames, events }) {
     afterClick: frame.at > clickEnded }));
 }
 
-// Owner retest B-D4 round 4 (2026-11-17), verbatim: "As i seeked into the zone that was not cached,
-// the player went into paused mode. I believe it should behave as on mobile - still be on play, just
-// not play. Because of that when I returned wifi it didn't start playing automatically. Also, even
-// when I pressed the button several times playback did not continue."
+// A seek past the received audio keeps the player on play, as on mobile, silent until the network is
+// back; then it plays on by itself, and Play works with one press.
 test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }, testInfo) => {
@@ -75,7 +73,7 @@ test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays play
   let track;
   let durationSeconds = 0;
 
-  // Wi-Fi off, as the owner did: the browser reports itself offline (no requests leave it, the
+  // Wi-Fi off: the browser reports itself offline (no requests leave it, the
   // `offline` event fires), and the open sockets go silent without closing. Wi-Fi on reverses both.
   const wifiOff = async () => {
     await page.context().setOffline(true);
@@ -181,19 +179,16 @@ test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays play
   }
 });
 
-// Owner retest B-D4 round 5 (2026-11-17), laptop, verbatim: "when I clicked into the zone that
-// wasn't downloaded, music did not stop immediately. it was playing apparently from the last
-// available moment. The time did not ticked. Then play button became paused, even though I did not
-// press anything. After network is back I tried to plahy completely different track and it took me
-// 4 or 5 tries [...] clicking play in the player also is not taken fast enough and sometimes needs
-// to be clicked several times". A laptop that keeps another network interface (a VPN or a virtual
+// On a laptop, a click past the received audio stops the music at once and moves the time there,
+// Play never pauses by itself, and after the network is back one press starts another song or Play.
+// A laptop that keeps another network interface (a VPN or a virtual
 // adapter) never reports `offline`, and connections made before the outage stay dead afterwards.
 test('FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received audio falls silent at once and stays playing, and after the network returns one press plays the current or another song', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }, testInfo) => {
   test.setTimeout(8 * 60 * 1000);
   const OTHER_TITLE = 'Medium Cold Signal 07';
-  // One press must start within this, counted from the press (owner: "taken fast enough").
+  // One press must start within this, counted from the press.
   const ONE_PRESS_BUDGET_MS = 8000;
   const appPort = Number(new URL(testInfo.project.use.baseURL).port);
   const relay = await startNetworkRelay(appPort, { playbackBytesPerSecond: PLAYBACK_BYTES_PER_SECOND });
@@ -304,14 +299,9 @@ test('FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received a
   }
 });
 
-// Owner retest B-D4 round 6 (2026-11-18), laptop with the CPU at 100%, verbatim: "1. When I clicked
-// past the moment that was donwloaded click/seek did nto even take. It started to behave as it was
-// lagging 2. Now it has delay before displaying where I clicked + I have to do 2 clicks: first
-// clicks moves playhead slightly, noit relevant ot where I click, second click moves it where I
-// want 2. Waveform disappeared, so I am left with no visual where I move it 3. Play button did not
-// become paused, but the playback did not continue when network came back 4. I had to click into
-// another song 6 TIMES before it started to play after Network came back." On the load: "Long cpu
-// 100% is no execuse".
+// On a laptop with the CPU at 100%: a click past the received audio takes, shows its place at once
+// and moves the head there with the first click; the waveform stays; playback goes on when the
+// network is back; one press starts another song after it. A full CPU excuses none of it.
 test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received audio in an outage shows its place at once with one click and keeps the waveform, playback goes on by itself when the network returns, and one press plays another song', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, settingsModalAppBarActions, stepLogger, trackModalActions, utilityAppearanceActions, utilityTabBarActions }, testInfo) => {
@@ -327,7 +317,7 @@ test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received 
   let load = null;
   let durationSeconds = 0;
 
-  // The owner's laptop never reports `offline`; connections made before the outage stay dead.
+  // This laptop never reports `offline`; connections made before the outage stay dead.
   const wifiOff = () => relay.stall();
   const wifiOn = () => relay.restore({ revive: false });
   const audibleAfter = async (mark, path) => {
@@ -452,11 +442,9 @@ test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received 
   }
 });
 
-// Owner retest B-D4 round 7 (2026-11-18), verbatim: "Even first click into the zone that supposedly
-// was dowloaded leaves player without audip. Then playhead is being reset into the beginning of the
-// track. The song does not restart when network is back. A track that was playing does not even want
-// to start playing after network restart when I click on PLAY button in the player. And it took 6
-// clicks for another song to try." The owner's laptop serves the app through a Cloudflare tunnel:
+// A click in the received audio plays at once, the head never resets to the start, the song goes on
+// when the network is back, Play works then, and one press starts another song. The laptop here
+// serves the app through a Cloudflare tunnel:
 // Wi-Fi off cuts the browser and the server alike, and for about a minute after it returns the
 // tunnel answers every request with a 530 error page.
 for (const { id, serverBackAfterMs, outcome } of [
@@ -630,9 +618,8 @@ for (const { id, serverBackAfterMs, outcome } of [
   });
 }
 
-// Owner, sandbox5 2026-11-19, verbatim: "even with Network on if I seek into a different place in the
-// player it just immediately stops, resets the playhead to the beginning of the track, dims the play
-// button and sits". Reproduced on sandbox5 (a2-seek-repro.cjs): the third seek stopped playback with an
+// With the network on, a seek never stops playback, resets the head to the start or dims Play. It did:
+// the third seek stopped playback with an
 // AudioWorklet protocol rejection, a late chunk of the stream the seek had just replaced.
 test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back each show their place, never reset to the start, never stop or disable Play, and the last one plays', {
   tag: '@area:playback',
@@ -662,8 +649,7 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
       expect(durationSeconds).toBeGreaterThan(120);
     });
 
-    // Owner, sandbox5 2026-11-21, verbatim: "When seeking, there's a bug delay before player displays that
-    // playhead is in a new place - this has to be fixed, it is a regression. On main seeking is immediate".
+    // A seek shows the head at its new place at once, as on main.
     await stepLogger.step('Ten rapid seeks: each paints its place within two frames, never the start, and Play stays playing and enabled', async () => {
       const fractions = [0.8, 0.3, 0.65, 0.15, 0.9, 0.5, 0.7, 0.2, 0.85, 0.4];
       const bounds = await player.timeline.boundingBox();
@@ -700,7 +686,7 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
       await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
     });
 
-    // Owner rule, "instant even at 100% CPU" (orchestrator, 2026-11-21): while a song plays and decodes
+    // Instant even at 100% CPU: while a song plays and decodes
     // under full load, a press on another song shows its title in the first frame after its click.
     await stepLogger.step('Under the same load, a press on another song shows its title in the first frame after the click', async () => {
       await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
@@ -718,9 +704,8 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
   }
 });
 
-// Owner, sandbox5 2026-11-19, verbatim: "when I clicked into not downloaded part the player play button
-// became dimmed and disabled. I asked for it to be just in the state of playing, just playhead not
-// moving because no data. So when network returns [...] the song has to continue on its own".
+// A click past the received audio leaves Play playing and enabled, the head still for lack of data,
+// and the song continues on its own when the network returns.
 test('FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns', {
   tag: '@area:playback',
 }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }, testInfo) => {

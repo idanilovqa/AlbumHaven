@@ -250,8 +250,7 @@ async function updateWaveformAppearance(forceReload = false) {
     clearWaveformCanvas();
   }
   // The peaks belong to the song, not to one stream of it: a restart of the same song (a seek past
-  // the received audio in an outage) keeps its waveform (owner retest B-D4 round 6, 2026-11-18:
-  // "Waveform disappeared, so I am left with no visual where I move it").
+  // the received audio in an outage) keeps its waveform, so a seek always has it to aim at.
   const active = state.player.waveform.compactPeaks;
   const waveform = active?.path === path ? active.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;

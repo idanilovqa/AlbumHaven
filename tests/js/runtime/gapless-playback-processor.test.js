@@ -585,8 +585,7 @@ test('prepared seek cuts over on the render clock without a silent frame', () =>
   assert.equal(fixture.events('first-frame').at(-1).streamId, 42);
 });
 
-// Owner, sandbox5 2026-11-19: "if I seek into a different place in the player it just immediately
-// stops, resets the playhead to the beginning of the track, dims the play button and sits". The
+// A seek never stops playback, resets the head to the start or dims Play. The
 // worklet cut over to the seek's stream; the engine, not yet told, still delivered the old stream's
 // next chunk as current, and the worklet rejected it, which stopped playback.
 test('a chunk or end of the stream a seek just replaced is dropped, and the seek plays on', () => {

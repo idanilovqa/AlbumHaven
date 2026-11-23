@@ -50,7 +50,7 @@ function loadDecoders({ failing = [] } = {}) {
   return { context, made };
 }
 
-// sandbox5 r26 (2026-11-21): at 4x CPU a press waited behind about 0.7 s of decoding a second on the
+// At 4x CPU a press waited behind about 0.7 s of decoding a second on the
 // page's thread. Songs decode in each build's Worker class; the pool hands a stream a started one.
 test('songs decode in the build\'s Worker class, and the first stream takes a decoder started at warm-up', async () => {
   const { context, made } = loadDecoders();

@@ -101,7 +101,7 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
     },
     /**
      * The network is back but the server is not: every request, the playback socket's included, is
-     * answered with Cloudflare's 530 error page, as the owner's tunnel does for about a minute after
+     * answered with Cloudflare's 530 error page, as a tunnel does for about a minute after
      * the laptop that serves it gets its Wi-Fi back. `restore()` ends it.
      */
     serverUnreachable: async () => {

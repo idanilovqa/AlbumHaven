@@ -2,7 +2,7 @@
 const STREAMING_DECODER_BASE_URL = '/static/vendor/wasm-audio-decoders/';
 // Each build decodes in a Worker of its own (its `workerClassName`), so a song decoding never holds
 // the page: on the page's thread a press waited behind about 0.7 s of decoding a second at 4x CPU
-// (sandbox5 r26, 2026-11-21; the owner: instant even at 100% CPU). A browser that cannot start one
+// (a press is instant even at 100% CPU). A browser that cannot start one
 // decodes on the page's thread instead.
 const STREAMING_DECODER_BUILDS = {
   mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder', workerClassName: 'MPEGDecoderWebWorker' },

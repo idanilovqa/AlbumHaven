@@ -524,7 +524,7 @@ class _PlaybackPcmConnection:
         """Tells the client its connection lives, however long the server takes to answer.
 
         A client cannot tell a connection that died without closing from a busy server by how long
-        its answers take (owner retest B-D4 round 6, 2026-11-18, with the CPU at 100%); it can by
+        its answers take, least of all with the CPU at 100%; it can by
         hearing nothing at all.
         """
         with suppress(WebSocketDisconnect, OSError, RuntimeError):

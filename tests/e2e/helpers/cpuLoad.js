@@ -2,8 +2,8 @@ import os from 'node:os';
 import { Worker } from 'node:worker_threads';
 
 /**
- * Loads the machine as the owner's was (a VM importing photos held the CPU at 100%; owner: "Long
- * cpu 100% is no execuse"): a busy thread on every core, which the app server and the browser
+ * Loads the machine as a busy one is (a VM importing photos held the CPU at 100%, which excuses
+ * nothing): a busy thread on every core, which the app server and the browser
  * compete with, and each page's own CPU slowed `slowdown` times by Chromium's throttling.
  */
 export async function startCpuLoad(pages, { slowdown = 4, threads = os.cpus().length } = {}) {

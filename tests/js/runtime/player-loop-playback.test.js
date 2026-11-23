@@ -711,7 +711,7 @@ test('pause awaiting an old scrobble cannot checkpoint a newer playing session',
   assert.strictEqual(context.state.player.listenSession, playingSession);
 });
 
-// Owner retest B-D4 (2026-11-17): offline, Pause silenced the music but the button kept showing
+// Offline, Pause silenced the music but the button kept showing
 // Pause while the listen checkpoint and the claim give-back waited on the network.
 test('pause shows Play at once while its listen checkpoint and claim give-back wait on the network', async () => {
   let finish;

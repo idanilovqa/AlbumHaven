@@ -4955,6 +4955,8 @@ def _non_album_entry_matches_query(
         for value in (
             entry.get("album"), entry.get("title"), file_name,
             Path(file_name).stem, entry.get("disc_subtitle"),
+            # Owner (2026-11-23): the year and the exception type (a custom collection's name) too.
+            entry.get("year"), normalize_exception_value(entry.get("exception_type")),
         )
     )
 

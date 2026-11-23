@@ -8169,3 +8169,131 @@ test('bounded interaction: the streaming keepalive sends one control per tick ov
     growth: { metric: 'requests', largeMinusSmallMax: 0 },
   });
 });
+
+/** A playing song whose socket is lost; [refuse] answers each later attempt as the test's network does. */
+async function startCountedOutage(counter, refuse, options = {}) {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    // Every socket the engine opens is counted, refused or not.
+    refuseConnection: (count) => {
+      counter.count('requests');
+      return count > 1 ? refuse : false;
+    },
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    ...options,
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  return { harness, timers };
+}
+
+test('bounded interaction: a reconnect retry opens one socket per tick over a 1,000-attempt outage', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (attempts) => {
+    const counter = createInteractionCounter();
+    const { harness, timers } = await startCountedOutage(counter, true);
+    const retry = async () => {
+      timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+      await settleTwice(harness);
+    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) await retry();
+    const opened = harness.sockets.length;
+    const work = await counter.measure(async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) await retry();
+    });
+    assert.equal(harness.sockets.length, opened + 10, 'one socket per retry');
+    assert.notEqual(harness.api.snapshot().mode, 'error', 'failed attempts never end the wait');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#scheduleStreamingReconnect',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 10 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: a hung connect given up at its deadline opens one socket per cycle over 1,000 attempts', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (attempts) => {
+    const counter = createInteractionCounter();
+    const { harness, timers } = await startCountedOutage(counter, 'hang');
+    const giveUp = async () => {
+      timers.fire(timers.pending().find(({ delay }) => delay >= 4_000));
+      await settleTwice(harness);
+      const retry = timers.pending().find(({ delay }) => delay <= 2_000);
+      if (retry) timers.fire(retry);
+      await settleTwice(harness);
+    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) await giveUp();
+    const opened = harness.sockets.length;
+    const work = await counter.measure(async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) await giveUp();
+    });
+    assert.equal(harness.sockets.length, opened + 10, 'one socket per deadline');
+    assert.notEqual(harness.api.snapshot().mode, 'error', 'hung attempts never end the wait');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#connectStreamingSocket',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 10 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: the socket liveness check does no work per tick over a 1,000-tick session', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (ticks) => {
+    const counter = createInteractionCounter();
+    const { harness } = await startCountedStreamingSession(counter);
+    const socket = harness.engine.socket;
+    const check = liveness(harness).callback;
+    for (let tick = 0; tick < ticks; tick += 1) check();
+    const work = await counter.measure(() => {
+      for (let tick = 0; tick < 10; tick += 1) check();
+    });
+    assert.equal(harness.engine.socket, socket, 'a socket that is heard is kept');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#watchStreamingSocketLiveness',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 0, outputEmissions: 0, domMutations: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('request capture: the reachability probe asks only the playback state, once per tick, over a 1,000-tick outage', async () => {
+  const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+  const { createRequestCapture, measureInteractionContract } = require('../helpers/request-capture.js');
+  await measureInteractionContract('js:runtime/player-streaming-engine.js#probeStreamingReachability', {
+    setup: async (ticks) => {
+      // The network is frozen: attempts hang and the server does not answer.
+      const capture = createRequestCapture(() => Promise.reject(new TypeError('Failed to fetch')));
+      const { harness } = await startCountedOutage(createInteractionCounter(), 'hang', { fetch: capture.fetch });
+      // The attempt has hung well past a healthy connect.
+      harness.setNow(5_000);
+      const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1).callback();
+      for (let tick = 0; tick < ticks; tick += 1) await probe();
+      return { harness, capture, probe };
+    },
+    act: async ({ harness, capture, probe }) => {
+      const sockets = harness.sockets.length;
+      const sent = capture.requests.length;
+      for (let tick = 0; tick < 10; tick += 1) await probe();
+      assert.equal(harness.sockets.length, sockets, 'while the server does not answer, the attempt waits');
+      return { requests: capture.urls().slice(sent) };
+    },
+  });
+});

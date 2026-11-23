@@ -5353,7 +5353,22 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: a hung connect given up at its deadline opens one socket per cycle over 1,000 attempts",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#keepStreamingSocketAlive",
@@ -5472,13 +5487,28 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/playback/state"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "request capture: the reachability probe asks only the playback state, once per tick, over a 1,000-tick outage",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#publishStreamingDiagnostics",
@@ -5508,7 +5538,22 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: a reconnect retry opens one socket per tick over a 1,000-attempt outage",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#waitForStreamingReplacementCushion",
@@ -5555,7 +5600,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 0,
+        "outputEmissions": 0,
+        "domMutations": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: the socket liveness check does no work per tick over a 1,000-tick session",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-waveform-peaks.js#loadSavedLoopWaveformPeaks",

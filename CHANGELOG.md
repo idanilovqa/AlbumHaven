@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.51 - 2026-11-23
+
+- Test and CI only: the freeze guard reads an f-string as one SQL text and follows callbacks handed over inside unpacked options, a failed functional gate shard uploads its trace, and the startup hydration contract stubs its history scope lookup.
+
 ## 0.11.48 - 2026-11-22
 
 - Scrolling the gallery while its next page loads no longer leaves that scroll unfinished: the page added after the scroll settles now counts as rendered for it.

@@ -1504,6 +1504,9 @@ test('a resume marks when its first audible frame renders, once, on the page clo
     const { resumedAtMs, resumeFirstFrameAtMs } = harness.api.snapshot().diagnostics;
     return [resumedAtMs, resumeFirstFrameAtMs];
   };
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0, contextTime: 1,
+  });
   consumed(21);
   assert.deepEqual(marks(), [0, 0], 'a start is no resume');
 

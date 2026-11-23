@@ -491,7 +491,8 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
         before = gallery.load_gallery_projection_page(connection, fixture.view_state, {})
     assert before is not None
     added = fixture.entry("New Artist/Third/three.flac", artist="New Artist", album="Third")
-    fixture.seed(fixture.first, fixture.second, added)
+    # A native scan's publication without the startup baseline (c72277e26), which would repair it at once.
+    fixture.seed(fixture.first, fixture.second, added, startup_baseline=False)
     repository = browse.PostgresLibraryBrowseRepository(
         fixture.config, connect=isolatedPostgres._connect,
     )

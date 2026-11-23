@@ -48,6 +48,9 @@ _CONNECT_TIMEOUT_SECONDS = 15  # as the shared pool's
 INLINE_ALBUM_LIMIT = 50
 # Albums evaluated per transaction by the backfill.
 BACKFILL_BATCH = 500
+# How a clear takes marks: in key order, never waiting for one a writer holds. A writer marks its albums,
+# then 0, so a clear that waited could close the cycle (40P01). A skipped mark stays for a later pass.
+_TAKE_FREE_MARKS = "order by album_id for update skip locked"
 # How often one pass evaluates again because tag saves committed during it.
 OUTRUN_RETRIES = 20
 _LOCK_NAMESPACE = 188  # pg advisory lock (namespace, library id)
@@ -469,8 +472,8 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
 
 
 def _drain(repository: Any, connection: Any, library_id: int, marks: list[object], *,
-           try_lock: bool = False) -> None:
-    """Evaluate ``marks`` and clear exactly those marks (a later mark survives).
+           try_lock: bool = False) -> int:
+    """Evaluate ``marks`` and clear exactly those marks (a later mark survives); how many it cleared.
 
     With ``try_lock`` (a request on a pool lease) only if no other evaluator holds them:
     that lock ends with the transaction and is never waited for.
@@ -480,23 +483,27 @@ def _drain(repository: Any, connection: Any, library_id: int, marks: list[object
     with connection.transaction():
         connection.execute("set transaction isolation level repeatable read")
         if try_lock and not _locked_for_transaction(connection, library_id):
-            return
+            return 0
         connection.execute("set local work_mem = '16MB'")
         connection.execute("set local jit = off")
         index_rows, duplicate_rows, replaced = _index_rows(repository, connection, library_id, album_ids, include_loose)
         _write(connection, library_id, index_rows, duplicate_rows, sorted({*replaced, *album_ids}),
                replace_loose=include_loose)
-    connection.execute(
-        """delete from library.problematic_index_dirty_albums dirty
-           using unnest(%(album_ids)s::bigint[], %(xids)s::text[]) claimed(album_id, marked_xid)
-           where dirty.library_id = %(library_id)s and dirty.album_id = claimed.album_id
-             and dirty.marked_xid = claimed.marked_xid::xid8""",
+    return connection.execute(
+        f"""with free as (
+             select dirty.album_id from library.problematic_index_dirty_albums dirty
+             join unnest(%(album_ids)s::bigint[], %(xids)s::text[]) claimed(album_id, marked_xid)
+               on dirty.album_id = claimed.album_id and dirty.marked_xid = claimed.marked_xid::xid8
+             where dirty.library_id = %(library_id)s
+             {_TAKE_FREE_MARKS})
+           delete from library.problematic_index_dirty_albums dirty using free
+           where dirty.library_id = %(library_id)s and dirty.album_id = free.album_id""",
         {
             "library_id": library_id,
             "album_ids": [int(_value(row, "album_id")) for row in marks],
             "xids": [str(_value(row, "marked_xid")) for row in marks],
         },
-    )
+    ).rowcount
 
 
 def _backfill(repository: Any, connection: Any, library_id: int,
@@ -545,9 +552,13 @@ def _backfill(repository: Any, connection: Any, library_id: int,
     # otherwise their own backfill follows and covers what this pass saw.
     if _duplicate_results_state(connection, library_id) != "ready":
         connection.execute(
-            """delete from library.problematic_index_dirty_albums
-               where library_id = %s and pg_visible_in_snapshot(marked_xid, %s::pg_snapshot)""",
-            (library_id, snapshot),
+            f"""with free as (
+                 select album_id from library.problematic_index_dirty_albums
+                 where library_id = %(library_id)s and pg_visible_in_snapshot(marked_xid, %(snapshot)s::pg_snapshot)
+                 {_TAKE_FREE_MARKS})
+               delete from library.problematic_index_dirty_albums dirty using free
+               where dirty.library_id = %(library_id)s and dirty.album_id = free.album_id""",
+            {"library_id": library_id, "snapshot": snapshot},
         )
 
 
@@ -608,8 +619,10 @@ def _backfill_duplicate_results(repository: Any, connection: Any, library_id: in
 
 
 def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebuild_duplicates: bool = False,
-                      report: Callable[[str, int, int], None] | None = None) -> None:
-    """Backfill what is not ready, then evaluate every marked album. The caller holds the lock."""
+                      report: Callable[[str, int, int], None] | None = None) -> int:
+    """Backfill what is not ready, then evaluate every marked album once; how many marks it left to a writer.
+
+    The caller holds the lock. A held mark stays for a later pass instead of being waited for."""
     if rebuild_duplicates:
         # Before anything slow: an app restarted during a rebuild must not find "ready".
         connection.execute(
@@ -626,23 +639,27 @@ def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebu
     if _duplicate_results_state(connection, library_id) != "ready":
         _backfill_duplicate_results(repository, connection, library_id, report)
     _DUPLICATES_READY.add(repository._database_url)
-    evaluated = outrun = 0
+    evaluated = outrun = held = 0
+    after = -1  # mark 0 (the loose files) comes first
     while marks := connection.execute(
         """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
-           where library_id = %s order by album_id limit %s""",
-        (library_id, BACKFILL_BATCH),
+           where library_id = %s and album_id > %s order by album_id limit %s""",
+        (library_id, after, BACKFILL_BATCH),
     ).fetchall():
         try:
-            _drain(repository, connection, library_id, marks)
+            cleared = _drain(repository, connection, library_id, marks)
         except Exception as error:
             # serialization_failure: a save wrote these rows after this pass's snapshot.
             if getattr(error, "sqlstate", None) != "40001" or outrun >= OUTRUN_RETRIES:
                 raise
             outrun += 1
             continue
+        held += len(marks) - cleared
+        after = int(_value(marks[-1], "album_id"))
         evaluated += len(marks)
         if report:
             report("Changed albums", evaluated, evaluated)
+    return held
 
 
 def prepare_for_serving(repository: Any, *, rebuild_duplicates: bool = False,
@@ -659,10 +676,13 @@ def prepare_for_serving(repository: Any, *, rebuild_duplicates: bool = False,
         # restarted meanwhile waits outside. Closing the connection releases it.
         connection.execute("select pg_advisory_lock(%s, %s::integer)", (_STEP_LOCK_NAMESPACE, library_id))
         try:
-            _bring_up_to_date(repository, connection, library_id,
-                              rebuild_duplicates=rebuild_duplicates, report=report)
+            held = _bring_up_to_date(repository, connection, library_id,
+                                     rebuild_duplicates=rebuild_duplicates, report=report)
         finally:
             _unlock(connection, library_id)
+    if held:
+        raise PreparationError(
+            f"{held} changed album(s) were held or marked again by a writer during this pass: stop every writer first.")
 
 
 def serving_readiness(repository: Any) -> dict[str, object]:

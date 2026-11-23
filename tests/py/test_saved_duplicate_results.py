@@ -210,9 +210,16 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
     def marks():
         return library.sql("select count(*) from library.problematic_index_dirty_albums where album_id <> 0")[0][0]
 
-    # 6.5 (28592adb3): background maintenance walks once. The save's marks are left free for the next pass,
-    # which is queued exactly once.
+    # 6.5 (28592adb3): background maintenance walks once, and an older evaluation never overwrites a save.
     assert library.marked(first, second) == expected, "An older evaluation overwrote the save."
+    if change == "breaks":
+        # Breaking the pair, the save rewrites the rows this pass read, so the pass's write fails as outrun
+        # (40001) and the same pass evaluates again from the save's commit: no mark left, no extra pass.
+        assert marks() == 0, "The pass evaluated the save's marks after it was outrun."
+        assert queued == [], "No extra pass is queued."
+        return
+    # Forming the pair, the pass's write goes through: the save's marks are left free for the next pass,
+    # which is queued exactly once.
     assert marks() == 2, "The save's marks on both albums are left for the next pass."
     assert queued == [library.repository], "Exactly one next pass is queued."
 

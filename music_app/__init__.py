@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import AsyncIterator
 
-from music_app.services.app_copy import APP_COPY_HEADER
+from music_app.services.app_copy import APP_COPY_HEADER, mark_app_copy_data
 
 
 _POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
@@ -378,6 +378,8 @@ def _configure_asgi_app(app, runtime) -> None:
                 response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
             else:
                 response.headers["Cache-Control"] = "no-store, max-age=0"
+        # Outside the private boundary, so the actor it resolved is known here.
+        mark_app_copy_data(request, response)
         if (
             str(response.headers.get("content-type") or "").lower().startswith("text/html")
             and APP_COPY_HEADER not in response.headers

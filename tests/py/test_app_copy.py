@@ -236,3 +236,88 @@ def test_app_copy_switched_off_retires_the_worker_and_leaves_the_page_without_it
     assert b"unregister()" in body and b"album-haven-app-copy-" in body
     assert b"addEventListener('fetch'" not in body
     assert b"/static/js/app-copy.js" not in page
+
+
+# ---- Library data the worker keeps for views already seen (IAR-W20..IAR-W22) ----
+
+
+def _data_app(account_id: int | None = 7):
+    """A small app with the data marking installed, answering as the real data routes do."""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from music_app.services.app_copy import mark_app_copy_data
+
+    app = FastAPI()
+    app.state.runtime_asset_version = "v9"
+    app.state.auth_policy_config = {
+        "hmac": {"secret": "test-only-policy-origin-key-32-bytes-minimum", "key_version": 1},
+        "session": {"idle_seconds": 3600},
+    }
+
+    @app.get("/album-details")
+    async def album_details():
+        return JSONResponse({"ok": True, "album": {"key": "Broadcast::Tender"}})
+
+    @app.get("/view-data")
+    async def view_data():
+        return JSONResponse({"ok": False, "code": "gallery_projection_pending"}, status_code=503)
+
+    @app.get("/status")
+    async def status():
+        return JSONResponse({"ok": True})
+
+    @app.middleware("http")
+    async def mark(request, call_next):
+        response = await call_next(request)
+        mark_app_copy_data(request, response)
+        return response
+
+    @app.middleware("http")
+    async def signed_in(request, call_next):
+        request.state.current_actor = SimpleNamespace(account_id=account_id, authenticated_at=None)
+        return await call_next(request)
+
+    return app
+
+
+def test_data_fetched_by_the_copy_is_marked_for_its_account_with_the_fields_it_must_not_keep():
+    from types import SimpleNamespace
+
+    from music_app.services.app_copy import APP_COPY_REDACTED_KEYS, app_copy_account
+
+    status, headers, body = run_asgi_request(_data_app(), "GET", "/album-details", query={"album_key": "x"}, headers=COPY_REQUEST)
+
+    assert status == 200
+    assert decode_json(body)["album"]["key"] == "Broadcast::Tender"
+    assert headers["cache-control"] == "private, no-cache"
+    assert headers["x-album-haven-app-copy"] == app_copy_account(SimpleNamespace(account_id=7))
+    assert headers["x-album-haven-asset-version"] == "v9"
+    assert int(headers["x-album-haven-app-copy-expires"]) > 0
+    assert headers["x-album-haven-app-copy-redact"].split(",") == list(APP_COPY_REDACTED_KEYS)
+    assert {"path", "src", "track_paths"} <= set(APP_COPY_REDACTED_KEYS)
+
+
+@pytest.mark.parametrize(("path", "copy_request", "account_id"), [
+    ("/album-details", False, 7),  # the page's own request, not the worker's
+    ("/view-data", True, 7),  # the app's own 503: not an answer to keep
+    ("/status", True, 7),  # not library data
+    ("/album-details", True, None),  # nobody signed in
+])
+def test_other_data_answers_are_never_marked(path, copy_request, account_id):
+    _status, headers, _body = run_asgi_request(
+        _data_app(account_id), "GET", path, headers=COPY_REQUEST if copy_request else {},
+    )
+
+    assert "x-album-haven-app-copy" not in headers
+    assert "x-album-haven-app-copy-redact" not in headers
+
+
+def test_data_is_not_marked_while_the_copy_is_switched_off(monkeypatch):
+    monkeypatch.setenv("ALBUM_HAVEN_APP_COPY", "off")
+
+    _status, headers, _body = run_asgi_request(_data_app(), "GET", "/album-details", headers=COPY_REQUEST)
+
+    assert "x-album-haven-app-copy" not in headers

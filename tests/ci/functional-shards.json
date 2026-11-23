@@ -561,7 +561,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-              "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
+              "case": "FTC-IAR-W10 offline, reloading an artist opened online shows that artist's kept albums, and an artist never opened names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
               "area": "gallery-search"
             },
             {
@@ -611,6 +611,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/instantReturnSignIn.spec.js",
               "case": "FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library, and more albums show 'Offline. Can't load more albums, check your network or try again later'",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnOfflineData.spec.js",
+              "case": "FTC-IAR-W20 after browsing online, an offline reload still opens every artist and album already seen, by the tree and by scrolling, and their details",
               "area": "gallery-search"
             }
           ]

@@ -4561,8 +4561,8 @@ def test_pending_relation_rebuild_keeps_last_families_without_request_builds(
             "Aria Band": "Aria Band",
         }
         assert counts.builder_calls == 0
-        # The background rebuild stays queued; the request never waits on it.
-        assert refreshes == [1]
+        # 6.5 (option 1): the request queues no rebuild; scans, the watcher and tag saves own the refresh.
+        assert refreshes == []
         statements[artist_count] = counts.sql_statements
     assert statements[20] == statements[14_000]
 
@@ -5009,7 +5009,8 @@ def test_root_startup_known_artist_prefix_keeps_bounded_balanced_preview(monkeyp
 
 @pytest.mark.parametrize(
     ("queue_projection_refresh", "expected_refresh_count"),
-    [(True, 1), (False, 0)],
+    # 6.5 (option 1): a bounded common preview never schedules a refresh, whatever the caller asks.
+    [(True, 0), (False, 0)],
 )
 def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payload_semantics(
     monkeypatch,

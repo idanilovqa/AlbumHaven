@@ -557,8 +557,16 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
     monkeypatch.setattr(gallery, "publish_gallery_projection", traced_publish)
     monkeypatch.setattr(gallery, "finish_full_relation_publication", traced_finish_full)
     monkeypatch.setattr(gallery, "patch_gallery_membership_in_transaction", traced_patch)
+    # 6.5 (option 1): browsing the stale gallery schedules nothing; the scan's own publication owns recovery.
     repository.build_root_startup_preview_payload()
-    assert len(refreshes) == 1, "Stale root browse did not schedule recovery"
+    assert refreshes == [], "a browse request never schedules the gallery refresh"
+
+    def scan_publication_owner():
+        # As cache.py does after a scan's snapshot is saved.
+        gallery.schedule_gallery_projection_refresh(fixture.config, connect=isolatedPostgres._connect)
+
+    scan_publication_owner()
+    assert len(refreshes) == 1
     assert refreshes[0] is not None
     if fail_first:
         with pytest.raises(RuntimeError, match="temporary relation repair failure"):
@@ -579,7 +587,11 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
                 break
             sleep(0.01)
         assert not pending, "Failed refresh did not release its single-flight slot"
-        repository.build_root_startup_preview_payload()
+        # Requests after the failure still schedule nothing; the next source change recovers it once.
+        for _request in range(3):
+            repository.build_root_startup_preview_payload()
+        assert len(refreshes) == 1, "requests after a failed refresh schedule nothing"
+        scan_publication_owner()
         assert len(refreshes) == 2
     # Keep last families (431e0375b): while a relation rebuild is pending, the refresh publishes both root
     # scopes with the last families, rebuilds relations, then republishes both once the relation publication

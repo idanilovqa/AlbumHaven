@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.py.test_isolated_postgres_live import watcher_repair_inventory
 from tests.py.test_multidestination_tag_edit_postgres import multi_destination_library
 
 
@@ -72,3 +73,97 @@ def test_album_artist_recovery_commits_identity_cover_and_intent_without_full_sn
     assert historical['album']['album_id'] == destination_id
     assert connection.execute('select release_year from library.local_albums where id=%s',
                               (destination_id,)).fetchone()[0] == (2025 if requested_field == 'title' else 2026)
+
+
+def test_startup_recovery_touches_only_the_journal_albums_at_any_library_size(watcher_repair_inventory, monkeypatch):
+    """Case 56 (b), real Postgres: recovering one unfinished title edit costs the same counted statements and
+    returned rows with 5 and 60 other albums in the library. Only the journal's album is journaled for the
+    relation owner, which recovery queues and never runs or waits on."""
+    from concurrent.futures import Future
+
+    from music_app.services import cache, library_roots, metadata, postgres_connections
+    from music_app.services.tag_edit_intents_postgres import PostgresTagEditIntentRepository
+    from music_app.services.tag_edit_recovery import reconcile_unfinished_tag_edit_intents_on_startup
+    from tests.e2e.support import isolatedPostgres
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts
+
+    fixture = watcher_repair_inventory
+    held = []
+
+    class Executor:
+        """Holds the relation owner the save queues: recovery never runs or waits on it."""
+
+        def submit(self, action):
+            future = Future()
+            held.append(action)
+            return future
+
+    monkeypatch.setattr(cache, '_CACHE_WRITE_EXECUTOR', Executor())
+    monkeypatch.setattr(library_roots, 'resolve_media_path_within_roots', lambda raw, _roots, **_k: Path(raw))
+    monkeypatch.setattr(metadata, 'apply_text_repairs_to_file',
+                        lambda *_args: pytest.fail('verified files are not rewritten in forward recovery'))
+    measured = {}
+
+    def run(other_albums, size):
+        edited = fixture.entry(f'Edited {size}/Album/01.flac', artist=f'Edited {size}', album='Edited album')
+        others = [fixture.entry(f'Other {size} {index:03d}/Album/01.flac', artist=f'Other {size} {index:03d}',
+                                album='Other album') for index in range(other_albums)]
+        fixture.seed(edited, *others)
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            assert connection.execute('select count(*) as rows from library.local_relation_dirty_albums').fetchone()['rows'] == 0
+            album_id = connection.execute("""
+                select tracks.album_id from library.local_tracks tracks
+                join library.local_track_files files on files.track_id=tracks.id where files.private_path=%s
+            """, (edited['path'],)).fetchone()['album_id']
+        identity = f'recovery-size-{size}'
+        repository = PostgresTagEditIntentRepository(fixture.config)
+        intent_id = repository.prepare_intent(library_root_identity=identity, changes=[{
+            'path': edited['path'], 'old_values': {'title': edited['title']},
+            'requested_values': {'title': 'Recovered title'},
+        }])
+        repository.mark_files_verified(intent_id)
+        recovered = {**edited, 'title': 'Recovered title'}
+        monkeypatch.setattr(library_roots, 'library_root_cache_identity', lambda _config: identity)
+        monkeypatch.setattr(metadata, 'read_editable_tag_values',
+                            lambda _path, fields: {field: recovered[field] for field in fields})
+        monkeypatch.setattr(metadata, 'read_metadata_for_file', lambda _path: dict(recovered))
+
+        counts = OperationCounts()
+        pooled = postgres_connections.pooled_connection
+
+        class CountedLease:
+            def __init__(self, lease):
+                self._lease = lease
+
+            def __enter__(self):
+                return CountingConnection(self._lease.__enter__(), counts)
+
+            def __exit__(self, *failure):
+                return self._lease.__exit__(*failure)
+
+        with monkeypatch.context() as counting:
+            counting.setattr(postgres_connections, 'pooled_connection',
+                             lambda *args, **kwargs: CountedLease(pooled(*args, **kwargs)))
+            result = reconcile_unfinished_tag_edit_intents_on_startup(SimpleNamespace(
+                config=fixture.config, logger=logging.getLogger(__name__)))
+        assert result == {'completed': 1, 'rolled_back': 0, 'reconciled_external': 0, 'failed': 0}
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            assert connection.execute('select status from library.tag_edit_intents where id=%s',
+                                      (intent_id,)).fetchone()['status'] == 'completed'
+            assert connection.execute('select title from library.local_tracks tracks join library.local_track_files files'
+                                      ' on files.track_id=tracks.id where files.private_path=%s',
+                                      (edited['path'],)).fetchone()['title'] == 'Recovered title'
+            dirty = [row['album_id'] for row in connection.execute(
+                'select album_id from library.local_relation_dirty_albums order by album_id').fetchall()]
+        assert dirty == [album_id], f"only the journal's album waits for the relation owner: {dirty}"
+        assert held, 'the relation owner is queued after the commit'
+        measured[size] = counts
+
+    run(5, 'small')
+    held.clear()
+    run(60, 'large')
+    small, large = measured['small'], measured['large']
+    assert small.sql_statements == large.sql_statements, (
+        f'statements grew with the library: {small.sql_statements} -> {large.sql_statements}')
+    assert small.returned_rows == large.returned_rows, (
+        f'returned rows grew with the library: {small.returned_rows} -> {large.returned_rows}')

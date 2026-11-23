@@ -36,7 +36,9 @@ def test_album_artist_recovery_commits_identity_cover_and_intent_without_full_sn
     ])
     repository.mark_files_verified(intent_id)
     monkeypatch.setattr(library_roots, 'library_root_cache_identity', lambda _config: root_identity)
-    monkeypatch.setattr(library_roots, 'resolve_configured_media_path', lambda _config, path: Path(path))
+    # Recovery resolves each journal path within the configured roots, loaded once (8128ee152).
+    monkeypatch.setattr(library_roots, 'iter_library_root_paths', lambda _config: [])
+    monkeypatch.setattr(library_roots, 'resolve_media_path_within_roots', lambda path, _roots, **_kwargs: Path(path))
     monkeypatch.setattr(metadata, 'read_editable_tag_values', lambda path, fields: {
         field: refreshed[path][field] for field in fields
     })

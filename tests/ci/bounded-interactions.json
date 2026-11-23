@@ -15039,7 +15039,7 @@
       },
       "budgets": {
         "pool_leases": 0,
-        "sql_statements": 25
+        "sql_statements": 9
       },
       "growth": {
         "metric": "sql_statements",

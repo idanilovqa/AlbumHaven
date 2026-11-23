@@ -1,6 +1,7 @@
 """Startup recovery uses the real scoped writer and durable intent transaction."""
 import logging
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -95,7 +96,7 @@ def test_startup_recovery_touches_only_the_journal_albums_at_any_library_size(wa
 
         def submit(self, action):
             future = Future()
-            held.append(action)
+            held.append((action, future))
             return future
 
     monkeypatch.setattr(cache, '_CACHE_WRITE_EXECUTOR', Executor())
@@ -156,14 +157,20 @@ def test_startup_recovery_touches_only_the_journal_albums_at_any_library_size(wa
             dirty = [row['album_id'] for row in connection.execute(
                 'select album_id from library.local_relation_dirty_albums order by album_id').fetchall()]
         assert dirty == [album_id], f"only the journal's album waits for the relation owner: {dirty}"
-        assert held, 'the relation owner is queued after the commit'
+        assert len(held) == 1, 'the relation owner is queued after the commit'
         measured[size] = counts
+        # Outside the measurement, the owner runs: it drains the album and releases its single-flight slot, so
+        # the next size's save queues its own owner instead of coalescing into this one.
+        action, future = held.pop()
+        future.set_result(action())
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            assert connection.execute('select count(*) as rows from library.local_relation_dirty_albums').fetchone()['rows'] == 0
 
     run(5, 'small')
-    held.clear()
     run(60, 'large')
     small, large = measured['small'], measured['large']
-    assert small.sql_statements == large.sql_statements, (
-        f'statements grew with the library: {small.sql_statements} -> {large.sql_statements}')
-    assert small.returned_rows == large.returned_rows, (
-        f'returned rows grew with the library: {small.returned_rows} -> {large.returned_rows}')
+    sizes = (f'5 other albums: {small.sql_statements} statements, {small.returned_rows} rows; '
+             f'60: {large.sql_statements} statements, {large.returned_rows} rows')
+    print(f'[case56-recovery-counts] {sizes}', file=sys.__stderr__, flush=True)
+    assert small.sql_statements == large.sql_statements, f'statements grew with the library: {sizes}'
+    assert small.returned_rows == large.returned_rows, f'returned rows grew with the library: {sizes}'

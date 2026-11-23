@@ -15018,19 +15018,36 @@
     },
     {
       "id": "py:services/problematic_index.py#_maintain",
-      "action": "Run background _maintain",
+      "action": "Background Problematic Files maintenance: each pass (backfill batches, then marked-album batches) runs on one connection of its own, with no pool lease and no other connection, and each batch's statements stay flat in library size",
       "entrypoints": [
         "py:music_app/services/problematic_index.py#_maintain:background:executor"
       ],
       "owners": [
-        "music_app/services/problematic_index.py"
+        "music_app/services/problematic_index.py",
+        "music_app/services/library_browse_postgres.py"
       ],
       "rules": [
+        "BI-05",
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 60
+      },
+      "budgets": {
+        "pool_leases": 0,
+        "sql_statements": 25
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_problematic_index_bounded_contracts.py::test_maintenance_holds_one_connection_of_its_own_and_its_batches_stay_flat",
+      "testIdentity": "test_maintenance_holds_one_connection_of_its_own_and_its_batches_stay_flat",
+      "rollback": "Dropping a reader's connection argument in a batch makes it lease the browse pool or open a connection per batch: pool_leases or the one-connection check fail."
     },
     {
       "id": "py:services/problematic_index.py#refresh",

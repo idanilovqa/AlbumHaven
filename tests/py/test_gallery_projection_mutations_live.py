@@ -574,7 +574,8 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
 
     fixture = gallery_inventory
     added = fixture.entry("Added/Third/three.flac", artist="Added", album="Third")
-    fixture.seed(fixture.first, fixture.second, added)
+    # The relation refresh must have work to do: no startup baseline (c72277e26), which would publish it first.
+    fixture.seed(fixture.first, fixture.second, added, startup_baseline=False)
     concurrent = fixture.entry("Concurrent/Fourth/four.flac", artist="Concurrent", album="Fourth")
     refresh_locked, target_attempted = Event(), Event()
     inventory_lock = relations.inventory_publication_advisory_lock_sql()

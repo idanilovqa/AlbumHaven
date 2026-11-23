@@ -142,7 +142,9 @@ def test_backfill_uses_a_bounded_background_pool_checkout(tmp_path):
     ]
 
 
-def test_backfill_cleans_previous_relocation_directories_only_for_custom_storage(tmp_path):
+def test_backfill_keeps_previous_preview_directories_under_any_storage(tmp_path):
+    """6.5 (8715d9d79 ruling): no backfill pass deletes anything under an album folder, also once previews
+    live elsewhere. A one-time cleanup is a separate, owner-started feature."""
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
     from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
 
@@ -167,11 +169,13 @@ def test_backfill_cleans_previous_relocation_directories_only_for_custom_storage
         {"mode": "custom", "active_root": str(tmp_path / "ssd")}
     )
     worker.run_once()
-    assert not old.exists()
+    assert (old / "v1/cover_variants/ab").is_dir(), "custom storage deletes nothing in the album folder"
     assert source.read_bytes() == b"original art"
 
 
-def test_backfill_deletes_leftover_album_folder_previews_once_previews_live_elsewhere(tmp_path):
+def test_backfill_keeps_album_folder_previews_once_previews_live_elsewhere(tmp_path):
+    """6.5 (8715d9d79 ruling): previews written before a move to separate storage stay in the album folder;
+    the backfill writes new previews to the separate location and deletes nothing."""
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
     from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
 
@@ -205,49 +209,12 @@ def test_backfill_deletes_leftover_album_folder_previews_once_previews_live_else
         {"mode": "custom", "active_root": str(custom_root)}
     )
     worker.run_once()
-    assert not old.exists(), "no .album-haven folder remains in the music folder"
+    assert legacy.read_bytes() == b"generated preview" and current.read_bytes() == b"generated preview", (
+        "no backfill pass deletes anything under the album folder"
+    )
     assert generated[-1] == custom_root / "v1", "new previews are written to the separate location"
     assert source.read_bytes() == b"original art"
     assert track.read_bytes() == b"audio"
-
-
-def test_album_folder_preview_removal_keeps_unknown_files(tmp_path):
-    from music_app.services.generated_preview_storage import remove_album_folder_previews
-
-    old = tmp_path / "album/.album-haven"
-    (old / "v1/cover_variants/ab").mkdir(parents=True)
-    (old / "v1/cover_variants/ab/preview.webp").write_bytes(b"generated")
-    (old / "notes.txt").write_text("user file")
-    remove_album_folder_previews(old)
-    assert not (old / "v1").exists()
-    assert (old / "notes.txt").read_text() == "user file"
-
-
-def test_backfill_cleanup_failure_does_not_starve_previews_and_attempts_each_root_once(tmp_path, monkeypatch):
-    from music_app.services import cover_preview_backfill as backfill
-    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
-
-    sources = [tmp_path / "locked/cover.jpg", tmp_path / "locked/front.jpg", tmp_path / "next/cover.jpg"]
-    attempts = []
-    generated = []
-
-    def cleanup(root):
-        attempts.append(root)
-        if root.parent.name == "locked":
-            raise PermissionError("Legacy preview folder is inaccessible")
-
-    monkeypatch.setattr(backfill, "remove_album_folder_previews", cleanup)
-    connection = _Connection([{"cover_path": str(path)} for path in sources])
-    worker = backfill.CoverPreviewBackfill(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
-         "_GENERATED_PREVIEW_STORAGE_POLICY": preview_storage_policy_from_mapping(
-             {"mode": "custom", "active_root": str(tmp_path / "ssd")})},
-        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
-        generate=lambda path, **_kwargs: generated.append(path), throttle_seconds=0,
-    )
-    assert worker.run_once() == 3
-    assert generated == sources
-    assert attempts == [tmp_path / "locked/.album-haven", tmp_path / "next/.album-haven"]
 
 
 def test_backfill_pauses_for_foreground_activity_then_resumes(tmp_path):

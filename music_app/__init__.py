@@ -154,7 +154,7 @@ def _start_library_warmup(
                         return
                 try:
                     runtime.logger.info(
-                        "Stored file metadata predates the current reader; starting a background repair scan."
+                        "A saved root change or older file metadata still needs a scan; starting it in the background."
                     )
                     started = start_refresh(
                         runtime.library_state,
@@ -369,6 +369,9 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
     app.state.local_cover_inventory = LocalCoverInventoryWorker(runtime.config, logger=runtime.logger)
     runtime.config["_LOCAL_COVER_INVENTORY"] = app.state.local_cover_inventory
+    from music_app.services.missing_album_rescan import MissingAlbumSearches
+
+    app.state.missing_album_searches = MissingAlbumSearches()
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
     runtime.library_watch_health_service = LibraryWatchHealthService(
@@ -679,6 +682,8 @@ def create_asgi_app():
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
                 ("local cover inventory", _app.state.local_cover_inventory.stop),
+                # Joining the search threads stays off the event loop.
+                ("missing album searches", lambda: asyncio.to_thread(_app.state.missing_album_searches.stop)),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop
@@ -974,8 +979,8 @@ def create_asgi_app():
 
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
+            # The cover inventory is not written: each open checks its stored folder against the new roots.
             targeted_reconciler.replace_roots(root_definitions)
-            _app.state.local_cover_inventory.rescan()
             try:
                 runtime.library_watch_service.replace_roots(root_definitions)
             except Exception:

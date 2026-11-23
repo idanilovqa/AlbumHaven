@@ -60,6 +60,7 @@ export class CoverLookup extends BasePage {
     this.savedRemoteCoverCards = this.modalBody.locator('[data-cover-lookup-saved-remote]');
     this.savedRemoteCoverCard = this.savedRemoteCoverCards.first();
     this.openLightboxButtons = this.modalBody.locator('[data-cover-lookup-open-lightbox]');
+    this.lightboxImage = page.locator(this.lightboxImageSelector);
     this.activeLocalCoverImage = this.modalBody
       .locator('[data-cover-lookup-local-active] .cover-lookup-art-preview-image')
       .first();
@@ -475,6 +476,10 @@ export class CoverLookup extends BasePage {
     return '.cover-lookup-art-resolution';
   }
 
+  get lightboxImageSelector() {
+    return '#image-lightbox-image';
+  }
+
   get remoteCoverImageWithinCardSelector() {
     return '.cover-lookup-art-preview-image';
   }
@@ -551,6 +556,10 @@ export class CoverLookup extends BasePage {
 
   remoteCoverImageWithin(card) {
     return card.locator(this.remoteCoverImageWithinCardSelector).first();
+  }
+
+  openLightboxButtonWithin(card) {
+    return card.locator('[data-cover-lookup-open-lightbox]').first();
   }
 
   remoteCoverNameWithin(card) {
@@ -761,9 +770,10 @@ export class CoverLookup extends BasePage {
     return this.taskCardById(taskId).evaluate((element) => {
       const opener = element.querySelector('[data-open-cover-lookup-task]');
       const image = element.querySelector('img.cover-lookup-task-cover');
+      // The preview cache shows a blob, so the image's identity is the production address it was resolved from.
       // currentSrc stays empty until a lazy image starts loading; resolve the attribute to the same absolute form.
       const imageSrc = image instanceof HTMLImageElement
-        ? String(image.currentSrc || image.getAttribute('src') || '').trim()
+        ? String(image.getAttribute('data-production-cover-src') || image.currentSrc || image.getAttribute('src') || '').trim()
         : '';
       return {
         taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),

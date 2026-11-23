@@ -2908,3 +2908,99 @@ test('request capture: loose-track hydration requests each scope once', async ()
     },
   });
 });
+
+// A server that keeps answering "deferred": every armed retry is fired in turn, as the browser would.
+function loadDeferredNonAlbumPage(albums = 0, counter = null) {
+  const { context } = loadHelper();
+  const live = new Map();
+  const delays = [];
+  let nextTimer = 0;
+  let maxLive = 0;
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    nextTimer += 1;
+    live.set(nextTimer, callback);
+    delays.push(delay);
+    maxLive = Math.max(maxLive, live.size);
+    return nextTimer;
+  };
+  context.clearBrowserTimeout = (id) => { live.delete(id); };
+  context.state.status = { inventory_mutation_revision: 7 };
+  const library = Array.from({ length: albums }, (_value, index) => ({ key: `album-${index}` }));
+  context.state.albums = counter ? require('../helpers/bounded-interaction-counter').countedCollection(library, counter) : library;
+  context.state.view = {
+    selected_artist: 'Agalloch', visible_library_categories: ['main_library'],
+    non_album_tracks: [], non_album_tracks_deferred: true, artist_groups: context.state.albums,
+  };
+  const requests = [];
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    counter?.count('requests');
+    return { ok: true, status: 200, json: async () => ({
+      non_album_track_count: 0, non_album_tracks_deferred: true, library_non_album_tracks: [],
+    }) };
+  };
+  const fireAll = async () => {
+    for (let fired = 0; live.size && fired < 100; fired += 1) {
+      const [id, callback] = live.entries().next().value;
+      live.delete(id);
+      await callback();
+    }
+  };
+  return { context, live, delays, requests, fireAll, maxLive: () => maxLive };
+}
+
+for (const kind of ['artist availability', 'library Loose Tracks']) {
+  test(`a ${kind} that stays deferred backs off from 250 ms to 2 s and stops after a bounded number of retries`, async () => {
+    const page = loadDeferredNonAlbumPage();
+    const hydrate = kind === 'artist availability'
+      ? () => page.context.hydrateArtistNonAlbumAvailability()
+      : () => page.context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+    await hydrate();
+    await page.fireAll();
+
+    assert.deepEqual(page.delays, [250, 500, 1000, 2000, 2000, 2000, 2000, 2000]);
+    assert.equal(page.requests.length, 9, 'the first ask and eight retries');
+    assert.equal(page.live.size, 0, 'no retry stays armed once the wait runs out');
+    assert.equal(page.maxLive(), 1);
+  });
+
+  test(`leaving a ${kind} that is still deferred cancels its retry`, async () => {
+    const page = loadDeferredNonAlbumPage();
+    const hydrate = kind === 'artist availability'
+      ? () => page.context.hydrateArtistNonAlbumAvailability()
+      : () => page.context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+    await hydrate();
+    assert.equal(page.live.size, 1);
+    page.context.state.view = { ...page.context.state.view, selected_artist: '', gallery_scope: 'new_arrivals' };
+    page.context.cancelDeferredNonAlbumRetries();
+
+    assert.equal(page.live.size, 0, 'leaving the view leaves no retry armed');
+    await page.fireAll();
+    assert.equal(page.requests.length, 1);
+  });
+}
+
+test('bounded interaction: an artist availability pass sends one request, keeps one retry and stops at the same bound at any library size', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const episode = async (albums) => {
+    const counter = createInteractionCounter();
+    const page = loadDeferredNonAlbumPage(albums, counter);
+    return counter.measure(async () => {
+      // Two asks for the same artist while the first is in flight share one request.
+      await Promise.all([page.context.hydrateArtistNonAlbumAvailability(), page.context.hydrateArtistNonAlbumAvailability()]);
+      await page.fireAll();
+      counter.count('timers', page.maxLive());
+      assert.equal(page.live.size, 0, 'no retry stays armed');
+    });
+  };
+  await measureScalePair({
+    id: 'js:runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability',
+    small: 20,
+    large: 14000,
+    run: episode,
+    budgets: { requests: 9, timers: 1, itemsVisited: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});

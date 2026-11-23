@@ -403,6 +403,42 @@ test('leaving the last mobile page reconciles its retained gallery parent withou
   assert.equal(calls.length, 1);
 });
 
+test('bounded interaction: mobile navigation installs its listeners once at any library size', async () => {
+  const { createInteractionCounter, countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const initialize = async (albums) => {
+    const counter = createInteractionCounter();
+    const listen = { addEventListener() { counter.count('listeners'); } };
+    // The library the page holds; installing navigation must not walk it.
+    const library = countedCollection(Array.from({ length: albums }, (_value, index) => ({ key: `album-${index}` })), counter);
+    const context = load('mobile-navigation.js', {
+      URL, virtualGrid: null,
+      ResizeObserver: class { constructor() { counter.count('observers'); } observe() {} },
+      requestAnimationFrame: () => { counter.count('animationFrames'); return 1; },
+      window: { innerWidth: 390, location: { href: 'https://example.test/' }, history: { state: {} },
+        ...listen, matchMedia: () => listen },
+      document: { getElementById: id => (id === 'mobile-navigation' ? {} : null), querySelector: () => null,
+        createComment: () => ({}), ...listen, documentElement: { dataset: {}, style: { setProperty() {} } } },
+      state: { utility: { activeTab: 'appearance' }, albums: library, view: { artist_groups: library } },
+      renderCoverLookupModal() {}, galleryMainSurfaceController: null,
+      syncMobileHome() {}, renderArtistGroups() {}, restorePlayerAppearance() {}, updatePlayerUi() {},
+    });
+    context.promoteVisibleMobileDialogs = () => {};
+    return counter.measure(() => {
+      context.initMobileNavigation();
+      context.initMobileNavigation(); // a second start installs nothing more
+    });
+  };
+  await measureScalePair({
+    id: 'js:runtime/mobile-navigation.js#initMobileNavigation',
+    small: 20,
+    large: 14000,
+    run: initialize,
+    // The one observer is the page's search-field ResizeObserver, created once by the first start.
+    budgets: { listeners: 8, observers: 1, animationFrames: 0, itemsVisited: 0 },
+    growth: { metric: 'listeners', largeMinusSmallMax: 0 },
+  });
+});
+
 test('cover gallery presentation refreshes across the shared breakpoint only while open', () => {
   let onBreakpoint, renders = 0;
   const overlay = { hidden: false };

@@ -428,6 +428,48 @@ function getDeferredNonAlbumScopeKey(url) {
 let libraryNonAlbumHydrationRequest = null;
 let artistNonAlbumAvailabilityRequest = null;
 
+// While the server still prepares loose tracks, ask again after 250 ms, doubling to 2 s, eight times at most.
+const DEFERRED_NON_ALBUM_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000, 2000, 2000, 2000];
+const deferredNonAlbumRetries = new Map();
+
+function clearDeferredNonAlbumRetryTimer(entry) {
+  if (entry?.timer && typeof clearBrowserTimeout === 'function') clearBrowserTimeout(entry.timer);
+}
+
+// One armed retry per kind ('artist' or 'library'). Only a retry continues the bounded wait; a new scope or
+// a new ask (reopening Loose Tracks) starts it again.
+function scheduleDeferredNonAlbumRetry(kind, scopeKey, isCurrentScope, retry) {
+  const previous = deferredNonAlbumRetries.get(kind);
+  clearDeferredNonAlbumRetryTimer(previous);
+  const attempt = previous?.scopeKey === scopeKey && previous.retrying ? previous.attempt + 1 : 0;
+  const delay = DEFERRED_NON_ALBUM_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) {
+    deferredNonAlbumRetries.set(kind, { scopeKey, attempt, timer: 0, exhausted: true });
+    return;
+  }
+  const entry = { scopeKey, attempt, timer: 0, retrying: false };
+  entry.timer = scheduleBrowserTimeout(() => {
+    entry.timer = 0;
+    if (!isCurrentScope()) {
+      deferredNonAlbumRetries.delete(kind);
+      return undefined;
+    }
+    entry.retrying = true;
+    return retry();
+  }, delay);
+  deferredNonAlbumRetries.set(kind, entry);
+}
+
+function settleDeferredNonAlbumRetry(kind) {
+  clearDeferredNonAlbumRetryTimer(deferredNonAlbumRetries.get(kind));
+  deferredNonAlbumRetries.delete(kind);
+}
+
+// Leaving the view leaves no retry armed.
+function cancelDeferredNonAlbumRetries() {
+  for (const kind of Array.from(deferredNonAlbumRetries.keys())) settleDeferredNonAlbumRetry(kind);
+}
+
 function hasHydratedArtistNonAlbumAvailability(view = state.view || {}) {
   if (!String(view.selected_artist || '').trim()) return false;
   return view.non_album_track_count_scope
@@ -469,6 +511,7 @@ function hydrateArtistNonAlbumAvailability() {
       return state.view.non_album_track_count;
     }
     state.view.non_album_track_count_scope = scopeKey;
+    settleDeferredNonAlbumRetry('artist');
     if (String(state.view.query || '').trim()
         && getVisibleNonAlbumTracks().length !== state.view.non_album_track_count) {
       state.view.non_album_tracks_deferred = true;
@@ -479,12 +522,13 @@ function hydrateArtistNonAlbumAvailability() {
     if (artistNonAlbumAvailabilityRequest !== request) return;
     artistNonAlbumAvailabilityRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) !== scopeKey) return;
-        return hydrateArtistNonAlbumAvailability().catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'artist', scopeKey,
+        () => getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) === scopeKey,
+        () => hydrateArtistNonAlbumAvailability().catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   artistNonAlbumAvailabilityRequest = request;
@@ -536,18 +580,20 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    settleDeferredNonAlbumRetry('library');
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return tracks;
   })().finally(() => {
     if (libraryNonAlbumHydrationRequest !== request) return;
     libraryNonAlbumHydrationRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return;
-        return hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'library', scopeKey,
+        () => getLibraryNonAlbumScopeKey(state.view || {}) === scopeKey,
+        () => hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   libraryNonAlbumHydrationRequest = request;
@@ -1121,6 +1167,8 @@ function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
+  // Leaving Loose Tracks leaves no deferred retry armed.
+  settleDeferredNonAlbumRetry('library');
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);

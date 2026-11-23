@@ -329,12 +329,14 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
                     "edition": "", "album_rating": 0, "library_root_id": roots[root]["id"],
                     "library_root_category": "main_library" if root == 0 else "hoard", "exception_type": exception}
 
-        def seed(*entries):
+        def seed(*entries, startup_baseline=True):
             adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
                                   "watcher-repair", 1.0, observed_library_root_ids={root["id"] for root in roots})
             # A full scan publishes its relation views; watcher publication
-            # requires that ready baseline, as after startup.
-            _finish_live_startup(config)
+            # requires that ready baseline, as after startup. A test that proves
+            # the gallery build itself seeds without it.
+            if startup_baseline:
+                _finish_live_startup(config)
 
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
     finally:
@@ -399,6 +401,70 @@ def test_live_targeted_invalidation_publishes_new_album_to_gallery(
         connect=isolatedPostgres._connect,
     ).build_root_sidebar_payload()
     assert any(item["artist"] == "I'm with Her" for item in sidebar["artists_sidebar"])
+
+
+def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready(
+    watcher_repair_inventory, monkeypatch,
+):
+    """Case 60 (freeze guard): once the gallery is ready, a search and a browse read each build 0 gallery
+    scopes, at any size. Only startup preparation, a builder change or an owner-started rebuild may build a
+    whole scope. The save-path and targeted-invalidation cases wait, red, for their fix (case60-red-cases.patch)."""
+    import time
+
+    from music_app.services import gallery_projection_postgres, state
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from tests.py.bounded_interactions import OperationCounts, _checked_in_entries, measure_scale_pair
+
+    fixture = watcher_repair_inventory
+    built = []
+    publish = gallery_projection_postgres.publish_gallery_projection
+    monkeypatch.setattr(gallery_projection_postgres, "publish_gallery_projection",
+                        lambda *args, **kwargs: built.append(args[2]) or publish(*args, **kwargs))
+    schedule = gallery_projection_postgres.schedule_gallery_projection_refresh
+    scheduled = []
+
+    def schedule_with_test_connection(config, **options):
+        options.setdefault("connect", isolatedPostgres._connect)
+        scheduled.append(schedule(config, **options))
+        return scheduled[-1]
+
+    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", schedule_with_test_connection)
+    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", schedule_with_test_connection)
+
+    def scopes_built_by(action):
+        built.clear()
+        scheduled.clear()
+        action()
+        for future in [future for future in scheduled if future is not None]:
+            future.result(timeout=60)
+        deadline = time.monotonic() + 60
+        while gallery_projection_postgres._PENDING and time.monotonic() < deadline:
+            time.sleep(0.05)  # a coalesced trailing refresh still running
+        return len(built)
+
+    def run(albums):
+        entries = [fixture.entry(f"Artist {index:03d}/Album {index:03d}/01.flac", artist=f"Artist {index:03d}",
+                                 album=f"Album {index:03d}") for index in range(albums)]
+        fixture.seed(*entries)
+        gallery_projection_postgres.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+        browse = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+        counts = OperationCounts()
+        # Each whole gallery scope a refresh publishes counts as one builder call.
+        counts.builder_calls = scopes_built_by(browse.build_root_sidebar_payload) + scopes_built_by(
+            lambda: browse.build_search_payload(query_params={"q": "Album", "surface": "albums"}),
+        )
+        return counts
+
+    interaction = "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh"
+    entry = _checked_in_entries()[interaction]
+    measure_scale_pair(
+        interaction_id=interaction,
+        small=entry["cardinalities"]["small"],
+        large=entry["cardinalities"]["production"],
+        run=run,
+        budgets=entry["budgets"],
+        growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
+    )
 
 
 def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(
@@ -8198,3 +8264,39 @@ def test_live_tag_save_moves_duplicate_badges_at_once_and_keeps_untouched_albums
     save_keeps_untouched_albums_cached(second, album="Other Release")
     assert badges() == [False, False, False], "Breaking the pair clears the remaining album's badge at once."
     browse.invalidate_postgres_utility_projection_cache()
+
+
+def test_live_pool_hands_no_session_state_to_the_next_borrower(monkeypatch):
+    """0.11.45 left one borrower's autocommit, and could leave its session lock, for the next one."""
+    from time import monotonic, sleep
+
+    from music_app.services import postgres_connections
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    lock_key = 611_450_045
+    postgres_connections.close_pools()
+    try:
+        with postgres_connections.leased_connection(runtime_url) as first:
+            first.autocommit = True
+            first_backend = first.execute("select pg_backend_pid() as pid").fetchone()["pid"]
+
+        with postgres_connections.leased_connection(runtime_url) as following:
+            assert following.execute("select pg_backend_pid() as pid").fetchone()["pid"] == first_backend
+            assert following.autocommit is False
+            statement = "select pg_current_xact_id()::text as xact"
+            transaction = following.execute(statement).fetchone()["xact"]
+            assert following.execute(statement).fetchone()["xact"] == transaction, "one transaction, not autocommit"
+
+        with postgres_connections.session_connection(runtime_url) as holder:
+            holder.execute("select pg_advisory_lock(%s)", (lock_key,))
+            # Returned without unlocking, as a failed unlock does.
+
+        with isolatedPostgres._connect(setup_url) as observer:
+            released_by = monotonic() + 5
+            while not observer.execute(
+                "select pg_try_advisory_lock(%s) as acquired", (lock_key,)
+            ).fetchone()["acquired"]:
+                assert monotonic() < released_by, "the session lock outlived its lease"
+                sleep(0.05)
+    finally:
+        postgres_connections.close_pools()

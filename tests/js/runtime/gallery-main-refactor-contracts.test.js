@@ -3143,3 +3143,66 @@ test('the artist panel ends its text with one disabled Open full page and lists 
   assert.match(disabled, /color:\s*color-mix\(in srgb, var\(--appearance-accent,[^)]*\)\) 45%, transparent\)/, 'dimmed like Full page was');
   assert.doesNotMatch(disabled, /opacity/, 'dimming the colour keeps the fade behind it opaque');
 });
+
+test('bounded interaction: a GalleryBar refit visits only its own genres and keeps one size observer at any page size', async () => {
+  const { createInteractionCounter, countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const GENRES = 6;
+  const refit = async (otherBars) => {
+    const counter = createInteractionCounter();
+    const observed = [];
+    // The rest of the page: other bars' genres and the gallery's cards. Touching any of them is counted.
+    const page = countedCollection(Array.from({ length: otherBars * (GENRES + 4) }, () => ({ hidden: false })), counter);
+    const context = loadRuntime({
+      document: { querySelectorAll: () => page, querySelector: () => null },
+      window: { innerWidth: 390 },
+      ResizeObserver: class {
+        constructor(callback) {
+          counter.count('observers');
+          this.callback = callback;
+        }
+
+        observe(target) {
+          observed.push([this, target]);
+        }
+      },
+    });
+    const pills = Array.from({ length: GENRES }, (_value, index) => ({
+      hidden: false,
+      getBoundingClientRect: () => ({ right: 40 * (index + 1) }),
+    }));
+    const genres = {
+      getClientRects: () => [{}],
+      getBoundingClientRect: () => ({ right: 120 }),
+      querySelectorAll: () => countedCollection(pills, counter),
+    };
+    const name = { textContent: 'Kipelov', scrollWidth: 100, clientWidth: 100 };
+    const bar = {
+      clientWidth: 300,
+      dataset: { galleryContextKind: 'artist' },
+      classList: { add: () => {}, remove: () => {} },
+      querySelector: selector => ({
+        '[data-gallery-context-name]': name,
+        '.gallery-bar__summary .gallery-bar__artist-genres': genres,
+      }[selector] || null),
+      querySelectorAll: () => countedCollection(pills, counter),
+    };
+    context.syncGalleryBarNameFit(bar, name); // the bar's first fit installs its observer
+    const measured = await counter.measure(() => {
+      bar.clientWidth = 301; // a new width refits once, through the bar's own observer
+      observed[0][0].callback();
+      assert.equal(pills.slice(3).every(pill => pill.hidden), true, 'genres past the line end are dropped whole');
+    });
+    assert.equal(counter.snapshot().observers, 1, 'one size observer exists across the first fit and the refit');
+    assert.equal(observed.length, 1, 'the bar is observed once');
+    return measured;
+  };
+  // One refit shows, then measures, each of the bar's own genres: 2 x 6 visits, none outside the bar.
+  await measureScalePair({
+    id: 'js:runtime/gallery-main-interactions.js#syncGalleryBarNameFit',
+    small: 10,
+    large: 1000,
+    run: refit,
+    budgets: { itemsVisited: 12, observers: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

@@ -380,6 +380,131 @@ def test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_pro
     )
 
 
+_SCAN_ADDED_ALBUMS = 3
+
+
+@pytest.mark.parametrize("trigger", [
+    "scan", "root-change-scan", "settings-save-scan", "watcher-during-scan", "watcher-during-scan-that-also-adds",
+])
+def test_scan_added_album_cover_lookup_searches_only_the_added_albums_at_two_library_sizes(
+    cover_state, tmp_path, monkeypatch, trigger,
+):
+    """Owner (relayed 2026-11-22): albums a scan or the watcher adds get the automatic cover lookup, never
+    the whole library. At 20 and 14,000 albums, three added coverless albums are queued, read and searched,
+    and no other album: the same counts at both sizes. Case 65 (6.5): a queued root-change scan, a Library
+    Settings save's scan, and a watcher addition that meets a running scan never reach the whole-library
+    manual cover refresh."""
+    from music_app.services import library_settings, scan_state
+    from music_app.services import state as state_service
+    from music_app.services.library import album_to_dict, build_albums_from_file_cache
+
+    def no_manual_refresh(**_kwargs):
+        pytest.fail("no whole-library manual cover refresh")
+
+    app, executor, searches = cover_state
+    config, logger = app.state.config, app.state.logger
+
+    def run(album_count: int) -> OperationCounts:
+        searches.clear()
+        counts = OperationCounts()
+        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        added = _cover_library(tmp_path / f"added-{album_count}", covered=0, missing=_SCAN_ADDED_ALBUMS)
+        existing = {
+            path: {"path": path, "title": "One", "album": "Album", "album_artist": f"Library Artist {index:05d}"}
+            for index in range(album_count - _SCAN_ADDED_ALBUMS)
+            for path in (f"/music/Library Artist {index:05d}/Album/01.mp3",)
+        }
+        existing_albums = build_albums_from_file_cache(existing)
+        added_albums = build_albums_from_file_cache(added)
+
+        class Repository:
+            """The Postgres browse repository answers keyed reads for the queued paths only."""
+
+            def __init__(self, _config):
+                pass
+
+            def build_album_payloads_by_track_paths(self, track_paths):
+                assert set(track_paths) <= set(added)
+                counts.returned_rows += 1
+                return [
+                    album_to_dict(album) for album in added_albums
+                    if any(str(track.path) in track_paths for track in album.tracks)
+                ]
+
+            def build_track_file_entries_by_paths(self, track_paths):
+                assert set(track_paths) <= set(added)
+                counts.returned_rows += len(track_paths)
+                return {path: dict(added[path]) for path in track_paths}
+
+        monkeypatch.setattr(state_service, "PostgresLibraryBrowseRepository", Repository)
+        library_state = app.state.library_state
+        library_state.update({
+            "file_cache": {**existing, **added}, "albums": [*existing_albums, *added_albums],
+            "covers_in_progress": False, "scan_in_progress": False, "pending_cover_refresh_after_scan": False,
+        })
+
+        def finish_scan(previous_album_keys):
+            library_state["scan_in_progress"] = False
+            scan_state.finalize_post_scan_actions(
+                library_state,
+                config=config,
+                logger=logger,
+                previous_album_keys=previous_album_keys,
+                start_manual_cover_refresh=no_manual_refresh,
+                start_background_cover_refresh=lambda: pytest.fail("no library-wide cover crawl"),
+                start_added_album_cover_lookup=lambda albums: (
+                    state_service.queue_cover_lookup_for_added_albums_for_state(library_state, config, logger, albums)
+                ),
+            )
+
+        existing_keys = {album.key for album in existing_albums}
+        if trigger.startswith("watcher-during-scan"):
+            # The watcher found the albums while a scan was running. In the second case that scan also counts
+            # them as added: both paths queue them, and each album is still searched exactly once.
+            scan_also_adds = trigger.endswith("also-adds")
+            library_state["scan_in_progress"] = True
+            state_service.queue_watcher_cover_refresh_for_track_paths_for_state(
+                library_state, config, logger, set(added),
+                affected_album_keys=tuple(album.key for album in added_albums),
+            )
+            executor.run_all()
+            assert searches == [], "no lookup while the scan runs"
+            enqueued = library_state["_watcher_cover_refresh_enqueue_token"]
+            monkeypatch.setattr(state_service, "refresh_library_for_state", lambda *_args, **_options: finish_scan(
+                existing_keys if scan_also_adds else existing_keys | {album.key for album in added_albums},
+            ))
+            monkeypatch.setattr(state_service, "_start_queued_root_change_scan", lambda *_args: None)
+            state_service._refresh_library_worker(library_state, config, logger, False)
+            # The scan skips albums the watcher already queued, so an in-flight lookup is never queued twice.
+            assert library_state["_watcher_cover_refresh_enqueue_token"] == enqueued
+        else:
+            if trigger == "root-change-scan":
+                library_state[scan_state.QUEUED_ROOT_CHANGE_KEY] = "roots-after"
+                monkeypatch.setattr(state_service, "_SCAN_EXECUTOR", _CapturingExecutor())
+                assert state_service.start_background_refresh_for_state(
+                    library_state, config, logger, force=True, scan_mode="library_settings_update",
+                )
+            elif trigger == "settings-save-scan":
+                library_settings.save_library_settings_and_start_refresh(
+                    config, {}, library_state=library_state,
+                    start_background_refresh=lambda **_kwargs: True,
+                    build_status_payload=lambda: {},
+                    save_root_settings=lambda _config, payload: payload,
+                )
+            finish_scan(existing_keys)
+        executor.run_all()
+        assert sorted(album for _artist, album in searches) == sorted(album.name for album in added_albums), (
+            "each added album is searched exactly once, and no other album"
+        )
+        assert not library_state["_watcher_cover_refresh_pending_track_paths"]
+        counts.queue_claims = len(searches)
+        return counts
+
+    small, large = run(20), run(14_000)
+    assert small.queue_claims == large.queue_claims == _SCAN_ADDED_ALBUMS
+    assert small.returned_rows == large.returned_rows, "keyed reads stay the same as the library grows"
+
+
 @pytest.mark.parametrize("interaction_id", [
     "py:services/state.py#refresh_cover_artwork_for_track_paths_for_state",
     "py:services/cover_refresh_runtime.py#refresh_cover_artwork_for_track_paths_request",

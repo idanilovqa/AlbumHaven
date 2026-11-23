@@ -6,6 +6,7 @@ from typing import Any
 import uuid
 
 from music_app.services.postgres_connections import leased_connection as _leased_connection
+from music_app.services.postgres_connections import session_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     from psycopg.types.json import Jsonb
@@ -39,8 +40,12 @@ class PostgresTagEditIntentRepository:
         *,
         connect: Callable[[str], Any] | None = None,
     ) -> None:
+        self._config = config
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
+        # The intent's advisory lock is a session lock held through the media writes: never on a
+        # connection that a request could borrow next.
+        self._lock_connect = connect or session_connection
 
     def intent_lease(self, request_id: str = ""):
         """Own a journal session until the edit's background finalizer releases it.
@@ -209,6 +214,11 @@ class PostgresTagEditIntentRepository:
                     status=status,
                     last_error=last_error,
                 )
+        if exception_updates:
+            # Completed on its own, outside the tag save: its overrides' albums go to the relation owner.
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+            queue_journaled_relation_drain(self._config)
 
     def mark_recovery_failed(self, intent_id: str, error: object) -> None:
         with self._connect_to_database() as connection:
@@ -244,11 +254,17 @@ class PostgresTagEditIntentRepository:
         return [_intent_from_row(row) for row in rows]
 
     def _connect_to_database(self) -> Any:
+        return self._connect(self._required_database_url())
+
+    def _required_database_url(self) -> str:
         if not self._database_url:
             raise RuntimeError(
                 "ALBUM_HAVEN_APP_DATABASE_URL is required for tag edit intents."
             )
-        return self._connect(self._database_url)
+        return self._database_url
+
+    def _connect_for_lock(self) -> Any:
+        return self._lock_connect(self._required_database_url())
 
 
 class _FallbackJsonb:
@@ -272,7 +288,7 @@ class _TagEditIntentLease:
         if self._released or self._connection is not None:
             raise RuntimeError("Tag edit lease has already been used.")
         self._intent_id = str(uuid.UUID(intent_id))
-        self._connection = self._stack.enter_context(self._repository._connect_to_database())
+        self._connection = self._stack.enter_context(self._repository._connect_for_lock())
         function = "pg_advisory_lock" if wait else "pg_try_advisory_lock"
         with _transaction(self._connection):
             row = _first_row(self._connection.execute(
@@ -363,13 +379,14 @@ def _validate_changes(changes: list[dict[str, object]]) -> list[dict[str, object
             raise ValueError(
                 "Tag edit intent requires matching old and requested values."
             )
-        normalized.append(
-            {
-                "path": path,
-                "old_values": dict(old_values),
-                "requested_values": dict(requested_values),
-            }
-        )
+        change = {
+            "path": path,
+            "old_values": dict(old_values),
+            "requested_values": dict(requested_values),
+        }
+        if isinstance(raw_change.get("text_correction_write"), Mapping):
+            change["text_correction_write"] = dict(raw_change["text_correction_write"])
+        normalized.append(change)
     return normalized
 
 
@@ -408,15 +425,29 @@ def _mark_files_verified_sql() -> str:
 
 
 def _mark_terminal_sql() -> str:
+    # A "Write in tags" correction is recorded as written only by the commit that completes its save.
     return """
-        update library.tag_edit_intents
-        set status = %(status)s,
-            updated_at = now(),
-            completed_at = now(),
-            last_error = %(last_error)s
-        where id = %(intent_id)s::uuid
-          and status in ('prepared', 'files_verified', 'recovery_failed')
-        returning id::text as id
+        with terminal as (
+          update library.tag_edit_intents
+          set status = %(status)s,
+              updated_at = now(),
+              completed_at = now(),
+              last_error = %(last_error)s
+          where id = %(intent_id)s::uuid
+            and status in ('prepared', 'files_verified', 'recovery_failed')
+          returning id, status, changes
+        ), written as (
+          insert into library.local_track_file_text_correction_writes (track_file_id, text_corrections)
+          select files.id, change -> 'text_correction_write' -> 'text_corrections'
+          from terminal
+          cross join lateral jsonb_array_elements(terminal.changes) change
+          join library.local_track_files files
+            on files.id = (change -> 'text_correction_write' ->> 'track_file_id')::bigint
+          where terminal.status = 'completed'
+          on conflict (track_file_id) do update
+            set text_corrections = excluded.text_corrections, written_at = now()
+        )
+        select id::text as id from terminal
     """
 
 

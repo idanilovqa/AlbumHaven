@@ -1919,12 +1919,20 @@ async function refreshMissingAlbumView(album, albumKey, pendingRefreshRequest) {
   }
 }
 
+// Owner wording, 2026-11-22 (case 59).
 const MISSING_ALBUM_RESCAN_MESSAGES = {
   restored: ['Album found and restored.', 'success'],
   moved: ['Album found in its new folder and restored.', 'success'],
-  deleted: ['Still missing: its files were deleted from disk.', 'info'],
+  searching: ['Album is not found. Searching your library folders for it...', 'info'],
+  deleted: [
+    'Album must have been deleted or moved out of the library. Add it back to one of the library paths to see it in the app',
+    'info',
+  ],
   unreachable: ['Still missing: its drive or network share cannot be reached.', 'info'],
 };
+// The background search's result is asked for about every 1.5 s, for at most 30 s.
+const MISSING_ALBUM_SEARCH_POLL_MS = 1500;
+const MISSING_ALBUM_SEARCH_POLLS = 20;
 
 async function keepMissingAlbum(album) {
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -1950,22 +1958,33 @@ async function rescanMissingAlbum(album, button) {
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
   }
-  try {
-    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/rescan`, {
-      method: 'POST',
-      headers: { Accept: 'application/json' },
-    });
+  const url = `/api/library/albums/${encodeURIComponent(albumKey)}/rescan`;
+  const request = async (method) => {
+    const response = await fetch(url, { method, headers: { Accept: 'application/json' } });
     let payload = {};
     try {
       payload = await response.json();
     } catch (_error) {
       payload = {};
     }
-    if (!response.ok) throw new Error(payload.error || 'Unable to re-scan this album.');
+    if (!response.ok) throw new Error((method === 'POST' && payload.error) || 'Unable to re-scan this album.');
+    return payload;
+  };
+  const toast = ([message, tone]) => { if (typeof showToast === 'function') showToast(message, tone, 3600); };
+  try {
+    let payload = await request('POST');
+    if (payload.status === 'searching') {
+      toast(MISSING_ALBUM_RESCAN_MESSAGES.searching);
+      for (let poll = 0; payload.status === 'searching'; poll += 1) {
+        // Still searching after 30 s: the button is freed with no further message.
+        if (poll >= MISSING_ALBUM_SEARCH_POLLS) return false;
+        await new Promise(resolve => scheduleBrowserTimeout(resolve, MISSING_ALBUM_SEARCH_POLL_MS));
+        payload = await request('GET');
+      }
+    }
     await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
-    const [message, tone] = MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
-      || ['Still missing.', 'info'];
-    if (typeof showToast === 'function') showToast(message, tone, 3600);
+    toast(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+      || MISSING_ALBUM_RESCAN_MESSAGES.deleted);
     return payload.status !== 'missing';
   } catch (error) {
     if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);

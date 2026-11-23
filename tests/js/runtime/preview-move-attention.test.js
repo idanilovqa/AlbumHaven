@@ -68,3 +68,37 @@ test('a running move that makes no progress for five minutes has stalled', () =>
   assert.equal(context.applyPreviewMoveAttention({ ...running, completed_count: 60 }, start + 10 * 60 * 1000).detail, 'No progress for 5 minutes');
   assert.equal(calls.toasts.length, 1);
 });
+
+test('bounded interaction: a preview move poll sends one request, renders the notifications once and arms one timer', async () => {
+  const { createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
+  await measureInteractionContract('js:runtime/preview-move-attention.js#refreshPreviewMoveAttention', {
+    // However many polls ran before: each poll is one request, one drawer render and one next timer.
+    setup: async (earlierPolls) => {
+      const capture = createRequestCapture(() => jsonResponse(failedMove({ failed_count: 3 })));
+      const timers = [];
+      const slot = { innerHTML: '', hidden: true };
+      let renders = 0;
+      const context = vm.createContext({
+        document: { getElementById: (id) => (id === 'preview-move-attention' ? slot : null) },
+        escapeHtml: (value) => String(value ?? ''),
+        showToast: () => {},
+        renderCoverLookupDrawer: () => { renders += 1; },
+        fetch: capture.fetch,
+        setTimeout: (callback) => timers.push(callback),
+      });
+      vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+      for (let poll = 0; poll < earlierPolls; poll += 1) await context.refreshPreviewMoveAttention();
+      return { context, capture, timers, renders: () => renders };
+    },
+    act: async ({ context, capture, timers, renders }) => {
+      const sent = capture.requests.length;
+      const armed = timers.length;
+      const rendered = renders();
+      await context.refreshPreviewMoveAttention();
+      return {
+        requests: capture.requests.slice(sent),
+        metrics: { timers: timers.length - armed, renderCommits: renders() - rendered },
+      };
+    },
+  });
+});

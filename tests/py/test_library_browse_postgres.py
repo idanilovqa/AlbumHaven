@@ -4545,8 +4545,8 @@ def test_pending_relation_rebuild_keeps_last_families_without_request_builds(
             "Aria Band": "Aria Band",
         }
         assert counts.builder_calls == 0
-        # The background rebuild stays queued; the request never waits on it.
-        assert refreshes == [1]
+        # 6.5 (option 1): the request queues no rebuild; scans, the watcher and tag saves own the refresh.
+        assert refreshes == []
         statements[artist_count] = counts.sql_statements
     assert statements[20] == statements[14_000]
 
@@ -4993,7 +4993,8 @@ def test_root_startup_known_artist_prefix_keeps_bounded_balanced_preview(monkeyp
 
 @pytest.mark.parametrize(
     ("queue_projection_refresh", "expected_refresh_count"),
-    [(True, 1), (False, 0)],
+    # 6.5 (option 1): a bounded common preview never schedules a refresh, whatever the caller asks.
+    [(True, 0), (False, 0)],
 )
 def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payload_semantics(
     monkeypatch,
@@ -20306,6 +20307,30 @@ def test_cover_lookup_track_path_reads_lease_the_shared_browse_pool(monkeypatch)
 
 
 def test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_production_page_size(tmp_path, monkeypatch):
+    _measure_display_cover_variant_queue(tmp_path, monkeypatch, "py:routes/web_asgi.py#index")
+
+
+@pytest.mark.parametrize("route", ["albums_page", "loose_tracks_page"])
+def test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count(tmp_path, monkeypatch, route):
+    """GET /albums and GET /loose-tracks are the index page itself; they carry its measured probe count."""
+    import asyncio
+
+    from music_app.routes import web_asgi
+
+    served = []
+
+    async def index(request):
+        served.append(request)
+        return "index page"
+
+    monkeypatch.setattr(web_asgi, "index", index)
+    request = object()
+    assert asyncio.run(getattr(web_asgi, route)(request)) == "index page"
+    assert served == [request], "the alias does nothing but serve the index"
+    _measure_display_cover_variant_queue(tmp_path, monkeypatch, f"py:routes/web_asgi.py#{route}")
+
+
+def _measure_display_cover_variant_queue(tmp_path, monkeypatch, interaction_id):
     from music_app.services import covers
     from music_app.services import library_browse_postgres as browse
     from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
@@ -20339,7 +20364,7 @@ def test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_prod
         return counts
 
     small, production = measure_scale_pair(
-        interaction_id="py:routes/web_asgi.py#index",
+        interaction_id=interaction_id,
         small=20,
         large=1_000,
         run=run,

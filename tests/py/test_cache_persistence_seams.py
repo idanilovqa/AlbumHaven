@@ -1025,7 +1025,11 @@ def test_structural_tag_persistence_refreshes_utility_projections_for_its_paths(
     assert calls[0]["changed_paths"] == {"track.flac"}
     # Only the edited files' entries are recomputed, never the whole list.
     assert invalidations == [
-        {"config": config, "track_paths": {"track.flac", "renamed.flac"}}
+        {
+            "config": config,
+            "track_paths": {"track.flac", "renamed.flac"},
+            "previous_entries": [{"album": "Before"}],
+        }
     ]
 
 

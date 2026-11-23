@@ -183,21 +183,8 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
     repository = PostgresTagEditIntentRepository(config)
     root_identity = library_root_cache_identity(config)
     summary = {"completed": 0, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
-    projections_ready = False
-
-    def prepare_projections() -> None:
-        nonlocal projections_ready
-        if projections_ready:
-            return
-        from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
-        from music_app.services.gallery_projection_postgres import initialize_gallery_membership
-
-        result = ensure_relation_projection_ready(config, logger=runtime.logger)
-        if not result.get("ready"):
-            raise RuntimeError("Relation projection is not ready for tag edit recovery.")
-        initialize_gallery_membership(config)
-        projections_ready = True
-
+    # No whole-projection readiness or preparation here (case 56): each edit is saved through the keyed
+    # tag-save path, which journals its albums for the relation owner.
     for candidate in repository.load_unfinished_intents(
         library_root_identity=root_identity
     ):
@@ -206,15 +193,13 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
         ) as claimed:
             if claimed is None:
                 continue
-            result = _reconcile_claimed_tag_edit_intent(
-                runtime, repository, claimed, before_recovery=prepare_projections,
-            )
+            result = _reconcile_claimed_tag_edit_intent(runtime, repository, claimed)
             for key in summary:
                 summary[key] += result[key]
     return summary
 
 
-def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, *, before_recovery):
+def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent):
     from music_app.services.cache import persist_structural_tag_edit_for_config
     from music_app.services.scan_cache_persistence import TARGETED_TAG_EDIT_FIELDS, select_scan_cache_adapter
     from music_app.services.library_roots import iter_library_root_paths, resolve_media_path_within_roots
@@ -252,7 +237,6 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, *, b
             )
             if any(path not in file_cache for path in resolved_recovery_paths):
                 raise RuntimeError("Postgres inventory is missing a selected tag edit recovery file.")
-            before_recovery()
         except Exception as exc:
             repository.mark_recovery_failed(intent_id, exc)
             preflight_failures += 1
@@ -324,7 +308,9 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, *, b
                    if _text(file_cache[path].get(field)) != _text(entry.get(field))}
             ),
             before_commit=repository_hook,
-            rebuild_relation_projection=True,
+            # The live tag save's keyed path: after the commit, the journaled albums go to the relation
+            # owner (persist_structural_tag_edit queues it; it returns quietly while relations are not ready).
+            rebuild_relation_projection=False,
         )
 
     summary = reconcile_tag_edit_intents(

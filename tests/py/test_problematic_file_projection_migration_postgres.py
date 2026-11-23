@@ -383,3 +383,50 @@ def test_album_haven_app_writes_keep_text_corrections_in_their_side_table():
             ).fetchone()[0] == 1
         finally:
             connection.rollback()
+
+
+@pytest.mark.parametrize(
+    ("status", "recorded"), [("completed", 1), ("rolled_back", 0), ("reconciled_external", 0)],
+)
+def test_a_correction_is_recorded_written_only_by_the_commit_that_completes_its_save(status, recorded):
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+
+    from music_app.services import tag_edit_intents_postgres as intents
+
+    database_url = _isolated_runtime_url_or_skip()
+    path = f"C:/corrections-written-{status}.mp3"
+    key = f"corrections-written-{status}"
+    corrections = {"artist": {"original": "??", "corrected": "A", "kind": "lost_characters"}}
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        try:
+            def value(sql, *values):
+                return next(iter(connection.execute(sql, values).fetchone().values()))
+
+            def written():
+                return value("select count(*) from library.local_track_file_text_correction_writes where track_file_id = %s", file_id)
+
+            library_id = value("select id from library.libraries order by id limit 1")
+            artist_id = value("insert into library.local_artists(library_id, artist_key, name) values (%s, %s, 'A') returning id",
+                              library_id, key)
+            album_id = value("insert into library.local_albums(library_id, artist_id, album_key, title) values (%s, %s, %s, 'C') returning id",
+                             library_id, artist_id, key)
+            track_id = value("insert into library.local_tracks(library_id, album_id, artist_id, track_key, title) values (%s, %s, %s, %s, 'T') returning id",
+                             library_id, album_id, artist_id, key)
+            file_id = value("insert into library.local_track_files(track_id, private_path, metadata) values (%s, %s, %s) returning id",
+                            track_id, path, Jsonb({"scan_cache": {"stale": False, "file_entry": {"text_corrections": corrections}}}))
+            changes = intents._validate_changes([{
+                "path": path, "old_values": {"artist": "??"}, "requested_values": {"artist": "A"},
+                "text_correction_write": {"track_file_id": file_id, "text_corrections": corrections},
+            }])
+            intent_id = value("""insert into library.tag_edit_intents(id, library_root_identity, status, changes)
+                                 values (gen_random_uuid(), 'corrections-written', 'files_verified', %s) returning id::text""",
+                              Jsonb(changes))
+            assert written() == 0, "nothing is written before the save completes"
+            # The same commit's inventory update clears the pending correction first.
+            connection.execute("update library.local_track_files set metadata = %s where id = %s",
+                               (Jsonb({"scan_cache": {"stale": False, "file_entry": {"artist": "A"}}}), file_id))
+            intents.PostgresTagEditIntentRepository({}).complete_in_transaction(connection, intent_id, status=status)
+            assert written() == recorded
+        finally:
+            connection.rollback()

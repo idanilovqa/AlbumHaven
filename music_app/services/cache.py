@@ -314,6 +314,8 @@ def save_cache_to_disk_for_config(
     rebuild_relation_projection: bool = False,
     observed_library_root_ids: set[str] | None = None,
     unreachable_scope: dict[str, object] | None = None,
+    cover_inventory_checked_at: dict[str, float] | None = None,
+    completes_root_change: bool = False,
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -345,6 +347,10 @@ def save_cache_to_disk_for_config(
         }
     if unreachable_scope is not None:
         snapshot_options["unreachable_scope"] = unreachable_scope
+    if cover_inventory_checked_at:
+        snapshot_options["cover_inventory_checked_at"] = cover_inventory_checked_at
+    if completes_root_change:
+        snapshot_options["completes_root_change"] = True
     adapter = _select_runtime_scan_cache_adapter(config)
     result = adapter.save_snapshot(
         cache_path,
@@ -541,6 +547,12 @@ def persist_cover_selection_for_tracks_for_config(
         track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
     )
     _refresh_local_cover_inventory_after_selection(config, track_paths, options)
+    if any(int(result.get(field) or 0) for field in ("album_rows_updated", "track_rows_updated", "track_file_rows_updated")):
+        # The commit journaled the album for relations (migration 0108); its owner drains just those
+        # albums, queued off the response path.
+        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+
+        schedule_gallery_projection_refresh(config, incremental_membership=True)
     return result
 
 
@@ -591,6 +603,7 @@ def _cover_selection_options(
     local_cover_width: int | None = None,
     local_cover_height: int | None = None,
     reject_if_user_controlled: bool = False,
+    reject_if_mixed_album_folder: bool = False,
     clear_selection: bool = False,
     expected_cover_selection_origin: str | None = None,
     expected_cover_revision: str | None = None,
@@ -622,6 +635,8 @@ def _cover_selection_options(
         persistence_options["explicit_selection"] = True
     if reject_if_explicit_selection:
         persistence_options["reject_if_explicit_selection"] = True
+    if reject_if_mixed_album_folder:
+        persistence_options["reject_if_mixed_album_folder"] = True
     if local_cover_width is not None or local_cover_height is not None:
         persistence_options.update(local_cover_width=local_cover_width, local_cover_height=local_cover_height)
     if clear_selection:

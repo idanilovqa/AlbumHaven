@@ -1370,7 +1370,9 @@ def ensure_best_cover_for_folder(
             )
             if written is False:
                 publish_automatic_improvement()
-                detail["reason"] = "automatic_write_blocked_by_user_selection"
+                detail["reason"] = (
+                    getattr(write_action, "blocked_reason", None) or "automatic_write_blocked_by_user_selection"
+                )
                 detail["elapsed_ms"] = round(
                     (time.perf_counter() - fetch_started_at) * 1000,
                     2,

@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from music_app.services.library_settings import (
-    LibrarySettingsWorkflowError,
-    save_library_settings_and_start_refresh,
-)
+from music_app.services.library_settings import save_library_settings_and_start_refresh
 
 
 def test_save_library_settings_workflow_uses_injected_root_settings_writer():
@@ -26,14 +23,16 @@ def test_save_library_settings_workflow_uses_injected_root_settings_writer():
 
     assert seen == [({"MUSIC_DIR": "C:\\Music"}, {"settings": True})]
     assert library_state["last_error"] is None
-    assert library_state["pending_cover_refresh_after_scan"] is True
-    assert library_state["pending_cover_refresh_force_search"] is False
+    # Case 65 (6.5): the save's scan looks up covers only for the albums it adds, never the whole library.
+    assert "pending_cover_refresh_after_scan" not in library_state
+    assert "pending_cover_refresh_force_search" not in library_state
     assert refresh_calls == [{"force": True, "scan_mode": "library_settings_update"}]
     assert watcher_root_calls == [[]]
     assert result == {
         "settings": {"normalized": True},
         "status": {"scan_in_progress": True},
         "refresh_started": True,
+        "refresh_queued": False,
     }
 
 
@@ -93,19 +92,50 @@ def test_saved_settings_still_refresh_when_watcher_attachment_fails(caplog):
     assert "OSError" in caplog.text
 
 
-def test_save_library_settings_workflow_rejects_running_scan_before_write():
+@pytest.mark.parametrize("roots_changed", [True, False])
+def test_save_library_settings_during_a_scan_saves_and_queues_one_reconcile_only_for_changed_roots(roots_changed):
     seen = []
+    queued = []
+    identities = iter(["roots-before", "roots-after" if roots_changed else "roots-before"])
+    library_state = {"scan_in_progress": True, "last_error": "shown", "pending_cover_refresh_after_scan": False}
 
-    with pytest.raises(LibrarySettingsWorkflowError) as excinfo:
-        save_library_settings_and_start_refresh(
-            {},
-            {"settings": True},
-            library_state={"scan_in_progress": True},
-            start_background_refresh=lambda **kwargs: None,
-            build_status_payload=lambda: {},
-            save_root_settings=lambda config, payload: seen.append((config, payload)) or {},
-        )
+    result = save_library_settings_and_start_refresh(
+        {},
+        {"settings": True},
+        library_state=library_state,
+        start_background_refresh=lambda **kwargs: pytest.fail("a running scan is never started again"),
+        build_status_payload=lambda: {},
+        save_root_settings=lambda config, payload: seen.append((config, payload)) or {},
+        load_root_identity=lambda _config: next(identities),
+        queue_root_change_scan=lambda identity: queued.append(identity) or True,
+    )
 
-    assert excinfo.value.status_code == 409
-    assert "finish before saving" in str(excinfo.value)
-    assert seen == []
+    assert seen == [({}, {"settings": True})]
+    assert queued == (["roots-after"] if roots_changed else [])
+    assert (result["refresh_started"], result["refresh_queued"]) == (False, roots_changed)
+    assert library_state == {"scan_in_progress": True, "last_error": "shown", "pending_cover_refresh_after_scan": False}
+
+
+def test_save_library_settings_starts_the_reconcile_when_the_scan_ended_during_the_save():
+    started = []
+    library_state = {"scan_in_progress": True}
+    identities = iter(["roots-before", "roots-after"])
+
+    def save(_config, _payload):
+        library_state["scan_in_progress"] = False
+        return {}
+
+    result = save_library_settings_and_start_refresh(
+        {},
+        {},
+        library_state=library_state,
+        start_background_refresh=lambda **kwargs: started.append(kwargs),
+        build_status_payload=lambda: {},
+        save_root_settings=save,
+        load_root_identity=lambda _config: next(identities),
+        queue_root_change_scan=lambda _identity: False,
+    )
+
+    assert started == [{"force": True, "scan_mode": "library_settings_update"}]
+    assert (result["refresh_started"], result["refresh_queued"]) == (True, False)
+    assert "pending_cover_refresh_after_scan" not in library_state, "no whole-library cover refresh (case 65)"

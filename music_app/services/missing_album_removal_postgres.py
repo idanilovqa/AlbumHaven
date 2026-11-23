@@ -45,6 +45,9 @@ class PostgresMissingAlbumRemovalService:
             row = connection.execute(_KEEP_MISSING_SQL, {"album_key": normalized_key}).fetchone()
         if row is None:
             raise MissingAlbumNotFound()
+        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+        queue_journaled_relation_drain(self._config)
 
     def confirm_removal(self, album_key: object) -> dict[str, object]:
         normalized_key = str(album_key or "").strip()

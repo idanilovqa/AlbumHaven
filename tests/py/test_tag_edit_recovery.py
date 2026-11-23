@@ -59,6 +59,21 @@ def run_recovery(intent_payload, physical):
     return summary, persisted, restored, failed
 
 
+def _forbid_whole_projection_preparation(monkeypatch):
+    """Case 56: recovery saves through the keyed tag-save path. It never requires whole-projection readiness
+    and never runs a whole-library preparation (initialize_gallery_membership, the stray-duplicate refresh of
+    every album); relations may be not ready at all."""
+    def forbidden(name):
+        return lambda *_args, **_kwargs: pytest.fail(f"tag edit recovery called {name}")
+
+    monkeypatch.setattr(relation_projection_postgres, "ensure_relation_projection_ready",
+                        forbidden("ensure_relation_projection_ready"))
+    monkeypatch.setattr(gallery_projection_postgres, "initialize_gallery_membership",
+                        forbidden("initialize_gallery_membership"))
+    monkeypatch.setattr(gallery_projection_postgres, "_refresh_all_stray_duplicate_ownership",
+                        forbidden("_refresh_all_stray_duplicate_ownership"))
+
+
 def run_startup_recovery(
     monkeypatch,
     tmp_path,
@@ -67,8 +82,6 @@ def run_startup_recovery(
     changes,
     physical_values,
     refreshed_entries,
-    readiness_error=None,
-    readiness_stage="relations",
     physical_accesses=None,
 ):
     structural_calls = []
@@ -96,8 +109,7 @@ def run_startup_recovery(
             pass
 
         def mark_recovery_failed(self, *_args):
-            if readiness_error is None:
-                raise AssertionError("startup recovery unexpectedly failed")
+            raise AssertionError("startup recovery unexpectedly failed")
 
     class SnapshotAdapter:
         def load_snapshot(self, _cache_path, _root_identity):
@@ -127,15 +139,7 @@ def run_startup_recovery(
         "select_scan_cache_adapter",
         lambda _config: SnapshotAdapter(),
     )
-    def ensure_relations(*_args, **_kwargs):
-        if readiness_error is not None and readiness_stage == "relations":
-            raise readiness_error
-        return {"ready": readiness_stage != "not_ready"}
-    def initialize_gallery(*_args):
-        if readiness_error is not None and readiness_stage == "gallery":
-            raise readiness_error
-    monkeypatch.setattr(relation_projection_postgres, "ensure_relation_projection_ready", ensure_relations)
-    monkeypatch.setattr(gallery_projection_postgres, "initialize_gallery_membership", initialize_gallery)
+    _forbid_whole_projection_preparation(monkeypatch)
     def read_physical(path, fields):
         if physical_accesses is not None:
             physical_accesses.append(str(path))
@@ -324,22 +328,23 @@ def test_terminal_intents_are_ignored_when_recovery_is_repeated():
     assert calls == []
 
 
-@pytest.mark.parametrize("failure_stage", ["relations", "not_ready", "gallery"])
-def test_startup_recovery_does_not_touch_media_before_projection_readiness(monkeypatch, tmp_path, failure_stage):
+def test_startup_recovery_saves_the_edit_while_relations_are_not_ready(monkeypatch, tmp_path):
+    """Case 56 (a) and (c): with relations not ready (startup has not prepared them), recovery still saves
+    the user's edit, raises nothing and fails nothing. It runs no whole-projection preparation (the harness
+    fails on ensure_relation_projection_ready, initialize_gallery_membership and the stray-duplicate refresh of
+    every album) and saves through the keyed tag-save path: no in-transaction relation rebuild, the albums
+    journaled for the relation owner."""
     path = str(tmp_path / 'selected.mp3')
-    accesses = []
     summary, structural, generic = run_startup_recovery(
         monkeypatch, tmp_path,
         file_cache={path: {'album': 'Old'}},
         changes=[{'path': path, 'old_values': {'album': 'Old'}, 'requested_values': {'album': 'New'}}],
         physical_values={path: {'album': 'New'}}, refreshed_entries={path: {'album': 'New'}},
-        readiness_error=RuntimeError('Normalized projection baseline is unavailable'),
-        readiness_stage=failure_stage,
-        physical_accesses=accesses,
     )
-    assert summary == {'completed': 0, 'rolled_back': 0, 'reconciled_external': 0, 'failed': 1}
-    assert accesses == []
-    assert structural == generic == []
+    assert summary == {'completed': 1, 'rolled_back': 0, 'reconciled_external': 0, 'failed': 0}
+    assert generic == []
+    assert len(structural) == 1 and structural[0]['updated_file_entries'] == {path: {'album': 'New'}}
+    assert structural[0]['rebuild_relation_projection'] is False
 
 
 def test_startup_recovery_dispatches_external_identity_changes_but_not_file_statistics(monkeypatch, tmp_path):
@@ -489,7 +494,7 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
     assert len(structural_calls) == 1
     call = structural_calls[0]
     assert call["changed_field_names"] == set(requested_updates)
-    assert call["rebuild_relation_projection"] is True
+    assert call["rebuild_relation_projection"] is False, "the keyed tag-save path (case 56)"
     assert call["updated_file_entries"] == {track_path: resolved_entry}
     assert call["previous_file_entries"] == {track_path: previous_entry}
     assert callable(call["before_commit"])
@@ -692,18 +697,13 @@ def test_startup_recovery_claims_one_intent_at_a_time_before_reconciling(monkeyp
         def load_snapshot(self, *_args):
             events.append(("snapshot", None))
             return {}, None, {}, None, None
-    def reconcile(_runtime, _repository, claimed, *, before_recovery):
-        before_recovery()
+    def reconcile(_runtime, _repository, claimed):
         events.append(("reconcile", claimed["id"]))
         return {"completed": 1, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
     monkeypatch.setattr(tag_edit_intents_postgres, "PostgresTagEditIntentRepository", Repository)
     monkeypatch.setattr(library_roots, "library_root_cache_identity", lambda _config: "root")
     monkeypatch.setattr(scan_cache_persistence, "select_scan_cache_adapter", lambda _config: Adapter())
-    def ensure_relations(*_args, **_kwargs):
-        events.append(("relations", None))
-        return {"ready": True}
-    monkeypatch.setattr(relation_projection_postgres, "ensure_relation_projection_ready", ensure_relations)
-    monkeypatch.setattr(gallery_projection_postgres, "initialize_gallery_membership", lambda *_args: events.append(("gallery", None)))
+    _forbid_whole_projection_preparation(monkeypatch)
     monkeypatch.setattr(recovery, "_reconcile_claimed_tag_edit_intent", reconcile, raising=False)
     runtime = SimpleNamespace(config={"CACHE_PATH": tmp_path / "unused"}, logger=SimpleNamespace(info=lambda *_args: None))
     summary = recovery.reconcile_unfinished_tag_edit_intents_on_startup(runtime)
@@ -712,4 +712,4 @@ def test_startup_recovery_claims_one_intent_at_a_time_before_reconciling(monkeyp
         assert events == [("claim", "one"), ("release", "one"), ("claim", "two"), ("release", "two")]
     else:
         assert summary["completed"] == 2
-        assert events == [("claim", "one"), ("relations", None), ("gallery", None), ("reconcile", "one"), ("release", "one"), ("claim", "two"), ("reconcile", "two"), ("release", "two")]
+        assert events == [("claim", "one"), ("reconcile", "one"), ("release", "one"), ("claim", "two"), ("reconcile", "two"), ("release", "two")]

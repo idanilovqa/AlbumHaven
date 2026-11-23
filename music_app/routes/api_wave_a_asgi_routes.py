@@ -67,10 +67,7 @@ from music_app.services.library_roots import (
     library_root_cache_identity,
     load_library_root_settings,
 )
-from music_app.services.library_settings import (
-    LibrarySettingsWorkflowError,
-    save_library_settings_and_start_refresh,
-)
+from music_app.services.library_settings import save_library_settings_and_start_refresh
 from music_app.services.log_history import append_log_history
 from music_app.services.manual_versions import load_manual_version_links, save_manual_version_links
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
@@ -98,6 +95,7 @@ from music_app.services.tag_edit_intents_postgres import (
 )
 from music_app.services.state import (
     invalidate_targeted_library_projections,
+    queue_root_change_scan_for_state,
     run_runtime_state_mutation_for_state,
     schedule_relation_projection_rebuild,
     start_background_refresh_for_state,
@@ -221,14 +219,30 @@ async def rescan_missing_album(request: Request, album_key: str) -> JSONResponse
         )
     config = _app_config(request)
 
+    searches = getattr(request.app.state, "missing_album_searches", None)
+
     def rescan() -> dict[str, object]:
         # Reading the roots takes a lock the watcher holds during disk work, so it stays off the event loop.
-        return MissingAlbumRescan(config, reconcile=reconcile, roots=get_library_roots(config)).rescan(normalized_key)
+        # Only lookups run here; a library walk, if needed, runs in the background (freeze guard case 59).
+        return MissingAlbumRescan(
+            config, reconcile=reconcile, roots=get_library_roots(config), searches=searches,
+        ).rescan(normalized_key)
 
     try:
         result = await run_in_threadpool(rescan)
     except MissingAlbumNotFound:
         return JSONResponse({"ok": False, "error": "Album not found", "code": "album_not_found"}, status_code=404)
+    return JSONResponse({"ok": True, **result})
+
+
+@router.get("/api/library/albums/{album_key:path}/rescan")
+async def missing_album_rescan_result(request: Request, album_key: str) -> JSONResponse:
+    """The background search a Re-scan started: still searching, or its result."""
+    await require_action("library.inventory.manage")(request)
+    searches = getattr(request.app.state, "missing_album_searches", None)
+    result = searches.result(str(album_key or "").strip()) if searches is not None else None
+    if result is None:
+        return JSONResponse({"ok": False, "error": "No search for this album", "code": "rescan_not_running"}, status_code=404)
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2
@@ -282,8 +296,8 @@ def _asgi_logger(request: Request):
 def _start_background_refresh_for_asgi_request(request: Request):
     library_state = _library_state(request)
 
-    def start_asgi_background_refresh(force: bool = False, *, scan_mode: str = "background") -> None:
-        start_background_refresh_for_state(
+    def start_asgi_background_refresh(force: bool = False, *, scan_mode: str = "background") -> bool | None:
+        return start_background_refresh_for_state(
             library_state,
             _app_config(request),
             _asgi_logger(request),
@@ -647,6 +661,9 @@ async def library_settings_write(request: Request) -> JSONResponse:
                 **scope,
                 library_state=_library_state(request),
                 start_background_refresh=_start_background_refresh_for_asgi_request(request),
+                queue_root_change_scan=lambda identity: queue_root_change_scan_for_state(
+                    _library_state(request), _app_config(request), _asgi_logger(request), identity,
+                ),
                 build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
                 replace_watch_roots=(
                     replace_live_watch_roots
@@ -656,8 +673,6 @@ async def library_settings_write(request: Request) -> JSONResponse:
             )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
-    except LibrarySettingsWorkflowError as exc:
-        return _json_response(({"ok": False, "error": str(exc)}, exc.status_code))
 
     return JSONResponse({"ok": True, **result})
 
@@ -1872,10 +1887,15 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
 
 
-async def run_edit_tags_payload(request: Request, payload, *, history_scope, started: float | None = None) -> ResponseValue:
+async def run_edit_tags_payload(
+    request: Request, payload, *, history_scope, started: float | None = None,
+    text_correction_writes: Mapping[str, Mapping[str, object]] | None = None,
+) -> ResponseValue:
     """The whole Edit Tags pipeline for one payload: reservation, intent,
     media write, save task, History. The route and Library Data Corrections
-    (with a request bound only to the app) both run it."""
+    (with a request bound only to the app) both run it. ``text_correction_writes``
+    is never taken from the payload: the intent carries it to the commit that
+    completes the save, recovery included."""
     request_started = perf_counter() if started is None else started
     if history_scope is not None:
         # Save-task finalizers record History from the request's scope.
@@ -1977,7 +1997,12 @@ async def run_edit_tags_payload(request: Request, payload, *, history_scope, sta
         "prepare_tag_edit_intent": (
             lambda *, changes: intent_lease.prepare_intent(
                 library_root_identity=library_root_cache_identity(config),
-                changes=changes,
+                changes=[
+                    {**change, "text_correction_write": text_correction_writes[change["path"]]}
+                    if text_correction_writes and change["path"] in text_correction_writes
+                    else change
+                    for change in changes
+                ],
             )
         ),
         "mark_tag_edit_files_verified": (

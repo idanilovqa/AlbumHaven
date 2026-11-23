@@ -23,7 +23,8 @@ def test_gallery_summary_builds_exact_page_and_invalidates_old_writer(watcher_re
     fixture = watcher_repair_inventory
     entries = [fixture.entry("Owner/First/one.flac", album="First"),
                fixture.entry("Owner/Second/two.flac", album="Second", artist="Owner feat. Guest")]
-    fixture.seed(*entries)
+    # Without the startup baseline (which publishes the root scopes since c72277e26), so the build is this test's.
+    fixture.seed(*entries, startup_baseline=False)
     result = prepare(fixture)
     assert result["built"] > 0
     state = browse._root_sidebar_view_state({})

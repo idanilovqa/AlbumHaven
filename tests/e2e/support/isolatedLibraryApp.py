@@ -4247,6 +4247,17 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "width": 2000,
             "height": 2000,
         })
+        # FTC-COVERS-018: the first acceptable candidate for a new album the watcher finds.
+        self.cover_lookup_watcher_first_acceptable_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "watcher-first-acceptable-primary",
+            "artist": "Watcher First Acceptable Artist",
+            "album": "Watcher First Acceptable Album",
+            "year": 2008,
+            "width": 1800,
+            "height": 1800,
+            "candidate_fixture_mode": "watcher-first-acceptable",
+        })
         self.cover_lookup_watcher_candidate_spec = prepare_provider_artwork_spec({
             **dict(cover_specs[0]),
             "cover_id": "watcher-automatic-candidate",
@@ -4394,6 +4405,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
             self.cover_lookup_automatic_candidate_spec,
             self.cover_lookup_watcher_candidate_spec,
+            self.cover_lookup_watcher_first_acceptable_spec,
             self.cover_lookup_split_chooser_spec,
             self.cover_lookup_neutral_user_cover_spec,
             self.cover_lookup_user_improvement_spec,
@@ -5121,6 +5133,10 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 "Watcher Automatic Cover Album"
             ) in normalized_query:
                 return [dict(self.server.cover_lookup_watcher_candidate_spec)]
+            if _normalize_provider_query(
+                "Watcher First Acceptable Album"
+            ) in normalized_query:
+                return [dict(self.server.cover_lookup_watcher_first_acceptable_spec)]
             return []
         if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
             return [dict(self.server.cover_lookup_automatic_candidate_spec)]

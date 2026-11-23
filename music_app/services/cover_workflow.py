@@ -781,8 +781,12 @@ def complete_local_image_promotion(promotion: LocalCoverPromotion) -> None:
     )
 
 
+def _local_cover_selection_lock_key(album_root: Path) -> str:
+    return str(album_root.resolve(strict=False)).casefold()
+
+
 def _acquire_local_cover_selection_lock(album_root: Path) -> tuple[str, Lock]:
-    lock_key = str(album_root.resolve(strict=False)).casefold()
+    lock_key = _local_cover_selection_lock_key(album_root)
     with _LOCAL_COVER_SELECTION_LOCKS_GUARD:
         selection_lock, reference_count = _LOCAL_COVER_SELECTION_LOCKS.get(
             lock_key,
@@ -812,13 +816,24 @@ def _release_local_cover_selection_lock(lock_key: str, selection_lock: Lock) -> 
             )
 
 
-def run_serialized_cover_selection(album_root: Path, action: Callable[[], object]) -> object:
-    """Run a short cover write/persist/apply transaction under the album lock."""
-    lock_key, selection_lock = _acquire_local_cover_selection_lock(album_root)
+def run_serialized_cover_selection(
+    album_root: Path,
+    action: Callable[[], object],
+    *other_folders: Path,
+) -> object:
+    """Run a short cover write/persist/apply transaction under the album lock.
+
+    Several folders are locked in key order, before any database lock.
+    """
+    folders = {_local_cover_selection_lock_key(folder): folder for folder in (album_root, *other_folders)}
+    acquired: list[tuple[str, Lock]] = []
     try:
+        for key in sorted(folders):
+            acquired.append(_acquire_local_cover_selection_lock(folders[key]))
         return action()
     finally:
-        _release_local_cover_selection_lock(lock_key, selection_lock)
+        for lock_key, selection_lock in reversed(acquired):
+            _release_local_cover_selection_lock(lock_key, selection_lock)
 
 
 def cover_revision_for_path(cover_path: Path) -> str:

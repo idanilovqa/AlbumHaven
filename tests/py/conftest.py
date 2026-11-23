@@ -707,8 +707,8 @@ def asgi_request():
 def unreachable_postgres_pool(monkeypatch: pytest.MonkeyPatch):
     """Every pool checkout fails at once, as `psycopg.connect` does against a missing database.
 
-    A real pool's first checkout before it has ever connected may wait up to 5 s while its
-    background attempts fail, which breaks tests that time their own threads in seconds.
+    A real pool fails only once the driver's attempt has failed, which takes seconds against a
+    closed port on Windows and breaks tests that time their own threads in seconds.
     """
     import psycopg
 

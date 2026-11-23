@@ -167,6 +167,11 @@ export async function measureResumeToSound({
     pressToTestReadMs: readAtMs - pressedAtMs,
     pausedAtSeconds: before.currentTime,
     heardFromSeconds: frame.currentTime,
+    evidence: {
+      pcmFrames: evidence.pcmFrames,
+      nonZeroSamples: evidence.nonZeroSamples,
+      renderedFrameDelta: evidence.renderedFrameDelta,
+    },
     claimRequests: requests.map(({ settled, ...record }) => ({
       ...record,
       startedAfterPressMs: record.startedAtEpochMs - pressedAtEpochMs,

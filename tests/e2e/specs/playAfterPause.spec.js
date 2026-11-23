@@ -42,10 +42,14 @@ test(`${CASE_ID} Pressing Play within 12 seconds of Pause sounds sooner than pre
     await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
     const summary = await trackModalActions.waitForInteractiveSummary();
     expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
+    const startMark = await playbackEvidence.playbackMark();
     const track = await trackModalActions.playTrackByTitle(TITLE);
     await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: track.title });
     await trackModalActions.close();
     await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 1 });
+    const started = await playbackEvidence.waitForTrackPlaybackEvidence({ after: startMark, path: track.path });
+    expect(started.nonZeroSamples, 'the song itself sounds').toBeGreaterThan(0);
+    expect(started.renderedFrameDelta).toBeGreaterThan(0);
     expect((await readResumeCheckpoint(page)).duration, 'room for every sample in one song').toBeGreaterThan(60);
   });
 
@@ -71,6 +75,11 @@ test(`${CASE_ID} Pressing Play within 12 seconds of Pause sounds sooner than pre
           await globalPlayerActions.pauseToReleasePlaybackClaim();
           return measureResumeToSound({ ...context, kind: 'round-trip' });
         }));
+      }
+      for (const sample of samples) {
+        // Each resume rendered the paused song's own non-silent audio (waitForTrackPlaybackEvidence in the helper).
+        expect(sample.evidence.nonZeroSamples, `${condition.label}: ${sample.kind} resume sounds`).toBeGreaterThan(0);
+        expect(sample.evidence.renderedFrameDelta).toBeGreaterThan(0);
       }
       results[condition.label] = summarizeResumeSamples(samples);
     }

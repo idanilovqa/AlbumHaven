@@ -497,6 +497,127 @@ def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(lo
     assert totals["2020"][1] == totals["20"][1], f"Rows written grew with the library: {small} vs {large}."
 
 
+# Rows a 200-folder batch's loader may read beyond the same batch at a 10x larger library: index pages and the
+# bootstrap rows, never a pass over the library's tracks, files or overrides.
+_BATCH_ROWS_READ_SLACK = 50
+# The first 500-folder batch of a drain right after a bulk add, with no statistics, took over 120 s before.
+_FIRST_BATCH_SECONDS = 5.0
+
+
+class _ExplainingConnection:
+    """The drain's own connection, which first EXPLAINs the candidate statement it is given, under whatever
+    planner settings the loader has set for it."""
+
+    def __init__(self, connection, plans):
+        self._connection, self._plans = connection, plans
+
+    def execute(self, sql, params=None):
+        if "eligible_track_file_ids" in str(sql):
+            self._plans.append(self._connection.execute("explain (format json) " + sql, params).fetchone())
+        return self._connection.execute(sql, params)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+def _plan_nodes(plan):
+    nodes = [plan]
+    for child in plan.get("Plans", []):
+        nodes.extend(_plan_nodes(child))
+    return nodes
+
+
+def _seed_overrides(fixture, prefix, count):
+    """``count`` exception overrides on the prefix's loose files, by path, none with an exception type: the
+    files stay membership problems and the override ranking has rows to rank."""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """insert into library.exception_overrides (library_id, track_id, track_key, override_payload)
+               select tracks.library_id, tracks.id, files.private_path, '{"custom_collection_name": ""}'::jsonb
+               from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id
+               where files.private_path like %(pattern)s
+               order by files.id limit %(count)s""",
+            {"pattern": f"%{prefix} %", "count": count})
+
+
+@pytest.mark.parametrize("overrides", [False, True], ids=["no-overrides", "overrides"])
+def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_library, overrides):
+    """Case 55, plan-robust drain (6.5). Right after a bulk add of loose groups, before any ANALYZE (reltuples
+    -1, asserted), a 200-folder batch's loader uses 0294's local_track_files_loose_group_idx, scans no track or
+    file table sequentially, and reads the same number of table rows with 200 and 2,000 loose groups in the
+    library, with or without about 1,000 exception overrides. The first 500-folder drain batch then finishes
+    within _FIRST_BATCH_SECONDS. A statement timeout ends a bad plan fast."""
+    import time
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from music_app.services import library_browse_postgres as browse, problematic_index
+
+    fixture = loose_library
+    tables = ("local_track_files", "local_tracks", "problematic_loose_groups", "exception_overrides")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        for table in tables:  # this disposable database only: no ANALYZE may run behind the test
+            connection.execute(f"alter table library.{table} set (autovacuum_enabled = false)")
+    repository = browse.PostgresLibraryBrowseRepository({**fixture.config, problematic_index.ENABLED_KEY: "1"})
+    library_id = _library_id(fixture)
+    measured = {}
+
+    def batch_rows_read(size):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            never_analyzed = {row["relname"]: float(row["reltuples"]) for row in connection.execute(
+                "select relname, reltuples from pg_class where relnamespace = 'library'::regnamespace"
+                " and relname = any(%s)", (list(tables[:3]),)).fetchall()}
+            connection.execute("update library.problematic_loose_groups set marked_xid = pg_current_xact_id()")
+        assert set(never_analyzed.values()) == {-1.0}, f"the tables must have no statistics: {never_analyzed}"
+        plans = []
+        with psycopg.connect(fixture.database_url, row_factory=dict_row) as connection:
+            connection.execute("set statement_timeout = '20s'")
+            folders = {(int(row["root_id"]), str(row["folder"])) for row in connection.execute(
+                problematic_index._MARKED_GROUPS_SQL, (library_id, "", 200)).fetchall()}
+            assert len(folders) == 200
+            with connection.transaction(force_rollback=True):
+                read = "select coalesce(sum(coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0)), 0) as rows" \
+                       " from pg_stat_xact_user_tables where schemaname = 'library'"
+                before = int(connection.execute(read).fetchone()["rows"])
+                loaded = repository._load_problematic_loose_file_rows(
+                    connection=_ExplainingConnection(connection, plans), limit=None,
+                    membership_folders=folders, all_roots=True)
+                rows_read = int(connection.execute(read).fetchone()["rows"]) - before
+        assert loaded, "the batch's loose files are loaded"
+        nodes = _plan_nodes(plans[0]["QUERY PLAN"][0]["Plan"])
+        assert any(node.get("Index Name") == "local_track_files_loose_group_idx" for node in nodes), (
+            "the folder lookup uses 0294's index")
+        sequential = [node["Relation Name"] for node in nodes
+                      if node["Node Type"] == "Seq Scan" and node.get("Relation Name") in tables]
+        assert sequential == [], f"no pass over a library table: {sequential}"
+        measured[size] = rows_read
+
+    _seed_loose_files(fixture, "Small", 200)
+    if overrides:
+        _seed_overrides(fixture, "Small", 100)
+    batch_rows_read("200")
+    _seed_loose_files(fixture, "Large", 1800)
+    if overrides:
+        _seed_overrides(fixture, "Large", 900)
+    batch_rows_read("2000")
+    print(f"[case55-drain-batch] rows read for a 200-folder batch: {measured}")
+    assert abs(measured["2000"] - measured["200"]) <= _BATCH_ROWS_READ_SLACK, (
+        f"the batch read grew with the library: {measured}")
+
+    with psycopg.connect(fixture.database_url, row_factory=dict_row, autocommit=True) as connection:
+        connection.execute("set statement_timeout = '20s'")
+        groups = connection.execute(problematic_index._MARKED_GROUPS_SQL,
+                                    (library_id, "", problematic_index.BACKFILL_BATCH)).fetchall()
+        assert len(groups) == problematic_index.BACKFILL_BATCH
+        started = time.perf_counter()
+        problematic_index._drain_groups(repository, connection, library_id, groups)
+        seconds = time.perf_counter() - started
+    print(f"[case55-drain-batch] first {len(groups)}-folder drain batch: {seconds:.2f} s")
+    assert seconds < _FIRST_BATCH_SECONDS, f"the first drain batch took {seconds:.1f} s"
+
+
 def test_no_app_code_deletes_a_library_root():
     """Settings only deactivates a root; nothing deletes one. A root deleted by hand leaves its loose items
     stored but unserved (the read joins active roots). A delete path in the app would need to remove that

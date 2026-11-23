@@ -26,8 +26,10 @@ test('a stale gallery projection does not count applying inventory revision', as
   assert.equal(context.state.view.artist_groups[0].albums[0].identity_revision, undefined);
 });
 
-test('FTC-SEARCH-NAV-031: a stale gallery is fetched again on the next idle poll though the revision stays', async () => {
+test('FTC-SEARCH-NAV-031: a stale gallery is fetched again by an idle poll though the revision stays', async () => {
   const { context, calls, pendingRequests } = createContext();
+  let now = 1_000_000;
+  vm.runInContext('Date', context).now = () => now;
   context.buildApiUrl = () => '/view-data?surface=albums';
   const idle = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false };
   // The page loads after the watcher's revision: status will never report a newer one.
@@ -40,13 +42,21 @@ test('FTC-SEARCH-NAV-031: a stale gallery is fetched again on the next idle poll
     gallery_page: { projection_stale: true },
   });
   await load;
-  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+  assert.equal(context.state.ui.staleProjectionViewRefreshDueAt, now + 3000);
 
-  const poll = context.pollStatus();
+  // A poll before the first back-off step asks nothing more.
+  const early = context.pollStatus();
   pendingRequests[1].resolveWith({ ...idle, inventory_mutation_revision: 2 });
-  for (let attempt = 0; attempt < 10 && pendingRequests.length < 3; attempt += 1) await flushMicrotasks();
-  assert.equal(pendingRequests.length, 3, 'the idle poll asks for the view again');
-  pendingRequests[2].resolveWith({
+  await early;
+  for (let attempt = 0; attempt < 5; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 2);
+
+  now += 3000;
+  const due = context.pollStatus();
+  pendingRequests[2].resolveWith({ ...idle, inventory_mutation_revision: 2 });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 4; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 4, 'the due idle poll asks for the view again');
+  pendingRequests[3].resolveWith({
     artist_groups: [
       { artist: 'Watcher Artist One', albums: [{ key: 'one' }] },
       { artist: 'Watcher Artist Two', albums: [{ key: 'two' }] },
@@ -54,35 +64,36 @@ test('FTC-SEARCH-NAV-031: a stale gallery is fetched again on the next idle poll
     inventory_mutation_revision: 2,
     gallery_page: { projection_stale: false },
   });
-  await poll;
+  await due;
 
-  assert.deepEqual(calls.fetchRequests.map(request => request.url).slice(1, 2), ['/status']);
+  assert.deepEqual(calls.fetchRequests.map(request => request.url).slice(1, 3), ['/status', '/status']);
   assert.deepEqual(context.state.view.artist_groups.map(group => group.artist), ['Watcher Artist One', 'Watcher Artist Two']);
   assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
   assert.equal(context.state.ui.staleProjectionViewRefreshCount, 0);
+  assert.equal(context.state.ui.staleProjectionViewRefreshDueAt, null);
 });
 
-test('a gallery that stays stale is refetched at most the stale-refresh limit times', async () => {
+test('a gallery that stays stale is refetched six times, each wait twice as long', async () => {
   const { context, pendingRequests } = createContext();
+  const now = 1_000_000;
+  vm.runInContext('Date', context).now = () => now;
   const staleResponse = {
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
     inventory_mutation_revision: 2,
     gallery_page: { projection_stale: true },
   };
-  context.state.ui.staleProjectionViewRefreshCount = 39;
+  const delays = [];
+  for (let index = 0; index < 7; index += 1) {
+    context.state.ui.staleProjectionViewRefreshDueAt = null;
+    const applied = context.fetchAndRender('/view-data?surface=albums', false, { preserveScroll: true });
+    pendingRequests[index].resolveWith(staleResponse);
+    await applied;
+    delays.push(context.state.ui.staleProjectionViewRefreshDueAt === null
+      ? null : context.state.ui.staleProjectionViewRefreshDueAt - now);
+  }
 
-  const last = context.fetchAndRender('/view-data?surface=albums', false, { preserveScroll: true });
-  pendingRequests[0].resolveWith(staleResponse);
-  await last;
-  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
-  assert.equal(context.state.ui.staleProjectionViewRefreshCount, 40);
-
-  context.state.ui.pendingInventoryMutationViewRefresh = false;
-  const beyond = context.fetchAndRender('/view-data?surface=albums', false, { preserveScroll: true });
-  pendingRequests[1].resolveWith(staleResponse);
-  await beyond;
-  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
-  assert.equal(context.state.ui.staleProjectionViewRefreshCount, 40);
+  assert.deepEqual(delays, [3000, 6000, 12000, 24000, 48000, 96000, null]);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
 });
 
 const galleryEventHandlersPath = path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js');

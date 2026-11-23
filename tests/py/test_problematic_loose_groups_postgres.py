@@ -39,12 +39,18 @@ def loose_library(watcher_repair_inventory, monkeypatch):
 
 def _rows(fixture, sql, params=()):
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        return connection.execute(sql, params).fetchall()
+        cursor = connection.execute(sql, params)
+        return cursor.fetchall() if cursor.description is not None else []
 
 
 def _marked_groups(fixture):
-    return {row["folder"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1] for row in _rows(
+    """Marked groups by folder name, casefolded: the stored folder is the path key's (lower case)."""
+    return {row["folder"].rsplit("/", 1)[-1].casefold() for row in _rows(
         fixture, "select folder from library.problematic_loose_groups where marked_xid is not null")}
+
+
+def _named(*names):
+    return {name.casefold() for name in names}
 
 
 def _loose_items(fixture):
@@ -62,7 +68,7 @@ def test_live_a_loose_edit_marks_its_group_only_and_a_read_matches_a_full_rebuil
     edited = {**fixture.strays["A"], "title": "Renamed stray"}
     _watcher_pass(fixture, active=[edited])
 
-    assert _marked_groups(fixture) == {"Strays A"}, "A loose edit marks exactly its own group."
+    assert _marked_groups(fixture) == _named("Strays A"), "A loose edit marks exactly its own group."
     assert _rows(fixture, "select count(*) as n from library.problematic_index_dirty_albums where album_id <= 0")[0]["n"] == 0
     assert _as_served(_indexed_problematic_items(fixture.database_url, limit=50)) == _as_served(
         _evaluated_problematic_items(fixture.config))
@@ -268,7 +274,7 @@ def _event_root_deleted(fixture):
 def _event_stale_and_back(fixture):
     path = fixture.strays["A"]["path"]
     _rows(fixture, "update library.local_track_files set scan_cache_stale = true where private_path = %s", (path,))
-    assert _marked_groups(fixture) <= {"Strays A"}
+    assert _marked_groups(fixture) <= _named("Strays A")
     _assert_read_is_a_full_rebuild(fixture)
     _rows(fixture, "update library.local_track_files set scan_cache_stale = false where private_path = %s", (path,))
     return {"Strays A"}
@@ -305,7 +311,7 @@ def test_live_each_event_marks_only_its_groups_and_a_read_equals_a_full_rebuild(
     _assert_read_is_a_full_rebuild(fixture)
     assert _marked_groups(fixture) == set()
 
-    affected = event(fixture)
+    affected = _named(*event(fixture))
 
     assert _marked_groups(fixture) <= affected, f"Unaffected groups marked: {_marked_groups(fixture) - affected}."
     _assert_read_is_a_full_rebuild(fixture)
@@ -384,7 +390,9 @@ def _one_loose_edit_drain(fixture, title):
     from music_app.services import library_browse_postgres as browse, problematic_index
 
     repository = browse.PostgresLibraryBrowseRepository({**fixture.config, problematic_index.ENABLED_KEY: "1"})
-    _assert_read_is_a_full_rebuild(fixture)  # nothing waits before the edit
+    # Nothing waits before the edit: the deploy step drains every group the bulk add marked.
+    problematic_index.prepare_for_serving(repository)
+    _assert_read_is_a_full_rebuild(fixture)
     _watcher_pass(fixture, active=[{**fixture.strays["A"], "title": title}])
     with psycopg.connect(fixture.database_url, row_factory=dict_row, autocommit=True) as connection:
         library_id = _library_id(fixture)

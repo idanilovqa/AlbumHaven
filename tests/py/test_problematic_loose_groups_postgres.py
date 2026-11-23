@@ -500,6 +500,9 @@ def test_live_one_loose_edit_drains_the_same_rows_at_20_and_2000_loose_tracks(lo
 # Rows a 200-folder batch's loader may read beyond the same batch at a 10x larger library: index pages and the
 # bootstrap rows, never a pass over the library's tracks, files or overrides.
 _BATCH_ROWS_READ_SLACK = 50
+# Shared buffers a one-page exception_overrides Seq Scan may touch per batch-key probe (6.5): its page, plus
+# one for a visibility or hint-bit lookup.
+_OVERRIDE_PROBE_BUFFERS_PER_KEY = 2
 # The first 500-folder batch of a drain right after a bulk add, with no statistics, took over 120 s before.
 _FIRST_BATCH_SECONDS = 5.0
 
@@ -514,7 +517,8 @@ class _ExplainingConnection:
 
     def execute(self, sql, params=None):
         if "eligible_track_file_ids" in str(sql):
-            self._plans.append(self._connection.execute("explain (analyze, format json) " + sql, params).fetchone())
+            self._plans.append(
+                self._connection.execute("explain (analyze, buffers, format json) " + sql, params).fetchone())
         return self._connection.execute(sql, params)
 
     def __getattr__(self, name):
@@ -575,6 +579,10 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
             reltuples = {row["relname"]: float(row["reltuples"]) for row in connection.execute(
                 "select relname, reltuples from pg_class where relnamespace = 'library'::regnamespace"
                 " and relname = any(%s)", (list(tables[:3]),)).fetchall()}
+            # The override table's real size in pages (not pg_class.relpages, which only ANALYZE updates).
+            override_pages = int(connection.execute(
+                "select pg_relation_size('library.exception_overrides')"
+                " / current_setting('block_size')::bigint as pages").fetchone()["pages"])
             connection.execute("update library.problematic_loose_groups set marked_xid = pg_current_xact_id()")
         if statistics:
             assert -1.0 not in reltuples.values(), f"the tables must be analyzed: {reltuples}"
@@ -598,9 +606,23 @@ def test_live_a_drain_batch_reads_only_its_folders_without_statistics(loose_libr
         nodes = _plan_nodes(plans[0]["QUERY PLAN"][0]["Plan"])
         assert any(node.get("Index Name") == "local_track_files_loose_group_idx" for node in nodes), (
             "the folder lookup uses 0294's index")
-        sequential = [node["Relation Name"] for node in nodes
-                      if node["Node Type"] == "Seq Scan" and node.get("Relation Name") in tables]
-        assert sequential == [], f"no pass over a library table: {sequential}"
+        # 6.5's rule: a per-key probe of exception_overrides may be a Seq Scan only while the table is one page
+        # (scanning one page is cheaper than an index probe, and its rows are arithmetic, not I/O), and then it
+        # touches at most _OVERRIDE_PROBE_BUFFERS_PER_KEY shared buffers per probe. Any other Seq Scan on a
+        # library table, or on exception_overrides once it has more than one page, fails.
+        sequential = []
+        for node in nodes:
+            if node["Node Type"] != "Seq Scan" or node.get("Relation Name") not in tables:
+                continue
+            if node["Relation Name"] == "exception_overrides" and override_pages <= 1:
+                buffers = node.get("Shared Hit Blocks", 0) + node.get("Shared Read Blocks", 0)
+                loops = max(1, node.get("Actual Loops", 1))
+                assert buffers <= _OVERRIDE_PROBE_BUFFERS_PER_KEY * loops, (
+                    f"the one-page override probe touched {buffers} buffers over {loops} probes")
+                continue
+            sequential.append(node["Relation Name"])
+        assert sequential == [], (
+            f"no pass over a library table (exception_overrides: {override_pages} pages): {sequential}")
         measured[size] = rows_read
 
     _seed_loose_files(fixture, "Small", 200)

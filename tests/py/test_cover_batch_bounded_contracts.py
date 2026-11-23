@@ -383,7 +383,9 @@ def test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_pro
 _SCAN_ADDED_ALBUMS = 3
 
 
-@pytest.mark.parametrize("trigger", ["scan", "root-change-scan", "settings-save-scan", "watcher-during-scan"])
+@pytest.mark.parametrize("trigger", [
+    "scan", "root-change-scan", "settings-save-scan", "watcher-during-scan", "watcher-during-scan-that-also-adds",
+])
 def test_scan_added_album_cover_lookup_searches_only_the_added_albums_at_two_library_sizes(
     cover_state, tmp_path, monkeypatch, trigger,
 ):
@@ -456,8 +458,10 @@ def test_scan_added_album_cover_lookup_searches_only_the_added_albums_at_two_lib
             )
 
         existing_keys = {album.key for album in existing_albums}
-        if trigger == "watcher-during-scan":
-            # The watcher found the albums while a scan was running; that scan added nothing itself.
+        if trigger.startswith("watcher-during-scan"):
+            # The watcher found the albums while a scan was running. In the second case that scan also counts
+            # them as added: both paths queue them, and each album is still searched exactly once.
+            scan_also_adds = trigger.endswith("also-adds")
             library_state["scan_in_progress"] = True
             state_service.queue_watcher_cover_refresh_for_track_paths_for_state(
                 library_state, config, logger, set(added),
@@ -465,11 +469,14 @@ def test_scan_added_album_cover_lookup_searches_only_the_added_albums_at_two_lib
             )
             executor.run_all()
             assert searches == [], "no lookup while the scan runs"
+            enqueued = library_state["_watcher_cover_refresh_enqueue_token"]
             monkeypatch.setattr(state_service, "refresh_library_for_state", lambda *_args, **_options: finish_scan(
-                existing_keys | {album.key for album in added_albums},
+                existing_keys if scan_also_adds else existing_keys | {album.key for album in added_albums},
             ))
             monkeypatch.setattr(state_service, "_start_queued_root_change_scan", lambda *_args: None)
             state_service._refresh_library_worker(library_state, config, logger, False)
+            # The scan skips albums the watcher already queued, so an in-flight lookup is never queued twice.
+            assert library_state["_watcher_cover_refresh_enqueue_token"] == enqueued
         else:
             if trigger == "root-change-scan":
                 library_state[scan_state.QUEUED_ROOT_CHANGE_KEY] = "roots-after"
@@ -487,7 +494,7 @@ def test_scan_added_album_cover_lookup_searches_only_the_added_albums_at_two_lib
             finish_scan(existing_keys)
         executor.run_all()
         assert sorted(album for _artist, album in searches) == sorted(album.name for album in added_albums), (
-            "each added album is searched once, and no other album"
+            "each added album is searched exactly once, and no other album"
         )
         assert not library_state["_watcher_cover_refresh_pending_track_paths"]
         counts.queue_claims = len(searches)

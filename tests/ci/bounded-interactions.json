@@ -4952,7 +4952,7 @@
         "largeMinusSmallMax": 0
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
-      "testIdentity": "bounded interaction: a burst of seeks publishes the claim's place at most twice",
+      "testIdentity": "bounded interaction: a burst of seeks publishes the claimed place at most twice",
       "performanceTargets": [],
       "rollback": "Revert publishPlaybackPositionSoon; Play here elsewhere then reads the place a seek, start or gapless move left from the next renewal instead. No data or API change."
     },

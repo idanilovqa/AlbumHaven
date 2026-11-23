@@ -2292,8 +2292,8 @@ test('request capture: playback ownership requests stay on ownership endpoints w
       assert.equal(await context.claimPlaybackOwnership(localTrack, { showBlockedToast: false }), false);
       const requests = capture.requests.slice(before).map(({ url, options }) => ({ url, method: options.method }));
       assert.deepEqual(requests.map(({ url, method }) => `${method} ${url.split('?')[0]}`), [
-        'POST /playback/refs', 'PUT /playback/state', 'PUT /playback/state', 'DELETE /playback/state',
-        'POST /playback/refs', 'PUT /playback/state', 'GET /playback/state',
+        'PUT /playback/state', 'PUT /playback/state', 'DELETE /playback/state',
+        'PUT /playback/state', 'GET /playback/state',
       ]);
       return { requests };
     },
@@ -2349,13 +2349,18 @@ test('bounded interaction: a playback ownership heartbeat repaints the player on
     const owner = loadCountedOwnership(counter, { fetch: countedOwnershipFetch(counter) });
     assert.equal(await owner.context.claimPlaybackOwnership(localTrack), true);
     let remote = null;
-    const mirror = loadCountedOwnership(counter, { fetch: countedOwnershipFetch(counter, { elsewhere: () => remote }) });
+    let mirrorNow = 0;
+    const mirror = loadCountedOwnership(counter, {
+      fetch: countedOwnershipFetch(counter, { elsewhere: () => remote }),
+      performance: { now: () => mirrorNow },
+    });
     mirror.context.startPlaybackOwnershipHeartbeat();
     const work = await counter.measure(async () => {
       for (let tick = 0; tick < ticks; tick += 1) {
         owner.heartbeat();
         if (tick === 1) remote = remoteOwnershipTrack;
         mirror.heartbeat();
+        mirrorNow += 10_000;
         await flushOwnershipTick();
       }
     });
@@ -2412,7 +2417,7 @@ test('bounded interaction: ownership broadcasts from other tabs repaint the play
 
 // A seek, a start's first frame or a gapless move publishes the claim's place at once; a burst of them sends
 // one request at its start and one when it settles, however long it is.
-test('bounded interaction: a burst of seeks publishes the claim\'s place at most twice', async () => {
+test('bounded interaction: a burst of seeks publishes the claimed place at most twice', async () => {
   const run = async (seeks) => {
     const counter = createInteractionCounter();
     const publishTimers = new Map();

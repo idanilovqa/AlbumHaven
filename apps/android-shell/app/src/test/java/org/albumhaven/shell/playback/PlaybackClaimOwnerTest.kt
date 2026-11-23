@@ -383,4 +383,3 @@ class PlaybackClaimOwnerTest {
         assertFalse(owner.maySound())
     }
 }
-}

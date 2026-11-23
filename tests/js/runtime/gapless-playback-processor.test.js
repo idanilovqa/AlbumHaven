@@ -164,8 +164,8 @@ test('silence stops the next quantum whatever the generation and is answered aft
   const fixture = createProcessor({ currentCapacityFrames: 1024 });
   enqueue(fixture, { streamId: 1, role: 'current', sequence: 0, left: new Array(512).fill(0.25) });
   fixture.send({ type: 'play', generation: 7 });
-  renderQuantum(fixture);
-  renderQuantum(fixture);
+  assertRenderedNonSilentStereo(fixture);
+  assertRenderedNonSilentStereo(fixture);
   fixture.send({ type: 'silence' });
   const last = fixture.port.events.at(-1);
   assert.equal(last.type, 'silenced');

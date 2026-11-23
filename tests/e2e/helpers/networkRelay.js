@@ -25,6 +25,27 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
   let server = null;
   let port = 0;
   let tunnelDown = false;
+  let stalled = false;
+  // Connections whose other side broke while the network was gone: they are reset once it is back.
+  const brokenInOutage = new Set();
+
+  const reset = (socket) => (socket.resetAndDestroy ? socket.resetAndDestroy() : socket.destroy());
+  // As on a real network, a side that errors or closes without ending resets the other one: a
+  // keep-alive connection the app dropped during an outage dies when the network returns, instead of
+  // swallowing the next request.
+  const pair = (client, upstream) => {
+    for (const [socket, peer] of [[client, upstream], [upstream, client]]) {
+      let ended = false;
+      socket.once('end', () => { ended = true; });
+      const broke = () => {
+        if (ended || peer.destroyed) return;
+        if (stalled) brokenInOutage.add(peer);
+        else reset(peer);
+      };
+      socket.once('error', broke);
+      socket.once('close', broke);
+    }
+  };
 
   const throttle = () => {
     let allowance = playbackBytesPerSecond;
@@ -65,6 +86,7 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
       socket.on('close', () => sockets.delete(socket));
       socket.on('error', () => {});
     }
+    pair(client, upstream);
     link(client, upstream);
     // The request line says whether this connection is the playback socket.
     client.once('data', (head) => {
@@ -94,6 +116,7 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
      * going off does: the page sees no close, its sockets just stop delivering.
      */
     stall() {
+      stalled = true;
       server?.close();
       server = null;
       for (const entry of links) {
@@ -103,21 +126,26 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
       for (const socket of sockets) socket.pause?.();
     },
     /**
-     * Accepts connections again on the same port. Stalled ones carry on where they stopped, or,
+     * Accepts connections again on the same port. Stalled ones carry on where they stopped (one whose
+     * other side broke meanwhile is reset), or,
      * with `revive: false`, stay dead without closing, as connections do when the network that
      * returns is not the one they were made on: only new connections work.
      */
     restore: async ({ revive = true } = {}) => {
       tunnelDown = false;
-      const stalled = [...sockets];
+      stalled = false;
+      const paused = [...sockets];
       const frozen = [...frozenLinks];
+      const broken = [...brokenInOutage];
       frozenLinks.clear();
+      brokenInOutage.clear();
       if (!server) await listen();
       if (!revive) return;
+      for (const socket of broken) if (!socket.destroyed) reset(socket);
       for (const { source, destination } of frozen) {
         if (!source.destroyed && !destination.destroyed) source.pipe(destination);
       }
-      for (const socket of stalled) socket.resume?.();
+      for (const socket of paused) socket.resume?.();
     },
     /**
      * The network is back but the server is not: every request, the playback socket's included, is

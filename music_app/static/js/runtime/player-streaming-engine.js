@@ -3018,9 +3018,13 @@ async function resumeBrowserStreaming(
     engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   }
   syncStreamingSoundPermission(node);
-  // Diagnostics: a resume's first audible frame is stamped when the processor reports it ([recordStreamingRenderedPcmEvidence]).
-  engine.diagnostics.resumedAtMs = performance.now();
-  engine.diagnostics.resumeFirstFrameAtMs = 0;
+  // Diagnostics: a resume's first audible frame is stamped when the processor reports it
+  // ([recordStreamingRenderedPcmEvidence]). A start's autoplay posts its play here too, before its song ever
+  // sounded: only a song that already sounded resumes.
+  if (engine.roles.current?.firstFrameNotified) {
+    engine.diagnostics.resumedAtMs = performance.now();
+    engine.diagnostics.resumeFirstFrameAtMs = 0;
+  }
   node.port.postMessage({ type: 'play', generation });
   engine.snapshot.paused = false;
   maybeGrantDeferredReplacementCredit();

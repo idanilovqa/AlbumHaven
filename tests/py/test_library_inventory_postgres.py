@@ -628,3 +628,36 @@ def test_inventory_repository_rejects_missing_database_url_before_connecting():
 
     with pytest.raises(RuntimeError, match="ALBUM_HAVEN_APP_DATABASE_URL is required"):
         repository.load_support_state()
+
+
+def _cte_body(sql: str, name: str) -> tuple[str, str]:
+    """(the keyword after AS, the body) of CTE ``name``: the text up to the next top-level CTE or SELECT."""
+    match = re.search(rf"\n\s+{name} as (materialized )?\(", sql)
+    assert match, f"no CTE {name}"
+    depth, start = 1, match.end()
+    for index in range(start, len(sql)):
+        depth += {"(": 1, ")": -1}.get(sql[index], 0)
+        if depth == 0:
+            return (match.group(1) or "").strip(), sql[start:index]
+    raise AssertionError(f"CTE {name} is not closed")
+
+
+def test_a_drain_batch_reads_overrides_in_materialized_steps_that_no_outer_row_can_rerun():
+    """Case 55: a folder batch's overrides are read once per statement. batch_keys, override_hits,
+    exception_candidates and their ranking are each AS MATERIALIZED; exception_overrides is read only inside
+    override_hits, whose fenced lookups refer to nothing but batch_keys and bootstrap_context; nothing after it
+    reads exception_overrides again."""
+    sql = " ".join(inventory_module._non_album_candidates_sql(
+        unassigned_only=True, membership_problems_only=True, all_roots=True, membership_folders=True,
+    ).lower().split()).replace(" ( ", " (").replace(" )", ")")
+    sql = "\n " + sql.replace(", ", ",\n ")
+    for name in ("batch_keys", "override_hits", "exception_candidates", "ranked_exception_overrides"):
+        keyword, _body = _cte_body(sql, name)
+        assert keyword == "materialized", f"{name} must be AS MATERIALIZED"
+    _keyword, hits = _cte_body(sql, "override_hits")
+    assert hits.count("from library.exception_overrides overrides") == 2
+    assert sql.count("library.exception_overrides") == hits.count("library.exception_overrides"), (
+        "exception_overrides is read only inside override_hits")
+    outer = set(re.findall(r"\b([a-z_]+)\.(?:private_path|track_id|library_id)\b", hits)) - {"overrides", "track_override"}
+    assert outer <= {"batch_keys", "bootstrap_context"}, f"override_hits refers to an outer row: {outer}"
+    assert hits.count("offset 0)") == 2, "each lookup is fenced"

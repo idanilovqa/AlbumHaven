@@ -67,12 +67,13 @@ def test_live_a_structural_save_whose_db_step_fails_after_its_files_are_verified
     )
 
     # Another album with the target identity appeared after the Save was checked: the first DB finish fails.
-    _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_structural_tag_edit", 1,
-                StructuralTagEditDestinationConflict("destination appeared meanwhile"))
+    injected = _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_structural_tag_edit", 1,
+                           StructuralTagEditDestinationConflict("destination appeared meanwhile"))
     paths = list(edit_route.entries)
 
     status, payload, _elapsed = _post_edit(edit_route, {path: {"album": "Renamed After Verify"} for path in paths})
 
+    assert injected, "The injected DB-step failure never ran; this check would prove nothing."
     assert _accepted(status, payload), f"A save with verified files was reported failed: {status} {payload}"
     assert all(_file_album(path) == "Renamed After Verify" for path in paths), "The files' old tags were restored."
     assert _until(lambda: _album_titled(edit_route, "Renamed After Verify")) is not None, (
@@ -86,12 +87,14 @@ def test_live_a_media_field_save_whose_db_step_fails_after_its_files_are_verifie
         edit_route, monkeypatch):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
-    _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_targeted_inventory_mutation", 1,
-                RuntimeError("the database connection was lost"))
+    # A title save on this route commits through the keyed tag-save path (persist_structural_tag_edit).
+    injected = _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_structural_tag_edit", 1,
+                           RuntimeError("the database connection was lost"))
     target = next(iter(edit_route.entries))
 
     status, payload, _elapsed = _post_edit(edit_route, {target: {"title": "Title After Verify"}})
 
+    assert injected, "The injected DB-step failure never ran; this check would prove nothing."
     assert _accepted(status, payload), f"A save with verified files was reported failed: {status} {payload}"
     assert _file_title(target) == "Title After Verify", "The file's old title was restored."
     assert _until(lambda: _persisted_title(edit_route, target) == "Title After Verify") is not None, (
@@ -104,13 +107,15 @@ def test_live_an_exception_change_saved_with_a_media_field_lands_through_the_cat
     exception value, part of the user's edit, lands through the same catch-up."""
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
-    _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_targeted_inventory_mutation", 1,
-                RuntimeError("the database connection was lost"))
+    # A title save on this route commits through the keyed tag-save path (persist_structural_tag_edit).
+    injected = _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_structural_tag_edit", 1,
+                           RuntimeError("the database connection was lost"))
     target = next(iter(edit_route.entries))
 
     status, payload, _elapsed = _post_edit(
         edit_route, {target: {"title": "Rarity After Verify", "exception_type": "Non-album rarity"}})
 
+    assert injected, "The injected DB-step failure never ran; this check would prove nothing."
     assert _accepted(status, payload), f"A save with verified files was reported failed: {status} {payload}"
     assert _file_title(target) == "Rarity After Verify"
 
@@ -130,12 +135,13 @@ def test_live_a_catch_up_that_fails_once_completes_on_the_next_drain(edit_route,
     )
 
     # The save's finish and the first catch-up both fail; the retry succeeds.
-    _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_structural_tag_edit", 2,
-                StructuralTagEditDestinationConflict("destination appeared meanwhile"))
+    injected = _fail_first(monkeypatch, PostgresScanCacheAdapter, "persist_structural_tag_edit", 2,
+                           StructuralTagEditDestinationConflict("destination appeared meanwhile"))
     paths = list(edit_route.entries)
 
     status, payload, _elapsed = _post_edit(edit_route, {path: {"album": "Caught Up On Retry"} for path in paths})
 
+    assert injected, "The injected DB-step failure never ran; this check would prove nothing."
     assert _accepted(status, payload), f"A save with verified files was reported failed: {status} {payload}"
     assert all(_file_album(path) == "Caught Up On Retry" for path in paths)
     queue_journaled_relation_drain(edit_route.config)

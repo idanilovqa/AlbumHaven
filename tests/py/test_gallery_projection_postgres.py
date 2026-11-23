@@ -838,7 +838,10 @@ def test_selected_startup_sidebar_uses_only_current_gallery_projection(monkeypat
         "album_count": 3,
         "show_all_artists_sidebar_link": True,
     }
-    assert events[-2:] == ["rollback", "close"]
+    # One read-only snapshot, then the lease ends. Since f9a7873e9 the sidebar reads through the browse
+    # connection context: a pooled lease is reset by the pool, and an owned connection is closed, which
+    # discards the read-only transaction (no explicit rollback).
+    assert events == ["SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", "close"]
 
 
 @pytest.mark.parametrize("relations", ["ready", "cold", "pending"])

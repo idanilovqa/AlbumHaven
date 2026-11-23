@@ -1436,10 +1436,15 @@ def test_live_problematic_index_follows_a_loose_group_exclusion_and_its_revert(w
 
     fixture = watcher_repair_inventory
     database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
-    # One stray copy in each of two folders: two groups, so the other one proves the rule is scoped.
-    fixture.seed(*(fixture.entry(f"Owner/{folder}/{track}.flac") for folder, track in (
-        ("Album", "01"), ("Album", "02"), ("Album", "03"), ("Strays A", "01"), ("Strays B", "02"),
-    )))
+    # A loose file has no artist tag ("Missing artist"). One in each of two folders makes two groups, so the
+    # other group proves the rule is scoped.
+    def stray(folder):
+        entry = fixture.entry(f"Owner/{folder}/01.flac", artist="")
+        entry["album_artist"] = ""
+        return entry
+
+    fixture.seed(*(fixture.entry(f"Owner/Album/{track}.flac") for track in ("01", "02", "03")),
+                 stray("Strays A"), stray("Strays B"))
     _ready_problematic_index(database_url)
     repository = browse.PostgresLibraryBrowseRepository(
         {**fixture.config, problematic_index.ENABLED_KEY: "1"})

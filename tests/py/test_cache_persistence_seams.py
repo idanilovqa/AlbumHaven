@@ -1070,6 +1070,12 @@ class _OneAlbumLibraryDatabase:
     def commit(self):
         pass
 
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        from contextlib import nullcontext
+
+        return nullcontext()
+
     def pipeline(self):
         from contextlib import nullcontext
 

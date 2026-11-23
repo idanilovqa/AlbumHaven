@@ -129,11 +129,13 @@ def test_live_confirming_a_removal_commits_while_another_transaction_holds_a_lib
         library.config, connect=isolatedPostgres._connect, root_health_check=lambda _root: True,
     ).confirm_removal(album_key)
 
-    assert int(result.get("removed_album_count") or 0) == 1
+    assert result["removed_album_key"] == album_key
     assert not _rows(library, "select 1 from library.local_albums where album_key = %s", (album_key,))
     assert _markers(library) == 1
 
 
+# A guard, not a red: keeping a missing album never reached the publication gate, so it already
+# commits at 5ffbaba62. (b)'s reds are the move and the confirmed removal above.
 def test_live_keeping_a_missing_album_commits_while_another_transaction_holds_a_library_wide_marker(library):
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
@@ -202,15 +204,17 @@ def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_wit
         before = _rows_read(fixture)
         _rename(fixture, title, adapter=adapter)
         after = _rows_read(fixture)
-        return len(counted), sum(after.get(table, 0) - before.get(table, 0) for table in after)
+        tables = {table: after.get(table, 0) - before.get(table, 0) for table in after}
+        return len(counted), sum(tables.values()), {table: rows for table, rows in tables.items() if rows}
 
     small = measure("First Size")
     _seed_albums(fixture, 2000)
     large = measure("Second Size")
 
-    print("edits always save, (statements, rows read) at 1 and 2,001 albums:", small, large)
-    assert small[0] == large[0], f"The save's statements grew with the library: {small} vs {large}."
-    assert abs(large[1] - small[1]) <= 25, f"The save's rows read grew with the library: {small} vs {large}."
+    print("edits always save, (statements, rows read, per table) at 1 and 2,001 albums:", small, large)
+    assert small[0] == large[0], f"The save's statements grew with the library: {small[:2]} vs {large[:2]}."
+    assert abs(large[1] - small[1]) <= 25, (
+        f"The save's rows read grew with the library: {small} vs {large}.")
 
 
 CUSTOM_SCOPES = (
@@ -292,6 +296,8 @@ def _rows_read(fixture):
 
 # 6.5's conditions on R1 and R5.
 
+# A guard, not a red: the journaled drain was already single-flight at 5ffbaba62. It holds R1's
+# deferral to that one owner.
 def test_repeated_publication_failures_make_no_back_to_back_drains(library, monkeypatch):
     import threading
 
@@ -316,6 +322,7 @@ def test_repeated_publication_failures_make_no_back_to_back_drains(library, monk
     assert len(drains) == 1, f"Failures were retried back to back: {len(drains)} drains."
 
 
+# A guard, not a red: no ordinary event started the one-time build at 5ffbaba62 (R5).
 def test_live_no_save_request_or_watcher_event_starts_the_one_time_build(library, monkeypatch):
     from music_app.services import gallery_projection_postgres, relation_projection_postgres
     from music_app.services.cache import _CACHE_WRITE_EXECUTOR
@@ -338,6 +345,8 @@ def test_live_no_save_request_or_watcher_event_starts_the_one_time_build(library
     assert started == [], f"An ordinary event started the one-time build: {started}."
 
 
+# A guard, not a red: a structural save already committed when its publication raised at
+# 5ffbaba62. It holds R1's savepoint to the same outcome.
 def test_live_a_rolled_back_publication_leaves_the_edit_committed(library, monkeypatch):
     from music_app.services import scoped_relation_projection
 

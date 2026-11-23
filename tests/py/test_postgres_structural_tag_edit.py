@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,10 @@ class StructuralTagEditConnection:
         self.exit_exc_type = exc_type
         self.exit_executed_count = len(self.executed)
         return False
+
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        return contextlib.nullcontext()
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
@@ -899,6 +904,10 @@ class _CommitSuppressingConnection:
 
     def execute(self, sql, params=None):
         return self._connection.cursor(row_factory=dict_row).execute(sql, params)
+
+    def transaction(self):
+        # A nested transaction is a savepoint: it never commits the wrapped connection.
+        return self._connection.transaction()
 
     def commit(self):
         raise AssertionError("The live restore contract must suppress adapter commits.")

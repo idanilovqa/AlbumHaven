@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 import re
 import threading
@@ -216,6 +217,10 @@ class FakeConnection:
 
     def commit(self):
         self.commit_calls += 1
+
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        return contextlib.nullcontext()
 
     def pipeline(self):
         connection = self
@@ -3622,7 +3627,7 @@ def test_targeted_structural_relation_patch_avoids_full_source_load(monkeypatch)
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services import scoped_relation_projection as scoped
 
-    connection = object()
+    connection = SimpleNamespace(transaction=contextlib.nullcontext)
     published = {"projection_mode": "targeted", "orphaned_source_artists": ["Ovderhead"],
                  "relation_view_patch": {"remove": {"artists": ["Ovderhead"]},
                                          "upsert": {"artists": ["Overhead"]}}}
@@ -3667,7 +3672,7 @@ def test_stale_structural_relation_patch_reports_authoritative_orphan(monkeypatc
 
     monkeypatch.setattr(scoped, "publish_affected_relation_projection", publish)
     result = persistence._patch_structural_relation_projection(
-        object(), previous_entries={"track.flac": {"album_id": 41}},
+        SimpleNamespace(transaction=contextlib.nullcontext), previous_entries={"track.flac": {"album_id": 41}},
         updated_entries={}, source_album_vacated=True,
     )
     assert result is authoritative
@@ -3680,8 +3685,9 @@ def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services import scoped_relation_projection as scoped
 
-    # Incompatible indexed evidence now fails closed; the wrapper cannot replace
-    # that failure with a successful stale snapshot or a global rebuild.
+    # Incompatible indexed evidence never fails the user's save (edits always save, R1): the
+    # publication's savepoint rolls back and the journal owner reconciles later. The wrapper never
+    # replaces it with a stale snapshot or a global rebuild.
     calls = []
 
     def reject(connection, **scope):
@@ -3693,11 +3699,11 @@ def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch
 
     monkeypatch.setattr(scoped, "publish_affected_relation_projection", reject)
     monkeypatch.setattr(persistence, "_commit_structural_relation_projection", forbidden)
-    with pytest.raises(RuntimeError, match="Relation compatibility evidence changed"):
-        persistence._patch_structural_relation_projection(
-            object(), previous_entries={"track.flac": {"album_id": 41}},
-            updated_entries={}, source_album_vacated=True,
-        )
+    result = persistence._patch_structural_relation_projection(
+        SimpleNamespace(transaction=contextlib.nullcontext), previous_entries={"track.flac": {"album_id": 41}},
+        updated_entries={}, source_album_vacated=True,
+    )
+    assert result == {"relation_publication_deferred": True}
     assert len(calls) == 1
     assert calls[0]["album_ids"] == {41}
 

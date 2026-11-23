@@ -731,6 +731,12 @@ class _MovedAlbumDatabase:
     def commit(self):
         self.commits += 1
 
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        from contextlib import nullcontext
+
+        return nullcontext()
+
     def pipeline(self):
         from contextlib import nullcontext
 

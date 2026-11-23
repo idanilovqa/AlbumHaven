@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from asyncio import sleep as _sleep
 import hmac
+import logging
 import ipaddress
 import threading
 from collections.abc import Mapping
@@ -49,6 +50,7 @@ from music_app.services.auth_session_csrf import (
 )
 from music_app.services.auth_reset_csrf import issue_reset_csrf, matches_reset_csrf
 from music_app.services.auth_tokens import hash_opaque_token
+from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
 
 
 router = APIRouter()
@@ -1021,6 +1023,7 @@ async def post_logout(request: Request) -> Response:
         )
     except Exception:
         return _no_store(HTMLResponse("Logout is temporarily unavailable.", status_code=503))
+    await _forget_last_played(request, config)
 
     response = RedirectResponse("/login", status_code=303)
     for cookie_name, httponly in (
@@ -1035,6 +1038,19 @@ async def post_logout(request: Request) -> Response:
             samesite="lax",
         )
     return _no_store(response)
+
+
+async def _forget_last_played(request: Request, config: Mapping[str, object]) -> None:
+    """Sign-out clears the player: the account's last-played song and place go. A live claim stays, as its
+    holder may still sound. The sign-out itself never fails for it."""
+    actor = getattr(request.state, "current_actor", None)
+    if actor is None:
+        return
+    claims = PostgresPlaybackClaims({**(getattr(request.app.state, "config", None) or {}), **config})
+    try:
+        await run_in_threadpool(claims.forget_last_played, actor)
+    except Exception:  # noqa: BLE001 - a record left behind is replaced by the next play.
+        logging.getLogger(__name__).warning("The last-played record was not cleared at sign-out.")
 
 
 def _safe_text_match(left: object, right: object) -> bool:

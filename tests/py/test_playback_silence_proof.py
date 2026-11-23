@@ -47,6 +47,8 @@ class _Table:
         self._db.execute("""create table app.playback_claims (account_id, library_id, client_id, client_surface,
             token_digest, expires_at, track, pending_handoff_id, pending_handoff_digest,
             pending_completion_digest, pending_handoff_expires_at, primary key (account_id, library_id))""")
+        self._db.execute("""create table app.playback_last_played (account_id, library_id, track, position_ms,
+            duration_ms, updated_at, primary key (account_id, library_id))""")
 
     def execute(self, sql, values=()):
         sql = sql.replace("app.playback_claims.", "playback_claims.").replace("::jsonb", "")
@@ -81,7 +83,11 @@ def player(monkeypatch):
     def pass_time(seconds):
         clock[0] += timedelta(seconds=seconds)
 
-    return SimpleNamespace(service=service, start=start, stage=stage, pass_time=pass_time)
+    def rows(name):
+        return table._db.execute(f"select count(*) from app.{name}").fetchone()[0]
+
+    return SimpleNamespace(service=service, start=start, stage=stage, pass_time=pass_time,
+                           claims=lambda: rows("playback_claims"), records=lambda: rows("playback_last_played"))
 
 
 def refused(call):
@@ -127,6 +133,82 @@ def test_only_the_holders_token_releases(player):
     player.service.release(None, client_id=other, claim_token=issue_opaque_token().raw)
 
     assert refused(lambda: player.start(other)) == 409
+
+
+# A claim no client can take up any more stops being a claim when read: it moves, by its key, to the
+# last-played record, its song and the place it was last heard at, so Play here still continues the exact
+# song and place. One record per account and library.
+def test_a_lapsed_claim_read_by_another_tab_moves_to_the_last_played_record_that_play_here_continues(handing):
+    holder, other, taker = str(uuid4()), str(uuid4()), str(uuid4())
+    handing.start(holder, silences_itself=True, position={"ms": 20_000, "durationMs": 90_000})
+    handing.pass_time(304)
+    handing.service.get(None, other)
+    assert (handing.claims(), handing.records()) == (1, 0), "inside its five minutes and margin it may sound"
+
+    handing.pass_time(1)
+    seen = handing.service.get(None, other)
+
+    assert (seen["is_playing_elsewhere"], seen["can_start_here"], seen["status_label"]) == (False, True, "Ready to play")
+    assert (handing.claims(), handing.records()) == (0, 1), "no claim; the song and its place stay"
+    observed = handing.service.holder(None)
+    assert (observed["client_id"], observed["silent"]) == (None, True)
+    handing.pass_time(600)
+    taken = handing.hand_over(taker, handing.service.holder(None), None)
+    assert (taken["confirmed"], taken["track"], taken["position"]) == (False, TRACK, {"ms": 20_000, "durationMs": 90_000})
+    assert (handing.service.holder(None)["client_id"], handing.records()) == (taker, 0)
+
+
+def test_a_last_played_record_is_no_claim_its_old_token_cannot_renew_and_any_start_replaces_it(player):
+    holder, other = str(uuid4()), str(uuid4())
+    token = player.start(holder, silences_itself=True)["claimToken"]
+    player.pass_time(305)
+    player.service.get(None, other)
+
+    assert refused(lambda: player.start(holder, claim_token=token)) == 409
+    assert player.start(other)["playbackState"]["is_playing_here"] is True
+    assert (player.claims(), player.records()) == (1, 0)
+
+
+def test_a_leaving_pages_claim_stays_while_its_next_page_can_take_it_then_moves_to_the_record(player):
+    holder, next_page, other = str(uuid4()), str(uuid4()), str(uuid4())
+    handoff = player.stage(holder, player.start(holder, silences_itself=True)["claimToken"])
+    player.pass_time(1)
+    player.service.get(None, other)
+
+    taken = player.start(next_page, claim_token=issue_opaque_token().raw, handoff=handoff, silences_itself=True)
+    assert taken["playbackState"]["is_playing_here"] is True, "a read never takes the claim from a reload"
+
+    player.stage(next_page, taken["claimToken"])
+    player.pass_time(15)
+    player.service.get(None, other)
+    assert (player.claims(), player.records()) == (0, 1)
+
+
+@pytest.mark.parametrize("silent_for", [0, 31, 86_400])
+def test_a_claim_without_proof_of_silence_stays_a_claim_however_long_it_is_quiet(player, silent_for):
+    # A client that made no promise (an installed app of an older build) may still sound: its claim stays.
+    holder, other = str(uuid4()), str(uuid4())
+    player.start(holder)
+    player.pass_time(silent_for)
+
+    player.service.get(None, other)
+
+    assert (player.claims(), player.records(), player.service.holder(None)["client_id"]) == (1, 0, holder)
+
+
+def test_sign_out_clears_the_last_played_record_but_never_a_live_claim(player):
+    lapsed, other, live = str(uuid4()), str(uuid4()), str(uuid4())
+    player.start(lapsed, silences_itself=True)
+    player.pass_time(305)
+    player.service.get(None, other)
+    assert player.records() == 1
+
+    player.service.forget_last_played(None)
+    assert player.records() == 0, "the player is cleared"
+
+    player.start(live)
+    player.service.forget_last_played(None)
+    assert player.claims() == 1, "a live claim may still sound"
 
 
 def test_a_client_whose_grant_was_never_answered_starts_again_itself(player):

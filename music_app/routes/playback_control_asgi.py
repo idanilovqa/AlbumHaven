@@ -259,7 +259,8 @@ async def _confirmed_takeover(request, payload):
         await playback_call(validate_taker, client_id, payload.get("clientSurface"))
         observed = await playback_call(claims.holder, actor)
         # A pause gives the claim back while the other tab still shows Play here: it is asked all the same.
-        paused = observed["client_id"] is None
+        # With no claim but a last-played record nobody is asked: its song goes on where it was last heard.
+        paused = observed["client_id"] is None and not observed["silent"]
         if paused:
             released = hub.released(observed["account_id"], observed["library_id"])
             if released is None:

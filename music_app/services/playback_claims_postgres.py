@@ -32,6 +32,8 @@ _SILENCE_MARGIN_SECONDS = 5
 _PROMISE = "silentAfterMs"
 # Kept there too: its holder paused and keeps the claim for its pause hold. Other clients see nothing playing.
 _PAUSED = "paused"
+# What a last-played record keeps of a claim's track.
+_TRACK_KEYS = ("playbackRef", "title", "artist", "album", "artworkUrl")
 
 
 def _client(value):
@@ -86,6 +88,23 @@ def _silent(table=""):
     """SQL that is true of a claim whose holder has proved silence, for [_silent_bounds]' two values."""
     return (f"({table}pending_handoff_expires_at <= %s"
             f" or (({table}track ->> '{_PROMISE}') is not null and {table}expires_at <= %s))")
+
+
+def _gone(table=""):
+    """SQL that is true of a claim no client can take up any more, for [_gone_bounds]' two values: a page that
+    said it was leaving and whose handoff to its next page has expired, or a holder past its promise."""
+    return (f"({table}pending_handoff_expires_at <= %s"
+            f" or (({table}track ->> '{_PROMISE}') is not null and {table}expires_at <= %s))")
+
+
+def _gone_bounds(now):
+    return now, _silent_bounds(now)[1]
+
+
+def _forget_last_played(connection, account_id, library_id):
+    """Any start replaces the last-played record, as does sign-out."""
+    connection.execute("delete from app.playback_last_played where account_id = %s and library_id = %s",
+                       (account_id, library_id))
 
 
 def _silent_bounds(now):
@@ -160,11 +179,41 @@ class PostgresPlaybackClaims:
         client_id = _client(client_id) if client_id else ""
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
-            row = connection.execute(f"""select client_id, client_surface, expires_at, track
-                from app.playback_claims where account_id = %s and library_id = %s
-                and not coalesce({_silent()}, false)""",
-                (account_id, library_id, *_silent_bounds(self._clock()))).fetchone()
-        return self._state(row, client_id, actor if include_path else None)
+            now = self._clock()
+            row = connection.execute(f"""select client_id, client_surface, token_digest, expires_at, track,
+                    coalesce({_gone()}, false) as gone, coalesce({_silent()}, false) as silent
+                from app.playback_claims where account_id = %s and library_id = %s""",
+                (*_gone_bounds(now), *_silent_bounds(now), account_id, library_id)).fetchone()
+            if row is not None and row["gone"]:
+                self._keep_last_played(connection, account_id, library_id, row, now)
+        # A holder that proved it is silent plays nowhere, whether or not its claim can still be taken up.
+        return self._state(None if row is None or row["silent"] else row, client_id, actor if include_path else None)
+
+    def _keep_last_played(self, connection, account_id, library_id, row, now):
+        """A claim no client can take up any more (its page left and its handoff to the next page expired, or its
+        promised time passed) is no live claim: read by its key, it moves to the last-played record, its song
+        and the place it was last heard at, for Play here to continue. A holder that made no promise may still
+        sound, so its claim stays however long it is quiet; a leaving page's stays while its next page can take it.
+        """
+        gone = connection.execute(f"""delete from app.playback_claims
+            where account_id = %s and library_id = %s and client_id = %s and token_digest = %s and {_gone()}
+            returning track""",
+            (account_id, library_id, row["client_id"], row["token_digest"], *_gone_bounds(now))).fetchone()
+        if gone is None:
+            return
+        heard = gone["track"].get("position")
+        connection.execute("""insert into app.playback_last_played
+                (account_id, library_id, track, position_ms, duration_ms, updated_at)
+            values (%s, %s, %s::jsonb, %s, %s, %s)
+            on conflict (account_id, library_id) do update set track = excluded.track,
+              position_ms = excluded.position_ms, duration_ms = excluded.duration_ms, updated_at = excluded.updated_at""",
+            (account_id, library_id, json.dumps({key: gone["track"][key] for key in _TRACK_KEYS}),
+             heard["ms"] if heard else None, heard["durationMs"] if heard else None, now))
+
+    def forget_last_played(self, actor):
+        """Sign-out clears the player: the account and library's last-played record goes; a live claim stays."""
+        with self._connect(self._database_url) as connection:
+            _forget_last_played(connection, *require_playback_membership(connection, actor))
 
     def acquire(self, actor, *, client_id, client_surface, track, claim_token=None, handoff=None,
                 takeover=False, position=None, silences_itself=False, yielded_digest=None, paused=False):
@@ -263,6 +312,9 @@ class PostgresPlaybackClaims:
                     (expires, json.dumps(stored_track), account_id, library_id, client_id, digest)).fetchone()
             if row is None:
                 raise PlaybackContractError(409)
+            # A start replaces what was last played; a renewal finds none.
+            if claim_token is None or handoff is not None:
+                _forget_last_played(connection, account_id, library_id)
         return {"protocol": 1, "claimToken": token, "expiresAt": expires.isoformat(),
                 "leaseMs": _CLAIM_LEASE_SECONDS * 1000, "playbackState": self._state(row, client_id)}
 
@@ -315,17 +367,20 @@ class PostgresPlaybackClaims:
     def holder(self, actor):
         """Who a confirmed Play here asks, however long quiet; `client_id` is None when nobody holds the
         claim. `silent` when its page said it was leaving and its output has drained, or it is past the time
-        it promised to fall silent by: it needs no asking.
+        it promised to fall silent by: it needs no asking. With no claim but a last-played record: no holder,
+        silent, and Play here continues that record's song where it was last heard.
         """
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
             row = connection.execute(f"""select client_id, token_digest, coalesce({_silent()}, false) as silent
                 from app.playback_claims where account_id = %s and library_id = %s""",
                 (*_silent_bounds(self._clock()), account_id, library_id)).fetchone()
+            record = None if row else connection.execute("""select 1 from app.playback_last_played
+                where account_id = %s and library_id = %s""", (account_id, library_id)).fetchone()
         return {"account_id": account_id, "library_id": library_id,
                 "client_id": str(row["client_id"]) if row else None,
                 "digest": bytes(row["token_digest"]) if row else None,
-                "silent": bool(row["silent"]) if row else False}
+                "silent": bool(row["silent"]) if row else record is not None}
 
     def holds(self, holder, token):
         try:
@@ -361,12 +416,22 @@ class PostgresPlaybackClaims:
         if not confirmed:
             with self._connect(self._database_url) as connection:
                 account_id, library_id = require_playback_membership(connection, actor)
-                row = connection.execute("""select track from app.playback_claims
-                    where account_id = %s and library_id = %s and token_digest = %s""",
-                    (account_id, library_id, observed["digest"])).fetchone()
+                if observed["digest"] is not None:
+                    row = connection.execute("""select track from app.playback_claims
+                        where account_id = %s and library_id = %s and token_digest = %s""",
+                        (account_id, library_id, observed["digest"])).fetchone()
+                else:
+                    row = connection.execute("""select track, position_ms, duration_ms from app.playback_last_played
+                        where account_id = %s and library_id = %s""", (account_id, library_id)).fetchone()
             if row is None:
                 raise PlaybackContractError(409)
-            track, position = self._stored(row["track"])
+            if observed["digest"] is not None:
+                track, position = self._stored(row["track"])
+            else:
+                # What was last played goes on where it was last heard.
+                track = dict(row["track"])
+                ms = row["position_ms"]
+                position = None if ms is None else _place(ms, ms, row["duration_ms"])
         try:
             # The browser opens a song by its library path, as today's takeover read gives it.
             path = PlaybackReferenceService(self._config, clock=self._clock, connect=self._connect) \
@@ -396,6 +461,7 @@ class PostgresPlaybackClaims:
                  json.dumps(stored), observed["digest"], answered, *_silent_bounds(now))).fetchone()
             if row is None:
                 raise PlaybackContractError(409)
+            _forget_last_played(connection, account_id, library_id)
         return {"protocol": 1, "claimToken": issued.raw, "expiresAt": expires.isoformat(),
                 "leaseMs": _CLAIM_LEASE_SECONDS * 1000, "confirmed": confirmed,
                 "track": track, "position": position, "path": path}

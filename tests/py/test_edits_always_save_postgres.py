@@ -280,7 +280,8 @@ def _counting_adapter(fixture):
             return self._connection.execute(
                 """select coalesce(sum(coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0)), 0)::bigint as n
                    from pg_stat_xact_user_tables
-                   where schemaname = 'library' and relname in ('local_albums', 'local_tracks', 'local_track_files')"""
+                   where schemaname = 'library' and relname in ('local_albums', 'local_tracks', 'local_track_files', 'local_artists',
+                                       'local_album_featured_artists')"""
             ).fetchone()["n"]
 
         def execute(self, sql, *args, **kwargs):

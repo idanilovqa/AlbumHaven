@@ -68,6 +68,10 @@ operate, or contribute to the application.
   request already uses; renumber before merging when two branches collide. Only
   code merged to main may apply migrations to a shared or production database;
   branch work uses an isolated database or a disposable copy.
+  One written exception (owner, 2026-11-22), for this file only:
+  `0117b_define_fold_search_accents.sql` shares 0117. It must sort before the
+  applied 0118, which needs its function, and no lower number is free. No
+  other file may take a suffix or share a number.
 - Production-copy development (owner rule, 2026-11-14): production stays up and
   is never a development database. Each branch or sandbox develops against its
   own restored copy of the production database, with media writes disabled or a
@@ -187,8 +191,11 @@ This rule outranks convenience and applies to every agent, chat, and change.
   process-wide cache without an invalidation owner. Fix BI-15 by leasing from
   `music_app/services/postgres_connections.py`: `pooled_connection` for new
   code, `leased_connection` where a repository is written against a
-  `psycopg.connect()` connection. Only a background worker that keeps session
-  state (a session advisory lock, `LISTEN`) holds a connection of its own.
+  `psycopg.connect()` connection. Session state (a session advisory lock,
+  `LISTEN`, `SET` without `LOCAL`, a temporary table not dropped on commit) is
+  rejected on a shared lease (BI-15): take the connection, in the function
+  that sets up that state, from `session_connection`, whose connections are
+  never reused, or in a background worker from a connection of its own.
 - The ASGI test client (`tests/py/asgi_testing.py`) fails any request that
   blocks the event loop for more than 250 ms outside a module's first import,
   and has no opt-out.

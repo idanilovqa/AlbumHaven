@@ -1063,7 +1063,23 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 2000
+      },
+      "budgets": {
+        "observers": 2,
+        "listeners": 1
+      },
+      "growth": {
+        "metric": "observers",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/album-track-table.test.js",
+      "testIdentity": "bounded interaction: re-rendering a track table keeps two credit observers and one motion listener at any row count",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; each re-render already disposes the previous observers and listener. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/album-track-table.js#triggerAlbumTrackPlayActivation",
@@ -2722,13 +2738,29 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/utilities/cover-lookup/gallery"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-local-mutation-ownership.test.js",
+      "testIdentity": "bounded interaction: a Cover Look Up gallery refresh reads its own album once and renders once beside any number of notifications",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; a refresh already asks for its own album's gallery once and renders the modal once. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#release",
@@ -3382,7 +3414,23 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 12,
+        "observers": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-main-refactor-contracts.test.js",
+      "testIdentity": "bounded interaction: a GalleryBar refit visits only its own genres and keeps one size observer at any page size",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the bar already keeps one ResizeObserver and walks only its own genre pills. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/gallery-main-interactions.js#transitionGalleryMain",
@@ -4416,7 +4464,25 @@
         "BI-09"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "listeners": 8,
+        "observers": 1,
+        "animationFrames": 0,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "listeners",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/mobile-feedback.test.js",
+      "testIdentity": "bounded interaction: mobile navigation installs its listeners once at any library size",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; starting mobile navigation already installs its listeners once and reads none of the library. The renders its resize and profile-change listeners start are their own surfaces' interactions."
     },
     {
       "id": "js:runtime/mobile-navigation.js#presentMobilePage",
@@ -4650,7 +4716,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 9,
+        "timers": 1,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
+      "testIdentity": "bounded interaction: an artist availability pass sends one request, keeps one retry and stops at the same bound at any library size",
+      "performanceTargets": [],
+      "rollback": "Reverting the shared deferred back-off makes a still-deferred count re-poll every 250 ms without end: requests then grow until the test's firing cap and the contract fails."
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks",
@@ -5053,7 +5136,23 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 200
+      },
+      "budgets": {
+        "timers": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "renderCommits",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/pending-tag-edits.test.js",
+      "testIdentity": "bounded interaction: a retry pass keeps one retry timer and refreshes the view once however many saves it settles",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; a retry pass already asks about each waiting save (the user's own queue), keeps at most one retry timer and refreshes the view once."
     },
     {
       "id": "js:runtime/pending-tag-edits.js#settle",
@@ -5869,13 +5968,30 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/admin/server/preview-storage"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1,
+        "timers": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "timers",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/preview-move-attention.test.js",
+      "testIdentity": "bounded interaction: a preview move poll sends one request, renders the notifications once and arms one timer",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; each poll already sends one storage request and re-arms one timer. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/problem-exclusion-mutations.js#queueProblemExclusionCreate",
@@ -9418,14 +9534,32 @@
         "py:music_app/routes/api_read_asgi_routes.py#library_loose_tracks:route:GET /library/loose-tracks"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/loose_track_store.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
-      "workClass": "page",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 20000
+      },
+      "budgets": {
+        "candidate_rows": 50,
+        "affected_rows": 100,
+        "sql_statements": 12
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_isolated_postgres_live.py::test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size",
+      "testIdentity": "test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size",
+      "rollback": "Case 64 (6.5): the read drains at most 50 waiting marks inline, keyed by those marks: one keyed candidate load, 50 rows read (one file per track) and 50 store rows written plus 50 marks cleared, at any store size. Reverting the store returns the route to its static page entry."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#people_read_reserved",
@@ -9904,20 +10038,104 @@
       "rollback": "Reverting fix(versions) makes POST /versions/mark build a key map over every published album again (candidate_rows grows with the album count)."
     },
     {
+      "id": "py:routes/api_wave_a_asgi_routes.py#missing_album_rescan_result",
+      "action": "Answer whether a missing album's background search is still running, or its result, from memory",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#missing_album_rescan_result:route:GET /api/library/albums/{album_key:path}/rescan"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/missing_album_rescan.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/api_wave_a_asgi_routes.py#rescan_missing_album",
       "action": "Serve POST /api/library/albums/{album_key:path}/rescan",
       "entrypoints": [
         "py:music_app/routes/api_wave_a_asgi_routes.py#rescan_missing_album:route:POST /api/library/albums/{album_key:path}/rescan"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/missing_album_rescan.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 400
+      },
+      "budgets": {
+        "sql_statements": 2,
+        "stat_calls": 4,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_missing_album_rescan.py::test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
+      "testIdentity": "test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
+      "rollback": "Walking a root or listing a candidate folder in the request makes filesystem_enumerations exceed 0; checking more places as the library grows makes stat_calls grow (freeze guard case 59)."
+    },
+    {
+      "id": "py:services/loose_track_store.py#LooseTrackStoreOwner._run",
+      "action": "Prepare the Loose Tracks store once at start in the background, and retry a failed build after its own backoff",
+      "entrypoints": [
+        "py:music_app/services/loose_track_store.py#LooseTrackStoreOwner._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/loose_track_store.py",
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
+    },
+    {
+      "id": "py:services/missing_album_rescan.py#MissingAlbumSearches._run",
+      "action": "Search the readable roots once, in the background, for a missing album a Re-scan did not find by lookups",
+      "entrypoints": [
+        "py:music_app/services/missing_album_rescan.py#MissingAlbumSearches._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/missing_album_rescan.py",
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 400
+      },
+      "budgets": {
+        "filesystem_enumerations": 5,
+        "stat_calls": 6
+      },
+      "growth": {
+        "metric": "filesystem_enumerations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_missing_album_rescan.py::test_missing_album_search_contract_walks_each_readable_root_once_at_any_library_size",
+      "testIdentity": "test_missing_album_search_contract_walks_each_readable_root_once_at_any_library_size",
+      "rollback": "Walking a root more than once, or listing each candidate folder, makes filesystem_enumerations grow with the library. The walk stays within the 15 s cap and stops at shutdown (freeze guard case 59)."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#revert_problem_ignore",
@@ -10970,14 +11188,31 @@
         "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork:route:POST /utilities/cover-lookup/additional-artwork"
       ],
       "owners": [
-        "music_app/routes/api_wave_d_asgi_routes.py"
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_workflow.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 1,
+        "stat_calls": 5,
+        "path_resolves": 11
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove",
@@ -10986,14 +11221,31 @@
         "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove:route:POST /utilities/cover-lookup/additional-artwork/remove"
       ],
       "owners": [
-        "music_app/routes/api_wave_d_asgi_routes.py"
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_workflow.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 1,
+        "stat_calls": 4,
+        "path_resolves": 7
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_cancel",
@@ -12111,14 +12363,32 @@
         "py:music_app/routes/web_asgi.py#albums_page:route:GET /albums"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "testIdentity": "test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "rollback": "The route is the index page; giving it its own work outside index fails the delegation assertion, and probing covers per album fails the index's stat_calls growth."
     },
     {
       "id": "py:routes/web_asgi.py#app_copy_account_route",
@@ -12359,14 +12629,32 @@
         "py:music_app/routes/web_asgi.py#loose_tracks_page:route:GET /loose-tracks"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "testIdentity": "test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "rollback": "The route is the index page; giving it its own work outside index fails the delegation assertion, and probing covers per album fails the index's stat_calls growth."
     },
     {
       "id": "py:routes/web_asgi.py#news_center",
@@ -13666,19 +13954,36 @@
     },
     {
       "id": "py:services/edit_state.py#apply_repairs_worker",
-      "action": "Run background apply_repairs_worker",
+      "action": "Write one file's tag repairs while the watcher ignores that one file",
       "entrypoints": [
         "py:music_app/services/edit_state.py#apply_repairs_worker:background:executor"
       ],
       "owners": [
-        "music_app/services/edit_state.py"
+        "music_app/services/edit_state.py",
+        "music_app/services/library_watch_suppression.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "path_resolves": 1,
+        "stat_calls": 0,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "path_resolves",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_edit_repairs_bounded_contracts.py::test_a_tag_repair_resolves_only_its_own_file_however_many_saves_are_in_flight",
+      "testIdentity": "test_a_tag_repair_resolves_only_its_own_file_however_many_saves_are_in_flight",
+      "rollback": "Resolving more than the written file's own path per write (for example every suppressed path) makes path_resolves grow with the saves in flight and the contract fails."
     },
     {
       "id": "py:services/gallery_projection_postgres.py#_publish_gallery_projection_on_connection",
@@ -13766,14 +14071,29 @@
         "py:music_app/services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh:background:executor"
       ],
       "owners": [
-        "music_app/services/gallery_projection_postgres.py"
+        "music_app/services/gallery_projection_postgres.py",
+        "music_app/services/library_browse_postgres.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 5,
+        "production": 60
+      },
+      "budgets": {
+        "builder_calls": 0
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_isolated_postgres_live.py::test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready",
+      "testIdentity": "test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready",
+      "rollback": "Case 60 (6.5): a search or browse read while the gallery is ready builds no whole scope. The save-path and targeted-invalidation cases are not yet proven (case60-red-cases.patch in the shared notes)."
     },
     {
       "id": "py:services/generated_preview_relocation.py#GeneratedPreviewRelocationWorker._run",
@@ -14235,19 +14555,38 @@
     },
     {
       "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._run",
-      "action": "Run background LocalCoverInventoryWorker._run",
+      "action": "Re-list only what a scan, live root change, watcher event or open named; an idle poll reads nothing",
       "entrypoints": [
         "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryWorker._run:background:thread"
       ],
       "owners": [
-        "music_app/services/local_cover_inventory.py"
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/library_indexing.py",
+        "music_app/services/scan_state.py",
+        "music_app/__init__.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 200
+      },
+      "budgets": {
+        "affected_rows": 10,
+        "candidate_rows": 64,
+        "filesystem_enumerations": 3
+      },
+      "growth": {
+        "metric": "affected_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_local_cover_inventory_bounded_contracts.py::test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size",
+      "testIdentity": "test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size",
+      "rollback": "Reverting makes every completed scan and live root change invalidate, resolve and hash every album folder again; affected_rows and filesystem_enumerations then grow with the library and the contract fails."
     },
     {
       "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker.schedule_invalidation_retry",
@@ -14864,19 +15203,36 @@
     },
     {
       "id": "py:services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths",
-      "action": "Run publisher PostgresScanCacheAdapter.load_removed_unpublished_paths",
+      "action": "A superseded scan's republish drops what another writer removed: one statement over the scan's files, a disk check only for a file the library lost",
       "entrypoints": [
         "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths:publisher:name"
       ],
       "owners": [
-        "music_app/services/scan_cache_persistence.py"
+        "music_app/services/scan_cache_persistence.py",
+        "music_app/services/scan_state.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 50,
+        "production": 2000
+      },
+      "budgets": {
+        "sql_statements": 1,
+        "stat_calls": 2,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_scan_republish_bounded_contracts.py::test_a_superseded_scans_republish_checks_only_the_files_the_library_lost",
+      "testIdentity": "test_a_superseded_scans_republish_checks_only_the_files_the_library_lost",
+      "rollback": "Checking the disk for every scanned file, or querying per file or batch, makes stat_calls or sql_statements grow with the scan and the contract fails. Values sent equal the scan's own files, at most 5 attempts per scan (6.5, 2026-11-22)."
     },
     {
       "id": "py:services/scan_cache_persistence.py#_execute_semantic_local_album_reconciliation",

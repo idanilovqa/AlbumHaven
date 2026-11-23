@@ -2908,3 +2908,260 @@ test('request capture: loose-track hydration requests each scope once', async ()
     },
   });
 });
+
+// A server that keeps answering "deferred": every armed retry is fired in turn, as the browser would.
+function loadDeferredNonAlbumPage(albums = 0, counter = null) {
+  const { context } = loadHelper();
+  const live = new Map();
+  const delays = [];
+  let nextTimer = 0;
+  let maxLive = 0;
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    nextTimer += 1;
+    live.set(nextTimer, callback);
+    delays.push(delay);
+    maxLive = Math.max(maxLive, live.size);
+    return nextTimer;
+  };
+  context.clearBrowserTimeout = (id) => { live.delete(id); };
+  context.state.status = { inventory_mutation_revision: 7 };
+  const library = Array.from({ length: albums }, (_value, index) => ({ key: `album-${index}` }));
+  context.state.albums = counter ? require('../helpers/bounded-interaction-counter').countedCollection(library, counter) : library;
+  context.state.view = {
+    selected_artist: 'Agalloch', visible_library_categories: ['main_library'],
+    non_album_tracks: [], non_album_tracks_deferred: true, artist_groups: context.state.albums,
+  };
+  const requests = [];
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    counter?.count('requests');
+    return { ok: true, status: 200, json: async () => ({
+      non_album_track_count: 0, non_album_tracks_deferred: true, library_non_album_tracks: [],
+    }) };
+  };
+  const fireAll = async () => {
+    for (let fired = 0; live.size && fired < 100; fired += 1) {
+      const [id, callback] = live.entries().next().value;
+      live.delete(id);
+      await callback();
+    }
+  };
+  return { context, live, delays, requests, fireAll, maxLive: () => maxLive };
+}
+
+for (const kind of ['artist availability', 'library Loose Tracks']) {
+  test(`a ${kind} that stays deferred backs off from 250 ms to 2 s and stops after a bounded number of retries`, async () => {
+    const page = loadDeferredNonAlbumPage();
+    const hydrate = kind === 'artist availability'
+      ? () => page.context.hydrateArtistNonAlbumAvailability()
+      : () => page.context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+    await hydrate();
+    await page.fireAll();
+
+    assert.deepEqual(page.delays, [250, 500, 1000, 2000, 2000, 2000, 2000, 2000]);
+    assert.equal(page.requests.length, 9, 'the first ask and eight retries');
+    assert.equal(page.live.size, 0, 'no retry stays armed once the wait runs out');
+    assert.equal(page.maxLive(), 1);
+  });
+
+  test(`leaving a ${kind} that is still deferred cancels its retry`, async () => {
+    const page = loadDeferredNonAlbumPage();
+    const hydrate = kind === 'artist availability'
+      ? () => page.context.hydrateArtistNonAlbumAvailability()
+      : () => page.context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+    await hydrate();
+    assert.equal(page.live.size, 1);
+    page.context.state.view = { ...page.context.state.view, selected_artist: '', gallery_scope: 'new_arrivals' };
+    page.context.cancelDeferredNonAlbumRetries();
+
+    assert.equal(page.live.size, 0, 'leaving the view leaves no retry armed');
+    await page.fireAll();
+    assert.equal(page.requests.length, 1);
+  });
+}
+
+// Owner (relayed 2026-11-22): "If at least one loose tracks is already indexed let that page show it".
+test('library Loose Tracks shows the rows already stored, keeps asking with the same back-off, then settles on the full list', async () => {
+  const page = loadDeferredNonAlbumPage();
+  const partial = [{ path: 'D:/Music/One.flac', title: 'One' }];
+  const full = [...partial, { path: 'D:/Music/Two.flac', title: 'Two' }];
+  const answers = [
+    { library_non_album_tracks: partial, non_album_tracks_deferred: false, non_album_tracks_partial: true },
+    { library_non_album_tracks: full, non_album_tracks_deferred: false, non_album_tracks_partial: true },
+    { library_non_album_tracks: full, non_album_tracks_deferred: false },
+  ];
+  page.context.fetch = async (url) => {
+    page.requests.push(String(url));
+    const payload = answers.shift();
+    return { ok: true, status: 200, json: async () => payload };
+  };
+  const rendered = [];
+  page.context.rerenderOpenLibraryNonAlbumModal = () => rendered.push(
+    page.context.getVisibleNonAlbumTracks({ libraryWide: true }).map(track => track.title),
+  );
+  page.context.state.view.selected_artist = '';
+
+  await page.context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+
+  assert.deepEqual(page.context.getVisibleNonAlbumTracks({ libraryWide: true }).map(track => track.title), ['One'],
+    'the rows stored so far are shown');
+  assert.equal(page.context.hasPartialLibraryNonAlbumTracks(), true);
+  assert.equal(page.context.hasHydratedLibraryNonAlbumTracks(), false, 'still asking for more');
+  assert.equal(page.live.size, 1, 'one retry armed, on the same back-off');
+  await page.fireAll();
+
+  assert.deepEqual(page.delays, [250, 500], 'the existing bounded back-off');
+  assert.equal(page.requests.length, 3);
+  assert.deepEqual(rendered, [['One'], ['One', 'Two'], ['One', 'Two']], 'each answer repaints the open page');
+  assert.equal(page.context.hasPartialLibraryNonAlbumTracks(), false, 'the ready list is no longer partial');
+  assert.equal(page.context.hasHydratedLibraryNonAlbumTracks(), true);
+  assert.equal(page.live.size, 0, 'no retry once the store is ready');
+});
+
+// Owner approved (2026-11-22): when the bounded wait runs out with no stored row, the page says so.
+test('a Loose Tracks page with no stored row says it is still being prepared once the bounded wait runs out', async () => {
+  const { context } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  const live = new Map();
+  let nextTimer = 0;
+  context.scheduleBrowserTimeout = (callback) => { nextTimer += 1; live.set(nextTimer, callback); return nextTimer; };
+  context.window = {}; // the loading table asks window.AlbumHavenCapabilities whether paths may show
+  context.clearBrowserTimeout = (id) => { live.delete(id); };
+  context.state.view = { library_non_album_tracks: [] };
+  context.state.ui = {};
+  const requests = [];
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: [], non_album_tracks_deferred: true }) };
+  };
+  const text = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
+  const settle = async () => { for (let turn = 0; turn < 20; turn += 1) await Promise.resolve(); };
+
+  context.openNonAlbumModal({ libraryWide: true });
+  await settle();
+  assert.equal(table.innerHTML.includes(text), false, 'loading while the wait lasts');
+  for (let fired = 0; live.size && fired < 50; fired += 1) {
+    const [id, callback] = live.entries().next().value;
+    live.delete(id);
+    await callback();
+    await settle();
+  }
+
+  assert.equal(requests.length, 9, 'the first ask and eight retries');
+  assert.equal(table.innerHTML.split(text).length - 1, 1, 'the exact text, once');
+  assert.equal(live.size, 0, 'nothing is asked after the wait ran out');
+});
+
+// Owner approved note A (2026-11-22): "Still indexing loose tracks, so more may appear."
+test('a partial Loose Tracks page notes under the table that more may appear, and a ready one does not', () => {
+  const { context } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.state.ui = {};
+  const note = 'Still indexing loose tracks, so more may appear.';
+  const tracks = [{ path: 'D:/Music/Loose.flac', title: 'Loose', artist: 'Artist', duration_seconds: 60 }];
+
+  context.state.view = { library_non_album_tracks: tracks };
+  context.state.view.library_non_album_tracks_partial_scope = context.getLibraryNonAlbumScopeKey();
+  context.fetch = () => new Promise(() => {}); // a partial page with no armed retry asks once more
+  context.openNonAlbumModal({ libraryWide: true });
+  assert.match(table.innerHTML, /Loose/);
+  assert.equal(table.innerHTML.split(note).length - 1, 1, 'the exact note, once, under the table');
+  assert.ok(table.innerHTML.indexOf(note) > table.innerHTML.indexOf('Loose'), 'below the rows');
+
+  context.state.view = { library_non_album_tracks: tracks };
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
+  context.openNonAlbumModal({ libraryWide: true });
+  assert.match(table.innerHTML, /Loose/);
+  assert.equal(table.innerHTML.includes(note), false, 'no note once the list is ready');
+});
+
+test('a Loose Tracks page that is still preparing does not ask again until its retry fires', async () => {
+  // Reopening the page after a deferred answer used to ask the server again at once, every answer.
+  const { context } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.scheduleBrowserTimeout = () => 1;
+  context.window = {}; // the loading table asks window.AlbumHavenCapabilities whether paths may show
+  context.clearBrowserTimeout = () => {};
+  context.state.view = { library_non_album_tracks: [] };
+  context.state.ui = {};
+  const requests = [];
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: [], non_album_tracks_deferred: true }) };
+  };
+
+  context.openNonAlbumModal({ libraryWide: true });
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+
+  assert.equal(requests.length, 1, 'one ask; the armed retry asks again later');
+  assert.match(table.innerHTML, /utility-loading|Loading|loading/i);
+});
+
+test('bounded interaction: an artist availability pass sends one request, keeps one retry and stops at the same bound at any library size', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const episode = async (albums) => {
+    const counter = createInteractionCounter();
+    const page = loadDeferredNonAlbumPage(albums, counter);
+    return counter.measure(async () => {
+      // Two asks for the same artist while the first is in flight share one request.
+      await Promise.all([page.context.hydrateArtistNonAlbumAvailability(), page.context.hydrateArtistNonAlbumAvailability()]);
+      await page.fireAll();
+      counter.count('timers', page.maxLive());
+      assert.equal(page.live.size, 0, 'no retry stays armed');
+    });
+  };
+  await measureScalePair({
+    id: 'js:runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability',
+    small: 20,
+    large: 14000,
+    run: episode,
+    budgets: { requests: 9, timers: 1, itemsVisited: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});

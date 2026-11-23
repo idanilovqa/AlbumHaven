@@ -270,7 +270,8 @@ function getVisibleNonAlbumTracks(options = {}) {
   // whole library's loose tracks for the active sources (and search, when the
   // search matched loose tracks). The hydrated scope key already encodes both.
   if (options.libraryWide) {
-    return hasHydratedLibraryNonAlbumTracks() && Array.isArray(view.library_non_album_tracks)
+    return (hasHydratedLibraryNonAlbumTracks() || hasPartialLibraryNonAlbumTracks())
+      && Array.isArray(view.library_non_album_tracks)
       ? view.library_non_album_tracks
       : [];
   }
@@ -401,6 +402,34 @@ function hasHydratedLibraryNonAlbumTracks() {
     && view.library_non_album_tracks_hydrated_scope === getLibraryNonAlbumScopeKey(view);
 }
 
+// While the server still builds Loose Tracks, the rows it stored so far are shown (owner, 2026-11-22).
+function hasPartialLibraryNonAlbumTracks() {
+  const view = state.view || {};
+  return Boolean(view.library_non_album_tracks_partial_scope)
+    && view.library_non_album_tracks_partial_scope === getLibraryNonAlbumScopeKey(view);
+}
+
+// The note under a partial list (owner-approved wording A, 2026-11-22).
+function buildLooseTracksPartialNoteHtml() {
+  return '<div class="utility-empty-state compact" data-loose-tracks-partial-note>'
+    + 'Still indexing loose tracks, so more may appear.</div>';
+}
+
+// The bounded wait ran out with no stored row (owner-approved wording, 2026-11-22).
+const LOOSE_TRACKS_STILL_PREPARING = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
+
+function libraryNonAlbumWaitExhausted() {
+  const retry = deferredNonAlbumRetries.get('library');
+  return Boolean(retry?.exhausted) && retry.scopeKey === getLibraryNonAlbumScopeKey(state.view || {});
+}
+
+function rerenderOpenLibraryNonAlbumModal() {
+  const overlay = getNonAlbumModalElements().overlay;
+  if (overlay && !overlay.hidden && state.ui?.nonAlbumLibraryWide) {
+    openNonAlbumModal({ libraryWide: true, syncNavigation: false });
+  }
+}
+
 function hasNonAlbumSearchMatches(options = {}) {
   const view = state.view || {};
   if (!String(view.query || '').trim()) return false;
@@ -427,6 +456,49 @@ function getDeferredNonAlbumScopeKey(url) {
 
 let libraryNonAlbumHydrationRequest = null;
 let artistNonAlbumAvailabilityRequest = null;
+
+// While the server still prepares loose tracks, ask again after 250 ms, doubling to 2 s, eight times at most.
+const DEFERRED_NON_ALBUM_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000, 2000, 2000, 2000];
+const deferredNonAlbumRetries = new Map();
+
+function clearDeferredNonAlbumRetryTimer(entry) {
+  if (entry?.timer && typeof clearBrowserTimeout === 'function') clearBrowserTimeout(entry.timer);
+}
+
+// One armed retry per kind ('artist' or 'library'). Only a retry continues the bounded wait; a new scope or
+// a new ask (reopening Loose Tracks) starts it again.
+function scheduleDeferredNonAlbumRetry(kind, scopeKey, isCurrentScope, retry) {
+  const previous = deferredNonAlbumRetries.get(kind);
+  clearDeferredNonAlbumRetryTimer(previous);
+  const attempt = previous?.scopeKey === scopeKey && previous.retrying ? previous.attempt + 1 : 0;
+  const delay = DEFERRED_NON_ALBUM_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) {
+    deferredNonAlbumRetries.set(kind, { scopeKey, attempt, timer: 0, exhausted: true });
+    if (kind === 'library') rerenderOpenLibraryNonAlbumModal();
+    return;
+  }
+  const entry = { scopeKey, attempt, timer: 0, retrying: false };
+  entry.timer = scheduleBrowserTimeout(() => {
+    entry.timer = 0;
+    if (!isCurrentScope()) {
+      deferredNonAlbumRetries.delete(kind);
+      return undefined;
+    }
+    entry.retrying = true;
+    return retry();
+  }, delay);
+  deferredNonAlbumRetries.set(kind, entry);
+}
+
+function settleDeferredNonAlbumRetry(kind) {
+  clearDeferredNonAlbumRetryTimer(deferredNonAlbumRetries.get(kind));
+  deferredNonAlbumRetries.delete(kind);
+}
+
+// Leaving the view leaves no retry armed.
+function cancelDeferredNonAlbumRetries() {
+  for (const kind of Array.from(deferredNonAlbumRetries.keys())) settleDeferredNonAlbumRetry(kind);
+}
 
 function hasHydratedArtistNonAlbumAvailability(view = state.view || {}) {
   if (!String(view.selected_artist || '').trim()) return false;
@@ -469,6 +541,7 @@ function hydrateArtistNonAlbumAvailability() {
       return state.view.non_album_track_count;
     }
     state.view.non_album_track_count_scope = scopeKey;
+    settleDeferredNonAlbumRetry('artist');
     if (String(state.view.query || '').trim()
         && getVisibleNonAlbumTracks().length !== state.view.non_album_track_count) {
       state.view.non_album_tracks_deferred = true;
@@ -479,12 +552,13 @@ function hydrateArtistNonAlbumAvailability() {
     if (artistNonAlbumAvailabilityRequest !== request) return;
     artistNonAlbumAvailabilityRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) !== scopeKey) return;
-        return hydrateArtistNonAlbumAvailability().catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'artist', scopeKey,
+        () => getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) === scopeKey,
+        () => hydrateArtistNonAlbumAvailability().catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   artistNonAlbumAvailabilityRequest = request;
@@ -519,6 +593,15 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
       request.deferred = true;
       return tracks;
     }
+    if (payload?.non_album_tracks_partial) {
+      // Shown now; the same bounded back-off keeps asking until more rows or the ready list replace them.
+      state.view.library_non_album_tracks = tracks;
+      state.view.library_non_album_tracks_partial_scope = scopeKey;
+      request.deferred = true;
+      if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+      rerenderOpenLibraryNonAlbumModal();
+      return tracks;
+    }
     if (searching && !searchMatched) {
       state.view.library_non_album_search_probe_scope = scopeKey;
       if (!resolveLibrary) {
@@ -536,18 +619,22 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    delete state.view.library_non_album_tracks_partial_scope;
+    settleDeferredNonAlbumRetry('library');
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+    rerenderOpenLibraryNonAlbumModal();
     return tracks;
   })().finally(() => {
     if (libraryNonAlbumHydrationRequest !== request) return;
     libraryNonAlbumHydrationRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return;
-        return hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'library', scopeKey,
+        () => getLibraryNonAlbumScopeKey(state.view || {}) === scopeKey,
+        () => hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   libraryNonAlbumHydrationRequest = request;
@@ -885,8 +972,9 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   state.ui.nonAlbumLibraryWide = libraryWide;
+  const partial = libraryWide && hasPartialLibraryNonAlbumTracks();
   const hydrationPending = libraryWide
-    ? !hasHydratedLibraryNonAlbumTracks()
+    ? !hasHydratedLibraryNonAlbumTracks() && !partial
     : Boolean(state.view?.non_album_tracks_deferred);
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
   const scope = !libraryWide && state.view.selected_artist ? ` · ${state.view.selected_artist} and family` : '';
@@ -912,10 +1000,13 @@ function openNonAlbumModal(options = {}) {
   if (typeof presentMobilePage === 'function') {
     presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle });
   }
-  els.table.innerHTML = hydrationPending
+  const waitExhausted = hydrationPending && libraryWide && libraryNonAlbumWaitExhausted();
+  els.table.innerHTML = waitExhausted
+    ? `<div class="utility-empty-state">${escapeHtml(LOOSE_TRACKS_STILL_PREPARING)}</div>`
+    : hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
-      ? buildNonAlbumTrackSectionsMarkup(looseTracks)
+      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial ? buildLooseTracksPartialNoteHtml() : ''}`
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
@@ -940,10 +1031,14 @@ function openNonAlbumModal(options = {}) {
       attachSharedPlayer();
     });
   });
-  if (hydrationPending) {
+  // A partial list reopened after leaving (which cancelled its retry) asks once more, then backs off again.
+  // A wait that ran out asks nothing more until the page is opened again (leaving clears it).
+  if ((hydrationPending && !waitExhausted) || (partial && !deferredNonAlbumRetries.has('library'))) {
     hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
-        if (!els.overlay.hidden) openNonAlbumModal({ ...options, syncNavigation: false });
+        // Library-wide answers repaint through rerenderOpenLibraryNonAlbumModal; a still-preparing answer
+        // waits for its armed retry instead of asking again at once.
+        if (!els.overlay.hidden && !libraryWide) openNonAlbumModal({ ...options, syncNavigation: false });
       })
       .catch((error) => {
         if (!els.overlay.hidden) {
@@ -1121,6 +1216,8 @@ function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
+  // Leaving Loose Tracks leaves no deferred retry armed.
+  settleDeferredNonAlbumRetry('library');
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);

@@ -256,7 +256,10 @@ def get_primary_music_root(config: dict[str, object]) -> Path:
 
 
 def get_library_roots(config: dict[str, object]) -> list[dict[str, object]]:
-    settings = load_library_root_settings(config)
+    return _roots_with_category(load_library_root_settings(config))
+
+
+def _roots_with_category(settings: dict[str, object]) -> list[dict[str, object]]:
     roots: list[dict[str, object]] = []
     for key in _ROOT_KEYS:
         for root in settings.get(key, []):
@@ -355,7 +358,11 @@ def library_root_cache_identity(config: dict[str, object]) -> str:
     change what a scan reads stay out: changing them must not force every file
     to be re-read. Excluding a key keeps the hash snapshots already carry.
     """
-    payload = dict(load_library_root_settings(config))
+    return _identity_of_settings(load_library_root_settings(config))
+
+
+def _identity_of_settings(settings: dict[str, object]) -> str:
+    payload = dict(settings)
     payload.pop(METADATA_CORRECTIONS_KEY, None)
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -368,8 +375,28 @@ def library_root_cache_identities(config: dict[str, object]) -> frozenset[str]:
     corrections setting; a slot still on such a build publishes that form, and
     a browse slot that accepted only the new form found no snapshot at all.
     """
-    legacy = json.dumps(dict(load_library_root_settings(config)), sort_keys=True, separators=(",", ":"))
-    return frozenset({library_root_cache_identity(config), hashlib.sha256(legacy.encode("utf-8")).hexdigest()})
+    return _identities_of_settings(load_library_root_settings(config))
+
+
+def _identities_of_settings(settings: dict[str, object]) -> frozenset[str]:
+    legacy = json.dumps(dict(settings), sort_keys=True, separators=(",", ":"))
+    return frozenset({_identity_of_settings(settings), hashlib.sha256(legacy.encode("utf-8")).hexdigest()})
+
+
+class PinnedRootIdentity(str):
+    """A scan's root identity, with every stored form that means the same roots.
+
+    It stays comparable after the settings change under the running scan."""
+
+    same_roots: frozenset[str]
+
+
+def pin_library_scan_roots(config: dict[str, object]) -> tuple[list[dict[str, object]], PinnedRootIdentity]:
+    """The roots one scan walks and the identity it loads and publishes under, from one settings read."""
+    settings = load_library_root_settings(config)
+    identity = PinnedRootIdentity(_identity_of_settings(settings))
+    identity.same_roots = _identities_of_settings(settings)
+    return _roots_with_category(settings), identity
 
 
 def resolve_configured_media_path(

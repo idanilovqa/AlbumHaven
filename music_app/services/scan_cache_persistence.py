@@ -17,7 +17,7 @@ from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
     split_folder_covers,
 )
-from music_app.services.album_local_membership import physical_album_folder
+from music_app.services.album_local_membership import physical_album_folder, physical_album_folder_sql
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_reachability import missing_reasons
 from music_app.services.missing_album_auto_removal import remove_untouched_deleted
@@ -146,6 +146,8 @@ class ScanCacheAdapter(Protocol):
         observed_library_root_ids: set[str] | None = None,
         unreachable_scope: dict[str, object] | None = None,
         publish_paths: set[str] | None = None,
+        cover_inventory_checked_at: dict[str, float] | None = None,
+        completes_root_change: bool = False,
     ) -> dict[str, object] | None:
         ...
 
@@ -204,6 +206,7 @@ class ScanCacheAdapter(Protocol):
         local_cover_width: int | None = None,
         local_cover_height: int | None = None,
         reject_if_user_controlled: bool = False,
+        reject_if_mixed_album_folder: bool = False,
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
@@ -282,6 +285,9 @@ class PostgresScanCacheAdapter:
             return True
         # A snapshot of the same roots published by a build that still hashed
         # the corrections setting (see library_root_cache_identities).
+        same_roots = getattr(root_identity, "same_roots", None)
+        if same_roots is not None:
+            return stored_identity in same_roots
         from music_app.services.library_roots import library_root_cache_identities, library_root_cache_identity
         try:
             if str(root_identity) != library_root_cache_identity(self._config):
@@ -404,6 +410,25 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
+
+    def mark_root_change_pending(self, root_identity: str) -> None:
+        """Remember across a restart that a saved root change still waits for its scan."""
+        with self._connect_to_database() as connection:
+            connection.execute(_mark_root_change_pending_sql(), {"root_identity": str(root_identity)})
+            connection.commit()
+
+    def load_pending_root_change(self) -> str | None:
+        with self._connect_to_database() as connection:
+            row = _first_row(connection.execute(_load_pending_root_change_sql()))
+        pending = _row_mapping(row).get("root_identity") if row is not None else None
+        return str(pending) if pending else None
+
+    def load_cover_inventory_checked_at(self) -> dict[str, float]:
+        """When the last published scan that could read each root started."""
+        with self._connect_to_database() as connection:
+            row = _first_row(connection.execute(_load_cover_inventory_checked_at_sql()))
+        checked_at = _row_mapping(row).get("checked_at") if row is not None else None
+        return dict(checked_at) if isinstance(checked_at, dict) else {}
 
     def load_inventory_published_since(self, since_epoch: float) -> tuple[dict[str, dict[str, object]], set[str]]:
         """Files another publication wrote or removed after a full scan started."""
@@ -1025,6 +1050,7 @@ class PostgresScanCacheAdapter:
         local_cover_width: int | None = None,
         local_cover_height: int | None = None,
         reject_if_user_controlled: bool = False,
+        reject_if_mixed_album_folder: bool = False,
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
@@ -1125,6 +1151,16 @@ class PostgresScanCacheAdapter:
                 raise ScanCachePublicationSuperseded(
                     "Inventory changed while cover selection was prepared."
                 )
+            # Read here, under the publication lock: a targeted run's file cache never holds the folder's other album.
+            if reject_if_mixed_album_folder and _row_mapping(_first_row(connection.execute(
+                _mixed_album_folder_sql(), {"track_paths": normalized_track_paths},
+            ))).get("mixed"):
+                connection.commit()
+                return {
+                    "album_rows_updated": 0,
+                    "track_file_rows_updated": 0,
+                    "blocked_by_mixed_album_folder": True,
+                }
             expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
             if not reject_if_user_controlled and not expected_cover_state_guard:
                 connection.execute(_increment_cover_mutation_revision_sql())
@@ -2335,6 +2371,8 @@ class PostgresScanCacheAdapter:
         observed_library_root_ids: set[str] | None = None,
         unreachable_scope: dict[str, object] | None = None,
         publish_paths: set[str] | None = None,
+        cover_inventory_checked_at: dict[str, float] | None = None,
+        completes_root_change: bool = False,
     ) -> dict[str, object] | None:
         """Publish the snapshot; with publish_paths, only the albums those files belong to.
 
@@ -2624,7 +2662,14 @@ class PostgresScanCacheAdapter:
                     metadata=projection_metadata, relations_last_built=resolved_relations_last_built,
                 )
                 shared_snapshot_payload = {**snapshot_payload, 'relation_views': legacy_views}
-            connection.execute(_save_scan_snapshot_sql(), {"scan_cache": _jsonb(shared_snapshot_payload)})
+            snapshot_parameters = {"scan_cache": _jsonb(shared_snapshot_payload)}
+            if cover_inventory_checked_at:
+                snapshot_parameters["cover_inventory_checked_at"] = _jsonb(cover_inventory_checked_at)
+            connection.execute(
+                _save_scan_snapshot_sql(record_cover_check=bool(cover_inventory_checked_at)), snapshot_parameters,
+            )
+            if completes_root_change:
+                connection.execute(_clear_pending_root_change_sql(), {"root_identity": str(root_identity)})
             if projection_metadata.get('status') == 'ready':
                 from music_app.services.gallery_projection_postgres import finish_full_relation_publication
                 finish_full_relation_publication(connection, self._config, deserialize_relation_views(relation_views_payload))
@@ -2667,10 +2712,14 @@ class _SharedConnection:
         self._connect = connect
         self._lock = threading.Lock()
         self._connection: Any = None
+        self._closed = False
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         with self._lock:
+            if self._closed:
+                # A lease opened now would never be returned to the pool.
+                raise RuntimeError("The cover run's shared connection is closed.")
             if self._connection is None:
                 self._connection = self._connect()
             connection = self._connection
@@ -2698,6 +2747,7 @@ class _SharedConnection:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._connection is not None:
                 self._discard()
 
@@ -7300,6 +7350,33 @@ def _load_scan_snapshot_sql(*, metadata_only: bool = False) -> str:
     """
 
 
+def _mixed_album_folder_sql() -> str:
+    """Whether a folder of the given files holds more than one album; one lookup per folder in 0088's index.
+
+    The given files need no album of their own: a track without one is refused in such a folder too.
+    """
+    return f"""
+        select exists (
+          select 1
+          from (
+            select distinct seed.library_root_id, tracks.library_id,
+              {physical_album_folder_sql("seed.private_path")} as folder
+            from library.local_track_files seed
+            join library.local_tracks tracks on tracks.id = seed.track_id
+            where seed.private_path = any(%(track_paths)s::text[]) and seed.scan_cache_stale is false
+          ) own
+          join lateral (
+            select count(distinct tracks.album_id) as albums
+            from library.local_track_files files
+            join library.local_tracks tracks on tracks.id = files.track_id and tracks.library_id = own.library_id
+            where files.library_root_id = own.library_root_id
+              and files.scan_cache_stale is false
+              and {physical_album_folder_sql("files.private_path")} = own.folder
+          ) held on held.albums > 1
+        ) as mixed
+    """
+
+
 def _persist_local_cover_selection_sql(
     *,
     include_origin: bool = False,
@@ -7861,8 +7938,66 @@ def _load_file_entries_sql(*, targeted_albums: bool = False, targeted_paths: boo
     )
 
 
-def _save_scan_snapshot_sql() -> str:
+_BOOTSTRAP_LIBRARY_ID_SQL = """(
+          select bootstrap_library.id
+          from app.bootstrap_owners
+          join library.libraries as bootstrap_library
+            on bootstrap_library.owner_account_id = app.bootstrap_owners.account_id
+           and bootstrap_library.name = 'Local Library'
+           and bootstrap_library.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1)"""
+
+
+def _mark_root_change_pending_sql() -> str:
+    return f"""
+        update library.libraries
+           set metadata = library.libraries.metadata
+                 || jsonb_build_object('pending_root_change', %(root_identity)s::text),
+               updated_at = now()
+         where library.libraries.id = {_BOOTSTRAP_LIBRARY_ID_SQL};
+    """
+
+
+def _load_pending_root_change_sql() -> str:
+    return f"""
+        select library.libraries.metadata ->> 'pending_root_change' as root_identity
+          from library.libraries
+         where library.libraries.id = {_BOOTSTRAP_LIBRARY_ID_SQL};
+    """
+
+
+def _clear_pending_root_change_sql() -> str:
+    # Only the change this publication covers; a later one still waits.
+    return f"""
+        update library.libraries
+           set metadata = library.libraries.metadata - 'pending_root_change',
+               updated_at = now()
+         where library.libraries.id = {_BOOTSTRAP_LIBRARY_ID_SQL}
+           and library.libraries.metadata ->> 'pending_root_change' = %(root_identity)s;
+    """
+
+
+def _load_cover_inventory_checked_at_sql() -> str:
     return """
+        select library.libraries.metadata -> 'cover_inventory_checked_at' as checked_at
+        from app.bootstrap_owners
+        join library.libraries
+          on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+         and library.libraries.name = 'Local Library'
+         and library.libraries.library_kind = 'local'
+        where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+        limit 1;
+    """
+
+
+def _save_scan_snapshot_sql(*, record_cover_check: bool = False) -> str:
+    # Merged per root and beside scan_cache: a root change, or a scan that could not read a root, keeps its time.
+    cover_check = """
+               || jsonb_build_object('cover_inventory_checked_at',
+                    coalesce(library.libraries.metadata -> 'cover_inventory_checked_at', '{}'::jsonb)
+                    || %(cover_inventory_checked_at)s::jsonb)""" if record_cover_check else ""
+    return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
           from app.bootstrap_owners
@@ -7874,7 +8009,7 @@ def _save_scan_snapshot_sql() -> str:
           limit 1
         )
         update library.libraries
-           set metadata = library.libraries.metadata || jsonb_build_object('scan_cache', %(scan_cache)s::jsonb),
+           set metadata = library.libraries.metadata || jsonb_build_object('scan_cache', %(scan_cache)s::jsonb){cover_check},
                updated_at = now()
         from bootstrap_context
         where library.libraries.id = bootstrap_context.library_id;

@@ -1603,6 +1603,8 @@ function commitViewPayload(previousView, nextView, options = {}) {
     }
   }
   state.view = nextView;
+  // A different artist (or none) leaves the deferred loose-track count and list it was waiting for.
+  if (selectionChanged && typeof cancelDeferredNonAlbumRetries === 'function') cancelDeferredNonAlbumRetries();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;

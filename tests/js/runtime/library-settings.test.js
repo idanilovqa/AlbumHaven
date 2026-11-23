@@ -390,6 +390,38 @@ test('saveUtilityLibrarySettings posts draft, clears stale problematic state, an
   assert.ok(calls.scheduledPolls.includes('pollStatus'));
 });
 
+for (const refreshQueued of [true, false]) {
+  test(`a save during a scan never says a scan started (queued: ${refreshQueued})`, async () => {
+    const settings = {
+      version: 1,
+      main_library_roots: [{ id: 'main-1', path: 'C:\\Music', layout_mode: 'artist' }],
+      hoarding_library_roots: [],
+      new_arrivals_roots: [],
+      move_policy: {},
+    };
+    const { context, calls } = loadHelpers({
+      fetch: async () => ({
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            settings,
+            status: { scan_in_progress: true, relations_in_progress: false, covers_in_progress: false },
+            refresh_started: false,
+            refresh_queued: refreshQueued,
+          };
+        },
+      }),
+    });
+    context.state.utility.librarySettings.loaded = true;
+    context.state.utility.librarySettings.draft = settings;
+
+    assert.equal(await context.saveUtilityLibrarySettings(), true);
+
+    assert.deepEqual(calls.toasts.at(-1), ['Library settings saved.', 'success', 3200]);
+  });
+}
+
 test('handleLibrarySettingsIntegrationSelection loads the library settings detail when the library integration is selected', async () => {
   const { context, calls } = loadHelpers();
 

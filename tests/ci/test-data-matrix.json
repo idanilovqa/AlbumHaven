@@ -5194,6 +5194,73 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupDrawerFocus.spec.js",
+    "case": "cover lookup drawer keeps a focused task opener through a full unchanged render",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "task-opener-focus-retained",
+      "no-drawer-scroll",
+      "enter-opens-the-same-task"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerFocus.spec.js",
+    "case": "cover lookup drawer keeps a focused task opener through a full changed render",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "task-opener-focus-retained",
+      "no-drawer-scroll",
+      "enter-opens-the-same-task"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerFocus.spec.js",
+    "case": "cover lookup drawer keeps a focused task opener through a targeted render",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "task-opener-focus-retained",
+      "no-drawer-scroll",
+      "enter-opens-the-same-task"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerFocus.spec.js",
+    "case": "cover lookup drawer renders never take focus from outside or force it after the focused card is removed",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "outside-focus-untouched",
+      "no-forced-focus-after-removal"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/buttonInteractionOutline.spec.js",
     "case": "shared footer buttons render themed hover and keyboard-focus outlines while excluded controls stay inert",
     "profile": null,

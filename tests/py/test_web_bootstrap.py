@@ -696,7 +696,7 @@ def test_bootstrap_data_preserves_startup_hydration_query_contract(asgi_app, mon
     assert payload["initial_view"]["gallery_scale_percent"] == 135
     assert payload["initial_view"]["selected_artist_family_display_mode"] == "chronological"
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
-        "/view-data?surface=albums&artist=Broadcast&family_display=chronological"
+        "/view-data?surface=albums&root_sidebar=1&artist=Broadcast&family_display=chronological"
         "&gallery_display=covers&gallery_scale_percent=135&related_artist=Stereolab&related_artist=Pram"
     )
 
@@ -1572,9 +1572,11 @@ def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asg
         (source, preview)
     )
 
-    status, _headers, body = run_asgi_request(
-        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
-    )
+    # A cover is asked for by reference; an unnamed path is refused (500ac7e02). Only a revisioned
+    # preview follows the storage policy and is recorded (1404cd72c, 0845e566c).
+    cover_url = cover_reference_url(asgi_app, cover_path)
+    revisioned = {"size": "480", "v": "d" * 64}
+    status, _headers, body = run_asgi_request(asgi_app, "GET", cover_url, query=revisioned)
     assert status == 200
     assert body != cover_path.read_bytes()
     assert len(recorded) == 1
@@ -1584,12 +1586,56 @@ def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asg
     assert preview_path.read_bytes() == body
     assert not (app.config["DATA_DIR"] / "display-cover-cache").exists()
 
-    status, _headers, cached_body = run_asgi_request(
-        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
-    )
+    status, _headers, cached_body = run_asgi_request(asgi_app, "GET", cover_url, query=revisioned)
     assert status == 200
     assert cached_body == body
     assert len(recorded) == 1
+
+    status, _headers, _body = run_asgi_request(asgi_app, "GET", cover_url, query={"size": "480"})
+    assert status == 200
+    assert len(recorded) == 1, "an unrevisioned preview is never recorded for relocation"
+
+
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_asgi_unrevisioned_cover_preview_stays_in_app_data_under_a_storage_policy(app, asgi_app, tmp_path, mode):
+    """1404cd72c: only a revisioned preview follows the storage policy; any other stays in app data."""
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), "green").save(cover_path)
+    policy = preview_storage_policy_from_mapping({"mode": mode, "active_root": str(tmp_path / "ssd")})
+    asgi_app.state.generated_preview_storage_policy = policy
+    asgi_app.state.generated_preview_inventory_recorder = lambda *_args: pytest.fail(
+        "an unrevisioned preview is never recorded for relocation"
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app, "GET", cover_reference_url(asgi_app, cover_path), query={"size": "480"},
+    )
+
+    assert status == 200
+    assert body != cover_path.read_bytes()
+    assert (app.config["DATA_DIR"] / "display-cover-cache").is_dir()
+    assert not policy.write_cache_root(cover_path).exists(), "nothing is written where the policy stores previews"
+
+    # The policy's storage stays a read fallback: a preview already there is served as it is.
+    from music_app.services.covers import resolve_cover_display_variant
+
+    stored_cover = app.config["MUSIC_DIR"] / "Artist" / "Stored Album" / "cover.jpg"
+    stored_cover.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), "purple").save(stored_cover)
+    stored_preview = resolve_cover_display_variant(
+        stored_cover, cache_root=policy.write_cache_root(stored_cover), max_size=480,
+    )
+    assert stored_preview.is_relative_to(policy.write_cache_root(stored_cover))
+    app_previews = sorted((app.config["DATA_DIR"] / "display-cover-cache").rglob("*"))
+    status, _headers, body = run_asgi_request(
+        asgi_app, "GET", cover_reference_url(asgi_app, stored_cover), query={"size": "480"},
+    )
+    assert status == 200
+    assert body == stored_preview.read_bytes()
+    assert sorted((app.config["DATA_DIR"] / "display-cover-cache").rglob("*")) == app_previews, "served, not regenerated"
 
 
 @pytest.mark.parametrize("mode", ["album_folders", "custom"])
@@ -1612,7 +1658,7 @@ def test_asgi_unrevisioned_cover_preview_keeps_legacy_app_cache_readable(app, as
     )
 
     status, _headers, body = run_asgi_request(
-        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+        asgi_app, "GET", cover_reference_url(asgi_app, cover_path), query={"size": "480"},
     )
     assert status == 200
     assert body == legacy_preview.read_bytes()

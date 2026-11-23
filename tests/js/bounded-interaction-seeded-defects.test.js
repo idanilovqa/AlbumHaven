@@ -475,6 +475,17 @@ const DEFECTS = [
     expected: /^rejected BI-15 database-connect-per-request:psycopg\.connect at music_app\/services\/generated_preview_storage_postgres\.py:\d+ from py:music_app\/routes\/admin_asgi\.py#get_preview_storage:route:GET \/admin\/server\/preview-storage via /,
   },
   {
+    // The save's prevalidator reaches its caller inside **options, through a spread and a forwarded
+    // **kwargs. A full preparation there (#65's gallery rebuild before a save) was never reported.
+    id: 'BI-04 tag save prevalidation, passed inside unpacked options, that rebuilds the library',
+    language: 'py',
+    file: 'music_app/services/cache.py',
+    anchor: '    _select_runtime_scan_cache_adapter(config).validate_structural_tag_edit(\n',
+    replacement: '    _seeded_prevalidation_rebuild([], config)\n    _select_runtime_scan_cache_adapter(config).validate_structural_tag_edit(\n',
+    prelude: 'from music_app.services.relations import build_relation_views as _seeded_prevalidation_rebuild\n',
+    expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_wave_a_asgi_routes\.py#utilities_edit_tags:route:POST \/utilities\/edit-tags via .*validate_structural_tag_edit_for_config/,
+  },
+  {
     id: 'BI-04 background reconciler that rebuilds every relation view without a batching contract',
     language: 'py',
     file: 'music_app/services/cover_lookup_tasks.py',
@@ -775,6 +786,24 @@ const DEFECTS = [
       + '    with _seeded_retry_lock:\n        pass\n',
     prelude: 'from music_app.services.lastfm_retry import _RETRY_LOCK as _seeded_retry_lock\n',
     expected: /^rejected BI-08 event-loop-blocking:wait:Lock\.acquire@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_opinions_crowd_read_reserved:route:GET \/album-opinions\/\{album_ref\}\/crowd$/,
+  },
+  {
+    // 0.11.45 (PR #113): the Edit Tags intent held its session advisory lock on a shared request lease.
+    id: 'BI-15 session advisory lock taken on a lease the next request borrows',
+    language: 'py',
+    file: 'music_app/services/tag_edit_intents_postgres.py',
+    anchor: '        self._lock_connect = connect or session_connection\n',
+    replacement: '        self._lock_connect = connect or _connect\n',
+    expected: /^rejected BI-15 session-state-on-shared-connection:advisory-lock at music_app\/services\/tag_edit_intents_postgres\.py:\d+ from py:music_app\/services\/tag_edit_intents_postgres\.py#_TagEditIntentLease\._acquire$/,
+  },
+  {
+    // The family of 0.11.45's autocommit leak, in the form the pool cannot restore.
+    id: 'BI-15 session setting changed on a shared lease',
+    language: 'py',
+    file: 'music_app/services/listen_history.py',
+    anchor: '        connection.autocommit = True\n',
+    replacement: '        connection.autocommit = True\n        connection.execute("set statement_timeout = 0")\n',
+    expected: /^rejected BI-15 session-state-on-shared-connection:set at music_app\/services\/listen_history\.py:\d+ from py:music_app\/services\/listen_history\.py#listen_history_connection$/,
   },
   {
     id: 'BI-08 waiting for executor futures on the event loop',

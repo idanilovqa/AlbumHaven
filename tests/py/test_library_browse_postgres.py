@@ -1778,15 +1778,31 @@ def test_inventory_backed_loose_track_reopen_honors_explicit_empty_exception_ove
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: _NoopSearchSnapshotConnection(inventory),
     )
-    # Loose Tracks come from their own request since REC-007 deferred them from the tree;
-    # only the background writer builds the missing snapshot (bf1b9441b).
-    [track] = repository.build_library_loose_tracks_payload(
-        rebuild_missing_snapshot=True,
-    )["library_non_album_tracks"]
+    # Loose Tracks come from their own request since REC-007 deferred them from the tree; since case 64 a read
+    # shapes the store's stored candidate rows, which the background owner built.
+    from music_app.services import loose_track_store
+
+    monkeypatch.setattr(loose_track_store, "load_state", lambda _connection: {
+        "status": "ready", "builder_version": loose_track_store.BUILDER_VERSION,
+    })
+    monkeypatch.setattr(loose_track_store, "waiting_marks", lambda _connection, **_kwargs: 0)
+    monkeypatch.setattr(loose_track_store, "read_candidates", lambda _connection, **_kwargs: [candidate])
+    [track] = repository.build_library_loose_tracks_payload()["library_non_album_tracks"]
 
     assert track["exception_type"] == ""
     assert track.get("custom_collection_name", "") == ""
     assert track["reason_label"] == "Unmarked"
+
+
+def _ready_loose_track_store(monkeypatch, browse, tracks, *, state=None):
+    """Case 64's store as a read sees it: its state, no waiting marks, and the stored rows built into ``tracks``."""
+    from music_app.services import loose_track_store
+
+    ready = {"status": "ready", "builder_version": loose_track_store.BUILDER_VERSION}
+    monkeypatch.setattr(loose_track_store, "load_state", lambda _connection: ready if state is None else state)
+    monkeypatch.setattr(loose_track_store, "waiting_marks", lambda _connection, **_kwargs: 0)
+    monkeypatch.setattr(loose_track_store, "read_candidates", lambda _connection, **_kwargs: [])
+    monkeypatch.setattr(browse, "build_non_album_track_list", lambda _entries, **_kwargs: [dict(track) for track in tracks])
 
 
 def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
@@ -1811,7 +1827,7 @@ def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
          "display_path": "Morse, Portnoy & George/Loose/alias.flac",
          "library_root_category": "main_library"},
     ]
-    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: tracks)
+    _ready_loose_track_store(monkeypatch, browse, tracks)
     monkeypatch.setattr(
         repository,
         "_load_relation_alias_maps",
@@ -1823,7 +1839,7 @@ def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
-        lambda **_kwargs: pytest.fail("a valid snapshot must avoid global candidate loading"),
+        lambda **_kwargs: pytest.fail("a ready store must avoid global candidate loading"),
     )
     monkeypatch.setattr(
         browse,
@@ -1852,11 +1868,16 @@ def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
     ]
 
 
-def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
+@pytest.mark.parametrize("status", ["building", "failed"])
+def test_loose_tracks_show_the_rows_already_stored_while_the_store_is_not_ready(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,
+    status,
 ):
-    from music_app.services import library_browse_postgres as browse
+    """Owner (relayed 2026-11-22): "If at least one loose track is already indexed let that page show it",
+    with a note that more may appear. While the store builds (or waits to retry a failed build), a read
+    returns the rows stored so far, flagged partial; it never drains, builds or queues anything."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
 
     repository = browse.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
@@ -1864,32 +1885,103 @@ def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
             committed_inventory_queries_for_legacy_browse_fakes
         ),
     )
-    stored = []
-    loaded_queries = []
-    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    tracks = [{"title": "Stored loose", "artist": "Broadcast", "album_artist": "Broadcast",
+               "display_path": "Broadcast/Loose/stored.flac", "library_root_category": "main_library"}]
+    _ready_loose_track_store(
+        monkeypatch, browse, tracks,
+        state={"status": status, "builder_version": loose_track_store.BUILDER_VERSION},
+    )
+    reads = []
+    monkeypatch.setattr(
+        loose_track_store, "read_candidates",
+        lambda _connection, *, limit: reads.append(limit) or [{"track_id": 1}],
+    )
+    monkeypatch.setattr(browse, "_non_album_entries_from_inventory_candidates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_relation_alias_maps",
+                        lambda **_kwargs: {"alias_to_canonical": {}, "canonical_to_aliases": {}})
+    monkeypatch.setattr(loose_track_store, "waiting_marks",
+                        lambda *_args, **_kwargs: pytest.fail("no drain while the store is not ready"))
+    monkeypatch.setattr(loose_track_store, "drain", lambda *_args, **_kwargs: pytest.fail("no drain"))
+    queued = []
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", queued.append)
+    monkeypatch.setattr(
+        browse,
+        "_selected_artist_family_context_from_state",
+        lambda *_args, **_kwargs: {"family_artists": [], "alias_to_canonical": {}, "canonical_to_aliases": {}},
+    )
+
+    payload = repository.build_library_loose_tracks_payload(query_params={})
+    # The artist count request (the only availability request the client sends) carries the flags too.
+    count = repository.build_library_loose_tracks_payload(query_params={"artist": "Broadcast", "availability": "1"})
+
+    assert [track["title"] for track in payload["library_non_album_tracks"]] == ["Stored loose"]
+    assert payload["non_album_tracks_deferred"] is False
+    assert payload["non_album_tracks_partial"] is True, "the page notes that more may appear"
+    assert payload.get("non_album_tracks_failed", False) is (status == "failed")
+    assert count == {
+        "non_album_track_count": 1, "non_album_tracks_partial": True,
+        **({"non_album_tracks_failed": True} if status == "failed" else {}),
+    }
+    assert reads == [browse.MAX_NON_ALBUM_CANDIDATE_LIMIT] * 2, "bounded reads of the stored rows"
+    assert queued == [], "a read never queues the build"
+
+
+def test_loose_tracks_with_no_stored_row_keep_the_preparing_answer_while_the_store_builds(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    """With no row stored yet the existing preparing (deferred) answer stays."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    _ready_loose_track_store(
+        monkeypatch, browse, [],
+        state={"status": "building", "builder_version": loose_track_store.BUILDER_VERSION},
+    )
+    queued = []
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", queued.append)
+
+    payload = repository.build_library_loose_tracks_payload(query_params={})
+
+    assert payload["library_non_album_tracks"] == []
+    assert payload["non_album_tracks_deferred"] is True
+    assert "non_album_tracks_partial" not in payload
+    assert queued == []
+
+
+def test_the_background_loose_tracks_owner_prepares_the_store_and_a_read_never_builds(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    """Case 64 (6.5's ruling) replaces the request-built snapshot: only the background owner prepares the
+    store (a build only for start-up preparation, otherwise a drain)."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    prepared = []
+    monkeypatch.setattr(loose_track_store, "prepare", lambda inventory, connect: prepared.append(inventory))
+    _ready_loose_track_store(monkeypatch, browse, [])
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
-        lambda **kwargs: loaded_queries.append(kwargs.get("query", "")) or [],
-    )
-    monkeypatch.setattr(
-        browse,
-        "_problematic_inventory_fingerprint",
-        lambda _connection: "fingerprint-before-build",
-    )
-    monkeypatch.setattr(
-        repository,
-        "_store_non_album_track_snapshot",
-        lambda _connection, tracks, fingerprint: stored.append((tracks, fingerprint)),
+        lambda **_kwargs: pytest.fail("no read loads the whole library's candidates"),
     )
 
-    repository.build_library_loose_tracks_payload(
-        query_params={"q": "Family"},
-        rebuild_missing_snapshot=True,
-    )
+    repository.build_library_loose_tracks_payload(query_params={"q": "Family"})
+    assert prepared == []
+    repository._run_utility_projection_prewarm("loose-tracks", ("loose-tracks", "key"), 0)
 
-    assert loaded_queries == [""]
-    assert stored == [([], "fingerprint-before-build")]
+    assert prepared == [repository._inventory_repository]
 
 
 def test_global_loose_tracks_defer_missing_snapshot_to_background_prewarm(
@@ -1905,7 +1997,7 @@ def test_global_loose_tracks_defer_missing_snapshot_to_background_prewarm(
         ),
     )
     queued = []
-    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    _ready_loose_track_store(monkeypatch, browse, [], state={})
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
@@ -1921,7 +2013,8 @@ def test_global_loose_tracks_defer_missing_snapshot_to_background_prewarm(
 
     assert payload["library_non_album_tracks"] == []
     assert payload["non_album_tracks_deferred"] is True
-    assert queued == ["loose-tracks"]
+    # Case 64 (6.5's ruling): a read without a ready store answers "preparing" and queues no build.
+    assert queued == []
 
 
 def test_stale_artist_snapshot_queues_writer_refresh_without_global_rebuild(
@@ -1944,7 +2037,7 @@ def test_stale_artist_snapshot_queues_writer_refresh_without_global_rebuild(
         invalidated.append(options)
         browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
 
-    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    _ready_loose_track_store(monkeypatch, browse, [], state={})
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
@@ -1978,11 +2071,9 @@ def test_stale_artist_snapshot_queues_writer_refresh_without_global_rebuild(
     }
     assert payload["non_album_tracks"] == []
     assert payload["non_album_tracks_deferred"] is True
-    assert queued == ["loose-tracks", "loose-tracks"]
-    assert invalidated == [{
-        "database_url": repository._database_url,
-        "kinds": ("loose-tracks",),
-    }]
+    # Case 64 (6.5's ruling): without a ready store an artist read neither queues a build nor drops a cache.
+    assert queued == []
+    assert invalidated == []
 
 
 def test_browse_only_repository_does_not_refresh_or_store_stale_non_album_snapshot(
@@ -2000,7 +2091,7 @@ def test_browse_only_repository_does_not_refresh_or_store_stale_non_album_snapsh
             committed_inventory_queries_for_legacy_browse_fakes
         ),
     )
-    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    _ready_loose_track_store(monkeypatch, browse, [], state={})
     monkeypatch.setattr(
         repository,
         "_load_non_album_entries",
@@ -2012,9 +2103,9 @@ def test_browse_only_repository_does_not_refresh_or_store_stale_non_album_snapsh
         lambda _kind: pytest.fail("browse-only mode must not queue a writer refresh"),
     )
 
-    class RejectingConnection:
-        def execute(self, *_args, **_kwargs):
-            pytest.fail("browse-only mode must not write the shared database")
+    from music_app.services import loose_track_store
+
+    monkeypatch.setattr(loose_track_store, "drain", lambda *_args, **_kwargs: pytest.fail("browse-only mode never drains"))
 
     assert repository.build_library_loose_tracks_payload(
         query_params={"artist": "Broadcast", "availability": "1"}
@@ -2025,7 +2116,6 @@ def test_browse_only_repository_does_not_refresh_or_store_stale_non_album_snapsh
     global_payload = repository.build_library_loose_tracks_payload()
     assert global_payload["library_non_album_tracks"] == []
     assert global_payload["non_album_tracks_deferred"] is True
-    repository._store_non_album_track_snapshot(RejectingConnection(), [], "fingerprint")
 
 
 def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_exact_pseudo_key(
@@ -17370,44 +17460,31 @@ def test_postgres_library_browse_duplicate_identity_prewarm_builds_compact_index
 
     assert calls == [(connection, [], repository)]
 
-def test_non_album_snapshot_prewarm_builds_and_registers_invalidation_refresh(monkeypatch):
-    from music_app.services import library_browse_postgres as module
+def test_loose_tracks_prewarm_prepares_the_store_and_caches_nothing(monkeypatch):
+    """Case 64 (6.5's ruling) replaces the cached snapshot and its invalidation re-warm: the loose-tracks
+    background job prepares the store (a build only for start-up preparation, else a drain) and caches nothing,
+    so every later queue reaches the drain."""
+    from music_app.services import library_browse_postgres as module, loose_track_store
 
     repository = module.PostgresLibraryBrowseRepository({
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
     })
     cache_key = repository._utility_projection_cache_key("loose-tracks")
-    builds = []
-    timers = []
+    prepared = []
+    monkeypatch.setattr(loose_track_store, "prepare", lambda inventory, connect: prepared.append(inventory))
     monkeypatch.setattr(
         repository,
         "build_library_loose_tracks_payload",
-        lambda **kwargs: builds.append(kwargs) or {"library_non_album_tracks": []},
-    )
-    monkeypatch.setattr(
-        module,
-        "Timer",
-        lambda delay, callback, args: type(
-            "RecordedTimer",
-            (),
-            {
-                "daemon": False,
-                "start": lambda self: timers.append((delay, callback, args)),
-            },
-        )(),
+        lambda **_kwargs: pytest.fail("the background job never goes through a read"),
     )
 
     try:
         module._UTILITY_PROJECTION_GENERATIONS[cache_key] = 0
         repository._run_utility_projection_prewarm("loose-tracks", cache_key, 0)
-        module.invalidate_postgres_utility_projection_cache(
-            database_url=repository._database_url,
-            kinds=("loose-tracks",),
-        )
 
-        assert builds == [{"rebuild_missing_snapshot": True}]
-        assert len(timers) == 1
-        assert timers[0][0] == module._UTILITY_PROJECTION_REWARM_DELAY_SECONDS
+        assert prepared == [repository._inventory_repository]
+        assert cache_key not in module._UTILITY_PROJECTION_CACHE
+        assert cache_key not in module._UTILITY_PROJECTION_REWARM
     finally:
         with module._UTILITY_PROJECTION_CACHE_LOCK:
             module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
@@ -20317,6 +20394,30 @@ def test_cover_lookup_track_path_reads_lease_the_shared_browse_pool(monkeypatch)
 
 
 def test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_production_page_size(tmp_path, monkeypatch):
+    _measure_display_cover_variant_queue(tmp_path, monkeypatch, "py:routes/web_asgi.py#index")
+
+
+@pytest.mark.parametrize("route", ["albums_page", "loose_tracks_page"])
+def test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count(tmp_path, monkeypatch, route):
+    """GET /albums and GET /loose-tracks are the index page itself; they carry its measured probe count."""
+    import asyncio
+
+    from music_app.routes import web_asgi
+
+    served = []
+
+    async def index(request):
+        served.append(request)
+        return "index page"
+
+    monkeypatch.setattr(web_asgi, "index", index)
+    request = object()
+    assert asyncio.run(getattr(web_asgi, route)(request)) == "index page"
+    assert served == [request], "the alias does nothing but serve the index"
+    _measure_display_cover_variant_queue(tmp_path, monkeypatch, f"py:routes/web_asgi.py#{route}")
+
+
+def _measure_display_cover_variant_queue(tmp_path, monkeypatch, interaction_id):
     from music_app.services import covers
     from music_app.services import library_browse_postgres as browse
     from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
@@ -20350,7 +20451,7 @@ def test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_prod
         return counts
 
     small, production = measure_scale_pair(
-        interaction_id="py:routes/web_asgi.py#index",
+        interaction_id=interaction_id,
         small=20,
         large=1_000,
         run=run,
@@ -20422,7 +20523,6 @@ def _record_browse_connections(monkeypatch):
         (lambda repo: repo._load_utility_rules_rows(), "pool:browse"),
         # Writes and whole-library reads keep their own connection so they cannot starve the pool.
         (lambda repo: repo.build_root_sidebar_payload(query_params={"gallery_offset": "50"}), "fresh"),
-        (lambda repo: repo.build_library_loose_tracks_payload(rebuild_missing_snapshot=True), "fresh"),
         (lambda repo: repo.build_root_counts_payload(), "fresh"),
         (lambda repo: repo._load_problematic_file_rows(candidate_summary=False), "fresh"),
         (lambda repo: repo._build_problematic_files_payload_uncached(), "fresh"),
@@ -20431,7 +20531,7 @@ def _record_browse_connections(monkeypatch):
     ids=[
         "selected-artist", "projected-root-sidebar", "root-sidebar-first-page", "loose-tracks-request",
         "relation-alias-maps", "missing-album-by-key", "problematic-album-rows",
-        "utility-rules", "root-sidebar-later-page", "loose-tracks-rebuild", "root-counts",
+        "utility-rules", "root-sidebar-later-page", "root-counts",
         "problematic-whole-library-rows", "problematic-complete-list",
         "root-album-browse-rows",
     ],

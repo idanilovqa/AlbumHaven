@@ -95,7 +95,7 @@ export async function readDisplayedBlobBytes(element, expected) {
     && element.complete && element.naturalWidth > 0;
   if (!matches()) throw new Error('Displayed browser-owned source changed before observation.');
   // Browser-owned URLs never request the production /cover route.
-  const response = await fetch(expected.currentSrc);
+  const response = await fetch(expected.currentSrc, { mode: 'same-origin' });
   if (!response.ok) throw new Error('Displayed blob bytes could not be read.');
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (!matches()) throw new Error('Displayed browser-owned source changed during observation.');
@@ -699,6 +699,12 @@ export class CoverLookupActions {
     ).toBeVisible({ timeout: options.timeout || 30000 });
     // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered candidate image to decode
     return image.evaluate(waitForDisplayedImageDecode);
+  }
+
+  async readRemoteCardOriginalEvidence(card, label) {
+    // The card shows a 480 px preview; its full-size button opens the original in the lightbox.
+    await this.coverLookup.openLightboxButtonWithin(card).click();
+    return this.readDisplayedImageEvidence(this.coverLookup.lightboxImage, `full-size ${label}`);
   }
 
   async readRemoteCandidateEvidence(candidateId, options = {}) {

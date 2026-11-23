@@ -10,7 +10,7 @@ import {
 } from '../helpers/coverLookupFixtureData.js';
 import { setPastedCoverSaveHeld } from '../helpers/coverLookupProviderHelpers.js';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
-import { coverPathForReference } from '../helpers/coverReferences.js';
+import { coverPathForReference, coverReferenceForPath } from '../helpers/coverReferences.js';
 
 const {
   cancelClear: CANCEL_CLEAR_TARGET,
@@ -156,8 +156,24 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     await expect(lookup.stagedCoverCardByName(pickerName)).toHaveClass(/\bis-active\b/);
     await expect(lookup.selectedCoverCards).toHaveCount(1);
     await expect(lookup.remoteCoverCards).toHaveCount(1);
-    const image = await coverLookupActions.readDisplayedImageEvidence(lookup.firstRemoteMatchImage, 'extensionless direct image');
-    expect(image.sha256).toBe(fixtureCover.sha256);
+    // The card shows the proxy's 480 px preview of this fixture (cbfabb331); the original keeps its bytes.
+    const preview = await coverLookupActions.readDisplayedImageEvidence(lookup.firstRemoteMatchImage, 'extensionless direct image');
+    const previewUrl = new URL(preview.src);
+    expect(previewUrl.searchParams.get('url')).toBe(imageUrl);
+    expect(previewUrl.searchParams.get('size')).toBe('480');
+    expect([preview.naturalWidth, preview.naturalHeight]).toEqual([480, 480]);
+    const original = await coverLookupActions.readRemoteCardOriginalEvidence(
+      lookup.firstRemoteCoverCard, 'extensionless direct image',
+    );
+    const originalUrl = new URL(original.src);
+    expect(originalUrl.searchParams.get('url')).toBe(imageUrl);
+    expect(originalUrl.searchParams.has('size')).toBe(false);
+    expect([original.naturalWidth, original.naturalHeight]).toEqual([fixtureCover.width, fixtureCover.height]);
+    expect(original.sha256).toBe(fixtureCover.sha256.toUpperCase());
+    await trackModalActions.closeCoverLightbox();
+    // Viewing the original selects nothing: the staged choice is still the only one.
+    await expect(lookup.stagedCoverCardByName(pickerName)).toHaveClass(/\bis-active\b/);
+    await expect(lookup.selectedCoverCards).toHaveCount(1);
   });
 
   await stepLogger.step('Keep exactly one local, remote, or staged cover selected and remove the staged image', async () => {
@@ -177,6 +193,15 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
 });
+
+// The LOCAL-order observer records the page's opaque references; assertions name the fixture files.
+async function resolveObservedCoverPaths(samples) {
+  const references = [...new Set(samples.flatMap((sample) => sample.paths))];
+  const paths = new Map(await Promise.all(
+    references.map(async (reference) => [reference, await coverPathForReference(reference)]),
+  ));
+  return samples.map((sample) => ({ ...sample, paths: sample.paths.map((reference) => paths.get(reference)) }));
+}
 
 test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, and mobile caches', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
@@ -350,7 +375,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(authoritativeCandidates.map((candidate) => candidate.name)).not.toContain(pickerName);
     const authoritativePaths = authoritativeCandidates.map(candidate => candidate.sourcePath);
     expect(secondReopenOrders.length).toBeGreaterThan(0);
-    for (const sample of secondReopenOrders) {
+    for (const sample of await resolveObservedCoverPaths(secondReopenOrders)) {
       expect(sample.paths).toEqual(authoritativePaths);
       expect(sample.activeIndexes).toEqual([sample.paths.length - 1]);
     }
@@ -549,12 +574,12 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await coverLookupActions.waitForModalResultsReady();
     const savedCards = await coverLookupActions.readLocalSectionCoverCandidates();
     const savedPasted = assertOnePastedCover(savedCards, 'reopened after the save');
-    expect(savedPasted.sourcePath).toBe(saved.selected_cover_path);
+    expect(savedPasted.sourcePath).toBe(await coverPathForReference(saved.selected_cover_ref));
     expect(savedCards.map(card => card.name), 'nothing moves or is renamed once the save lands')
       .toEqual(pendingCards.map(card => card.name));
     const savedPaths = savedCards.map(card => card.sourcePath);
     const pastedIndex = savedPaths.indexOf(savedPasted.sourcePath);
-    const frames = await lookup.finishLocalCoverOrderObservation(saveFrames);
+    const frames = await resolveObservedCoverPaths(await lookup.finishLocalCoverOrderObservation(saveFrames));
     expect(frames.length).toBeGreaterThan(0);
     for (const frame of frames) {
       expect(frame.paths, 'every rendered frame shows the final cards in the final order').toEqual(savedPaths);
@@ -566,7 +591,9 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     // Every remaining card must finish loading: reading candidates waits for each decoded image.
     const afterDelete = await coverLookupActions.readLocalSectionCoverCandidates();
     const remainingPaths = savedPaths.filter(sourcePath => sourcePath !== savedPasted.sourcePath);
-    for (const frame of await lookup.finishLocalCoverOrderObservation(deleteFrames)) {
+    for (const frame of await resolveObservedCoverPaths(
+      await lookup.finishLocalCoverOrderObservation(deleteFrames),
+    )) {
       expect([JSON.stringify(savedPaths), JSON.stringify(remainingPaths)],
         'a delete only ever removes the deleted card').toContain(JSON.stringify(frame.paths));
       expect(frame.activeIndexes, 'one selected card in every frame').toHaveLength(1);
@@ -580,9 +607,10 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
 
     await coverLookupActions.closeModal();
     const deletedAlbum = deleted.updated_album || (deleted.updated_albums || [])[0];
-    expect(deletedAlbum?.cover_path).toBeTruthy();
+    const deletedAlbumCoverPath = await coverPathForReference(deletedAlbum?.cover_ref);
+    expect(deletedAlbumCoverPath).toBeTruthy();
     const fallbackFullSize = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: deletedAlbum.cover_path,
+      coverPath: deletedAlbumCoverPath,
       coverRevision: deletedAlbum.cover_revision,
       label: 'fallback cover after delete',
     });
@@ -590,7 +618,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage,
       'Album Details cover after delete',
-      { expectedCoverPath: deletedAlbum.cover_path, expectedCoverRevision: deletedAlbum.cover_revision },
+      { expectedCoverPath: deletedAlbumCoverPath, expectedCoverRevision: deletedAlbum.cover_revision },
     );
     await trackModalActions.close();
     await galleryActions.scrollToAlbumUnderHeading(
@@ -600,7 +628,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await coverLookupActions.readDisplayedImageEvidence(
       galleryActions.albumCoverByName(USER_OWNED_IMPROVEMENT_TARGET.album),
       'gallery card cover after delete',
-      { expectedCoverPath: deletedAlbum.cover_path, expectedCoverRevision: deletedAlbum.cover_revision },
+      { expectedCoverPath: deletedAlbumCoverPath, expectedCoverRevision: deletedAlbum.cover_revision },
     );
 
     expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
@@ -644,9 +672,9 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/utilities/cover-lookup/local-delete'
     ), { timeout: 60_000 });
-    const card = await lookup.localCoverCards.evaluateAll((cards, sourcePath) => cards.findIndex(
-      item => item.getAttribute('data-select-local-cover') === sourcePath,
-    ), pasted[0].sourcePath);
+    const card = await lookup.localCoverCards.evaluateAll((cards, reference) => cards.findIndex(
+      item => item.getAttribute('data-select-local-cover') === reference,
+    ), await coverReferenceForPath(pasted[0].sourcePath));
     expect(card).toBeGreaterThanOrEqual(0);
     await lookup.localCoverDeleteWithin(lookup.localCoverCards.nth(card)).click();
     await expect(lookup.deleteConfirm).toBeVisible();

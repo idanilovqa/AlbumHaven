@@ -1803,8 +1803,9 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
     afterScan,
     /neutralCandidateEvidence\s*=\s*await coverLookupActions\.readRemoteCandidateEvidence\(neutralCandidate\.id\)/u,
   );
-  assert.match(afterScan, /expect\(neutralCandidateEvidence\.naturalWidth\)\.toBe\(600\)/u);
-  assert.match(afterScan, /expect\(neutralCandidateEvidence\.naturalHeight\)\.toBe\(600\)/u);
+  // The card shows the proxy's 480 px preview (e0e98c8a7); the 600 px original stays pinned by resolution and hash.
+  assert.match(afterScan, /expect\(neutralCandidateEvidence\.naturalWidth\)\.toBe\(480\)/u);
+  assert.match(afterScan, /expect\(neutralCandidateEvidence\.naturalHeight\)\.toBe\(480\)/u);
   assert.match(afterScan, /expect\(neutralCandidateEvidence\.src\)\.toContain\('automatic-coverless-neutral'\)/u);
   assert.match(
     coverLookupActions,
@@ -3026,6 +3027,7 @@ test('sparse tag response observation starts while the initial topology observat
     method: () => 'POST',
     postDataJSON: () => ({
       album: { key: 'sparse-source' },
+      client_request_id: '6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f',
       confirmed: true,
       updates: {
         'D:\\Synthetic Music\\Rarity Artist\\Sparse Album\\01 Apply Rarity.mp3': {

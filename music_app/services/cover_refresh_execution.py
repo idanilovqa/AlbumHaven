@@ -326,6 +326,7 @@ def _build_automatic_cover_write_guard(
                 local_cover_width=getattr(write_action, "local_cover_width", None),
                 local_cover_height=getattr(write_action, "local_cover_height", None),
                 reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
+                reject_if_mixed_album_folder=True,
                 reject_if_explicit_selection=replace_legacy_user,
                 expected_cover_state=("user", legacy_revision) if replace_legacy_user else None,
                 expected_cover_selection_origin=(
@@ -337,6 +338,9 @@ def _build_automatic_cover_write_guard(
                 expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 commit_guard=commit_after_write,
             )
+            if persistence_result.get("blocked_by_mixed_album_folder"):
+                write_action.blocked_reason = "mixed_album_folder"
+                return False
             if bool(
                 persistence_result.get("blocked_by_user_selection")
                 or persistence_result.get("blocked_by_expected_cover_state")
@@ -761,7 +765,10 @@ def _run_cover_jobs(
         reason = str(detail.get("reason") or "")
         detail.update(downloaded=downloaded, has_cover=has_cover, cover_path=cover_value)
         job_results.append(detail)
-        if reason in {"remote_provider_group_disabled", "library_root_unavailable"}:
+        if reason in {"remote_provider_group_disabled", "library_root_unavailable"} or (
+            # Also when the album's missing-file flag took the reason's place: a refusal is not a failure.
+            "mixed_album_folder" in (reason, detail.get("search_reason"))
+        ):
             terminal_category = "skipped"
             skipped += 1
         elif reason == "cover_selection_recovery_failed":
@@ -928,7 +935,8 @@ def _run_cover_jobs(
             changed = changed or recovered
             if conflict:
                 detail["recovery_conflict"] = True
-                detail["reason"] = "recovered_cover_selection_conflict"
+                # As for a missing selected file below, the reason it replaces stays as the search's.
+                detail.update(search_reason=reason, reason="recovered_cover_selection_conflict")
                 log_job_event(
                     config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
                     "Existing cover metadata recovery skipped because selection could not be verified",
@@ -953,7 +961,7 @@ def _run_cover_jobs(
             entry = file_cache.get(str(track_path))
             if not isinstance(entry, dict):
                 continue
-            if reason == "automatic_write_blocked_by_user_selection":
+            if reason in {"automatic_write_blocked_by_user_selection", "mixed_album_folder"}:
                 continue
             if not downloaded and (
                 str(job.get("cover_selection_origin") or "").strip().casefold() == "user"

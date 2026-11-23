@@ -1591,7 +1591,7 @@ function createDrawerHarness(overrides = {}) {
   process.exitCode = 1;
 });
 
-require('node:test')('pasted cover updates its notification before the save response settles', async () => {
+require('node:test')('pasted cover never updates its notification before the server accepts the save', async () => {
   const album = {
     key: 'various artists::aladdin',
     album_artist: 'Various Artists',
@@ -1646,12 +1646,11 @@ require('node:test')('pasted cover updates its notification before the save resp
   const savePromise = context.savePastedCoverFromLookup('third-cover');
   await Promise.resolve();
 
-  assert.equal(markCalls.length, 1);
-  assert.equal(markCalls[0].taskId, 'aladdin-task');
-  assert.equal(markCalls[0].selectedAlbum.name, 'Aladdin');
-  assert.equal(markCalls[0].options.persist, false);
-  assert.deepEqual(lifecycleCalls, ['render', 'close']);
-  assert.deepEqual(Array.from(drawerRenderCalls[0].taskIds), ['aladdin-task']);
+  // Owner rule: "Saved" shows when the server accepts; only the picture is optimistic.
+  assert.equal(markCalls.length, 0);
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
+  assert.deepEqual(lifecycleCalls, ['close']);
+  assert.equal(drawerRenderCalls.length, 0);
 
   resolveRequest({
     ok: false,
@@ -1659,8 +1658,10 @@ require('node:test')('pasted cover updates its notification before the save resp
   });
   await savePromise;
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
-  assert.deepEqual(lifecycleCalls, ['render', 'close', 'render']);
-  assert.deepEqual(Array.from(drawerRenderCalls[1].taskIds), ['aladdin-task']);
+  assert.equal(markCalls.length, 0);
+  assert.deepEqual(lifecycleCalls, ['close', 'render']);
+  assert.equal(drawerRenderCalls[0].preserveInteraction, false);
+  assert.deepEqual(Array.from(drawerRenderCalls[0].taskIds), ['aladdin-task']);
 });
 
 require('node:test')('pasted cover applies server-actioned notification when opened from album details', async () => {
@@ -3792,11 +3793,14 @@ require('node:test')('remote optimistic selection reuses the selected preview un
     'C:/music/Remote/cover.jpg',
   );
 
+  // The URL of the card the user selected: the cached 480 px preview, already on screen (FTC-COVERS-013).
   const expectedPreview = context.buildRemoteCoverLookupDisplayUrl(
     selectedMatch,
     selectedMatch.thumbnail_url,
     selectedMatch.id,
+    { preview: true },
   );
+  assert.match(expectedPreview, /[?&]size=480$/);
   assert.equal(updatedAlbum.cover_ref, null);
   assert.equal(updatedAlbum.remote_cover_url, selectedMatch.url);
   assert.equal(refreshedAlbums[0].cover_ref, null);
@@ -5711,7 +5715,7 @@ for (const status of ['pending', 'running']) {
 
   assert.equal(
     context.state.coverLookup.optimisticAlbumCovers['C:/music/Kaipa/01.mp3'].src,
-    '/utilities/cover-lookup/remote-image?url=https%3A%2F%2Fimages.example%2Fkaipa-thumbnail.jpg&key=kaipa-candidate',
+    '/utilities/cover-lookup/remote-image?url=https%3A%2F%2Fimages.example%2Fkaipa-thumbnail.jpg&key=kaipa-candidate&size=480',
     'remote selection should reuse the already-rendered candidate preview instead of refetching a new full image',
   );
 }
@@ -7900,7 +7904,8 @@ require('node:test')('pasted cover is selected under LOCAL when reopened before 
   assert.equal(reopened.local_covers[0].is_active, true);
   assert.equal(reopened.selected_source_cover_ref, reopened.local_covers[0].candidate_cover_ref);
   assert.equal(reopened.other_art.length, 0);
-  assert.equal(context.state.coverLookup.tasks.every(task => task.notification_action_taken), true);
+  assert.equal(context.state.coverLookup.tasks.some(task => task.notification_action_taken), false,
+    'the picture is optimistic, "Art chosen" waits for the server');
 
   resolveRequest({
     ok: false,

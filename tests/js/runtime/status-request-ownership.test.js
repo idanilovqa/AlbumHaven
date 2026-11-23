@@ -661,7 +661,7 @@ test('superseded library settings save retains saved values without publishing i
   enableLibrarySettings(h);
   const saving = h.ctx.saveUtilityLibrarySettings(), request = h.requests.at(-1);
   await acceptedStart(h);
-  request.resolve({ ok: true, settings: { version: 7 }, status: h.status() });
+  request.resolve({ ok: true, settings: { version: 7 }, status: h.status(), refresh_started: true });
   assert.equal(await saving, true);
   expectBusy(h);
   assert.equal(h.ctx.state.utility.librarySettings.settings.version, 7);

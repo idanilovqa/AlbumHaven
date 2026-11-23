@@ -92,7 +92,11 @@ test(`${CASE_ID} Play after Pause within the pause hold sounds sooner than a Pla
       description: `held median ${Math.round(result.heldMedianMs)} [${ms(result.heldMs)}]; `
         + `round trip median ${Math.round(result.roundTripMedianMs)} [${ms(result.roundTripMs)}]`,
     });
-    stepLogger.note(`${label}: held ${ms(result.heldMs)} ms; round trip ${ms(result.roundTripMs)} ms`, 1);
+    const claimRoundTrips = result.samples.filter((sample) => sample.kind === 'round-trip')
+      .map((sample) => sample.claimRoundTripMs);
+    stepLogger.note(`${label}: held median ${Math.round(result.heldMedianMs)} ms [${ms(result.heldMs)}]; `
+      + `round trip median ${Math.round(result.roundTripMedianMs)} ms [${ms(result.roundTripMs)}], `
+      + `claim request ${ms(claimRoundTrips)} ms`, 1);
   }
   for (const [label, result] of Object.entries(results)) {
     expect(result.heldMedianMs, `${label}: held Play sounds sooner than one that asks for the claim`)

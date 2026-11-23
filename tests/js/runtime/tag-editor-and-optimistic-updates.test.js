@@ -5519,3 +5519,96 @@ test('request capture: missing album removal posts once and refreshes its own vi
     },
   });
 });
+
+// Owner (relayed 2026-11-22), case 59: a Re-scan that starts the background search says so, and a search
+// that ends without the album says how to bring it back. The search result is polled about every 1.5 s, at
+// most 30 s; a timeout frees the button with no extra toast.
+const RESCAN_SEARCHING = 'Album is not found. Searching your library folders for it...';
+const RESCAN_NOT_FOUND = 'Album must have been deleted or moved out of the library. '
+  + 'Add it back to one of the library paths to see it in the app';
+
+function loadMissingAlbumRescan(answers) {
+  const toasts = [];
+  const requests = [];
+  const delays = [];
+  const refreshed = [];
+  const context = vm.createContext({
+    URL,
+    encodeURIComponent,
+    getTrackModalAlbumRequestKey: album => album.key,
+    getPendingMissingAlbumRefreshRequest: () => null,
+    refreshMissingAlbumView: async (_album, key) => { refreshed.push(key); },
+    showToast: (message, tone) => toasts.push([message, tone]),
+    scheduleBrowserTimeout: (callback, delay) => { delays.push(delay); Promise.resolve().then(callback); return delays.length; },
+    fetch: async (url, options = {}) => {
+      requests.push([options.method || 'GET', String(url)]);
+      const [status, payload] = answers.shift();
+      return { ok: status < 400, status, json: async () => payload };
+    },
+  });
+  vm.runInContext(helperSource, context);
+  const button = { disabled: false, isConnected: true, setAttribute() {}, removeAttribute() {} };
+  return { context, toasts, requests, delays, refreshed, button };
+}
+
+for (const [reason, message] of [
+  ['deleted', RESCAN_NOT_FOUND],
+  [undefined, RESCAN_NOT_FOUND],
+  ['unreachable', 'Still missing: its drive or network share cannot be reached.'],
+]) {
+  test(`a Re-scan that searches in the background says so, polls, then shows ${reason || 'not found'}`, async () => {
+    const page = loadMissingAlbumRescan([
+      [200, { ok: true, status: 'searching' }],
+      [200, { ok: true, status: 'searching' }],
+      [200, { ok: true, status: 'missing', ...(reason ? { reason } : {}) }],
+    ]);
+
+    const restored = await page.context.rescanMissingAlbum({ key: 'a/b', inventory_status: 'missing' }, page.button);
+
+    assert.equal(restored, false);
+    assert.deepEqual(page.toasts, [[RESCAN_SEARCHING, 'info'], [message, 'info']]);
+    assert.deepEqual(page.requests, [
+      ['POST', '/api/library/albums/a%2Fb/rescan'], ['GET', '/api/library/albums/a%2Fb/rescan'],
+      ['GET', '/api/library/albums/a%2Fb/rescan'],
+    ]);
+    assert.deepEqual(page.delays, [1500, 1500]);
+    assert.deepEqual(page.refreshed, ['a/b'], 'the view refreshes once, when the search has its answer');
+    assert.equal(page.button.disabled, false);
+  });
+}
+
+test('a background search that finds the album restores it with the existing message', async () => {
+  const page = loadMissingAlbumRescan([
+    [200, { ok: true, status: 'searching' }],
+    [200, { ok: true, status: 'moved' }],
+  ]);
+
+  assert.equal(await page.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, page.button), true);
+  assert.deepEqual(page.toasts, [[RESCAN_SEARCHING, 'info'], ['Album found in its new folder and restored.', 'success']]);
+});
+
+test('a background search still running after 30 s frees the button with no further toast', async () => {
+  const page = loadMissingAlbumRescan(Array.from({ length: 40 }, () => [200, { ok: true, status: 'searching' }]));
+
+  assert.equal(await page.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, page.button), false);
+  assert.deepEqual(page.toasts, [[RESCAN_SEARCHING, 'info']]);
+  assert.equal(page.delays.length, 20, 'about every 1.5 s, at most 30 s');
+  assert.equal(page.requests.length, 21, 'the POST and twenty polls');
+  assert.deepEqual(page.refreshed, []);
+  assert.equal(page.button.disabled, false);
+});
+
+test('a Re-scan answered at once keeps its messages; a failed one says it could not re-scan', async () => {
+  const deleted = loadMissingAlbumRescan([[200, { ok: true, status: 'missing', reason: 'deleted' }]]);
+  await deleted.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, deleted.button);
+  assert.deepEqual(deleted.toasts, [[RESCAN_NOT_FOUND, 'info']]);
+  assert.deepEqual(deleted.delays, [], 'no poll without a background search');
+
+  const restored = loadMissingAlbumRescan([[200, { ok: true, status: 'restored' }]]);
+  await restored.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, restored.button);
+  assert.deepEqual(restored.toasts, [['Album found and restored.', 'success']]);
+
+  const failed = loadMissingAlbumRescan([[500, { ok: false }]]);
+  await failed.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, failed.button);
+  assert.deepEqual(failed.toasts, [['Unable to re-scan this album.', 'error']]);
+});

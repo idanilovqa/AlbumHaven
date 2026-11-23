@@ -166,20 +166,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
     const settledDiagnostics = await readGaplessPlaybackDiagnostics(page);
 
     const controls = traffic.snapshotSince(0);
-    // A start opens at a guessed rate; the server refuses a wrong guess before any audio and the page
-    // opens the song again at its real rate. The refused open is no stream of this boundary.
-    const received = traffic.eventsSince(0).filter((event) => event.direction === 'received');
-    const refusedStreamIds = new Set(received
-      .filter((event) => event.type === 'rate-mismatch')
-      .map((event) => event.streamId));
-    const allOpens = controls.filter((control) => control.type === 'open');
-    const refusedOpens = allOpens.filter((control) => refusedStreamIds.has(control.streamId));
-    expect(refusedOpens.length).toBeLessThanOrEqual(1);
-    expect(refusedOpens.map((control) => [control.role, control.path]))
-      .toEqual(refusedOpens.map(() => ['current', outgoing.path]));
-    expect(received.filter((event) => ['encoded', 'pcm'].includes(event.type)
-      && refusedStreamIds.has(event.streamId))).toEqual([]);
-    const opens = allOpens.filter((control) => !refusedStreamIds.has(control.streamId));
+    const opens = controls.filter((control) => control.type === 'open');
     const promotion = controls.find((control) => control.type === 'promote');
     const replacementOpen = opens[2];
     expect(diagnostics.underruns).toBe(0);

@@ -8564,9 +8564,9 @@ const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
 const STREAMING_ENCODED_DECODE_SLICE_BYTES = 16 * 1024;
 // Several credits stay in flight, so a start's cushion does not wait one round trip per credit.
 const STREAMING_ENCODED_CREDIT_WINDOW_BYTES = 4 * STREAMING_ENCODED_CREDIT_BYTES;
-// A start opens at the rate already playing, else the last one this browser played, else this
-// one, instead of asking first; the server answers a wrong guess with the track's rate and the
-// start runs again at it.
+// A start opens at the rate already playing, else the last one this browser played, instead of
+// asking first; the server answers a wrong guess with the track's rate and the start runs again at
+// it. A browser with neither asks first. The idle graph is built at this rate when nothing is known.
 const STREAMING_GUESSED_SAMPLE_RATE = 44_100;
 const STREAMING_SAMPLE_RATE_STORAGE_KEY = 'albumhaven.playbackSampleRate.v1';
 // The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
@@ -11261,15 +11261,19 @@ function streamingQualityNeedsTrackSize(track) {
     && !(Number(engine.trackFormats?.get(path)?.sizeBytes) > 0);
 }
 
-function guessedStreamingSampleRate() {
+// The rate of the song loaded now, else the last one this browser played; 0 when it has played
+// none. An idle graph's rate is no evidence: it was itself built on a guess.
+function rememberedStreamingSampleRate() {
   const engine = streamingEngineState();
-  if (engine.sampleRate) return engine.sampleRate;
+  if (engine.roles.current && engine.sampleRate) return engine.sampleRate;
   const remembered = typeof getLocalStorageItem === 'function'
     ? Number(getLocalStorageItem(STREAMING_SAMPLE_RATE_STORAGE_KEY))
     : 0;
-  return Number.isInteger(remembered) && remembered >= 8_000 && remembered <= 192_000
-    ? remembered
-    : STREAMING_GUESSED_SAMPLE_RATE;
+  return Number.isInteger(remembered) && remembered >= 8_000 && remembered <= 192_000 ? remembered : 0;
+}
+
+function guessedStreamingSampleRate() {
+  return rememberedStreamingSampleRate() || STREAMING_GUESSED_SAMPLE_RATE;
 }
 
 function streamingPlaybackRate(track) {
@@ -12042,14 +12046,17 @@ async function openBrowserStreamingTrack(track, {
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
   let sampleRate = 0;
-  // Only a start that is to sound guesses: nobody waits on a paused one (a restore), and a refused
-  // guess would leave it a second generation that never draws its waveform while paused.
+  // Only a start that is to sound guesses, and only from a rate this browser has played: nobody
+  // waits on a paused one (a restore), whose refused guess would leave a second generation that
+  // never draws its waveform while paused; and a blind guess would cost its own refused open.
   const guessedSampleRate = autoplay && !knownStreamingSampleRate(track)
-    && chooseStreamingQuality(track) === 'original' && !streamingQualityNeedsTrackSize(track);
+    && chooseStreamingQuality(track) === 'original' && !streamingQualityNeedsTrackSize(track)
+    ? rememberedStreamingSampleRate()
+    : 0;
   try {
     if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
     if (guessedSampleRate) {
-      sampleRate = guessedStreamingSampleRate();
+      sampleRate = guessedSampleRate;
     } else {
       await prepareStreamingPlaybackEngine();
       await requestStreamingSampleRate(track);

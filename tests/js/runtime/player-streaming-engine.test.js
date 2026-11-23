@@ -6256,6 +6256,11 @@ test('unknown active-stream control type is a fatal socket protocol error', asyn
   assert.match(settled.diagnostics.lastError.message, /unknown|protocol|control/i);
 });
 
+// A browser that has played a song at 44.1 kHz: its starts guess that rate instead of asking.
+const PLAYED_AT_44_100 = {
+  getLocalStorageItem: (key) => (key === 'albumhaven.playbackSampleRate.v1' ? '44100' : ''),
+};
+
 test('tracks play in a context at their own sample rate with rate-scaled buffers', async () => {
   const harness = createEngineHarness({ trackSampleRates: new Map(), trackSampleRate: () => 44_100 });
   const track = makeTrack();
@@ -6278,6 +6283,7 @@ test('a queued track at another rate opens no continuity and is handed over on e
   const ended = [];
   
   const harness = createEngineHarness({
+    ...PLAYED_AT_44_100,
     trackSampleRates: new Map(),
     trackSampleRate: (path) => (path.endsWith('next.flac') ? 96_000 : 44_100),
     handleStreamingPlaybackEnded: (event) => ended.push(structuredClone(event)),
@@ -6394,8 +6400,8 @@ test('the rate a song played at is remembered for the next page', async () => {
   assert.equal(stored.get('albumhaven.playbackSampleRate.v1'), '44100');
 });
 
-test('a start at an unknown rate opens at once at the guessed rate without a probe', async () => {
-  const harness = createEngineHarness({ trackSampleRates: new Map() });
+test('a start at an unknown rate opens at once at the rate this browser last played, without a probe', async () => {
+  const harness = createEngineHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
 
   await harness.api.start(makeTrack('01.mp3'));
 
@@ -6404,8 +6410,19 @@ test('a start at an unknown rate opens at once at the guessed rate without a pro
   assert.equal(harness.sent('open')[0].sampleRate, 44_100);
 });
 
-test('a start the server refuses for its rate starts again at the reported rate', async () => {
+test('a browser that has played no song asks the rate first and opens once, even over an idle graph', async () => {
   const harness = createEngineHarness({ trackSampleRates: new Map() });
+  await harness.context.prepareIdleStreamingPlayback();
+
+  await harness.api.start(makeTrack('01.mp3'));
+
+  assert.equal(harness.sockets[0].probes.length, 1);
+  assert.equal(harness.sent('open').length, 1);
+  assert.equal(harness.sent('open')[0].sampleRate, 48_000);
+});
+
+test('a start the server refuses for its rate starts again at the reported rate', async () => {
+  const harness = createEngineHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
   const track = makeTrack('01.flac');
   await harness.api.start(track, { startSeconds: 2 });
   const guessed = harness.sent('open')[0];
@@ -6447,7 +6464,7 @@ test('a paused start at an unknown rate asks the rate first and opens once', asy
 });
 
 test('a guessed start paused before its refusal starts again paused', async () => {
-  const harness = createEngineHarness({ trackSampleRates: new Map() });
+  const harness = createEngineHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
   await harness.api.start(makeTrack('01.flac'));
   const guessed = harness.sent('open')[0];
   await harness.api.pause();
@@ -8044,7 +8061,7 @@ test('a rate probe asked of a socket that hears nothing goes again on a new sock
 });
 
 test('a guessed-rate start asked of a socket that hears nothing opens the song on a new socket, so one press starts it', async () => {
-  const harness = encodedHarness({ trackSampleRates: new Map() });
+  const harness = encodedHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
   await harness.api.start(makeTrack('01.mp3'));
   acceptMetadata(harness, harness.sent('open').at(-1), {
     sampleRate: 44_100, codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000,

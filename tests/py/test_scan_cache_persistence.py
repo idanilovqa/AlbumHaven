@@ -5490,3 +5490,51 @@ def test_targeted_watcher_preserves_detached_prewrite_scope(monkeypatch, change)
     adapter.persist_targeted_inventory_mutation(root_id='main', **kwargs)
     assert len(selected) == 1
     assert selected[0]['album_ids'] == {0}
+
+
+@pytest.mark.parametrize("outcome", ["acquired", "held-elsewhere", "lock-query-fails"])
+def test_the_metadata_repair_lease_lives_on_a_session_lease_and_is_released_on_every_path(monkeypatch, outcome):
+    """BI-15 (6.5): the metadata repair lease is a session advisory lock held across the repair, so it is taken
+    on a session lease nobody borrows next (session_connection), never the adapter's pooled lease. Every path
+    closes that lease: released after the repair (unlock, then close), not acquired, or the lock query failing."""
+    from music_app.services import scan_cache_persistence as persistence
+
+    leases = []
+
+    class Lease:
+        autocommit = False
+
+        def __init__(self):
+            self.statements, self.closed = [], False
+
+        def execute(self, sql, params=None):
+            self.statements.append(sql)
+            if outcome == "lock-query-fails":
+                raise RuntimeError("lock query failed")
+            return SimpleNamespace(fetchone=lambda: {"acquired": outcome == "acquired"},
+                                   fetchall=lambda: [{"acquired": outcome == "acquired"}])
+
+        def close(self):
+            self.closed = True
+
+    def session_connection(_url):
+        leases.append(Lease())
+        return leases[-1]
+
+    monkeypatch.setattr(persistence, "session_connection", session_connection, raising=False)
+    monkeypatch.setattr(persistence, "_leased_connection",
+                        lambda *_a, **_k: pytest.fail("the repair lease's session lock was taken on a pooled lease"))
+    adapter = persistence.PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://repair-lease"})
+
+    if outcome == "lock-query-fails":
+        with pytest.raises(RuntimeError, match="lock query failed"):
+            adapter.try_acquire_metadata_repair_lease()
+    else:
+        lease = adapter.try_acquire_metadata_repair_lease()
+        if outcome == "acquired":
+            assert lease is not None and not leases[0].closed, "the lease holds its session until released"
+            lease.release()
+            assert any("pg_advisory_unlock" in sql for sql in leases[0].statements)
+        else:
+            assert lease is None
+    assert len(leases) == 1 and leases[0].closed

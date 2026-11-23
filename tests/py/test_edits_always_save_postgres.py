@@ -166,9 +166,10 @@ def test_live_a_save_with_the_baseline_not_ready_commits_with_no_full_prepare_an
     assert _album_titles(library) == {"Saved Anyway"}
 
 
-# (d) The save's statements are the same at two library sizes.
+# (d) The save's statements and rows read are the same at 1 and 2,001 albums, with several custom gallery
+# scopes published, so the per-header membership patch is counted too (6.5's R4 condition).
 
-def test_live_a_structural_save_runs_the_same_statements_at_two_library_sizes(library):
+def test_live_a_structural_save_reads_and_runs_the_same_at_two_library_sizes_with_custom_scopes(library):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
     fixture = library
@@ -193,16 +194,160 @@ def test_live_a_structural_save_runs_the_same_statements_at_two_library_sizes(li
             return self._connection.execute(sql, *args, **kwargs)
 
     adapter = PostgresScanCacheAdapter(fixture.config, connect=lambda url: Counting(isolatedPostgres._connect(url)))
+    # Several custom gallery scopes published, so the per-header membership patch is counted too (R4).
+    _publish_custom_scopes(fixture)
 
-    def statements(title):
+    def measure(title):
         counted.clear()
+        before = _rows_read(fixture)
         _rename(fixture, title, adapter=adapter)
-        return len(counted)
+        after = _rows_read(fixture)
+        return len(counted), sum(after.get(table, 0) - before.get(table, 0) for table in after)
 
-    small = statements("First Size")
-    fixture.seed(*fixture.tracks, *(fixture.entry(f"Other/Album {number:03}/01.flac", artist="Other",
-                                                   album=f"Album {number:03}") for number in range(200)))
+    small = measure("First Size")
+    _seed_albums(fixture, 2000)
+    large = measure("Second Size")
+
+    print("edits always save, (statements, rows read) at 1 and 2,001 albums:", small, large)
+    assert small[0] == large[0], f"The save's statements grew with the library: {small} vs {large}."
+    assert abs(large[1] - small[1]) <= 25, f"The save's rows read grew with the library: {small} vs {large}."
+
+
+CUSTOM_SCOPES = (
+    {"gallery_scope": "all", "visible_library_categories": ["main_library"]},
+    {"gallery_scope": "all", "visible_library_categories": ["hoard"]},
+    {"gallery_scope": "all", "visible_library_categories": ["main_library", "hoard"]},
+)
+
+
+def _publish_custom_scopes(fixture):
+    from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+
+    for view_state in CUSTOM_SCOPES:
+        ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect, view_state=view_state)
+    headers = _rows(fixture, "select count(distinct scope_key) as n from library.gallery_membership_headers")[0]["n"]
+    assert headers >= len(CUSTOM_SCOPES) + 1, "The custom scopes were not published."
+
+
+def _catalog_columns(connection, table):
+    return [row["column_name"] for row in connection.execute(
+        """select column_name from information_schema.columns
+           where table_schema = 'library' and table_name = %s
+             and is_generated = 'NEVER' and is_identity = 'NO' order by ordinal_position""", (table,)).fetchall()]
+
+
+def _seed_albums(fixture, count):
+    """``count`` one-track albums in one INSERT per table (generate_series): clones of the saved album's
+    rows, every column but the identity and generated ones read from the catalog."""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        source = connection.execute(
+            """select files.id as file_id, tracks.id as track_id, tracks.album_id from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %s""",
+            (fixture.tracks[0]["path"],)).fetchone()
+        clone = {"album_key": "source.album_key || '::bulk::' || n", "title": "source.title || ' Bulk ' || n"}
+        albums = _catalog_columns(connection, "local_albums")
+        connection.execute(
+            f"""insert into library.local_albums ({", ".join(albums)})
+                select {", ".join(clone.get(column, f"source.{column}") for column in albums)}
+                from library.local_albums source, generate_series(1, %(count)s) n where source.id = %(album)s""",
+            {"count": count, "album": source["album_id"]})
+        clone = {"track_key": "source.track_key || '::bulk::' || n", "album_id": "albums.id"}
+        tracks = _catalog_columns(connection, "local_tracks")
+        connection.execute(
+            f"""insert into library.local_tracks ({", ".join(tracks)})
+                select {", ".join(clone.get(column, f"source.{column}") for column in tracks)}
+                from library.local_tracks source cross join generate_series(1, %(count)s) n
+                join library.local_albums albums on albums.album_key = (
+                  select album_key from library.local_albums where id = source.album_id) || '::bulk::' || n
+                where source.id = %(track)s""", {"count": count, "track": source["track_id"]})
+        moved = f"'{ALBUM}', 'Bulk ' || n"
+        clone = {"track_id": "tracks.id", "private_path": f"replace(source.private_path, {moved})",
+                 "relative_path": f"replace(source.relative_path, {moved})"}
+        files = _catalog_columns(connection, "local_track_files")
+        connection.execute(
+            f"""insert into library.local_track_files ({", ".join(files)})
+                select {", ".join(clone.get(column, f"source.{column}") for column in files)}
+                from library.local_track_files source cross join generate_series(1, %(count)s) n
+                join library.local_tracks tracks on tracks.track_key = (
+                  select track_key from library.local_tracks where id = source.track_id) || '::bulk::' || n
+                where source.id = %(file)s""", {"count": count, "file": source["file_id"]})
     _finish_live_reconciliation(fixture.config)
-    large = statements("Second Size")
 
-    assert small == large, f"The save's statements grew with the library: {small} vs {large}."
+
+def _rows_read(fixture):
+    """Rows read per table so far, once every backend's pending statistics have flushed."""
+    previous = None
+    for _ in range(60):
+        with isolatedPostgres._connect(fixture.setup_url) as reader:
+            reader.execute("select pg_stat_clear_snapshot()")
+            current = {row["relname"]: int(row["read"]) for row in reader.execute(
+                """select relname, coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) as read
+                   from pg_stat_user_tables where schemaname in ('library', 'app', 'ops')""").fetchall()}
+        if current == previous:
+            return current
+        previous = current
+        time.sleep(0.25)
+    return previous
+
+
+# 6.5's conditions on R1 and R5.
+
+def test_repeated_publication_failures_make_no_back_to_back_drains(library, monkeypatch):
+    import threading
+
+    from music_app.services import gallery_projection_postgres, scoped_relation_projection
+    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
+
+    drains, release = [], threading.Event()
+
+    def failing(*_args, **_kwargs):
+        drains.append(time.monotonic())
+        release.wait(2)
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready", failing)
+    for _ in range(5):
+        gallery_projection_postgres.queue_journaled_relation_drain(library.config)
+    release.set()
+    for _ in range(3):
+        _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=30)
+    time.sleep(0.5)
+
+    assert len(drains) == 1, f"Failures were retried back to back: {len(drains)} drains."
+
+
+def test_live_no_save_request_or_watcher_event_starts_the_one_time_build(library, monkeypatch):
+    from music_app.services import gallery_projection_postgres, relation_projection_postgres
+    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from tests.py.test_problematic_albums import _watcher_pass
+
+    started = []
+    monkeypatch.setattr(relation_projection_postgres, "ensure_relation_projection_ready",
+                        lambda *_a, **_k: started.append("relation build") or {"ready": True})
+    monkeypatch.setattr(gallery_projection_postgres, "initialize_gallery_membership",
+                        lambda *_a, **_k: started.append("gallery build"))
+
+    _rename(library, "Saved Once")
+    PostgresLibraryBrowseRepository(library.config).build_root_startup_preview_payload(
+        query_params={}, sidebar_only=True, queue_projection_refresh=True)
+    _watcher_pass(library, active=[{**library.tracks[0], "title": "Watcher Title"}])
+    for _ in range(3):
+        _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=60)
+
+    assert started == [], f"An ordinary event started the one-time build: {started}."
+
+
+def test_live_a_rolled_back_publication_leaves_the_edit_committed(library, monkeypatch):
+    from music_app.services import scoped_relation_projection
+
+    def failing(*_args, **_kwargs):
+        raise RuntimeError("Library changes are still being reconciled.")
+
+    monkeypatch.setattr(scoped_relation_projection, "publish_affected_relation_projection", failing)
+
+    _rename(library, "Committed Despite Publication")
+
+    assert _album_titles(library) == {"Committed Despite Publication"}, "The publication's failure lost the edit."
+    journaled = _rows(library, "select count(*) as n from library.local_relation_dirty_albums where album_id > 0")[0]["n"]
+    assert journaled >= 1, "The edit's albums were not left in the journal for their owner."

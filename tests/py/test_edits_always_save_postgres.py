@@ -478,15 +478,64 @@ def test_live_a_saved_edit_reaches_every_scope_through_its_queued_drain(library)
     assert holding, "The album is in no gallery scope before the save."
 
     _rename(library, "Reached By The Drain")
-    committed = time.perf_counter()
-    deadline = committed + 10
-    while not holding <= _scopes_showing(library, "Reached By The Drain") and time.perf_counter() < deadline:
-        time.sleep(0.005)
-    gap = time.perf_counter() - committed
+    gap = _seconds_until_shown(library, holding, "Reached By The Drain")
     print(f"edits always save, R4 gap from the save's commit to the edit in every scope: {gap * 1000:.0f} ms")
 
     assert holding <= _scopes_showing(library, "Reached By The Drain"), (
         f"The drain the save queued did not publish the edit within {gap:.1f} s.")
+    # A reload or another tab sees the old value for this long (the saving screen updates at the click).
+    assert gap < R4_GAP_BOUND, f"The save-to-gallery gap regressed: {gap * 1000:.0f} ms."
+
+
+R4_GAP_BOUND = 1.0
+
+
+def _seconds_until_shown(fixture, scopes, title, *, timeout=10):
+    """Seconds from now until every one of ``scopes`` shows the album titled ``title`` (or the timeout)."""
+    began = time.perf_counter()
+    while not scopes <= _scopes_showing(fixture, title) and time.perf_counter() - began < timeout:
+        time.sleep(0.005)
+    return time.perf_counter() - began
+
+
+def _lower_one_header(fixture):
+    _publish_custom_scopes(fixture)
+    headers = _headers(fixture)
+    behind = sorted(headers)[0]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""update library.gallery_membership_headers set source_generation = source_generation - 1
+            where scope_key = %s""", (behind,))
+    return behind
+
+
+def test_live_a_save_shows_in_every_header_the_journal_covers(library):
+    """Rewritten for R4 (orchestrator, 11-23): the save, then the drain it queues. With one header behind the
+    journal, the edit still reaches every scope that held the album, within the R4 bound."""
+    behind = _lower_one_header(library)
+    holding = _scopes_showing(library, ALBUM) - {behind}
+    assert holding, "No header the journal covers holds the album."
+
+    _rename(library, "Shown Everywhere")
+    gap = _seconds_until_shown(library, holding, "Shown Everywhere")
+
+    assert holding <= _scopes_showing(library, "Shown Everywhere"), (
+        "The edit is missing from a header the journal covers after the save's drain.")
+    assert gap < R4_GAP_BOUND, f"The covered headers showed the edit after {gap * 1000:.0f} ms."
+
+
+def test_live_a_save_shows_in_a_header_behind_the_journal_after_its_drain(library):
+    """Rewritten for R4: a header behind the journal (a restored database) is realigned by the drain the save
+    queues, and then shows the edit at the current generation, within the R4 bound."""
+    behind = _lower_one_header(library)
+    assert behind in _scopes_showing(library, ALBUM), "The lowered header does not hold the album."
+
+    _rename(library, "Shown Behind Too")
+    gap = _seconds_until_shown(library, {behind}, "Shown Behind Too")
+
+    assert behind in _scopes_showing(library, "Shown Behind Too"), (
+        "The edit never reached the header behind the journal.")
+    assert _headers(library)[behind] == _generation(library), "The drain left the header behind."
+    assert gap < R4_GAP_BOUND, f"The header behind the journal showed the edit after {gap * 1000:.0f} ms."
 
 
 def test_live_the_owners_drain_realigns_every_header_and_empties_the_journal(library, monkeypatch):

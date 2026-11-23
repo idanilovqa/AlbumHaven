@@ -259,15 +259,16 @@ def read_tags(path: Path) -> dict[str, object]:
         handle = open(path, "rb")
     except OSError:
         handle = None
+    view = None
     try:
         data: dict[str, object] = {}
         if handle is None:
             source = path  # mutagen reports the unreadable file as it always has
         else:
-            source = art_free_view(handle, path)
-            if source is None:
+            view = art_free_view(handle, path)
+            if view is None:
                 handle.seek(0)
-                source = handle
+            source = view if view is not None else handle
         audio_full = MutagenFile(source)
         if audio_full is not None and getattr(audio_full, "tags", None):
             for key, value in audio_full.tags.items():
@@ -286,6 +287,8 @@ def read_tags(path: Path) -> dict[str, object]:
     except Exception:
         return _apev2_tags(handle, path)
     finally:
+        if view is not None:
+            view.close()  # non-owning: the handle stays open until the line below
         if handle is not None:
             handle.close()
 

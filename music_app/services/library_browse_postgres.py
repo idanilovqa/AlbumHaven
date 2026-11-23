@@ -6804,29 +6804,30 @@ def _problem_reason_identity_code(reason: object) -> str:
 
 
 _LOOSE_IGNORED_REPAIRS_SQL = """
-    select library.ignored_repairs.repair_key
+    select identities.identity, library.ignored_repairs.repair_key
     from library.ignored_repairs
     join app.bootstrap_owners on app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
     join library.libraries
       on library.libraries.id = library.ignored_repairs.library_id
      and library.libraries.owner_account_id = app.bootstrap_owners.account_id
      and library.libraries.name = 'Local Library' and library.libraries.library_kind = 'local'
-    where split_part(library.ignored_repairs.repair_key, '::', 1) = any(%(identities)s::text[])
+    join unnest(%(identities)s::text[]) identities(identity)
+      on left(library.ignored_repairs.repair_key, length(identities.identity) + 2) = identities.identity || '::'
 """
 
 
 def _attach_loose_ignored_repair_keys(connection: Any, rows: list[dict[str, object]]) -> None:
     """A loose group's exclusions, as an album row carries its own: a file rule names the file's path, a
-    group rule the group's key. One read for these rows only."""
+    group rule the group's key. A rule key is the identity, then "::" (a group key holds "::" itself, so the
+    identity is matched as a whole prefix). One read for these rows only."""
     if not rows:
         return
     identities = sorted({str(row.get("file_private_path") or "") for row in rows}
                         | {str(row.get("album_key") or "") for row in rows} - {""})
-    keys = [str((found.get("repair_key") if isinstance(found, Mapping) else found[0]) or "") for found in connection.execute(
-        _LOOSE_IGNORED_REPAIRS_SQL, {"identities": identities}).fetchall()]
     by_identity: dict[str, list[str]] = {}
-    for key in keys:
-        by_identity.setdefault(key.split("::", 1)[0], []).append(key)
+    for found in connection.execute(_LOOSE_IGNORED_REPAIRS_SQL, {"identities": identities}).fetchall():
+        identity, key = (found["identity"], found["repair_key"]) if isinstance(found, Mapping) else found[:2]
+        by_identity.setdefault(str(identity), []).append(str(key))
     for row in rows:
         row["ignored_repair_keys"] = sorted({
             *by_identity.get(str(row.get("file_private_path") or ""), ()),

@@ -69,6 +69,7 @@ from music_app.services.relation_projection_postgres import (
     replace_artist_search_projection_in_transaction,
 )
 from music_app.services.postgres_connections import leased_connection as _leased_connection
+from music_app.services.postgres_connections import session_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -309,9 +310,16 @@ class PostgresScanCacheAdapter:
 
         Several app instances may share one library database. The lease lives on
         its own connection until released (or until that process exits), so a
-        second instance sees it as held and skips its own repair scan.
+        second instance sees it as held and skips its own repair scan. That
+        connection is a session lease nobody borrows next (BI-15), never the
+        adapter's pooled lease; closing it ends the session and the lock.
         """
-        connection = self._connect_to_database()
+        if not self._database_url:
+            raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres scan_cache persistence.")
+        connection = (
+            session_connection(self._database_url) if self._connect is _connect
+            else self._connect_to_database()  # a test's own connection
+        )
         try:
             if hasattr(connection, "autocommit"):
                 connection.autocommit = True

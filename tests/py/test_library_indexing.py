@@ -1331,7 +1331,9 @@ def test_cached_album_classification_cannot_mask_unread_physical_compilation_tag
             "TIT2": [f"Track {number}"], "TRCK": [str(number)], "TDRC": ["1988"],
             "TCMP": TCMP(encoding=3, text=["1"]),
         }
-    monkeypatch.setattr(metadata, "MutagenFile", lambda path: SimpleNamespace(tags=tags_by_path[str(path)]))
+    # read_tags hands mutagen its one open file, never the path: the fake finds the tags by the file's name.
+    monkeypatch.setattr(metadata, "MutagenFile",
+                        lambda source: SimpleNamespace(tags=tags_by_path[str(getattr(source, "name", source))]))
     reads = []
     def read_metadata(path):
         reads.append(str(path))

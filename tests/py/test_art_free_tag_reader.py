@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 import struct
 
 import pytest
@@ -47,7 +48,7 @@ def _write_flac(path):
 
 def _full_read(path, monkeypatch):
     with monkeypatch.context() as patch:
-        patch.setattr(art_free_tag_reader, "open_art_free", lambda _path: None)
+        patch.setattr(art_free_tag_reader, "art_free_view", lambda _handle, _path: None)
         return metadata.read_metadata_for_file(path)
 
 
@@ -77,7 +78,8 @@ def test_scan_metadata_skips_embedded_pictures_and_matches_a_full_read(tmp_path,
     expected = _full_read(path, monkeypatch)
 
     counting_open = _CountingOpen()
-    monkeypatch.setattr(art_free_tag_reader, "open", counting_open, raising=False)
+    # read_tags opens the file once; the art-free view, mutagen and the APE probe all read that handle.
+    monkeypatch.setattr(metadata, "open", counting_open, raising=False)
     entry = metadata.read_metadata_for_file(path)
 
     assert entry == expected
@@ -105,3 +107,99 @@ def test_ape_tail_probe_still_reads_ape_tags(tmp_path):
     plain = tmp_path / "plain.mp3"
     plain.write_bytes(MP3_FRAME * 10)
     assert metadata.read_apev2_tags(plain) == {}
+
+
+class _OneHandleOpen:
+    """metadata's open: records every file it opens and how often each is closed."""
+
+    def __init__(self):
+        self.handles = []
+
+    def __call__(self, path, mode="rb"):
+        opener = self
+
+        class Tracked(io.BufferedReader):
+            closes = 0
+
+            def close(self):
+                type(self).closes += 1
+                super().close()
+
+        handle = Tracked(io.FileIO(path, mode))
+        opener.handles.append(handle)
+        return handle
+
+
+def _ape_item_and_footer():
+    item = (5).to_bytes(4, "little") + bytes(4) + b"Title\x00" + b"Hello"
+    return item + b"APETAGEX" + (2000).to_bytes(4, "little") + (len(item) + 32).to_bytes(4, "little") + \
+        (1).to_bytes(4, "little") + bytes(12)
+
+
+@pytest.mark.parametrize("kind", ["id3", "no-header"])
+def test_read_tags_hands_mutagen_the_one_open_handle_never_the_path(tmp_path, monkeypatch, kind):
+    """6.5: real I/O is one open per file. mutagen is given the art-free view (ID3) or the shared handle (no
+    header the view handles), never the path, so it opens nothing itself; the handle is closed exactly once."""
+    path = tmp_path / "track.mp3"
+    if kind == "id3":
+        _write_mp3(path, 4)
+    else:
+        path.write_bytes(MP3_FRAME * 10)
+    tracked = _OneHandleOpen()
+    handed = []
+    real_mutagen = metadata.MutagenFile
+    monkeypatch.setattr(metadata, "open", tracked, raising=False)
+    monkeypatch.setattr(metadata, "MutagenFile", lambda source: handed.append(source) or real_mutagen(source))
+
+    metadata.read_tags(path)
+
+    assert len(tracked.handles) == 1, "one open per file"
+    assert len(handed) == 1 and not isinstance(handed[0], (str, Path)), f"mutagen got {handed[0]!r}"
+    assert handed[0] is not tracked.handles[0] if kind == "id3" else handed[0] is tracked.handles[0]
+    assert type(tracked.handles[0]).closes == 1 and tracked.handles[0].closed
+
+
+def test_each_reader_seeks_for_itself_so_their_order_does_not_matter(tmp_path):
+    """6.5: the art-free view, mutagen and the APE probe share one handle, each seeking to its own offset
+    first. Run in either order, each reads the same."""
+    path = tmp_path / "track.mp3"
+    _write_mp3(path, 4)
+    with path.open("ab") as appended:
+        appended.write(_ape_item_and_footer())
+
+    def readings(order):
+        results = {}
+        with path.open("rb") as handle:
+            for reader in order:
+                handle.seek(123)  # wherever the previous reader left it
+                if reader == "ape":
+                    results[reader] = metadata._read_apev2_tags_from(handle)
+                else:
+                    view = art_free_tag_reader.art_free_view(handle, path)
+                    results[reader] = dict(metadata.MutagenFile(view).tags.items())
+            assert not handle.closed, "neither reader closes the caller's handle"
+        return results
+
+    forward, backward = readings(["view", "ape"]), readings(["ape", "view"])
+    assert forward == backward
+    assert forward["ape"] == {"title": "Hello"}
+    assert str(forward["view"]["TIT2"]) == "Fugata"
+
+
+@pytest.mark.parametrize("failure", ["unparseable", "mutagen-raises"])
+def test_a_file_mutagen_cannot_read_gives_todays_answer_and_closes_its_handle_once(tmp_path, monkeypatch, failure):
+    """6.5: a file mutagen cannot parse still gives what it gave before (no mutagen tags; the APE tags, if
+    any), and a mutagen error falls back the same way; either way the one handle is closed exactly once."""
+    path = tmp_path / "broken.mp3"
+    path.write_bytes(b"not audio at all" + _ape_item_and_footer())
+    tracked = _OneHandleOpen()
+    monkeypatch.setattr(metadata, "open", tracked, raising=False)
+    if failure == "mutagen-raises":
+        def raising(_source):
+            raise RuntimeError("mutagen could not parse")
+
+        monkeypatch.setattr(metadata, "MutagenFile", raising)
+
+    assert metadata.read_tags(path) == {"title": "Hello"}
+    assert len(tracked.handles) == 1
+    assert type(tracked.handles[0]).closes == 1 and tracked.handles[0].closed

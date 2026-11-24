@@ -663,7 +663,27 @@ def test_build_completed_move_task_tracks_refresh_metadata():
     assert task["requires_view_refresh"] is True
 
 
-def test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_library_size(config, tmp_path, monkeypatch):
+def _write_moved_track(path: Path, header: str) -> None:
+    """A moved track: an MP3 with a real ID3v2 tag, or bytes with no header any reader recognizes."""
+    if header == "no-header":
+        path.write_bytes(b"track")
+        return
+    mutagen_id3 = pytest.importorskip("mutagen.id3")
+    # MPEG-1 Layer III, 128 kbit/s, 44.1 kHz: frames of silence.
+    path.write_bytes((b"\xff\xfb\x90\x64" + bytes(413)) * 20)
+    tags = mutagen_id3.ID3()
+    tags.add(mutagen_id3.TIT2(encoding=3, text=[path.stem]))
+    tags.add(mutagen_id3.TALB(encoding=3, text=["Tender Buttons"]))
+    tags.add(mutagen_id3.TPE1(encoding=3, text=["Broadcast"]))
+    tags.save(path, v2_version=4)
+
+
+@pytest.mark.parametrize("header", ["id3", "no-header"])
+def test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_library_size(
+    config, tmp_path, monkeypatch, header,
+):
+    """One open per moved track (plus the folder's one cover lookup), whether or not the file starts with a
+    header the art-free reader handles: a declined art-free read hands the parser the file it opened."""
     from music_app.services import metadata
     from music_app.services import move_executor as move_executor_module
     from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
@@ -676,7 +696,7 @@ def test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_libra
     moved = {}
     for index in range(10):
         new_path = destination / f"{index:02d}.mp3"
-        new_path.write_bytes(b"track")
+        _write_moved_track(new_path, header)
         moved[str(tmp_path / "arrivals" / f"{index:02d}.mp3")] = str(new_path)
     monkeypatch.setattr(move_executor_module, "get_library_roots", lambda _config: [
         {"id": "main-1", "path": str(main_root), "category": "main_library_roots"},

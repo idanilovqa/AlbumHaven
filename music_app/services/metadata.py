@@ -163,18 +163,26 @@ def _decode_ape_text(value: bytes) -> str:
 def read_apev2_tags(path: Path) -> dict[str, object]:
     try:
         with path.open("rb") as handle:
-            handle.seek(0, 2)
-            file_size = handle.tell()
-            # An APEv2 footer ends the file or precedes the 128-byte ID3v1 tag.
-            # Probe those 160 bytes before reading the 64 KB tag window: a
-            # scan does this for every file and most files have no APE tag.
-            probe_size = min(file_size, 160)
-            handle.seek(file_size - probe_size)
-            if b"APETAGEX" not in handle.read(probe_size):
-                return {}
-            read_size = min(file_size, 65536)
-            handle.seek(file_size - read_size)
-            tail = handle.read(read_size)
+            return _read_apev2_tags_from(handle)
+    except Exception:
+        return {}
+
+
+def _read_apev2_tags_from(handle) -> dict[str, object]:
+    """The APEv2 tags of an open file; ``handle`` is the caller's and stays open."""
+    try:
+        handle.seek(0, 2)
+        file_size = handle.tell()
+        # An APEv2 footer ends the file or precedes the 128-byte ID3v1 tag.
+        # Probe those 160 bytes before reading the 64 KB tag window: a
+        # scan does this for every file and most files have no APE tag.
+        probe_size = min(file_size, 160)
+        handle.seek(file_size - probe_size)
+        if b"APETAGEX" not in handle.read(probe_size):
+            return {}
+        read_size = min(file_size, 65536)
+        handle.seek(file_size - read_size)
+        tail = handle.read(read_size)
 
         footer_index = tail.rfind(b"APETAGEX")
         if footer_index < 0 or footer_index + 32 > len(tail):
@@ -243,16 +251,25 @@ def _full_tag_aliases(tags: dict[str, object]) -> dict[str, object]:
 def read_tags(path: Path) -> dict[str, object]:
     if MutagenFile is None:
         return read_apev2_tags(path)
+    from music_app.services.art_free_tag_reader import art_free_view
+
+    # One open per file: the art-free view, mutagen and the APE probe all read this handle (each seeks
+    # first), and only this function closes it.
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        handle = None
+    view = None
     try:
         data: dict[str, object] = {}
-        from music_app.services.art_free_tag_reader import open_art_free
-
-        art_free = open_art_free(path)
-        try:
-            audio_full = MutagenFile(art_free if art_free is not None else path)
-        finally:
-            if art_free is not None:
-                art_free.close()
+        if handle is None:
+            source = path  # mutagen reports the unreadable file as it always has
+        else:
+            view = art_free_view(handle, path)
+            if view is None:
+                handle.seek(0)
+            source = view if view is not None else handle
+        audio_full = MutagenFile(source)
         if audio_full is not None and getattr(audio_full, "tags", None):
             for key, value in audio_full.tags.items():
                 data[str(key).lower()] = value
@@ -264,11 +281,20 @@ def read_tags(path: Path) -> dict[str, object]:
             and getattr(audio_full.info, "length", None)
         ):
             data["duration_seconds"] = int(audio_full.info.length)
-        for key, value in read_apev2_tags(path).items():
+        for key, value in _apev2_tags(handle, path).items():
             data.setdefault(key, value)
         return data
     except Exception:
-        return read_apev2_tags(path)
+        return _apev2_tags(handle, path)
+    finally:
+        if view is not None:
+            view.close()  # non-owning: the handle stays open until the line below
+        if handle is not None:
+            handle.close()
+
+
+def _apev2_tags(handle, path: Path) -> dict[str, object]:
+    return _read_apev2_tags_from(handle) if handle is not None else read_apev2_tags(path)
 
 _LOST_CHARACTER_ARTIST = re.compile(r"^[\s?/&,;.\-]*\?[\s?/&,;.\-]*$")
 

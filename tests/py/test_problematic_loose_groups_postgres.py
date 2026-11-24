@@ -195,8 +195,8 @@ KEY_PATHS = [
     pytest.param("/01.flac", id="posix-root"),
     pytest.param("/music/Caf\u00e9/01.flac", id="non-ascii-nfc"),
     pytest.param("/music/Cafe\u0301/01.flac", id="non-ascii-nfd"),
-    pytest.param(r"C:\Музыка\ДДТ\Ремиксы\01.flac", id="cyrillic"),
-    pytest.param("/music/天門/She and Her Cat/01.flac", id="cjk"),
+    pytest.param(r"C:\Музыка\Тестовый артист\Альбом\01.flac", id="cyrillic"),
+    pytest.param("/music/試験アーティスト/Test Album/01.flac", id="cjk"),
 ]
 
 

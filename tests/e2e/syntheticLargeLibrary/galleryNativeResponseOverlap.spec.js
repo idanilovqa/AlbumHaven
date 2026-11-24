@@ -15,6 +15,7 @@ import {
 import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHelpers.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
 import { observeGalleryTraffic, readGalleryRuntimeState } from '../helpers/passiveGalleryDiagnostics.js';
+import { isSearchLooseTracksPrefetchUrl } from '../helpers/productionViewObserver.js';
 
 const PREFETCH_VIEWPORTS = 8;
 const FULL_REFRESH_SEARCH_QUERY = 'Neal Morse';
@@ -33,8 +34,10 @@ function isRootContinuation(response) {
 
 function isFullSearchRefreshUrl(candidateUrl, query) {
   const url = new URL(candidateUrl);
+  // The search's Loose Tracks prefetch shares the URL's query but never answers for the gallery.
   return url.pathname.endsWith('/view-data')
     && !url.searchParams.has('gallery_cursor')
+    && !isSearchLooseTracksPrefetchUrl(url)
     && String(url.searchParams.get('q') || '').trim() === query;
 }
 
@@ -395,6 +398,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
     let diagnosticSequenceBeforeInput = 0;
     let anchor = null;
       let watcherFixture = null;
+      const watchedAlbum = `Gallery Refresh ${Date.now()}`;
       let originalFailure = null;
       let observation = null;
       let samples;
@@ -411,7 +415,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       watcherFixture = await createWatchedAlbumFixture({
         ownedDirectoryName: 'gallery-native-response-overlap',
         artist: FULL_REFRESH_SEARCH_QUERY,
-        album: `Gallery Refresh ${Date.now()}`,
+        album: watchedAlbum,
         year: 2026,
         createLocalArt: true,
         context,
@@ -437,10 +441,9 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         candidate => isFullSearchRefresh(candidate, FULL_REFRESH_SEARCH_QUERY),
         { timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
       );
-      const fixtureMutation = watcherFixture.renameTrack(
-        0,
-        `Watcher First Signal ${Date.now()}`,
-      );
+      // The watched album's card must change: a refresh that only renames a track leaves every
+      // card as it was, so the gallery rightly keeps its mounted cards and has nothing to defer.
+      const fixtureMutation = Promise.resolve().then(() => watcherFixture.deleteTrack(1));
       activeInput = keepWheelActiveUntilResponseBoundary(
         ui, page,
         deferredUpdateBoundary(galleryActions, diagnosticSequenceBeforeInput, responseBoundary.responseAt),
@@ -477,7 +480,6 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         expect(deferredEvent, 'full refresh must reach the production deferred group-update path').not.toBeNull();
         expect(deferredEvent.touchGestureActive).toBe(false);
         expect(response.ok(), `${response.status()} ${response.url()}`).toBe(true);
-        expect(watcherFixture.tracks).toHaveLength(2);
         const responseUrl = new URL(response.url());
         expect(responseUrl.searchParams.has('gallery_cursor')).toBe(false);
         expect(responseAt).toBeGreaterThanOrEqual(inputStartedAt);
@@ -486,13 +488,18 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         expect(Number(deferredEvent.epoch)).toBeLessThanOrEqual(inputEndedAt);
         await waitForDeferredReplay(galleryActions, deferredEvent);
       // parity-check: allow-read-only-measurement-evaluate -- diagnose authoritative post-scan view ownership
-      stateAfterReplay = await page.evaluate(() => ({
+      stateAfterReplay = await page.evaluate(album => ({
+        watchedAlbumTrackCounts: (state.view?.artist_groups || [])
+          .flatMap(group => group.albums || [])
+          .filter(candidate => candidate.name === album)
+          .map(candidate => getAlbumCardSummary(candidate).trackCount),
         query: state.view?.query || '',
         albumCount: state.view?.album_count ?? null,
         groupAlbumCount: (state.view?.artist_groups || [])
           .reduce((count, group) => count + (group.albums || []).length, 0),
         pendingScanCompletionViewRefresh: Boolean(state.ui?.pendingScanCompletionViewRefresh),
-      }));
+      }), watchedAlbum);
+      expect(stateAfterReplay.watchedAlbumTrackCounts).toEqual([1]);
       await expect.poll(() => readLoadedAlbumCount(page)).toBe(loadedBefore + 1);
         await page.waitForTimeout(300);
       } catch (error) {

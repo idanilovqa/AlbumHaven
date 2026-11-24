@@ -8596,10 +8596,16 @@ function findGalleryMainContextSection(threshold) {
   return null;
 }
 
+// A hidden gallery (a mobile page covers it) reads scrollTop 0; its bar keeps the context it had
+// until the gallery shows again and its scroll position resolves the context.
+function isGalleryScrollHidden(scroll) {
+  return scroll.getClientRects?.().length === 0;
+}
+
 function updateGalleryMainScrollContext() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
-  if (!bar || !scroll) return;
+  if (!bar || !scroll || isGalleryScrollHidden(scroll)) return;
   if (!galleryMainChromeInputs || !galleryMainChromeTokenMatches(galleryMainChromeInputs.token)) {
     updateGalleryMainChrome();
     return;
@@ -8651,7 +8657,9 @@ function updateGalleryMainChrome() {
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   };
   galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs, loadedTotals };
-  renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  if (!isGalleryScrollHidden(scroll)) {
+    renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  }
   updateGalleryFamilyPanelChrome(primaryArtist);
 }
 

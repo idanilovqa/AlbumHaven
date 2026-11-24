@@ -11791,6 +11791,54 @@
       "proof": "static"
     },
     {
+      "id": "py:services/child_process.py#ChildProcess._supervise",
+      "action": "Wait for one child process to exit on its own thread",
+      "entrypoints": [
+        "py:music_app/services/child_process.py#ChildProcess._supervise:background:thread"
+      ],
+      "owners": [
+        "music_app/services/child_process.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/child_process.py#ChildProcess.launch",
+      "action": "Start one child process off the event loop",
+      "entrypoints": [
+        "py:music_app/services/child_process.py#ChildProcess.launch:background:executor"
+      ],
+      "owners": [
+        "music_app/services/child_process.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/child_process.py#_PipeReader.pump",
+      "action": "Read one child pipe while its reader has room",
+      "entrypoints": [
+        "py:music_app/services/child_process.py#_PipeReader.pump:background:thread"
+      ],
+      "owners": [
+        "music_app/services/child_process.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:services/compressed_static_files.py#_GzipCache.warm",
       "action": "Pre-compress the app's own static assets once per process, off the request path",
       "entrypoints": [
@@ -13521,6 +13569,22 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/private_route_boundary.py#_PrivateCachePolicy.__call__",
+      "action": "Set the cache policy on each private answer's headers from its own Cache-Control and its address, reading no body",
+      "entrypoints": [
+        "py:music_app/services/private_route_boundary.py#_PrivateCachePolicy.__call__:middleware:MIDDLEWARE asgi"
+      ],
+      "owners": [
+        "music_app/services/private_route_boundary.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
       "proof": "static"
     },
     {

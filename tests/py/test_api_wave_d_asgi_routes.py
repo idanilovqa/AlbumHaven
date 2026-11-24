@@ -3202,7 +3202,7 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
     assert all(call["logger"] is asgi_app.state.logger for call in log_calls)
     assert update_calls[0]["config"] is app.config
     assert image_status == 200
-    assert image_headers["cache-control"] == "public, max-age=3600"
+    assert image_headers["cache-control"] == "private, max-age=3600"
     assert image_headers["content-type"] == "image/jpeg"
     assert image_body == b"image-bytes"
     assert fetch_calls == [

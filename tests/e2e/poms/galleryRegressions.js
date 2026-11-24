@@ -945,6 +945,9 @@ export class GalleryRegressions {
     return this.galleryScroll.evaluate(scroll => ({
       remaining: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
       viewport: scroll.clientHeight,
+      scrollTop: scroll.scrollTop,
+      // A root page still loading will extend the gallery once it lands.
+      pageRequestInFlight: typeof rootGalleryPageRequest !== 'undefined' && Boolean(rootGalleryPageRequest),
     }));
   }
 

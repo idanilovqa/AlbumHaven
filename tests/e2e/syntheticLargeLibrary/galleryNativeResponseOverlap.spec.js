@@ -185,6 +185,11 @@ async function positionWithWheelBeforeContinuation(ui, page) {
   if (!box) throw new Error('Gallery scroll surface is not visible.');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   for (let step = 0; step < 100; step += 1) {
+    // Measure only between pages: a page landing during this step extends the gallery under it.
+    await expect.poll(
+      async () => (await ui.readContinuationGeometry()).pageRequestInFlight,
+      { intervals: [16, 32, 64], timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
+    ).toBe(false);
     const geometry = await ui.readContinuationGeometry();
     const lower = geometry.viewport * (PREFETCH_VIEWPORTS + 0.15);
     const upper = geometry.viewport * (PREFETCH_VIEWPORTS + 0.35);
@@ -203,10 +208,11 @@ async function positionWithWheelBeforeContinuation(ui, page) {
       continue;
     }
     await page.mouse.wheel(0, Math.min(480, Math.max(32, geometry.remaining - upper)));
+    // The wheel moves the gallery down; a page that lands meanwhile only lengthens what remains.
     await expect.poll(
-      async () => (await ui.readContinuationGeometry()).remaining,
+      async () => (await ui.readContinuationGeometry()).scrollTop,
       { intervals: [0, 8, 16, 32], timeout: 2000 },
-    ).toBeLessThan(geometry.remaining);
+    ).toBeGreaterThan(geometry.scrollTop);
   }
   throw new Error('Desktop preposition did not reach the continuation boundary.');
 }

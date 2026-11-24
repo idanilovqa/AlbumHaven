@@ -2301,6 +2301,77 @@ test('fetchAndRender schedules sidebar hydration after gallery-first startup wit
   assert.equal(applyOptions[1].preserveMountedGalleryChildren, true);
 });
 
+test('a selected startup page shows its gallery while the root sidebar rebuilds, then requests the sidebar the server named', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const scheduledTimeouts = [];
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduledTimeouts.push({ callback, delayMs });
+    return scheduledTimeouts.length;
+  };
+  context.isEffectivelyEmptyView = () => false;
+  context.state.view.selected_artist = 'Broadcast';
+  const sidebarEndpoint = '/view-data?surface=albums&payload_tier=sidebar&category=main_library';
+
+  const selectedPromise = context.fetchAndRender('/view-data?surface=albums&artist=Broadcast&root_sidebar=1', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+    startupHydrationFollowupEndpoint: '',
+  });
+  pendingRequests[0].resolveWith({
+    selected_artist: 'Broadcast',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+    album_count: 1,
+    root_sidebar_followup_endpoint: sidebarEndpoint,
+  });
+  await selectedPromise;
+  await flushMicrotasks();
+
+  // The gallery is on screen before any sidebar request, and startup is not complete without the sidebar.
+  assert.deepEqual(context.state.view.artist_groups, [
+    { artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] },
+  ]);
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(context.startupMetrics.completed, 0);
+  assert.equal(scheduledTimeouts.length, 1);
+  scheduledTimeouts[0].callback();
+  await flushMicrotasks();
+
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, sidebarEndpoint);
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }, { artist: 'Mono', count: 2 }],
+    artist_count: 2,
+    payload_tier: 'sidebar',
+  });
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.equal(context.state.view.selected_artist, 'Broadcast');
+  assert.deepEqual(context.state.view.artists_sidebar, [
+    { artist: 'Broadcast', count: 1 }, { artist: 'Mono', count: 2 },
+  ]);
+  assert.strictEqual(calls.applyViewPayload[1].artist_groups, calls.applyViewPayload[0].artist_groups);
+});
+
+test('a startup answer without a named sidebar request queues no followup', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.view.selected_artist = 'Broadcast';
+  const selectedPromise = context.fetchAndRender('/view-data?surface=albums&artist=Broadcast&root_sidebar=1', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+    startupHydrationFollowupEndpoint: '',
+  });
+  pendingRequests[0].resolveWith({
+    selected_artist: 'Broadcast',
+    artist_groups: [{ artist: 'Broadcast', albums: [] }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+  });
+  await selectedPromise;
+  await flushMicrotasks();
+  assert.ok(!context.state.ui.pendingStartupHydrationFollowup);
+  assert.equal(pendingRequests.length, 1);
+});
+
 test('fetchAndRender still schedules the full startup followup when sidebar hydration leaves a non-empty root view', async () => {
   const { context, calls, pendingRequests } = createContext();
   const scheduledTimeouts = [];

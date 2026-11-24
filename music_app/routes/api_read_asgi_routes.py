@@ -7,6 +7,7 @@ from music_app.services.loops import project_loop_for_client, project_loop_order
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlencode
 from collections.abc import Iterable, Mapping
 
 from fastapi import APIRouter, Query, Request
@@ -659,15 +660,10 @@ def view_data(request: Request) -> JSONResponse:
                     query_params=request.query_params,
                 )
             except GalleryProjectionPending:
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "code": "gallery_projection_pending",
-                        "error": "Gallery is being prepared.",
-                    },
-                    status_code=503,
-                    headers={"Retry-After": "1", "Cache-Control": "no-store"},
-                )
+                # The selected gallery never waits for the root header's rebuild: the page shows it now
+                # and asks for the sidebar next, from the root sidebar route, which needs no header.
+                root_sidebar_payload = {}
+                payload["root_sidebar_followup_endpoint"] = _root_sidebar_followup_endpoint(request)
             payload.update(
                 {
                     field: root_sidebar_payload[field]
@@ -743,17 +739,19 @@ def view_data(request: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+# The root view's own parameters: they choose which root sidebar a selected page sits in.
+_ROOT_SIDEBAR_VIEW_PARAMS = ("gallery_scope", "gallery_display", "gallery_display_mode", "gallery_scale_percent", "category")
+
+
+def _root_sidebar_followup_endpoint(request: Request) -> str:
+    """The root sidebar request for this page's root view (`_is_postgres_root_sidebar_request`)."""
+    params = [("surface", "albums"), ("payload_tier", "sidebar")]
+    params += [(key, value) for key, value in request.query_params.multi_items() if key in _ROOT_SIDEBAR_VIEW_PARAMS]
+    return f"/view-data?{urlencode(params)}"
+
+
 def _is_postgres_root_sidebar_request(request: Request) -> bool:
-    allowed_root_sidebar_params = {
-        "gallery_offset",
-        "payload_tier",
-        "surface",
-        "gallery_scope",
-        "gallery_display",
-        "gallery_display_mode",
-        "gallery_scale_percent",
-        "category",
-    }
+    allowed_root_sidebar_params = {"gallery_offset", "payload_tier", "surface", *_ROOT_SIDEBAR_VIEW_PARAMS}
     if any(str(key) not in allowed_root_sidebar_params for key in request.query_params.keys()):
         return False
     if str(request.query_params.get("payload_tier") or "").strip().casefold() != "sidebar":

@@ -84,7 +84,9 @@ def _sanitize_text(value):
     text = re.sub('(["\\\'])(?:[A-Za-z]:[\\\\/]|\\\\\\\\|/)[^"\\\']*\\1', '[path]', text)
     text = re.sub('https?://[^\\s/@:]+:[^\\s/@]+@', 'https://[redacted]@', text, flags=re.I)
     text = re.sub('(?i)\\b(?:token|password|secret|authorization|api[_-]?key)\\s*[:=]\\s*[^\\s,;]+', '[redacted]', text)
-    text = re.sub('[A-Za-z]:[\\\\/][^\\s,;]+|\\\\\\\\[^\\s,;]+|(?<![\\w:])/(?:[^\\s/]+/)*[^\\s,;]+', '[path]', text)
+    # A bare path may hold spaces, so it runs to the separator that ends it in an error (":", ";", ",", a quote
+    # or the line end) rather than to the first space.
+    text = re.sub('(?:[A-Za-z]:[\\\\/]|\\\\\\\\|(?<![\\w:])/)[^\\s:;,"\\\'][^\\n:;,"\\\']*', '[path]', text)
     return text[:8192]
 _TEXT_FIELDS = frozenset((
     'id', 'action', 'source', 'source_label', 'level', 'message', 'error',

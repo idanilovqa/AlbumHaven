@@ -1895,6 +1895,28 @@ function maybePrepareStreamingSeek(roleState) {
   publishStreamingDiagnostics();
 }
 
+/**
+ * A press on the song still sounding gives up the switch waiting for the pressed one, as a seek does: its
+ * start ends, its prepared stream goes, and the sounding song plays on with no gap. False once the cut-over
+ * has been sent to the audio thread, which may already be making it.
+ */
+function cancelStreamingSwitch() {
+  const engine = streamingEngineState();
+  const pending = engine.pendingSeek;
+  if (pending?.kind === 'replacement' && pending.prepareSent) return false;
+  engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
+  if (pending?.kind !== 'replacement') return true;
+  if (engine.roles.continuity?.streamId === pending.streamId
+      && !closeStreamingContinuityRole('switch-given-up')) return false;
+  settlePendingStreamingCutover(Object.assign(
+    new Error('Prepared track replacement was given up by a press on the playing song'), { cancelledPress: true },
+  ));
+  engine.pendingSeek = null;
+  engine.waveformReadyIdentity = null;
+  publishStreamingDiagnostics();
+  return true;
+}
+
 function settlePendingStreamingCutover(error = null, roleState = null) {
   const pending = streamingEngineState().pendingSeek;
   if (typeof pending?.resolve !== 'function' && typeof pending?.reject !== 'function') return;

@@ -9618,6 +9618,30 @@ test('with nothing playing, presses and a double tap before the song sounds neit
   assert.equal(harness.api.snapshot().paused, true, 'once it sounds its row pauses it as ever');
 });
 
+for (const late of [false, true]) {
+  test(`a press on the still-sounding song during a switch gives the switch up and it plays on with no gap${late ? ', though the pressed stream answers after' : ''}`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    const rows = installRowPresses(harness);
+    await rows.press('05.flac');
+    assert.equal(harness.context.state.player.selectedTrack.path, makeTrack('05.flac').path);
+    const pressedOpen = opensOf(harness, '05.flac')[0];
+
+    await rows.press('01.flac');
+    await harness.settle();
+    if (late && pressedOpen) {
+      try { await answerOpen(harness, pressedOpen, PRESSED_SONG); } catch { /* its stream is closed */ }
+      await harness.settle();
+    }
+
+    assert.equal(harness.api.snapshot().paused, false, 'not paused');
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.engine.node, node, 'the audio graph is not torn down');
+    assert.equal(harness.context.state.player.selectedTrack, null, 'the rows show the playing song again');
+    assert.equal(harness.context.state.player.current.path, makeTrack('01.flac').path);
+    assert.deepEqual(heardFor(node, 8), [OLD_SONG], 'only the playing song sounds, with no gap');
+  });
+}
+
 test('once a switched-to song sounds its row pauses it as ever', async (t) => {
   const { harness, node } = await playingSong(t);
   const rows = installRowPresses(harness);

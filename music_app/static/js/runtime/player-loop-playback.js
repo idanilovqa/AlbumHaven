@@ -1390,6 +1390,15 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
   const playback = getPlayerPlaybackSnapshot();
   const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
   if (isLoadedCurrentTrack && !restart) {
+    // The song still sounding, pressed while another starts: the switch is given up and it plays on.
+    const switching = String(state.player.selectedTrack?.path || trackPath) !== String(trackPath);
+    if (switching && !playback.paused && typeof cancelStreamingSwitch === 'function' && cancelStreamingSwitch()) {
+      pendingPlayerStart = null;
+      cancelPendingPlayerSelection();
+      if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
+      updatePlayerUi();
+      return;
+    }
     togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
     updatePlayerUi();
     return;

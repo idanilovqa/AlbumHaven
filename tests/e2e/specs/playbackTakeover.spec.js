@@ -301,7 +301,7 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
     await page.waitForTimeout(1000);
     const { frames } = await pressPaint;
     const samples = frames.map(({ title, time }) => ({ title, seconds: displayedSeconds(time) }));
-    // The title changes when the pressed song sounds, not at the press (owner, 11-22).
+    // The title changes when the pressed song sounds, not at the press.
     expect(frames.find(({ shows }) => shows), 'the pressed title is painted').toBeTruthy();
     expect(samples.length, 'read often enough to see a flicker').toBeGreaterThan(50);
     const firstPressed = samples.findIndex(({ title }) => title.includes(OTHER_TITLE));

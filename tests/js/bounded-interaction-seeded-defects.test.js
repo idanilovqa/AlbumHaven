@@ -868,6 +868,18 @@ const DEFECTS = [
     expected: /^rejected BI-04 forbidden-work:py:music_app\/services\/gallery_projection_postgres\.py#schedule_full_gallery_projection_refresh at .* from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_(pasted_image_save|local_select|local_delete):route:/,
   },
   {
+    // The private generic scheduler called directly, bypassing both named forms.
+    id: 'BI-04 a cover save calling the generic gallery scheduler',
+    language: 'py',
+    file: 'music_app/services/cache.py',
+    // Its own anchor, so it composes with the full-refresh defect on the same save.
+    anchor: '    _refresh_local_cover_inventory_after_selection(config, track_paths, options)\n    if any(',
+    replacement: '    from music_app.services.gallery_projection_postgres import _schedule_gallery_projection_refresh\n'
+      + '    _schedule_gallery_projection_refresh(config)\n'
+      + '    _refresh_local_cover_inventory_after_selection(config, track_paths, options)\n    if any(',
+    expected: /^rejected BI-04 forbidden-work:py:music_app\/services\/gallery_projection_postgres\.py#_schedule_gallery_projection_refresh at .* from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_(pasted_image_save|local_select|local_delete):route:/,
+  },
+  {
     id: 'BI-04 a cover-only watcher commit refreshing every library projection',
     language: 'py',
     file: 'music_app/services/state.py',

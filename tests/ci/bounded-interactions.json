@@ -11418,6 +11418,7 @@
         "library-state-scan",
         "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
         "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },
@@ -11464,6 +11465,7 @@
         "library-state-scan",
         "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
         "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },
@@ -11514,6 +11516,7 @@
         "library-state-scan",
         "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
         "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },
@@ -15671,6 +15674,7 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction.",
       "forbiddenWork": [
         "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },

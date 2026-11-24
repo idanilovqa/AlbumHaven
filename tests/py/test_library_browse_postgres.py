@@ -16261,7 +16261,8 @@ class _ProblematicSnapshotConnectionStub:
         return False
 
     def execute(self, sql, params=None):
-        if _is_missing_album_query(sql):
+        # The read lays the waiting Ignore intents over the loaded rows (none here).
+        if _is_missing_album_query(sql) or "library.ignored_repair_intents" in str(sql):
             return _InventoryCursor()
         assert str(sql) in {
             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",

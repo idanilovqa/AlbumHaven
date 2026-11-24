@@ -15153,19 +15153,37 @@
     },
     {
       "id": "py:services/scan_state.py#_merge_newer_published_inventory",
-      "action": "Run publisher _merge_newer_published_inventory",
+      "action": "A superseded full scan merges newer published rows and rebuilds its albums in memory, reading no disk for albums whose covers their own folders hold",
       "entrypoints": [
         "py:music_app/services/scan_state.py#_merge_newer_published_inventory:publisher:name"
       ],
       "owners": [
-        "music_app/services/scan_state.py"
+        "music_app/services/scan_state.py",
+        "music_app/services/library.py",
+        "music_app/services/album_local_cover_integrity.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 50,
+        "production": 2000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 0,
+        "open_calls": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_scan_republish_bounded_contracts.py::test_a_superseded_scans_merge_rebuilds_its_albums_without_touching_the_disk",
+      "testIdentity": "test_a_superseded_scans_merge_rebuilds_its_albums_without_touching_the_disk",
+      "rollback": "Test-only contract; the merge is unchanged. It runs only in a full scan's finalize, at most 5 times per scan, and its album rebuild is the scan's own in-memory work; the cover repair lists a folder only for an album whose cover was inherited from a rejected file. Reverting returns this entry to static proof, which the guard rejects for its 4 reachable filesystem hazards."
     },
     {
       "id": "py:services/scan_state.py#_published_entry_is_newer",

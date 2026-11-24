@@ -71,6 +71,7 @@ from music_app.services.library_settings import save_library_settings_and_start_
 from music_app.services.log_history import append_log_history
 from music_app.services.manual_versions import load_manual_version_links, save_manual_version_links
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
+from music_app.services.stray_fold_decision import decide_stray_folds_for_save
 from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
 from music_app.services.problem_exclusions import (
@@ -100,6 +101,7 @@ from music_app.services.state import (
     start_background_refresh_for_state,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
+from music_app.services.postgres_connections import user_save_connections
 from music_app.services.utility_rule_mutations import (
     create_version_exception,
     clear_version_exceptions,
@@ -580,8 +582,20 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
         before_persistence_commit=before_persistence_commit,
         complete_scoped_persistence=complete_scoped_persistence,
         record_scoped_persistence_failure=record_scoped_persistence_failure,
+        catch_up_verified_save=_verified_save_catch_up(config, tag_edit_intent_id if intent_repository else ""),
         **kwargs,
     )
+
+
+def _verified_save_catch_up(config, tag_edit_intent_id: str):
+    """Owner's rule (2026-11-23): a save with written, verified files has succeeded. A DB-step failure after
+    that queues the library's catch-up with only this save's files; nothing is restored. None without a
+    stored intent (nothing to catch up from)."""
+    if not tag_edit_intent_id:
+        return None
+    from music_app.services.tag_edit_catch_up import queue_tag_edit_catch_up
+
+    return lambda *, on_settled: queue_tag_edit_catch_up(config, tag_edit_intent_id, on_settled=on_settled)
 
 
 @router.get("/library-settings")
@@ -1088,42 +1102,6 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
     *, history_scope=None,
 ):
     history_scope = history_scope or getattr(request.state, 'history_scope', None)
-    def compensate_structural_tag_edit(
-        *,
-        changed_paths: set[str],
-        previous_file_entries: dict[str, dict[str, object]],
-        updated_file_entries: dict[str, dict[str, object]] | None = None,
-        changed_field_names: set[str],
-    ) -> None:
-        failures: list[str] = []
-        for path in sorted(changed_paths):
-            previous_entry = previous_file_entries.get(path)
-            if not isinstance(previous_entry, Mapping):
-                failures.append(f"{path}: previous metadata is unavailable")
-                continue
-            updated_entry = (updated_file_entries or {}).get(path)
-            path_field_names = {
-                field
-                for field in changed_field_names
-                if not isinstance(updated_entry, Mapping)
-                or previous_entry.get(field, "")
-                != updated_entry.get(field, "")
-            }
-            reverse_repairs = previous_tag_values(
-                previous_entry, path_field_names & _MEDIA_TAG_EDIT_FIELDS,
-            )
-            if not reverse_repairs:
-                continue
-            try:
-                restore_media_tag_values(_apply_repairs_worker, path, reverse_repairs)
-            except Exception as exc:
-                failures.append(f"{path}: {exc}")
-        if failures:
-            raise RuntimeError(
-                "Structural tag edit database commit failed and media compensation "
-                f"also failed: {'; '.join(failures)}"
-            )
-
     def queue_selected_postgres_structural_tag_edit(**kwargs: Any) -> None:
         config = kwargs["config"]
         tag_edit_intent_id = str(kwargs.pop("tag_edit_intent_id", "") or "").strip()
@@ -1178,7 +1156,7 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
                 else None
             ),
             record_scoped_persistence_failure=record_scoped_persistence_failure,
-            compensate_structural_tag_edit=compensate_structural_tag_edit,
+            catch_up_verified_save=_verified_save_catch_up(config, tag_edit_intent_id if intent_repository else ""),
             append_log_history=lambda app_config, entry: append_log_history(
                 app_config,
                 entry,
@@ -1254,6 +1232,27 @@ def _is_postgres_edit_tags_exception_only_response_request(
     return browse_selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES
 
 
+class EditTagsTracksNotInLibrary(ValueError):
+    """Requested tracks the library no longer holds, named for the user, never by path."""
+
+    def __init__(self, names: list[str]):
+        # Owner (2026-11-23): "Name the songs". The failed-save alert shows this text.
+        super().__init__(
+            "These tracks are no longer in the library: " + ", ".join(names) + ". Reload the album and try again."
+        )
+
+
+def _edit_tags_track_names(payload: Mapping[str, object], paths: set[str]) -> list[str]:
+    """Each path's track title from the request's album, or the album's name: never the path."""
+    album = payload.get("album") if isinstance(payload.get("album"), Mapping) else {}
+    titles = {
+        str(track.get("path") or "").strip(): str(track.get("title") or "").strip()
+        for track in album.get("tracks") or [] if isinstance(track, Mapping)
+    }
+    fallback = str(album.get("name") or album.get("title") or "").strip() or "this album"
+    return sorted({titles.get(path) or fallback for path in paths})
+
+
 def _postgres_exception_only_edit_state(
     request: Request,
     payload: Mapping[str, object],
@@ -1277,12 +1276,18 @@ def _postgres_exception_only_edit_state(
     selected_file_entries = repository.build_track_file_entries_by_paths(
         inventory_paths
     )
+    if requested_paths - set(selected_file_entries):
+        # A scan's or watcher's publication may be adding them right now (6.5, row B4): wait for its
+        # commit once, then look again.
+        from music_app.services.scan_cache_persistence import edit_save_lock_wait_seconds
+
+        repository.wait_for_inventory_publication(
+            timeout_seconds=edit_save_lock_wait_seconds(_app_config(request)))
+        missed = inventory_paths - set(selected_file_entries)
+        selected_file_entries.update(repository.build_track_file_entries_by_paths(missed))
     unresolved_paths = requested_paths - set(selected_file_entries)
     if unresolved_paths:
-        raise ValueError(
-            "Postgres library inventory could not resolve requested track paths: "
-            + ", ".join(sorted(unresolved_paths))
-        )
+        raise EditTagsTracksNotInLibrary(_edit_tags_track_names(payload, unresolved_paths))
     # The selected inventory overlays the runtime cache, which is never copied.
     return {
         **library_state,
@@ -1420,6 +1425,11 @@ def _authoritative_edit_tags_response(
     response["timings"] = response_timings
     task = save_task_result(task_id)
     status = str(task.get("status") or "missing")
+    if status == "finishing":
+        # Saved, finishing (6.5, row B2): the files are written and the intent is stored; the save completes
+        # in the background when the inventory lock frees. The client keeps the edit and watches the task,
+        # as for any save task that hasn't completed yet.
+        return {**response, "save_task_status": status}, 202
     if status != "completed":
         error = str(task.get("error") or "").strip()
         if not error:
@@ -1842,6 +1852,30 @@ async def tag_editor_folder_files(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/utilities/tag-editor/fold-decision")
+async def tag_editor_fold_decision(request: Request) -> JSONResponse:
+    """Which cards these exact updates fold or unfold (owner, 2026-11-22: cards change at the Save click).
+
+    Asked when the confirmation opens. Read-only; a refusal never holds or fails the save.
+    """
+    payload = await _json_payload(request)
+    updates = (payload or {}).get("updates")
+    if not isinstance(updates, dict) or not updates or not all(
+        str(path).strip() and isinstance(values, dict) for path, values in updates.items()
+    ):
+        return _json_response(({"ok": False, "error": "No tag edits were provided"}, 400))
+    if not _is_selected_postgres_library_browse_request(request):
+        return _json_response(({"ok": False, "code": "unavailable"}, 409))
+    try:
+        decision = await run_in_threadpool(decide_stray_folds_for_save, _app_config(request), updates)
+    except Exception:
+        _asgi_logger(request).exception("The stray fold decision failed.")
+        return _json_response(({"ok": False, "code": "failed"}, 503))
+    return JSONResponse(
+        decision, status_code=200 if decision["ok"] else 409, headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/utilities/edit-tags/requests/{client_request_id}")
 async def utilities_edit_tags_request_status(request: Request, client_request_id: str) -> JSONResponse:
     """What happened to a save the page sent but got no answer for (owner, 2026-11-17)."""
@@ -1856,10 +1890,12 @@ async def utilities_edit_tags_request_status(request: Request, client_request_id
 
 @router.post("/utilities/edit-tags")
 async def utilities_edit_tags(request: Request) -> JSONResponse:
-    history_scope = await history_scope_for_request(request, required=False)
-    request_started = perf_counter()
-    payload = await _json_payload(request)
-    return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
+    # The whole save request leases from the save workload (row B3), its History scope read included.
+    with user_save_connections():
+        history_scope = await history_scope_for_request(request, required=False)
+        request_started = perf_counter()
+        payload = await _json_payload(request)
+        return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
 
 
 async def run_edit_tags_payload(
@@ -1870,7 +1906,21 @@ async def run_edit_tags_payload(
     media write, save task, History. The route and Library Data Corrections
     (with a request bound only to the app) both run it. ``text_correction_writes``
     is never taken from the payload: the intent carries it to the commit that
-    completes the save, recovery included."""
+    completes the save, recovery included.
+
+    Its connections come from the save workload, so a request pool held by
+    publications or reads never makes the save wait (6.5, row B3)."""
+    with user_save_connections():
+        return await _run_edit_tags_payload(
+            request, payload, history_scope=history_scope, started=started,
+            text_correction_writes=text_correction_writes,
+        )
+
+
+async def _run_edit_tags_payload(
+    request: Request, payload, *, history_scope, started: float | None = None,
+    text_correction_writes: Mapping[str, Mapping[str, object]] | None = None,
+) -> ResponseValue:
     request_started = perf_counter() if started is None else started
     if history_scope is not None:
         # Save-task finalizers record History from the request's scope.
@@ -1927,6 +1977,8 @@ async def run_edit_tags_payload(
             postgres_edit_state = await run_in_threadpool(
                 _postgres_exception_only_edit_state, request, payload
             )
+        except EditTagsTracksNotInLibrary as exc:
+            return ({"ok": False, "code": "tracks_not_in_library", "error": str(exc)}, 409)
         except ValueError as exc:
             return ({"ok": False, "error": str(exc)}, 400)
         get_state = lambda: postgres_edit_state

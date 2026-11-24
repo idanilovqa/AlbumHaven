@@ -462,3 +462,30 @@ def test_private_boundary_contract_resolves_restricted_artwork_from_the_root_sna
         budgets={"filesystem_enumerations": 0, "stat_calls": 3, "open_calls": 1, "sql_statements": 0},
         growth=("stat_calls", 0),
     )
+
+
+@pytest.mark.parametrize("interaction_id", [
+    "py:services/tag_edit_catch_up.py#_run",
+    "py:services/tag_edit_catch_up.py#_reconcile_intent",
+])
+def test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count(
+    recovery_runtime, monkeypatch, interaction_id,
+):
+    """Owner's rule (2026-11-23): a verified save whose DB step failed is caught up by case 56's per-intent
+    reconciliation, run now. It reads only that intent's files, never the library (6.5: affected-set)."""
+    from music_app.services import tag_edit_catch_up
+
+    def run(track_count: int) -> OperationCounts:
+        return _measure_recovery(
+            monkeypatch, recovery_runtime, track_count,
+            lambda: tag_edit_catch_up._run(recovery_runtime.runtime.config, "intent-1", None),
+        )
+
+    measure_scale_pair(
+        interaction_id=interaction_id,
+        small=20,
+        large=160_000,
+        run=run,
+        budgets=_recovery_budgets(startup=True),
+        growth=("stat_calls", 0),
+    )

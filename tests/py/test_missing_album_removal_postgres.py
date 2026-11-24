@@ -110,7 +110,8 @@ def test_confirm_removal_deletes_only_missing_album_inventory_and_advances_revis
         "removed_album_key": ALBUM_KEY,
         "library_revision": 18,
     }
-    assert connection.events == ["begin", "commit"]
+    # The removal's transaction, and inside it the publication's savepoint (edits always save, R1).
+    assert connection.events == ["begin", "begin", "commit", "commit"]
     assert [sql for sql, _params in connection.operations] == [
         "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));",
         "select pg_advisory_xact_lock( hashtextextended('album-haven:local-relation-projection', 0) );",
@@ -119,7 +120,7 @@ def test_confirm_removal_deletes_only_missing_album_inventory_and_advances_revis
     assert ALBUM_KEY in _flatten_values(connection.operations[2][1])
     # The removal publishes its own relation journal before commit, as every inventory writer does.
     assert published_removals == [{
-        "events": ["begin"], "album_keys": (ALBUM_KEY,), "reason": "missing_album_removal",
+        "events": ["begin", "begin"], "album_keys": (ALBUM_KEY,), "reason": "missing_album_removal",
         "config": {"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL}, "expected_gallery_generation": 7,
     }]
 
@@ -302,7 +303,7 @@ def test_confirm_removal_route_checks_pending_health_after_database_recovers(
         assert not app.state.library_state.get("targeted_inventory_album_keys")
     else:
         assert status == 200
-        assert connection.events == ["begin", "commit"]
+        assert connection.events == ["begin", "begin", "commit", "commit"]  # with the publication's savepoint
         assert decode_json(body)["removed_album_key"] == ALBUM_KEY
     assert "pg_advisory_xact_lock" in connection.operations[0][0]
     assert "library.local_track_files" in connection.operations[2][0]

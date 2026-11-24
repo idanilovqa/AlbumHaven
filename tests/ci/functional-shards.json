@@ -1108,6 +1108,76 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/duplicateTwinMarker.spec.js",
+              "case": "FTC-TAGS-033 Editing an album's tags so its album artist, album and year match another album's shows the two copies as one album card with the Duplicate files marker at once; editing it back shows the two separate album cards again without the marker at once",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-034 Save removes an album's card within 350 ms of the click, while the files are still being written, when no second album remains",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-035 Save shows a new or renamed album's card within 350 ms of the click, while the files are still being written",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-036 A copy that a save folds into another album leaves the gallery at Save, and no frame shows both cards afterwards",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-037 A copy that a save unfolds gets its own card at Save",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-038 Clicking Save before the fold is decided still updates every other card at once; only the fold follows, when its decision arrives",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-039 A failed or outdated fold decision is shown readably and never waits for the save to finish to change cards",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-040 A failed save puts cards, counts, markers and the artist tree back, and says why",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-041 A page opened during a save shows the edited albums as the save will leave them",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-042 Save keeps the selected artist and gallery position while cards appear and disappear",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/sparseTagEditReconciliation.spec.js",
               "case": "FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split",
               "area": "tag-edit"
@@ -1176,6 +1246,20 @@
               "project": "functional",
               "test": "tests/e2e/specs/libraryDataCorrections.spec.js",
               "case": "FTC-LIBRARY-CORRECTIONS-001 an unreadable track artist shows the album artist, is a problem, and Write in tags fixes the tags",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+              "case": "FTC-TAGS-043 a save that finishes while a scan holds the library shows its new album name immediately, still shows it after a reload, in a second tab and in Album Details, and keeps it once the library holds it",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+              "case": "FTC-TAGS-044 a save whose file write fails shows the old values again, keeps no pending edit, and a reload shows the old values",
               "area": "tag-edit"
             }
           ]

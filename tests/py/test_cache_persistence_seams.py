@@ -297,18 +297,24 @@ class _TargetedInventoryAdapter:
         *,
         root_id,
         active_file_entries,
-        expected_cover_mutation_revision,
-        expected_inventory_mutation_revision,
-        before_commit,
+        expected_cover_mutation_revision=None,
+        expected_inventory_mutation_revision=None,
+        before_commit=None,
+        rebase_under_lock=None,
     ):
         from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
 
+        if rebase_under_lock is not None:
+            # Under the inventory lock: the entries as persisted now, which no writer can change until commit.
+            active_file_entries = rebase_under_lock({
+                path: dict(self.file_cache[path]) for path in active_file_entries if path in self.file_cache})
         self.publications.append({
             "root_id": root_id,
             "active_file_entries": {path: dict(entry) for path, entry in active_file_entries.items()},
             "expected_revisions": (expected_cover_mutation_revision, expected_inventory_mutation_revision),
+            "rebased_under_lock": rebase_under_lock is not None,
         })
-        if (expected_cover_mutation_revision, expected_inventory_mutation_revision) != (
+        if rebase_under_lock is None and (expected_cover_mutation_revision, expected_inventory_mutation_revision) != (
             self.cover_mutation_revision, self.inventory_mutation_revision,
         ):
             raise ScanCachePublicationSuperseded(f"forced queued-writer conflict {len(self.publications)}")
@@ -361,7 +367,8 @@ def test_runtime_cache_update_publishes_only_the_changed_entries_and_leaves_rela
     assert adapter.publications == [{
         "root_id": "main",
         "active_file_entries": {str(changed_track): changed_entry},
-        "expected_revisions": (17, 4),
+        "expected_revisions": (None, None),
+        "rebased_under_lock": True,
     }]
     assert result == {"inventory_mutation_revision": 5, "affected_album_keys": ["artist::album"], "projection_mode": "stale"}
     # The stale relation projection is rebuilt by the background gallery refresh.
@@ -420,7 +427,8 @@ def test_queued_title_update_preserves_newer_authoritative_cover(tmp_path, targe
     assert final_entry["cover_revision"] == "selected-revision"
     assert final_entry["title"] == "New Title"
     assert final_entry["play_count"] == 1
-    assert [publication["expected_revisions"] for publication in adapter.publications] == [(0, 0), (1, 0)]
+    # One publication, rebased under the inventory lock over the cover that landed after the load.
+    assert [publication["rebased_under_lock"] for publication in adapter.publications] == [True]
 
 
 def test_file_entry_cache_round_trip_preserves_metadata_and_cover_validation_signature(tmp_path):
@@ -665,9 +673,9 @@ def test_queued_cache_update_accepts_already_committed_numeric_track_number_valu
     assert rebased[track_path]["track_number"] == "4"
 
 
-def test_queued_cache_update_repeated_revision_conflict_fails_after_one_rebase(tmp_path, targeted_adapter):
-    from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
-
+def test_queued_cache_update_commits_while_cover_commits_keep_landing(tmp_path, targeted_adapter):
+    """Rewritten for edits always save (6.5, 11-23, row A11): this pinned the edit being lost after one
+    rebase. Commits landing after every load are now rebased over under the inventory lock."""
     track_path = str((tmp_path / "Generated" / "Artist" / "Album" / "song.mp3").resolve())
     adapter = targeted_adapter({track_path: {"path": track_path, "play_count": 0, "library_root_id": "main"}})
 
@@ -676,16 +684,15 @@ def test_queued_cache_update_repeated_revision_conflict_fails_after_one_rebase(t
 
     adapter.after_load = commit_cover_after_every_load
 
-    with pytest.raises(ScanCachePublicationSuperseded, match="forced queued-writer conflict 2"):
-        cache_module.save_cache_updates_to_disk_for_config(
-            _POSTGRES_CONFIG,
-            {track_path: {"path": track_path, "play_count": 1, "library_root_id": "main"}},
-        )
+    cache_module.save_cache_updates_to_disk_for_config(
+        _POSTGRES_CONFIG,
+        {track_path: {"path": track_path, "play_count": 1, "library_root_id": "main"}},
+    )
 
-    assert len(adapter.loaded_paths) == 2
-    assert len(adapter.publications) == 2
-    assert adapter.file_cache[track_path]["play_count"] == 0
-    assert targeted_adapter.installed["refreshes"] == 0
+    assert len(adapter.loaded_paths) == 1
+    assert len(adapter.publications) == 1
+    assert adapter.file_cache[track_path]["play_count"] == 1
+    assert targeted_adapter.installed["refreshes"] == 1
 
 
 class _HeldExecutor:
@@ -739,7 +746,7 @@ def test_scheduled_cache_update_rebases_onto_a_cover_committed_before_the_worker
     assert held_executor.run_all() == 1
 
     assert future.result()["projection_mode"] == "stale"
-    assert [publication["expected_revisions"] for publication in adapter.publications] == [(1, 0)]
+    assert [publication["rebased_under_lock"] for publication in adapter.publications] == [True]
     final_entry = adapter.file_cache[track_path]
     assert final_entry["cover_path"] == selected_cover_path
     assert final_entry["cover_revision"] == "selected-revision"
@@ -1069,6 +1076,12 @@ class _OneAlbumLibraryDatabase:
 
     def commit(self):
         pass
+
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        from contextlib import nullcontext
+
+        return nullcontext()
 
     def pipeline(self):
         from contextlib import nullcontext

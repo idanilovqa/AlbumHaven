@@ -3159,7 +3159,9 @@ test('manual tag edit keeps the editor closed after an immediate rolled-back per
   assert.deepEqual(clearedOptimisticSplits, [], 'an older failed request cannot undo a newer cover merge');
 });
 
-test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {
+// Owner (2026-11-22): a file that can't be written says so in the owner's words, never with its path or error.
+for (const [stage, text] of [['media_write', 'Save failed: Read-only files'], ['persistence', 'Failed to edit tags.']]) {
+test(`FTC-TAGS-040 manual tag edit keeps the editor closed after a logged ${stage} failure and says why`, async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\01 - Track.flac';
   const album = {
     key: 'artist::album::2000',
@@ -3193,7 +3195,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
           return {
             ok: false,
             error: `PermissionError: cannot write ${trackPath}`,
-            failure_stage: 'media_write',
+            failure_stage: stage,
             edit_outcome: 'failed_rolled_back',
             log_entry: { id: 'tag-edit-failure-42', action: 'Tag edit failed' },
           };
@@ -3207,13 +3209,71 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
   await context.confirmManualTagEdit();
 
   assert.equal(closedModal.hidden, true);
-  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
+  assert.equal(alerts.at(-1)[0], text);
   assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\Music|PermissionError/);
   assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1)[3])), {
     logHistoryEntryId: 'tag-edit-failure-42',
     logHistoryLink: true,
   });
 });
+}
+
+// Owner (2026-11-23), "Name the songs": tracks the library no longer holds are named in the alert by the
+// server's text (track titles, never paths); any other refusal keeps the generic message.
+for (const [code, expected] of [
+  ['tracks_not_in_library', 'These tracks are no longer in the library: Second Song. Reload the album and try again.'],
+  ['some_other_refusal', 'Failed to edit tags.'],
+]) {
+test(`a save refused with ${code} shows ${expected === 'Failed to edit tags.' ? 'the generic message' : 'the named songs'}`, async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\02 - Second Song.flac';
+  const album = {
+    key: 'artist::album::2000',
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album', title: 'Second Song' }],
+  };
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { title: 'Renamed Song' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return {
+        ok: false,
+        status: 409,
+        async json() {
+          return {
+            ok: false,
+            code,
+            error: 'These tracks are no longer in the library: Second Song. Reload the album and try again.',
+          };
+        },
+      };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(alerts.at(-1)[0], expected);
+  assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\\\Music/);
+});
+}
 
 test('a failed tag edit whose files could not be put back says those files keep the new tags', async () => {
   const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\01 - Track.flac';
@@ -5612,4 +5672,42 @@ test('a Re-scan answered at once keeps its messages; a failed one says it could 
   const failed = loadMissingAlbumRescan([[500, { ok: false }]]);
   await failed.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, failed.button);
   assert.deepEqual(failed.toasts, [['Unable to re-scan this album.', 'error']]);
+});
+
+// Owner (2026-11-23): a save whose files are written is saved. A "finishing" answer keeps the edit on screen and
+// hands it to the pending-edit store, so a reload or another tab still shows it until the library holds it.
+test('a save answered "finishing" keeps the edit and hands it to the pending-edit store', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Song.flac';
+  const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, title: 'Song' }] };
+  const added = [];
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    window: { AlbumHavenPendingTagEdits: { addFinishing: (entry) => added.push(entry), add: () => assert.fail('resend queue used') } },
+    crypto: { randomUUID: () => '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b' },
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { title: 'Renamed Song' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    scheduleTagEditSaveTaskWatch() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return { ok: true, status: 202, async json() { return { ok: true, save_task_id: 'task-1', save_task_status: 'finishing' }; } };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(added.length, 1, 'the finishing save was not kept for reloads and other tabs');
+  assert.equal(added[0].id, '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
+  assert.deepEqual(JSON.parse(JSON.stringify(added[0].payload.updates)), { [trackPath]: { title: 'Renamed Song' } });
+  assert.ok(!alerts.some(([, variant]) => variant === 'error'), 'a finishing save was reported as failed');
 });

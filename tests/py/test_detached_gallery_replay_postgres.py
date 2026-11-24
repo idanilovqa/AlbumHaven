@@ -103,13 +103,10 @@ def test_old_writer_detached_edit_replays_without_rebuilding_album_membership(mo
         monkeypatch.setattr(relations, 'build_postgres_relation_views', forbidden)
         monkeypatch.setattr(scoped, 'build_postgres_relation_views', forbidden)
         monkeypatch.setattr(browse, '_root_gallery_membership_sql', forbidden)
-        source_sql = relations.load_relation_source_rows_sql
-
-        def scoped_sources_only(*, scoped=False):
-            assert scoped, 'Detached replay must not read full-library relation sources'
-            return source_sql(scoped=True)
-
-        monkeypatch.setattr(relations, 'load_relation_source_rows_sql', scoped_sources_only)
+        # Only the scoped loader may run; the full-library one is forbidden.
+        monkeypatch.setattr(relations, 'load_relation_source_rows_sql',
+                            lambda: pytest.fail('Detached replay must not read full-library relation sources'))
+        monkeypatch.setattr(scoped, 'build_component_relation_views', forbidden)
         replay_result = scoped.ensure_pending_relation_projection_ready(config)
 
         after_headers = headers()

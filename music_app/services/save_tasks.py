@@ -496,6 +496,53 @@ def _build_save_failure_log_entry(
     }
 
 
+# Owner (2026-11-23, approved through 6.5): a save whose files are written but whose album re-read failed.
+CATCH_UP_PENDING_MESSAGE = "Tags saved. The library will catch up shortly."
+# Queues the library's catch-up with a verified save; the callback gets "settled" or "failed".
+VerifiedSaveCatchUp = Callable[..., object]
+
+
+def _catch_up_verified_save(
+    task_id: str,
+    *,
+    catch_up: VerifiedSaveCatchUp,
+    config: dict[str, object],
+    logger: object,
+    append_log_history: LogHistoryAppender,
+    log_app_event: AppEventLogger,
+    log_entry: JsonDict,
+    error: object,
+) -> None:
+    """Owner's rule (2026-11-23): the save's files are written and verified, so it has succeeded. Its DB step
+    failed: nothing is restored, the task is "finishing" and the library re-reads only this save's files."""
+    recorded = Event()
+
+    def settle(outcome: str) -> None:
+        if outcome == "settled":
+            if not recorded.is_set():
+                recorded.set()
+                try:
+                    append_log_history(config, log_entry)
+                except Exception:
+                    logger.exception("Could not record a caught-up tag edit in History.")
+            update_save_task(task_id, status="completed", requires_view_refresh=True, warnings=[],
+                             completed_at=datetime.now(timezone.utc).isoformat())
+        elif save_task_result(task_id).get("status") == "finishing":
+            # The first failed re-read answers the page; later retries continue in the background.
+            update_save_task(task_id, status="completed", requires_view_refresh=False,
+                             warnings=[CATCH_UP_PENDING_MESSAGE], catch_up_pending=True,
+                             completed_at=datetime.now(timezone.utc).isoformat())
+
+    try:
+        log_app_event(config, logger, "Tag edit saved; the library is catching up", level="warning",
+                      error=str(error), **{key: value for key, value in log_entry.items()
+                                           if key not in {"id", "timestamp", "action"}})
+    except Exception:
+        pass
+    update_save_task(task_id, status="finishing")
+    catch_up(on_settled=settle)
+
+
 def _fail_save_task(
     task_id: str,
     *,
@@ -604,6 +651,7 @@ def _finalize_save_task(
     scoped_postgres_exception_only: bool = False,
     run_state_mutation: StateMutationGuard | None = None,
     compensate_save_task: StructuralTagEditCompensator | None = None,
+    catch_up_verified_save: VerifiedSaveCatchUp | None = None,
     before_persistence_commit: Callable[[object], object] | None = None,
     complete_scoped_persistence: Callable[[], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
@@ -658,6 +706,12 @@ def _finalize_save_task(
                     "Tag edit persistence returned no durable completion task."
                 )
     except Exception as exc:
+        if catch_up_verified_save is not None and not scoped_postgres_exception_only:
+            _catch_up_verified_save(
+                task_id, catch_up=catch_up_verified_save, config=config, logger=logger,
+                append_log_history=append_log_history, log_app_event=log_app_event, log_entry=log_entry, error=exc,
+            )
+            return
         compensation_succeeded = False
         try:
             if compensate_save_task is not None:
@@ -897,7 +951,7 @@ def finalize_structural_tag_edit_save_task(
     get_state: StateProvider,
     rebuild_affected_albums_in_state: AlbumStateRebuilder,
     persist_structural_tag_edit: StructuralTagEditPersister,
-    compensate_structural_tag_edit: StructuralTagEditCompensator | None = None,
+    catch_up_verified_save: VerifiedSaveCatchUp | None = None,
     append_log_history: LogHistoryAppender,
     log_app_event: AppEventLogger,
     find_albums_by_track_paths: AlbumFinder,
@@ -917,8 +971,15 @@ def finalize_structural_tag_edit_save_task(
     before_persistence_commit: Callable[[object], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
     timing_recorder: EditTagTimingRecorder | None = None,
+    lock_wait_seconds: float | None = None,
 ) -> None:
+    """``lock_wait_seconds`` bounds the save's wait for the inventory lock. Past it the save raises
+    EditSaveLockBusy with its files written and intent stored, keeping its reservation for the
+    background completion (row B2); None waits as long as the publication takes."""
+    from music_app.services.scan_cache_persistence import EditSaveLockBusy, edit_save_lock_wait
+
     finalize_started = perf_counter()
+    finishing = False
     try:
         try:
             persistence_started = perf_counter()
@@ -931,7 +992,7 @@ def finalize_structural_tag_edit_save_task(
                 timing_recorder.measure("postgres_commit")
                 if timing_recorder is not None
                 else nullcontext()
-            ), collect_persistence_stages() as persistence_stages:
+            ), collect_persistence_stages() as persistence_stages, edit_save_lock_wait(lock_wait_seconds):
                 try:
                     persistence_result = persist_structural_tag_edit(
                         changed_paths=set(changed_paths),
@@ -946,20 +1007,20 @@ def finalize_structural_tag_edit_save_task(
                     if timing_recorder is not None:
                         timing_recorder.record_postgres_commit_stages(persistence_stages)
             persistence_ms = (perf_counter() - persistence_started) * 1000.0
+        except EditSaveLockBusy:
+            # Saved, finishing: never compensate (restore) written files for a busy lock.
+            finishing = True
+            raise
         except Exception as exc:
+            if catch_up_verified_save is not None:
+                _catch_up_verified_save(
+                    task_id, catch_up=catch_up_verified_save, config=config, logger=logger,
+                    append_log_history=append_log_history, log_app_event=log_app_event, log_entry=log_entry,
+                    error=exc,
+                )
+                return
+            # Without a stored intent there is nothing to catch up from; the files keep their new tags.
             compensation_succeeded = False
-            try:
-                if compensate_structural_tag_edit is not None:
-                    compensate_structural_tag_edit(
-                        changed_paths=set(changed_paths),
-                        previous_file_entries=previous_file_cache,
-                        updated_file_entries=updated_file_cache,
-                        changed_field_names=set(changed_field_names),
-                    )
-                    compensation_succeeded = True
-            except Exception as compensation_exc:
-                compensation_succeeded = False
-                exc = compensation_exc
             if record_scoped_persistence_failure is not None:
                 try:
                     record_scoped_persistence_failure(compensation_succeeded, exc)
@@ -1241,7 +1302,7 @@ def finalize_structural_tag_edit_save_task(
             )
     finally:
         release = getattr(structural_tag_edit_reservation, "release", None)
-        if callable(release):
+        if callable(release) and not finishing:
             release()
 
 
@@ -1280,8 +1341,21 @@ def queue_finalize_structural_tag_edit_save_task(
     **kwargs,
 ) -> None:
     if wait_for_completion:
-        finalize_structural_tag_edit_save_task(**kwargs)
+        from music_app.services.scan_cache_persistence import EditSaveLockBusy, edit_save_lock_wait_seconds
+
+        try:
+            finalize_structural_tag_edit_save_task(
+                **kwargs, lock_wait_seconds=edit_save_lock_wait_seconds(kwargs.get("config")))
+        except EditSaveLockBusy:
+            # The request answers "saved, finishing"; the same finalize completes the stored intent in
+            # the background as soon as the lock frees, holding the save's reservation until then.
+            update_save_task(kwargs["task_id"], status="finishing")
+            _submit_structural_finalize(kwargs)
         return
+    _submit_structural_finalize(kwargs)
+
+
+def _submit_structural_finalize(kwargs: dict) -> None:
     try:
         future = _STRUCTURAL_TAG_EDIT_EXECUTOR.submit(
             finalize_structural_tag_edit_save_task,

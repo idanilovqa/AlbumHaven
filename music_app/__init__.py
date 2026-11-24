@@ -5,15 +5,30 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import AsyncIterator
+from typing import AsyncIterator, NoReturn
 
 from music_app.services.app_copy import APP_COPY_HEADER
 
 
 _POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
+
+
+def _exit_refusing(logger: logging.Logger, refusal: Exception) -> NoReturn:
+    """End a refused start with its own exit code and one line.
+
+    An exception cannot do this: uvicorn turns every failed lifespan startup into exit 3
+    and a traceback. Nothing has started yet, so there is nothing to shut down.
+    """
+    from music_app.services.app_logging import flush_log_handlers
+    from music_app.services.problematic_index import REFUSED_TO_START_EXIT_CODE
+
+    logger.critical("STARTUP REFUSED (exit code %d): %s", REFUSED_TO_START_EXIT_CODE, refusal)
+    flush_log_handlers(logger)
+    os._exit(REFUSED_TO_START_EXIT_CODE)
 
 
 class _BoundedExecutorAdmission:
@@ -546,6 +561,16 @@ def create_asgi_app():
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        from starlette.concurrency import run_in_threadpool
+
+        from music_app.services.problematic_index import NotReadyToServeError, refuse_to_serve_until_ready
+
+        # Before any writer, watcher, worker or prewarm starts: a refusal leaves nothing
+        # running, writes nothing and serves nothing.
+        try:
+            await run_in_threadpool(refuse_to_serve_until_ready, runtime.config)
+        except NotReadyToServeError as refusal:
+            _exit_refusing(runtime.logger, refusal)
         for template_name in _app.state.templates.env.list_templates():
             _app.state.templates.env.get_template(template_name)
         from music_app.services.log_history import resolve_media_host_history_scope

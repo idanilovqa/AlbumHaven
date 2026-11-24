@@ -18,6 +18,7 @@ from time import monotonic
 from isolatedLibraryApp import configure_isolated_environment, ProviderFixtureService
 from isolatedPostgres import (
     IsolatedDatabaseOwnershipLock,
+    prepare_app_to_serve,
     prepare_isolated_database,
     reset_application_tables,
     resolve_isolated_database_urls,
@@ -542,6 +543,7 @@ def main() -> None:
         from music_app import create_asgi_app
 
         app = create_asgi_app()
+        prepare_app_to_serve(app)
         import uvicorn
 
         if args.worker_port is not None:

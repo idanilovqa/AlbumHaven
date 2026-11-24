@@ -868,6 +868,386 @@ def test_live_problematic_index_equals_a_full_rebuild_through_tag_saves(watcher_
                for item in after_fix if item["name"] == "Карусель Эпох")
 
 
+
+def test_live_indexed_duplicate_cards_equal_the_live_overlay_and_follow_each_save(watcher_repair_inventory, monkeypatch):
+    """FTC-TAGS-015: gallery and search cards read each album's stored duplicate result. It
+    equals the overlay computed live, key for key: main and hoard copies, an exception track,
+    an album spanning two years, a pair whose duplicate problem is excluded from Problematic
+    Files and one folder holding the same song twice. A save that forms or breaks a pair, or changes a
+    twin's track, shows on the other card in the very next read."""
+    import psycopg
+
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+    from music_app.services.library_browse_postgres import refresh_postgres_utility_projections_after_edit
+    from music_app.services.rule_state_postgres import RuleStatePostgresAdapter
+    from tests.e2e.support import isolatedPostgres
+
+    from tests.py.runtime_testing import publish_relations_with_each_save
+
+    publish_relations_with_each_save(monkeypatch)
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+
+    def tagged(relative, album, *, root=0, artist="Twin", year=2001, exception=None, title=None):
+        entry = fixture.entry(relative, root=root, artist=artist, album=album, exception=exception)
+        entry.update(album_artist=artist, year=year, title=title or entry["title"])
+        return entry
+
+    # Album keys keep accents and duplicate identities fold them: these are two cards.
+    main_copy = tagged("Twin/Main Copy/01.flac", "Same Release")
+    hoard_copy = tagged("Twin/Hoard Copy/01.flac", "Same Réléase", root=1)
+    other = tagged("Twin/Other/01.flac", "Other Release")
+    interview = tagged("Twin/Interview/01.flac", "Interview Copy", exception="Interview")
+    interview_twin = tagged("Twin/Interview Twin/01.flac", "Interview Cópy")
+    early = tagged("Split/Two Years/01.flac", "Two Years", artist="Split", year=2001)
+    late = tagged("Split/Two Years/02.flac", "Two Years", artist="Split", year=2002)
+    excluded = tagged("Quiet/Excluded/01.flac", "Quiet Release", artist="Quiet")
+    excluded_twin = tagged("Quiet/Excluded Twin/01.flac", "Quiet Réléase", artist="Quiet")
+    repeated = tagged("Repeat/Album/01.flac", "Repeat Release", artist="Repeat", title="Same Song")
+    repeated_copy = tagged("Repeat/Album/01 copy.flac", "Repeat Release", artist="Repeat", title="Same Song")
+    fixture.seed(main_copy, hoard_copy, other, interview, interview_twin, early, late, excluded, excluded_twin,
+                 repeated, repeated_copy)
+
+    def album_key(entry):
+        with psycopg.connect(fixture.runtime_url) as connection:
+            return connection.execute(
+                """select albums.album_key from library.local_track_files files
+                   join library.local_tracks tracks on tracks.id = files.track_id
+                   join library.local_albums albums on albums.id = tracks.album_id
+                   where files.private_path = %s and files.scan_cache_stale is false""",
+                (entry["path"],),
+            ).fetchone()[0]
+
+    excluded_key = album_key(excluded)
+    RuleStatePostgresAdapter(fixture.config, connect=isolatedPostgres._connect).upsert_ignored_repair_keys(
+        [f"{excluded_key}::problem-album::duplicate-files"],
+        album_keys_by_repair_key={f"{excluded_key}::problem-album::duplicate-files": excluded_key},
+    )
+    _ready_problematic_index(database_url)
+    indexed = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    # The duplicate results backfill after the items, in the same background pass.
+    problematic_index.wait_for_background_work()
+    assert problematic_index.duplicate_results_readable(indexed), "The backfill stores every duplicate result."
+    live = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+
+    def cards():
+        with psycopg.connect(fixture.runtime_url) as connection:
+            album_ids = [row[0] for row in connection.execute("select id from library.local_albums").fetchall()]
+        with isolatedPostgres._connect(fixture.runtime_url) as connection:
+            rows = live._load_problematic_file_rows(connection=connection, album_ids=album_ids)
+        albums = browse._problematic_album_projection_payloads(rows)
+        for album in albums:
+            # The Problematic Files row builder's lazy source loader; gallery cards never carry it.
+            album.pop("_duplicate_source_materializer", None)
+        return sorted(albums, key=lambda album: str(album["key"]))
+
+    def overlays():
+        live_cards, indexed_cards = cards(), cards()
+        browse.invalidate_postgres_utility_projection_cache()
+        live._attach_duplicate_sources(live_cards)
+        indexed._attach_duplicate_sources(indexed_cards, indexed=True)
+        live_served, indexed_served = _as_served(live_cards), _as_served(indexed_cards)
+        differences = {
+            live_card["key"]: {
+                field: (live_card.get(field), indexed_card.get(field))
+                for field in {*live_card, *indexed_card} if live_card.get(field) != indexed_card.get(field)
+            }
+            for live_card, indexed_card in zip(live_served, indexed_served) if live_card != indexed_card
+        }
+        assert len(indexed_served) == len(live_served) and not differences, differences
+        return {str(card["key"]): card for card in indexed_served}
+
+    def marked(cards_by_key, *entries):
+        return [bool(cards_by_key[album_key(entry)].get("has_duplicate_files")) for entry in entries]
+
+    def save(entry, **changes):
+        updated = {**entry, **changes}
+        fixture.adapter.persist_structural_tag_edit(
+            changed_paths={entry["path"]}, previous_file_entries={entry["path"]: entry},
+            updated_file_entries={entry["path"]: updated}, changed_field_names=set(changes),
+        )
+        refresh_postgres_utility_projections_after_edit(
+            fixture.config, track_paths={entry["path"]}, previous_entries=[dict(entry)],
+        )
+        entry.update(updated)
+
+    first = overlays()
+    assert marked(first, main_copy, hoard_copy, excluded, excluded_twin) == [True] * 4
+    # An exception track belongs to no album, so it never makes its namesake a duplicate.
+    assert marked(first, other, interview_twin, repeated) == [False] * 3
+    assert not any(card.get("has_duplicate_files") for key, card in first.items() if key.startswith("split::"))
+    listed = {item["key"]: item["problem_reasons"] for item in _indexed_problematic_items(database_url)}
+    assert "Duplicate files" not in listed.get(excluded_key, []), "The exclusion hides it from Problematic Files only."
+
+    sources_before = first[album_key(main_copy)]["duplicate_sources"]
+    save(hoard_copy, title="Renamed Hoard Song")
+    # Renaming the twin's only track also ends the pair (duplicates share track titles); either
+    # way the other card's stored result changed with this save, equal to the live overlay.
+    assert overlays()[album_key(main_copy)]["duplicate_sources"] != sources_before, (
+        "A twin's track change reaches the other card at once."
+    )
+    save(hoard_copy, title=main_copy["title"])
+
+    save(other, album="Sámé Release")
+    assert marked(overlays(), other, main_copy, hoard_copy) == [True] * 3, (
+        "Forming a pair badges the edited album at once."
+    )
+
+    save(main_copy, album="Renamed Release")
+    save(other, album="Other Release")
+    assert marked(overlays(), main_copy, hoard_copy, other) == [False] * 3, (
+        "Breaking the pair clears the badge on the twin left behind at once."
+    )
+
+def test_live_stored_duplicate_result_follows_a_stray_link_only_the_stray_album_changed(watcher_repair_inventory):
+    """FTC-TAGS-033 (renaming a pair apart left the marker): while an album is another's stray
+    copy its tracks carry the owner's identity. Setting or clearing that link changes only the
+    stray album's row, so only it is marked; the owner's stored result must follow both times."""
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+
+    fixture = watcher_repair_inventory
+    owner = fixture.entry("Apart/Owner/01.flac", artist="Apart", album="Own Release")
+    stray = fixture.entry("Apart/Stray/01.flac", artist="Apart", album="Stray Release")
+    for entry in (owner, stray):
+        entry.update(album_artist="Apart", year=2001)
+    fixture.seed(owner, stray)
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    _ready_problematic_index(database_url)
+    problematic_index.wait_for_background_work()
+    indexed = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    with psycopg.connect(fixture.runtime_url) as connection:
+        albums = {
+            title: (album_id, key)
+            for album_id, key, title in connection.execute(
+                "select id, album_key, title from library.local_albums",
+            ).fetchall()
+        }
+    owner_id, owner_key = albums["Own Release"]
+    stray_id, _stray_key = albums["Stray Release"]
+
+    def owner_marked():
+        card = {"key": owner_key, "year": 2001, "tracks": []}
+        indexed._attach_duplicate_sources([card], indexed=True)
+        return bool(card.get("has_duplicate_files"))
+
+    def set_stray_link(link):
+        with psycopg.connect(fixture.runtime_url) as connection:
+            connection.execute(
+                """update library.local_albums
+                   set metadata = case when %(link)s::jsonb is null then metadata - 'stray_duplicate_of'
+                     else metadata || jsonb_build_object('stray_duplicate_of', %(link)s::jsonb) end
+                   where id = %(album_id)s""",
+                {"link": Jsonb(link) if link else None, "album_id": stray_id},
+            )
+
+    assert owner_marked() is False
+    set_stray_link({"album_id": owner_id, "album_key": owner_key})
+    assert owner_marked() is True, "Linking a stray copy marks its owner in the very next read."
+    set_stray_link(None)
+    assert owner_marked() is False, "Clearing the stray link clears its owner's marker in the very next read."
+
+
+def test_live_duplicate_results_backfill_runs_once_across_restarts(watcher_repair_inventory, monkeypatch):
+    """The backfill is one-time: a restart on a ready database never runs it again."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Restart/Album/01.flac", artist="Restart", album="Restart Album"))
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    _ready_problematic_index(database_url)
+    problematic_index.wait_for_background_work()
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    assert problematic_index.duplicate_results_readable(repository)
+
+    reruns = []
+    for backfill in ("_backfill", "_backfill_duplicate_results"):
+        monkeypatch.setattr(problematic_index, backfill, lambda *_args, name=backfill: reruns.append(name))
+    # A restarted process has seen nothing.
+    for seen in ("_READY", "_DUPLICATES_READY", "_WARMED"):
+        monkeypatch.setattr(problematic_index, seen, set())
+    problematic_index._maintain(repository)
+    assert problematic_index.duplicate_results_readable(repository)
+    assert reruns == []
+
+
+def test_live_index_evaluators_leave_the_real_pool_transactional_and_unlocked(watcher_repair_inventory):
+    """After a request's evaluation and after a maintenance pass the next pool lease is
+    transactional and no advisory lock of the index is left on any backend."""
+    from psycopg.pq import TransactionStatus
+
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+    from music_app.services.postgres_connections import leased_connection
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Pool/Album/01.flac", artist="Pool", album="Pool Album"))
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    _ready_problematic_index(database_url)
+    problematic_index.wait_for_background_work()
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    for evaluate in (problematic_index.refresh, problematic_index._maintain):
+        with leased_connection(database_url) as connection:
+            connection.execute(
+                "select library.mark_problematic_album_dirty(library_id, id) from library.local_albums",
+            ).fetchall()
+        evaluate(repository)
+        with leased_connection(database_url) as connection:
+            assert connection.autocommit is False
+            left = connection.execute(
+                """select (select count(*) from library.problematic_index_dirty_albums) as marks,
+                          (select count(*) from pg_locks
+                           where locktype = 'advisory' and classid::bigint = %s
+                             and database = (select oid from pg_database where datname = current_database())) as locks""",
+                (problematic_index._LOCK_NAMESPACE,),
+            ).fetchone()
+            assert connection.info.transaction_status == TransactionStatus.INTRANS
+            assert dict(left) == {"marks": 0, "locks": 0}
+
+
+def test_live_deploy_step_fills_before_serving_and_reruns_without_redoing_it(watcher_repair_inventory, monkeypatch):
+    """Owner (11-21): "Fill it first". On a database nothing has prepared, the step leaves
+    both states ready with no album waiting; a rerun backfills nothing unless told to."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Deploy/Album/01.flac", artist="Deploy", album="Deploy Album"))
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"],
+    })
+    assert problematic_index.serving_readiness(repository)["duplicate_results"] != "ready"
+
+    progress = []
+    problematic_index.prepare_for_serving(repository, report=lambda *step: progress.append(step))
+    assert ("Duplicate results", 1, 1) in progress
+    assert problematic_index.serving_readiness(repository) == {
+        "problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0,
+    }
+
+    backfilled = []
+    real = problematic_index._backfill_duplicate_results
+    monkeypatch.setattr(problematic_index, "_backfill_duplicate_results",
+                        lambda *args: backfilled.append(1) or real(*args))
+    problematic_index.prepare_for_serving(repository)
+    assert backfilled == []
+    problematic_index.prepare_for_serving(repository, rebuild_duplicates=True)
+    assert backfilled == [1]
+
+
+@pytest.mark.parametrize("change", ["former stray copy", "former identity twin"])
+def test_live_builder_bump_keeps_duplicate_results_readable_and_evaluates_their_marks(
+    watcher_repair_inventory, monkeypatch, change,
+):
+    """The results have their own version: a Problematic Files builder bump never makes them
+    unreadable or rebuilds them. An album changed before it still gets evaluated, and so does
+    its former twin, which the changed album's identities no longer reach: only the stored
+    linked_album_ids do."""
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+
+    fixture = watcher_repair_inventory
+    identity_twin = change == "former identity twin"
+    owner = fixture.entry("Bump/Owner/01.flac", artist="Bump", album="Same Release" if identity_twin else "Own Release")
+    other = fixture.entry("Bump/Other/01.flac", artist="Bump", album="Same Réléase" if identity_twin else "Stray Release")
+    for entry in (owner, other):
+        entry.update(album_artist="Bump", year=2001)
+    fixture.seed(owner, other)
+
+    def sql(statement, params=None):
+        with psycopg.connect(fixture.runtime_url) as connection:
+            cursor = connection.execute(statement, params)
+            return cursor.fetchall() if cursor.description else []
+
+    album_of = {
+        path: (album_id, key)
+        for path, album_id, key in sql(
+            """select files.private_path, albums.id, albums.album_key
+               from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id
+               join library.local_albums albums on albums.id = tracks.album_id""",
+        )
+    }
+    (owner_id, owner_key), (other_id, _other_key) = album_of[owner["path"]], album_of[other["path"]]
+
+    def set_stray_link(link):
+        sql(
+            """update library.local_albums
+               set metadata = case when %(link)s::jsonb is null then metadata - 'stray_duplicate_of'
+                 else metadata || jsonb_build_object('stray_duplicate_of', %(link)s::jsonb) end
+               where id = %(album_id)s""",
+            {"link": Jsonb(link) if link else None, "album_id": other_id},
+        )
+
+    if identity_twin:
+        sql("update library.local_albums set metadata = metadata - 'stray_duplicate_of'")
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    _ready_problematic_index(database_url)
+    problematic_index.wait_for_background_work()
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+
+    def owner_marked():
+        card = {"key": owner_key, "year": 2001, "tracks": []}
+        repository._attach_duplicate_sources([card], indexed=True)
+        return bool(card.get("has_duplicate_files"))
+
+    if not identity_twin:
+        set_stray_link({"album_id": owner_id, "album_key": owner_key})
+    assert owner_marked() is True
+    assert sql("select linked_album_ids from library.album_duplicate_results where album_id = %s", (owner_id,)) == [
+        ([other_id],),
+    ]
+
+    # A change nobody has evaluated yet, then the builder bump.
+    if identity_twin:
+        sql(
+            """update library.local_track_files
+               set metadata = jsonb_set(metadata, '{scan_cache,file_entry,album}', %s)
+               where private_path = %s""",
+            (Jsonb("Other Release"), other["path"]),
+        )
+    else:
+        set_stray_link(None)
+    assert sql("select album_id from library.problematic_index_dirty_albums where album_id <> 0") == [(other_id,)]
+    library_id = sql("select library_id from library.local_albums where id = %s", (owner_id,))[0][0]
+    assert owner_id not in {
+        row[0] for row in sql(problematic_index._SCOPE_SQL, {
+            "library_id": library_id, "album_ids": [other_id], "old_identities": [],
+        })
+    }, "Only linked_album_ids can reach the former twin."
+    monkeypatch.setattr(problematic_index, "BUILDER_VERSION", "next")
+    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: None)
+    monkeypatch.setattr(problematic_index, "_backfill_duplicate_results",
+                        lambda *_args: pytest.fail("a builder bump must not rebuild the results"))
+    assert problematic_index.duplicate_results_readable(repository), "A builder bump hid the stored results."
+    assert owner_marked() is True, "The last complete rows serve until the pass evaluates the change."
+
+    problematic_index._maintain(repository)
+
+    assert sql("select builder_version, status from library.problematic_index_state") == [("next", "ready")]
+    assert sql("select status from library.album_duplicate_results_state") == [("ready",)]
+    assert sql("select album_id from library.problematic_index_dirty_albums where album_id <> 0") == []
+    assert owner_marked() is False, "The former twin was evaluated."
+
+
 def test_live_problematic_index_reads_pages_and_search_without_the_whole_library_pass(monkeypatch):
     """An album that becomes problematic, one that is fixed and one that is removed reach the
     first page and search through the marked albums alone."""

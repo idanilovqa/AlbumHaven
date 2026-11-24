@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import hashlib
+from collections import defaultdict
 import json
 import logging
 from threading import Lock
@@ -96,6 +97,17 @@ def _membership_headers(connection, params):
     """, params).fetchall()
 
 
+def gallery_membership_headers_behind(connection, journal_floor_generation):
+    """Whether any header is behind the journal's earliest generation: a gap only a realignment fills."""
+    if journal_floor_generation is None or not _membership_installed(connection):
+        return False
+    context = gallery_projection_context(connection)
+    if not context:
+        return False
+    headers = _membership_headers(connection, {**context, "builder_version": BUILDER_VERSION})
+    return not headers or any(header["source_generation"] < journal_floor_generation for header in headers)
+
+
 def gallery_membership_baseline_ready(connection, expected_generation):
     """Whether journaled changes from ``expected_generation`` can be patched into membership.
 
@@ -116,8 +128,6 @@ def patch_gallery_membership_in_transaction(
     alias_to_canonical, expected_generation, expected_target_generation=None,
 ):
     """Publish changed memberships against an exact, previously ready baseline."""
-    from music_app.services import library_browse_postgres as browse
-
     if expected_generation is None or not _membership_installed(connection):
         return 0
     context = gallery_projection_context(connection)
@@ -126,44 +136,157 @@ def patch_gallery_membership_in_transaction(
     if expected_target_generation is not None and context['generation'] != expected_target_generation:
         raise RuntimeError('Library sources changed before gallery publication; retry reconciliation.')
     keys = sorted({str(key) for key in affected_album_keys if str(key)})
-    params = {**context, "expected_generation": expected_generation,
-              "builder_version": BUILDER_VERSION, "affected_album_keys": keys}
-    headers = _membership_headers(connection, params)
+    headers = _membership_headers(connection, {**context, "builder_version": BUILDER_VERSION})
     if not headers or any(header["source_generation"] != expected_generation for header in headers):
         raise RuntimeError("Gallery membership baseline is unavailable; initialize or reconcile it before editing.")
+    publish_all = _header_membership_publisher(connection, config, context, keys, affected_album_ids, alias_to_canonical)
+    if publish_all([(header, expected_generation) for header in headers]):
+        raise RuntimeError("Gallery membership baseline changed during inventory publication.")
+    return len(headers)
+
+
+def _header_membership_publisher(connection, config, context, keys, affected_album_ids, alias_to_canonical):
+    """Patches the affected albums into many headers at once, each from its own expected generation to the
+    current one. Five statements at any header count (6.5, 11-23): the missing-album rows and the candidate
+    rows once, every header's visibility in one statement, the aliases once, every header's patch in one
+    statement. Returns ``publish_all(targets)``, which takes ``(header, expected_generation)`` pairs and
+    returns the scope keys whose patch the database refused (a changed generation or baseline)."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services.scoped_relation_projection import _published_aliases
+
     repository = browse.PostgresLibraryBrowseRepository(config)
     aliases = browse._root_browse_alias_to_canonical(alias_to_canonical)
-    published = 0
-    for header in headers:
-        state = dict(header["view_state"])
+    album_ids = sorted(set(affected_album_ids))
+    # The affected albums' missing-album rows are the same for every header: loaded once per publication.
+    missing_rows = repository._load_missing_album_rows(album_keys=keys, connection=connection) if keys else []
+
+    def publish_all(targets):
+        targets = [(header, expected, dict(header["view_state"])) for header, expected in targets]
+        if not targets:
+            return []
+        # Every candidate row once, unfiltered by category; each header's visible albums then come from the
+        # same visibility predicate the membership query applies, with that header's category set.
         rows = connection.execute(
             browse._root_gallery_membership_sql(candidate_albums_only=True),
-            {**browse._root_sidebar_params(state), "gallery_album_ids": sorted(set(affected_album_ids))},
+            {**browse._root_sidebar_params({}), "gallery_album_ids": album_ids},
         ).fetchall() if keys else []
-        missing_rows = repository._load_missing_album_rows(album_keys=keys, connection=connection) if keys else []
-        missing_payloads = browse._missing_album_projection_payloads(missing_rows, view_state=state)
-        from music_app.services.scoped_relation_projection import _published_aliases
+        visible = defaultdict(set)
+        row_album_ids = sorted({int(row["album_id"]) for row in rows})
+        if row_album_ids:
+            for row in connection.execute(browse._headers_visible_albums_sql(), {
+                "headers": Jsonb([{"scope_key": header["scope_key"], **browse._root_sidebar_params(state)}
+                                  for header, _expected, state in targets]),
+                "gallery_album_ids": row_album_ids,
+            }).fetchall():
+                visible[row["scope_key"]].add(int(row["album_id"]))
+        shown = {
+            header["scope_key"]: (
+                [row for row in rows if int(row["album_id"]) in visible[header["scope_key"]]],
+                browse._missing_album_projection_payloads(missing_rows, view_state=state),
+            )
+            for header, _expected, state in targets
+        }
         row_aliases = _published_aliases(connection, context['library_id'], {
-            *(str(row.get('artist_name') or '').strip() for row in rows),
-            *(str(album.get('album_artist') or 'Unknown Artist').strip() for album in missing_payloads),
+            *(str(row.get('artist_name') or '').strip() for header_rows, _missing in shown.values()
+              for row in header_rows),
+            *(str(album.get('album_artist') or 'Unknown Artist').strip() for _rows, missing in shown.values()
+              for album in missing),
         } - {''})
         row_aliases.update(aliases)
-        snapshot = browse._prepare_root_gallery_snapshot(
-            rows, missing_payloads, row_aliases, state,
-        )
-        revision = hashlib.sha256(f'{header["revision"]}:{snapshot["revision"]}'.encode()).hexdigest()
-        result = _first(connection.execute("""
-            select library.patch_gallery_membership(
-                %(library_id)s, %(scope_key)s, %(expected_generation)s, %(generation)s,
-                %(builder_version)s, %(revision)s, %(view_state)s, %(affected_album_keys)s,
-                %(rows)s
+        patches = []
+        for header, expected, state in targets:
+            header_rows, missing_payloads = shown[header["scope_key"]]
+            snapshot = browse._prepare_root_gallery_snapshot(header_rows, missing_payloads, row_aliases, state)
+            patches.append({
+                "scope_key": header["scope_key"], "expected_generation": expected, "view_state": state,
+                "revision": hashlib.sha256(f'{header["revision"]}:{snapshot["revision"]}'.encode()).hexdigest(),
+                "rows": membership_rows(snapshot),
+            })
+        # One statement patches every header; a refusal is that header's false, never an abort of the others.
+        published = connection.execute("""
+            select patches.scope_key, library.patch_gallery_membership(
+                %(library_id)s, patches.scope_key, patches.expected_generation, %(generation)s,
+                %(builder_version)s, patches.revision, patches.view_state, %(affected_album_keys)s,
+                patches.rows
             ) as published
-        """, {**params, "scope_key": header["scope_key"], "revision": revision,
-                "view_state": Jsonb(state), "rows": Jsonb(membership_rows(snapshot))}))
-        if not result or result.get("published") is not True:
-            raise RuntimeError("Gallery membership baseline changed during inventory publication.")
-        published += 1
-    return published
+            from jsonb_to_recordset(%(patches)s) as patches(
+              scope_key text, expected_generation bigint, revision text, view_state jsonb, rows jsonb)
+        """, {**context, "builder_version": BUILDER_VERSION, "affected_album_keys": keys,
+              "patches": Jsonb(patches)}).fetchall()
+        accepted = {row["scope_key"] for row in published if row.get("published") is True}
+        return [header["scope_key"] for header, _expected, _state in targets if header["scope_key"] not in accepted]
+
+    return publish_all
+
+
+def patch_membership_per_header_in_transaction(
+    connection, config, *, affected_album_ids, affected_album_keys,
+    alias_to_canonical, journal_floor_generation, expected_target_generation=None,
+):
+    """Edits always save (R3/R4): each header is patched from its own generation.
+
+    The journal holds every album changed since ``journal_floor_generation`` (its earliest row), so a
+    header at or after that floor reaches the current generation by these albums alone. A header behind
+    the floor has a gap the journal can't fill: it is left as it is and returned, and the journal owner's
+    drain realigns it (``realign_headers_behind_journal``). Returns the scope keys of those headers.
+    """
+    if journal_floor_generation is None or not _membership_installed(connection):
+        return []
+    context = gallery_projection_context(connection)
+    if not context:
+        return []
+    if expected_target_generation is not None and context['generation'] != expected_target_generation:
+        raise RuntimeError('Library sources changed before gallery publication; retry reconciliation.')
+    keys = sorted({str(key) for key in affected_album_keys if str(key)})
+    headers = _membership_headers(connection, {**context, "builder_version": BUILDER_VERSION})
+    publish_all = _header_membership_publisher(connection, config, context, keys, affected_album_ids, alias_to_canonical)
+    covered = [header for header in headers if header["source_generation"] >= journal_floor_generation]
+    lagging = [header["scope_key"] for header in headers if header["source_generation"] < journal_floor_generation]
+    # A header whose patch the database refuses is left to the journal owner, like one behind the floor;
+    # the other headers and the save's committed edit are unaffected (6.5, 11-23).
+    return lagging + publish_all([(header, header["source_generation"]) for header in covered])
+
+
+def realign_headers_behind_journal(connection, config, scope_keys):
+    """The journal owner's drain only: realign headers behind the journal's floor (a restored database, an
+    interrupted startup). The journal cannot name what such a header missed, so that header alone is
+    republished from a complete snapshot of the current sources, from its own generation to the current one,
+    in the drain's transaction. A failure raises, so the drain rolls back and the journal stays."""
+    from music_app.services import library_browse_postgres as browse
+
+    context = gallery_projection_context(connection)
+    if not context or not scope_keys:
+        return 0
+    repository = browse.PostgresLibraryBrowseRepository(config)
+    alias_maps = repository._load_relation_alias_maps(connection=connection)
+    if not browse._relation_aliases_servable(alias_maps):
+        raise RuntimeError("Relations are not servable; headers behind the journal stay for the next drain.")
+    aliases = browse._root_browse_alias_to_canonical(alias_maps["alias_to_canonical"])
+    headers = connection.execute("""select scope_key, view_state, source_generation
+        from library.gallery_membership_headers
+        where library_id = %s and builder_version = %s and scope_key = any(%s::text[])""",
+        (context["library_id"], BUILDER_VERSION, sorted(scope_keys))).fetchall()
+    missing_rows = repository._load_missing_album_rows(connection=connection)
+    for header in headers:
+        state = dict(header["view_state"])
+        rows = connection.execute(browse._root_gallery_membership_sql(), browse._root_sidebar_params(state)).fetchall()
+        missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
+        snapshot = browse._prepare_root_gallery_snapshot(rows, missing, aliases, state)
+        keys = {row["album_key"] for row in snapshot["ordered"]}
+        keys.update(row["album_key"] for row in connection.execute("""select distinct album_key
+            from library.gallery_membership_entries where library_id = %s and scope_key = %s""",
+            (context["library_id"], header["scope_key"])).fetchall())
+        published = _first(connection.execute("""select library.patch_gallery_membership(
+            %(library_id)s,%(scope_key)s,%(expected)s,%(generation)s,%(builder)s,
+            %(revision)s,%(view_state)s,%(keys)s,%(rows)s) as published""", {
+            **context, "scope_key": header["scope_key"], "expected": header["source_generation"],
+            "builder": BUILDER_VERSION, "revision": snapshot["revision"], "view_state": Jsonb(state),
+            "keys": sorted(keys), "rows": Jsonb(membership_rows(snapshot)),
+        }))
+        if not published or not published.get("published"):
+            raise RuntimeError("Gallery changed while realigning a header behind the journal.")
+    _LOGGER.warning("Realigned %s gallery header(s) behind the relation journal from a full snapshot.", len(headers))
+    return len(headers)
 
 
 def _first(cursor):
@@ -595,7 +718,11 @@ def _first_build_ready(config, connect=None) -> bool:
 
 def queue_journaled_relation_drain(config):
     """The owner of a committed write's journaled albums (library.local_relation_dirty_albums) outside a scan,
-    the watcher, a tag save and startup: the keyed incremental drain, queued off the response path."""
+    the watcher, a tag save and startup: the keyed incremental drain, queued off the response path. It also
+    retries the catch-up of any verified save whose back-off has run out (owner's rule, 2026-11-23)."""
+    from music_app.services.tag_edit_catch_up import retry_waiting_catch_ups
+
+    retry_waiting_catch_ups()
     return schedule_gallery_projection_refresh(config, incremental_membership=True)
 
 

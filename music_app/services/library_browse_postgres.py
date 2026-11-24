@@ -267,7 +267,8 @@ def _fingerprint_at_most_one_save_behind(cached: Mapping[str, object], fingerpri
     if len(old) != len(new) or len(new) < 2 or old[:1] + old[2:] != new[:1] + new[2:]:
         return False
     try:
-        return int(new[1]) - int(old[1]) in (0, 1)
+        # A library no save has touched yet has no revision: count it as revision 0.
+        return int(new[1] or 0) - int(old[1] or 0) in (0, 1)
     except (TypeError, ValueError):
         return False
 
@@ -516,9 +517,11 @@ class PostgresLibraryBrowseRepository:
         albums: Iterable[dict[str, object]],
         *,
         connection: Any | None = None,
-        defer_on_cache_miss: bool = False,
         defer_source_payloads: bool = False,
+        indexed: bool = False,
     ) -> bool:
+        """Overlay each album's duplicate state. Gallery and search cards pass ``indexed``: they
+        read the persisted per-album results (FTC-TAGS-015) and never compute them."""
         albums = list(albums)
         keys = list({str(album.get("_persisted_album_key") or album.get("key") or album.get("album_ref") or "") for album in albums} - {""})
         if not keys:
@@ -539,14 +542,7 @@ class PostgresLibraryBrowseRepository:
             cache_key = self._utility_projection_cache_key(kind)
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
-            candidate_ids = _load_duplicate_candidate_album_ids(
-                active_connection,
-                pending,
-                repository=self,
-                cache_only=defer_on_cache_miss,
-            )
-            if candidate_ids is None:
-                return None
+            candidate_ids = _load_duplicate_candidate_album_ids(active_connection, pending, repository=self)
             duplicates = {}
             duplicate_rows = []
             if candidate_ids:
@@ -580,7 +576,9 @@ class PostgresLibraryBrowseRepository:
                 _cache_compact_inventory_payload(active_connection, self, kind, fingerprint, {"albums": absent}, generation)
             return {**duplicates, **known}
 
-        if connection is None:
+        if indexed:
+            duplicates = self._indexed_duplicate_results(keys)
+        elif connection is None:
             with self._connect_to_database() as owned_connection:
                 duplicates = load(owned_connection)
         else:
@@ -645,6 +643,62 @@ class PostgresLibraryBrowseRepository:
                     album["total_duration_seconds"] = source["total_duration_seconds"]
                     album["total_duration_display"] = source["total_duration_display"]
         return True
+
+    def _indexed_duplicate_results(self, album_keys: list[str]) -> dict[str, dict[str, object]] | None:
+        """The persisted duplicate results of ``album_keys``; None while no index is readable.
+
+        Refreshing first evaluates the few albums a save just marked, so a pair it formed or
+        broke shows on both cards at once. The read uses its own connection: a caller's
+        repeatable-read snapshot may predate that evaluation.
+        """
+        if not problematic_index.duplicate_results_readable(self):
+            return None
+        with self._browse_connection_context() as connection:
+            rows = connection.execute(
+                f"""select results.album_key, results.result
+                    from library.album_duplicate_results results
+                    where results.library_id = ({_LOCAL_LIBRARY_ID_SQL})
+                      and results.album_key = any(%(album_keys)s::text[])
+                      and results.result <> '{{}}'::jsonb""",
+                {"album_keys": sorted(album_keys)},
+            ).fetchall()
+        return {
+            str(payload["album_key"]): _decode_duplicate_result(payload["result"])
+            for payload in map(_row_mapping, rows)
+        }
+
+    def compute_duplicate_results_for_album_keys(
+        self,
+        connection: Any,
+        album_keys: Iterable[str],
+        *,
+        candidate_album_ids: list[int] | None = None,
+    ) -> dict[str, dict[str, object]]:
+        """The duplicate results the Problematic Files index stores for ``album_keys``: the
+        same rule the card overlay applied live, kept only where it changes a card. Each
+        names the other albums it was computed from, whose changes must refresh it.
+
+        A tag save passes its affected scope as ``candidate_album_ids``, so it never loads
+        the whole identity index, which Postgres 17 needs to find candidates itself."""
+        from music_app.services.edit_tag_timings import persistence_stage
+
+        keys = sorted({str(key) for key in album_keys} - {""})
+        if candidate_album_ids is not None:
+            candidate_ids = candidate_album_ids
+        else:
+            candidate_ids = _load_duplicate_candidate_album_ids(connection, keys, repository=self) if keys else []
+        with persistence_stage("duplicate_results.source_rows"):
+            rows = connection.execute(
+                _duplicate_source_rows_for_album_ids_sql(), {"album_ids": candidate_ids},
+            ).fetchall() if candidate_ids else []
+        with persistence_stage("duplicate_results.build"):
+            duplicates = _duplicate_sources_from_rows(rows)
+            linked = _linked_duplicate_album_ids(rows, duplicates)
+        return {
+            key: {**duplicates[key], "_linked_album_ids": linked.get(key, [])}
+            for key in keys
+            if key in duplicates and _duplicate_result_changes_a_card(duplicates[key])
+        }
 
     def _apply_private_album_rating_overlays(
         self,
@@ -1105,8 +1159,7 @@ class PostgresLibraryBrowseRepository:
             )
             self._attach_duplicate_sources(
                 _album_payloads_from_groups(preview_artist_groups),
-                connection=connection,
-                defer_on_cache_miss=True,
+                indexed=True,
             )
             self._apply_private_album_rating_overlays(
                 _album_payloads_from_groups(preview_artist_groups),
@@ -1975,8 +2028,7 @@ class PostgresLibraryBrowseRepository:
                 *reusable_primary_artist_groups,
                 *sidebar_family_artist_groups,
             ]),
-            connection=_connection,
-            defer_on_cache_miss=True,
+            indexed=True,
         )
         if selected_subphase_ms is not None:
             selected_subphase_ms["selected_duplicate_overlay"] = (
@@ -2344,7 +2396,7 @@ class PostgresLibraryBrowseRepository:
         )
         self._attach_duplicate_sources(
             _album_payloads_from_groups(artist_groups),
-            defer_on_cache_miss=True,
+            indexed=True,
         )
         album_count = len(_album_identity_set(rows)) + len(missing_albums)
         non_album_entries = self._load_non_album_entries(
@@ -2882,8 +2934,7 @@ class PostgresLibraryBrowseRepository:
                 *primary_artist_groups,
                 *family_artist_groups,
             ]),
-            connection=connection,
-            defer_on_cache_miss=True,
+            indexed=True,
         )
         phase_ms["grouping_duplicate_overlay"] = (
             perf_counter() - grouping_subphase_started_at
@@ -4554,6 +4605,22 @@ class PostgresLibraryBrowseRepository:
             cursor = connection.execute(_utility_rules_sql(), {})
             return list(cursor.fetchall())
 
+    def wait_for_inventory_publication(self, *, timeout_seconds: float) -> bool:
+        """Wait, at most ``timeout_seconds``, for a publication holding the inventory lock to commit.
+        Takes and releases the lock in one short transaction; returns False when the wait ran out."""
+        from music_app.services.relation_projection_postgres import inventory_publication_advisory_lock_sql
+        from music_app.services.scan_cache_persistence import set_local_lock_wait
+
+        try:
+            with self._connect_to_database() as connection:
+                set_local_lock_wait(connection, timeout_seconds)
+                connection.execute(inventory_publication_advisory_lock_sql())
+            return True
+        except Exception as error:
+            if getattr(error, "sqlstate", None) == "55P03":  # lock_not_available
+                return False
+            raise
+
     def _connect_to_database(self) -> Any:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres library browse.")
@@ -5577,6 +5644,74 @@ def _annotate_album_payload_problematic_tracks(
                     track["problem_reasons"] = list(reasons)
 
 
+def _stray_duplicate_owner_id(payload: Mapping[str, object]) -> int:
+    """The album whose identity this row's tracks take while its album is that one's stray copy."""
+    ownership = _row_json_mapping(payload.get("stray_duplicate_of")) or _row_json_mapping(
+        _row_json_mapping(payload.get("album_metadata")).get("stray_duplicate_of")
+    )
+    return _coerce_int(ownership.get("album_id"))
+
+
+def _linked_duplicate_album_ids(
+    rows: Iterable[object],
+    duplicates: Mapping[str, Mapping[str, object]],
+) -> dict[str, list[int]]:
+    """Per album key, the other albums its result was computed from: those holding its source
+    tracks and those tied to it by a stray-copy link, in either direction."""
+    album_id_by_key: dict[str, int] = {}
+    album_id_by_path: dict[str, int] = {}
+    stray_links: dict[int, set[int]] = {}
+    for payload in map(_row_mapping, rows):
+        album_id = _coerce_int(payload.get("album_id"))
+        album_id_by_key[str(payload.get("album_key") or "")] = album_id
+        album_id_by_path[str(payload.get("file_private_path") or "").strip()] = album_id
+        if owner_id := _stray_duplicate_owner_id(payload):
+            stray_links.setdefault(album_id, set()).add(owner_id)
+            stray_links.setdefault(owner_id, set()).add(album_id)
+    linked: dict[str, list[int]] = {}
+    for key, result in duplicates.items():
+        album_id = album_id_by_key.get(key, 0)
+        related = set(stray_links.get(album_id, ()))
+        for source in result.get("duplicate_sources") or []:
+            related.update(album_id_by_path.get(str(track.get("path") or ""), 0) for track in source["tracks"])
+        linked[key] = sorted(related - {0, album_id})
+    return linked
+
+
+def _duplicate_result_changes_a_card(result: Mapping[str, object]) -> bool:
+    """An album without duplicates and with one year shows its own tracks and provenance; any
+    other result changes its card (a year-split card takes its year's provenance)."""
+    return bool(
+        result.get("has_duplicate_files")
+        or result.get("duplicate_sources")
+        or len(result.get("_root_provenance_by_year") or {}) > 1
+    )
+
+
+def encode_duplicate_result(result: Mapping[str, object]) -> str:
+    """The stored form of one album's duplicate result (library.album_duplicate_results)."""
+    return json.dumps({
+        "has_duplicate_files": bool(result.get("has_duplicate_files")),
+        "duplicate_sources": list(result.get("duplicate_sources") or []),
+        "root_provenance_by_year": [
+            [year, provenance] for year, provenance in (result.get("_root_provenance_by_year") or {}).items()
+        ],
+        **({"root_provenance": result["root_provenance"]} if "root_provenance" in result else {}),
+    }, default=str)
+
+
+def _decode_duplicate_result(value: object) -> dict[str, object]:
+    stored = _row_json_mapping(value)
+    return {
+        "has_duplicate_files": bool(stored.get("has_duplicate_files")),
+        "duplicate_sources": list(stored.get("duplicate_sources") or []),
+        "_root_provenance_by_year": {
+            _coerce_int(year): provenance for year, provenance in stored.get("root_provenance_by_year") or []
+        },
+        **({"root_provenance": stored["root_provenance"]} if "root_provenance" in stored else {}),
+    }
+
+
 def _duplicate_sources_for_projected_album(album: Mapping[str, object], result: Mapping[str, object]) -> list[dict[str, object]]:
     sources = result.get("duplicate_sources", [])
     if album.get("_persisted_album_key") and album.get("key") != album["_persisted_album_key"]:
@@ -5623,8 +5758,7 @@ def _load_duplicate_candidate_album_ids(
     album_keys: list[str],
     *,
     repository: PostgresLibraryBrowseRepository,
-    cache_only: bool = False,
-) -> list[int] | None:
+) -> list[int]:
     # Compare only compact tag identities before loading full file metadata. SQL
     # collation is not Python's NFC/casefold rule; broad Unicode SQL candidates
     # otherwise pull thousands of unrelated albums into every artist request.
@@ -5636,14 +5770,6 @@ def _load_duplicate_candidate_album_ids(
         and _duplicate_identity_helpers_available(connection)
     ):
         return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
-    if cache_only:
-        kind = "duplicate-identities"
-        fingerprint = _duplicate_inventory_fingerprint(connection)
-        cached = repository._get_cached_utility_projection(kind, copy_payload=False)
-        if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
-            return _duplicate_candidate_ids_from_index(cached["index"], album_keys)
-        repository.queue_utility_projection_prewarm(kind)
-        return None
     kind = "duplicate-identities"
     fingerprint = _duplicate_inventory_fingerprint(connection)
     cached = repository._get_cached_utility_projection(kind, copy_payload=False)
@@ -5916,16 +6042,7 @@ def _duplicate_sources_from_rows(
             entry = _problematic_file_entry_from_row(payload)
         else:
             entry = dict(entry)
-        ownership = _row_json_mapping(payload.get("stray_duplicate_of"))
-        if not ownership:
-            ownership = _row_json_mapping(
-                _row_json_mapping(payload.get("album_metadata")).get(
-                    "stray_duplicate_of"
-                )
-            )
-        source_identity = source_identities.get(
-            _coerce_int(ownership.get("album_id"))
-        )
+        source_identity = source_identities.get(_stray_duplicate_owner_id(payload))
         if source_identity:
             entry.update(source_identity)
         if payload.get("file_entry_is_object") is not True and not file_entry:
@@ -9763,12 +9880,19 @@ def _build_artist_page_gallery_payload(artist_ref: str) -> dict[str, object]:
     }
 
 
-def _visible_album_clause(album_ref: str) -> str:
+def _visible_album_clause(
+    album_ref: str,
+    *,
+    category_count: str = "%(category_count)s",
+    visible_categories: str = "%(visible_categories)s::text[]",
+) -> str:
+    """The album visibility predicate. Its default text (bind parameters) is pinned; the gallery header
+    batch passes column references to decide every header's visibility in one statement."""
     return f"""
              not ({album_ref}.metadata ? 'stray_duplicate_of')
              and (
-             %(category_count)s = 0
-             or ({album_ref}.metadata #>> '{{root_provenance,primary_category}}') = any(%(visible_categories)s::text[])
+             {category_count} = 0
+             or ({album_ref}.metadata #>> '{{root_provenance,primary_category}}') = any({visible_categories})
              or exists (
                select 1
                from jsonb_array_elements_text(
@@ -9777,10 +9901,10 @@ def _visible_album_clause(album_ref: str) -> str:
                    '[]'::jsonb
                  )
                ) as root_categories(category)
-               where root_categories.category = any(%(visible_categories)s::text[])
+               where root_categories.category = any({visible_categories})
              )
              or (
-               'main_library' = any(%(visible_categories)s::text[])
+               'main_library' = any({visible_categories})
                and coalesce({album_ref}.metadata #>> '{{root_provenance,primary_category}}', '') = ''
                and coalesce(
                  jsonb_array_length(
@@ -9794,6 +9918,23 @@ def _visible_album_clause(album_ref: str) -> str:
              )
              )
     """.strip()
+
+
+def _headers_visible_albums_sql() -> str:
+    """For each gallery header's category set (%(headers)s: jsonb rows of scope_key, category_count and
+    visible_categories), the given albums it shows: one statement for every header of a publication."""
+    return f"""
+        select headers.scope_key, album.id as album_id
+        from jsonb_to_recordset(%(headers)s) as headers(
+          scope_key text, category_count integer, visible_categories text[])
+        cross join lateral (
+          select keyed.* from library.local_albums keyed
+          where keyed.id = any(%(gallery_album_ids)s::bigint[])
+          offset 0
+        ) album
+        where ({_visible_album_clause(
+            "album", category_count="headers.category_count", visible_categories="headers.visible_categories")})
+    """
 
 
 def _eligible_album_tracks_cte_sql(
@@ -9898,6 +10039,44 @@ def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
           where id = any(%(gallery_album_ids)s::bigint[])
         ),
     """ if candidate_albums_only else ""
+    if candidate_albums_only:
+        # A publication's affected albums: start from them and read each album, its featured artists and
+        # each artist by key in a lateral lookup (offset 0), so the read stays with those albums even on
+        # tables with no statistics yet (case 55's shape). Same rows as the library-wide form below.
+        return f"""
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library' and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1
+        ), {candidate_albums} {eligible_tracks}
+        select distinct artist.id as artist_id, artist.name as artist_name,
+          artist.sort_name as artist_sort_name, featured.featured_kind,
+          album.id as album_id, album.album_key,
+          album.title as album_title, album.release_year as album_release_year
+        from search_candidate_album_ids candidate
+        join bootstrap_context on bootstrap_context.library_id = candidate.library_id
+        join lateral (
+          select keyed.* from library.local_albums keyed
+          where keyed.id = candidate.album_id and keyed.library_id = bootstrap_context.library_id
+          offset 0
+        ) album on true
+        join lateral (
+          select keyed.* from library.local_album_featured_artists keyed
+          where keyed.library_id = album.library_id and keyed.album_id = album.id
+          offset 0
+        ) featured on true
+        join lateral (
+          select keyed.* from library.local_artists keyed
+          where keyed.id = featured.artist_id and keyed.library_id = album.library_id
+          offset 0
+        ) artist on true
+        where ({_visible_album_clause("album")}) and exists (
+          select 1 from eligible_album_tracks eligible
+          where eligible.library_id = album.library_id and eligible.album_id = album.id
+        );
+    """
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id

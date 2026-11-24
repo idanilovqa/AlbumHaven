@@ -6118,6 +6118,46 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/save-fold-decisions.js#<top-level>",
+      "action": "Show another page's save in this page: storage listeners installed by <top-level>",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/save-fold-decisions.js#<top-level>:event:storage"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/save-fold-decisions.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/save-fold-decisions.js#ask",
+      "action": "Ask which cards the confirmed tag updates fold: fetch requests installed by ask",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/save-fold-decisions.js#ask:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/save-fold-decisions.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/tag-editor/fold-decision"
+        ],
+        "forbidden": [
+          "/utilities/edit-tags"
+        ]
+      }
+    },
+    {
       "id": "js:runtime/search-input.js#<top-level>",
       "action": "click/input listeners installed by <top-level>",
       "entrypoints": [
@@ -10114,6 +10154,41 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/api_wave_a_asgi_routes.py#tag_editor_fold_decision",
+      "action": "Serve POST /utilities/tag-editor/fold-decision",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#tag_editor_fold_decision:route:POST /utilities/tag-editor/fold-decision"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/scan_cache_persistence.py",
+        "music_app/services/scoped_relation_projection.py",
+        "music_app/services/stray_fold_decision.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "sql_statements": 10,
+        "returned_rows": 12,
+        "candidate_rows": 2
+      },
+      "growth": {
+        "metric": "returned_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_fold_decision_route_bounded_contract.py::test_fold_decision_route_contract_reads_only_the_edited_albums_at_production_album_count",
+      "testIdentity": "test_fold_decision_route_contract_reads_only_the_edited_albums_at_production_album_count",
+      "rollback": "Revert the fold decision route, its page caller and contract; cards then fold at save completion."
+    },
+    {
       "id": "py:routes/api_wave_a_asgi_routes.py#tag_editor_folder_files",
       "action": "Serve POST /utilities/tag-editor/folder-files",
       "entrypoints": [
@@ -10249,7 +10324,7 @@
       "budgets": {
         "builder_calls": 0,
         "returned_rows": 6,
-        "sql_statements": 29,
+        "sql_statements": 31,
         "invalidations": 1
       },
       "growth": {
@@ -14156,7 +14231,7 @@
     },
     {
       "id": "py:services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit",
-      "action": "After a tag save, keep the duplicate projections except the albums the edit can change, so the next search or artist view reads only those albums",
+      "action": "After a tag save, keep the duplicate projections except the albums the edit can change, so the next live duplicate read (album details, the Problematic Files evaluation) reads only those albums",
       "entrypoints": [
         "py:music_app/services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit:refresh:name"
       ],
@@ -14183,7 +14258,7 @@
       },
       "command": "python -m pytest tests/py/test_duplicate_projection_bounded_contracts.py::test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_production_album_count",
       "testIdentity": "test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_production_album_count",
-      "rollback": "Revert the scoped duplicate-projection retention; every save then wipes both duplicate caches and the next view rereads the whole identity index."
+      "rollback": "Revert the scoped duplicate-projection retention; every save then wipes both duplicate caches and the next live duplicate read rereads the whole identity index."
     },
     {
       "id": "py:services/library_event_coordinator.py#LibraryEventCoordinator._run_scheduled_flush",
@@ -15909,6 +15984,137 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/pending-tag-edits.js#<top-level>",
+      "action": "Show another tab's finishing tag edits over the loaded view when it writes the pending-edit store",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-tag-edits.js#<top-level>:event:storage"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-tag-edits.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/gallery_projection_postgres.py#_header_membership_publisher",
+      "action": "Patch a save's edited albums into each gallery membership header",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#_header_membership_publisher:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#publish_affected_relation_projection_or_defer",
+      "action": "Publish a write's affected relation component in a savepoint, or defer it to the journal owner",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#publish_affected_relation_projection_or_defer:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#_reconcile_intent",
+      "action": "Reconcile one verified save's intent from its files (case 56's per-intent path, run now)",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#_reconcile_intent:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 61,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 13
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the verified-save catch-up (tag_edit_catch_up) with its contract. A DB-step failure after verified files then restores the old tags again, which the owner's rule (2026-11-23) forbids."
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#_run",
+      "action": "Catch the library up with one verified save on the single-flight catch-up worker",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#_run:background:executor"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 61,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 13
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the verified-save catch-up (tag_edit_catch_up) with its contract. A DB-step failure after verified files then restores the old tags again, which the owner's rule (2026-11-23) forbids."
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#retry_waiting_catch_ups",
+      "action": "Retry the catch-ups whose back-off has run out (timer and the journal owner's drain)",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#retry_waiting_catch_ups:background:thread"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
       "proof": "static"
     }
   ]

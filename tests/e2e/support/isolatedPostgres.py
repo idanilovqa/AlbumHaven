@@ -829,6 +829,17 @@ def _reset_owned_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def prepare_app_to_serve(app: Any) -> None:
+    """The deploy step itself, as an operator runs it: an app refuses to start without it."""
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from scripts import prepare_duplicate_results
+
+    if prepare_duplicate_results.main(
+        [], repository_factory=lambda: PostgresLibraryBrowseRepository(app.state.config),
+    ):
+        raise RuntimeError("scripts/prepare_duplicate_results.py failed; the E2E app must not serve.")
+
+
 def reset_application_tables(setup_database_url: str) -> None:
     from psycopg import sql
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,10 @@ class StructuralTagEditConnection:
         self.exit_exc_type = exc_type
         self.exit_executed_count = len(self.executed)
         return False
+
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        return contextlib.nullcontext()
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
@@ -347,9 +352,9 @@ def test_identity_edit_with_publication_never_round_trips_global_relations(
     monkeypatch.setattr(persistence, "_commit_structural_relation_projection", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_family_projection_in_transaction", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_search_projection_in_transaction", unexpected_global_work)
-    scoped_source_sql = relations.load_relation_source_rows_sql(scoped=True)
-    monkeypatch.setattr(relations, "load_relation_source_rows_sql",
-                        lambda *, scoped=False: scoped_source_sql if scoped else unexpected_global_work())
+    # The scoped publication runs this text through load_scoped_relation_source_rows; the full loader is forbidden.
+    scoped_source_sql = relations._relation_source_rows_sql(scoped=True)
+    monkeypatch.setattr(relations, "load_relation_source_rows_sql", unexpected_global_work)
 
     result = adapter.persist_structural_tag_edit(
         changed_paths=selected,
@@ -899,6 +904,10 @@ class _CommitSuppressingConnection:
 
     def execute(self, sql, params=None):
         return self._connection.cursor(row_factory=dict_row).execute(sql, params)
+
+    def transaction(self):
+        # A nested transaction is a savepoint: it never commits the wrapped connection.
+        return self._connection.transaction()
 
     def commit(self):
         raise AssertionError("The live restore contract must suppress adapter commits.")
@@ -2099,8 +2108,9 @@ def test_postgres_album_split_reuses_legacy_key_with_same_release_identity(
         if "source_album_track_file_count" in _normalized_sql(sql)
     )
     normalized_sql = _normalized_sql(mutation_sql)
+    # The same-release match is a keyed lookup by the source's artist (locked_album_ids), then locked by id.
     locked_album_scope = normalized_sql.split(
-        "locked_album_scope as materialized (", 1
+        "locked_album_ids as materialized (", 1
     )[1].split("existing_destination_album as materialized", 1)[0]
     copied_ratings = normalized_sql.split(
         "copied_album_ratings as (", 1
@@ -2110,17 +2120,19 @@ def test_postgres_album_split_reuses_legacy_key_with_same_release_identity(
     assert mutation_params["destination_release_year"] == 2000
     assert mutation_params["destination_edition"] == ""
     assert mutation_params["updates_release_year"] is True
+    assert "keyed.artist_id = source_album_identity.artist_id" in locked_album_scope
     assert (
-        "library.local_albums.artist_id is not distinct from "
+        "keyed.artist_id is not distinct from "
         "source_album_identity.artist_id"
     ) in locked_album_scope
     assert (
-        "library.local_albums.release_year is not distinct from "
+        "keyed.release_year is not distinct from "
         "case when %(updates_release_year)s::boolean "
         "then %(destination_release_year)s "
         "else source_album_identity.release_year end"
     ) in locked_album_scope
-    assert "library.local_albums.metadata ->> 'edition'" in locked_album_scope
+    assert "keyed.metadata ->> 'edition'" in locked_album_scope
+    assert "join library.local_albums on library.local_albums.id = locked_album_ids.id" in locked_album_scope
     assert "destination_album.album_key" in copied_ratings
 
 
@@ -2237,78 +2249,31 @@ def test_supported_media_field_combinations_select_targeted_finalizer(monkeypatc
     })
 
 
-def test_tag_edit_prevalidation_rejects_dirty_baseline_and_schedules_replay(monkeypatch):
-    from music_app.services import scoped_relation_projection, gallery_projection_postgres
+def test_tag_edit_prevalidation_never_waits_for_publishes_or_prepares_an_unready_baseline(monkeypatch):
+    """Owner (2026-11-22): any edit is saved despite background indexing. With the baseline not ready,
+    prevalidation validates the edit and nothing else: no refusal, inline publication, full preparation,
+    scheduled replay or wait (rows B1, R2). Replaces the gate that refused or published first."""
+    from music_app.services import gallery_projection_postgres, scan_cache_persistence, scoped_relation_projection
+
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
-    scheduled = []
-    published = []
+    library_wide = []
     monkeypatch.setattr(scoped_relation_projection, "tag_edit_baseline_ready", lambda *a, **k: False)
-    rebuilt = []
     monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
-                        lambda *a, **k: published.append(k) or {"initialized": True})
+                        lambda *a, **k: library_wide.append("inline publication"))
     monkeypatch.setattr(gallery_projection_postgres, "ensure_gallery_projection_ready",
-                        lambda *a, **k: rebuilt.append(k))
+                        lambda *a, **k: library_wide.append("full gallery preparation"))
     monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
-                        lambda *a, **k: scheduled.append(k))
-    paths, previous, updated = _entries()
-    with pytest.raises(RuntimeError, match="still being reconciled"):
-        adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
-            updated_file_entries=updated, changed_field_names={"album"})
-    # Pending changes are published and membership rebuilt first; only a
-    # baseline that stays dirty after both is refused.
-    assert len(published) == 1
-    assert len(rebuilt) == 1
-    assert scheduled == [{"incremental_membership": True}]
-    assert connection.executed == []
-
-
-def test_tag_edit_prevalidation_publishes_the_previous_save_instead_of_refusing(monkeypatch):
-    """Owner (11-18): a merge right after a split was refused with "still being reconciled"."""
-    from music_app.services import (
-        gallery_projection_postgres,
-        scan_cache_persistence,
-        scoped_relation_projection,
-    )
-
-    connection = StructuralTagEditConnection(_successful_result())
-    adapter = _adapter(monkeypatch, connection)
-    readiness = iter((False, True, True))
-    scheduled = []
-    published = []
-    monkeypatch.setattr(
-        scoped_relation_projection,
-        "tag_edit_baseline_ready",
-        lambda *a, **k: next(readiness),
-    )
-    monkeypatch.setattr(
-        scoped_relation_projection,
-        "ensure_pending_relation_projection_ready",
-        lambda *a, **k: published.append(k) or {"initialized": True},
-    )
-    monkeypatch.setattr(
-        gallery_projection_postgres,
-        "schedule_gallery_projection_refresh",
-        lambda *a, **k: scheduled.append(k),
-    )
-    monkeypatch.setattr(
-        scan_cache_persistence,
-        "sleep",
-        lambda _seconds: None,
-        raising=False,
-    )
+                        lambda *a, **k: library_wide.append("scheduled replay"))
+    monkeypatch.setattr(scan_cache_persistence, "sleep", lambda _seconds: library_wide.append("wait"),
+                        raising=False)
     paths, previous, updated = _entries()
 
-    adapter.validate_structural_tag_edit(
-        changed_paths=set(paths),
-        previous_file_entries=previous,
-        updated_file_entries=updated,
-        changed_field_names={"album"},
-    )
+    adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
+        updated_file_entries=updated, changed_field_names={"album"})
 
-    assert len(published) == 1
-    assert scheduled == []
-    assert connection.executed
+    assert library_wide == []
+    assert connection.executed, "The edit itself was not validated."
 
 
 @pytest.mark.parametrize("edits", [
@@ -2991,7 +2956,9 @@ def test_semantic_album_reconciliation_serializes_bootstrap_library_before_candi
         scan_cache_persistence._execute_semantic_local_album_reconciliation
     )
     assert "isinstance" not in executor_source
-    assert "for statement in _reconcile_semantic_local_albums_sql()" in executor_source
+    # The unscoped run takes the statements as returned, in order (an empty candidate set skips to the drop).
+    assert "else _reconcile_semantic_local_albums_sql()" in executor_source
+    assert "for statement in statements:" in executor_source
 
 
 def test_semantic_album_reconciliation_can_scope_candidates_to_target_identity():
@@ -3009,10 +2976,8 @@ def test_semantic_album_reconciliation_can_scope_candidates_to_target_identity()
 
     assert "semantic_album_target_identities as materialized" in normalized_sql
     assert "library.local_albums.id = any(%(target_album_ids)s::bigint[])" in normalized_sql
-    assert (
-        "target_identity.artist_id is not distinct from "
-        "library.local_albums.artist_id"
-    ) in normalized_sql
+    # Plain equality lets the artist index bound the candidates (rows read never grow with the library).
+    assert "and target_identity.artist_id = library.local_albums.artist_id" in normalized_sql
     assert (
         "target_identity.normalized_title = "
         "lower(btrim(library.local_albums.title))"
@@ -3604,90 +3569,6 @@ def test_selected_postgres_structural_finalizer_uses_authoritative_album_finder(
     queue_finalize(config={})
 
     assert captured["find_albums_by_track_paths"] is authoritative_finder
-
-
-def test_selected_postgres_year_compensation_restores_exact_release_date(monkeypatch):
-    from types import SimpleNamespace
-    from music_app.routes import api_wave_a_asgi_routes as routes
-
-    track_path = "C:/Music/Artist/Old Album/01 First.flac"
-    applied_repairs: list[tuple[str, dict[str, str]]] = []
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        routes,
-        "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))) or (path, True, list(repairs)),
-    )
-    monkeypatch.setattr(
-        routes,
-        "queue_finalize_structural_tag_edit_save_task",
-        lambda **kwargs: captured.update(kwargs),
-    )
-
-    queue_finalize = (
-        routes._asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
-            SimpleNamespace(state=SimpleNamespace())
-        )
-    )
-    queue_finalize(config={})
-    captured["compensate_structural_tag_edit"](
-        changed_paths={track_path},
-        previous_file_entries={
-            track_path: {
-                "year": 2004,
-                "release_date": "2004-07-16",
-            }
-        },
-        changed_field_names={"year"},
-    )
-
-    assert applied_repairs == [(track_path, {"year": "2004-07-16"})]
-
-
-def test_selected_postgres_compensation_restores_only_fields_changed_per_path(
-    monkeypatch,
-):
-    from types import SimpleNamespace
-    from music_app.routes import api_wave_a_asgi_routes as routes
-
-    first_path = "C:/Music/Artist/Album/01 First.flac"
-    second_path = "C:/Music/Artist/Album/02 Second.flac"
-    applied_repairs: list[tuple[str, dict[str, str]]] = []
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        routes,
-        "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))) or (path, True, list(repairs)),
-    )
-    monkeypatch.setattr(
-        routes,
-        "queue_finalize_structural_tag_edit_save_task",
-        lambda **kwargs: captured.update(kwargs),
-    )
-
-    queue_finalize = (
-        routes._asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
-            SimpleNamespace(state=SimpleNamespace())
-        )
-    )
-    queue_finalize(config={})
-    captured["compensate_structural_tag_edit"](
-        changed_paths={first_path, second_path},
-        previous_file_entries={
-            first_path: {"album": "Old", "title": "First"},
-            second_path: {"album": "Old", "title": "Second"},
-        },
-        updated_file_entries={
-            first_path: {"album": "New", "title": "First"},
-            second_path: {"album": "Old", "title": "Renamed"},
-        },
-        changed_field_names={"album", "title"},
-    )
-
-    assert applied_repairs == [
-        (first_path, {"album": "Old"}),
-        (second_path, {"title": "Second"}),
-    ]
 
 
 def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_revision(monkeypatch):

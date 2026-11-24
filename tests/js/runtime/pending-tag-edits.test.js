@@ -165,3 +165,137 @@ test('bounded interaction: a retry pass keeps one retry timer and refreshes the 
     growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
   });
 });
+
+// Owner (2026-11-23): a save whose files are written is saved; while the library catches up ("finishing"),
+// a reload or another tab still shows the new values. The pending edit stays in this storage, is never
+// resent, and its values are laid over every display site until the save settles. No list UI here.
+function loadWithOverlay({ answers = [], stored = null, scope = 'scope-a', now = Date.now() } = {}) {
+  const storage = new Map(stored ? [['albumHaven.pendingTagEdits', JSON.stringify(stored)]] : []);
+  const timers = [];
+  const requests = [];
+  const listeners = {};
+  const calls = { refreshes: 0, overlays: [], nonAlbum: [], renders: 0, warnings: [] };
+  const context = {
+    console: { ...console, warn: (...args) => calls.warnings.push(args.join(' ')) },
+    JSON,
+    Promise,
+    Date: class extends Date { static now() { return now; } },
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
+    document: { querySelector: (selector) => (selector === 'meta[name="album-haven-edit-scope"]' ? { content: scope } : null) },
+    window: {
+      dispatchEvent() {},
+      addEventListener: (type, listener) => { (listeners[type] ||= []).push(listener); },
+    },
+    getLocalStorageItem: (key, fallback) => (storage.has(key) ? storage.get(key) : fallback),
+    setLocalStorageItem: (key, value) => storage.set(key, value),
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    clearTimeout() {},
+    showToast() {},
+    refreshCurrentViewAfterBackgroundCompletion: async () => { calls.refreshes += 1; },
+    buildOptimisticUpdatedAlbumsFromEdits: (album, updates) => [{ ...album, edited: updates }],
+    applyUpdatedAlbumsToCurrentView: (albums, options) => { calls.overlays.push([albums, options]); return albums; },
+    applyTagEditsToNonAlbumView: (album, updates) => calls.nonAlbum.push([album, updates]),
+    renderView: () => { calls.renders += 1; },
+    fetch: async (url, options = {}) => {
+      requests.push([options.method || 'GET', String(url)]);
+      const answer = answers.shift() || { status: 200, body: { ok: true, found: true, status: 'files_verified' } };
+      return { ok: answer.status < 400, status: answer.status, json: async () => answer.body };
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(moduleSource, context, { filename: modulePath });
+  const runNext = async () => {
+    const timer = timers.shift();
+    assert.ok(timer, 'a check is scheduled');
+    await timer.fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    return timer.ms;
+  };
+  const fireStorage = () => (listeners.storage || []).forEach((listener) => listener({ key: 'albumHaven.pendingTagEdits' }));
+  return { api: context.window.AlbumHavenPendingTagEdits, storage, timers, requests, calls, runNext, fireStorage };
+}
+
+const finishingAlbum = { key: 'artist::album', name: 'Album', tracks: [{ path: 'a.mp3', title: 'Old' }] };
+const finishingPayload = { confirmed: true, client_request_id: SAVE_ID, album: { name: 'Album' }, updates: { 'a.mp3': { title: 'New' } } };
+
+test('a finishing save is only checked, never resent, and leaves storage once the library holds it', async () => {
+  const { api, requests, calls, runNext } = loadWithOverlay({
+    answers: [{ status: 200, body: { ok: true, found: true, status: 'completed' } }],
+  });
+  api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
+  assert.equal(api.list()[0].state, 'finishing');
+  await runNext();
+  assert.deepEqual(requests, [['GET', `/utilities/edit-tags/requests/${SAVE_ID}`]], 'a finishing save is never resent');
+  assert.equal(api.list().length, 0);
+  assert.equal(calls.refreshes, 1, 'the view re-reads what the library now holds');
+});
+
+test('a finishing save the library has not caught up with is checked less and less often, up to a minute', async () => {
+  const { api, runNext } = loadWithOverlay();
+  api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
+  const delays = [];
+  for (let pass = 0; pass < 7; pass += 1) delays.push(await runNext());
+  assert.ok(delays.every((delay, index) => index === 0 || delay >= delays[index - 1]), `delays: ${delays}`);
+  assert.equal(Math.max(...delays), 60000);
+});
+
+test('a pending save with no answer for 24 hours is dropped and logged, never checked forever', async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const { api, requests, calls } = loadWithOverlay({
+    now: 10 * day,
+    stored: [{ id: SAVE_ID, payload: finishingPayload, state: 'finishing', scope: 'scope-a', created_at: 10 * day - day - 1 }],
+  });
+  assert.equal(api.list().length, 0, 'the expired entry was dropped');
+  assert.equal(requests.length, 0);
+  assert.ok(calls.warnings.some((line) => line.includes('Dropped')), 'the drop was logged');
+});
+
+test('a save another tab added is kept when this tab writes (T4)', () => {
+  const { api, storage } = loadWithOverlay();
+  storage.set('albumHaven.pendingTagEdits', JSON.stringify([
+    { id: 'other-tab', payload: finishingPayload, state: 'finishing', scope: 'scope-a', created_at: Date.now() },
+  ]));
+  api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
+  const ids = JSON.parse(storage.get('albumHaven.pendingTagEdits')).map((entry) => entry.id).sort();
+  assert.deepEqual(ids, ['other-tab', SAVE_ID].sort());
+});
+
+test('pending saves of another account or library are neither shown nor checked here (T3)', async () => {
+  const { api, requests, calls, timers } = loadWithOverlay({
+    scope: 'scope-b',
+    stored: [{ id: SAVE_ID, payload: finishingPayload, display_album: finishingAlbum, state: 'finishing', scope: 'scope-a', created_at: Date.now() }],
+  });
+  api.overlayCurrentView();
+  assert.equal(calls.overlays.length, 0, 'another scope was laid over this view');
+  assert.equal(api.list().length, 0, 'another scope is listed here');
+  assert.equal(timers.length, 0);
+  assert.equal(requests.length, 0);
+});
+
+test('a finishing save is laid over the view after a load and when another tab adds it', () => {
+  const { api, calls, storage, fireStorage } = loadWithOverlay();
+  api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
+  api.overlayCurrentView();
+  assert.equal(calls.overlays.length, 1);
+  const [albums, options] = calls.overlays[0];
+  assert.deepEqual(JSON.parse(JSON.stringify(options.tagEdits)), finishingPayload.updates);
+  assert.equal(albums[0].key, 'artist::album');
+  assert.equal(options.skipRender, true);
+
+  // Another tab's save arrives through the storage event: laid over and rendered.
+  storage.set('albumHaven.pendingTagEdits', JSON.stringify([
+    ...JSON.parse(storage.get('albumHaven.pendingTagEdits')),
+    { id: 'other-tab', payload: { updates: { 'b.mp3': { title: 'Other' } } }, display_album: { key: 'x::y', tracks: [] },
+      state: 'finishing', scope: 'scope-a', created_at: Date.now() },
+  ]));
+  fireStorage();
+  assert.equal(calls.overlays.length, 3, 'both open saves were laid over after the other tab wrote');
+  assert.equal(calls.renders, 1);
+});
+
+test('the values of a finishing save replace the stored ones in fetched album details', () => {
+  const { api } = loadWithOverlay();
+  api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
+  const shown = api.overlayAlbumDetails({ key: 'artist::album', tracks: [{ path: 'a.mp3', title: 'Old' }, { path: 'c.mp3', title: 'C' }] });
+  assert.deepEqual(shown.tracks.map((track) => track.title), ['New', 'C']);
+});

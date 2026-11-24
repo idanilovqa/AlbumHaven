@@ -570,7 +570,11 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
     # publishes only after its relation rebuild: 2. That 2 depends on the pre-pass reusing the headers the failed
     # attempt already published at the current generation; a later change that rebuilds ready headers shows
     # up here as 4.
-    assert refreshes[-1].result(timeout=10) == {"built": 2 if fail_first else 4}
+    # Edits always save (R3/R4): the relation replay now patches each header from its own generation by the
+    # journal's albums instead of asking for a full republication. After the relation rebuild the scopes are
+    # already current, so the second full publication of both scopes is gone: 2 (the pre-pass) without a
+    # failure, and 0 after one, since the failed attempt's pre-pass already published them.
+    assert refreshes[-1].result(timeout=10) == {"built": 0 if fail_first else 2}
     assert len(attempts) == (2 if fail_first else 1)
     assert not repository._load_relation_alias_maps().get("projection_stale_reason")
     with isolatedPostgres._connect(fixture.runtime_url) as connection:

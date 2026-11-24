@@ -1,7 +1,9 @@
 """Bounded contract: a tag save keeps the duplicate projections (FTC-TAGS-015).
 
-The save and the next search or artist view read only the edited albums and the albums
-sharing their old or new duplicate identity, never the whole library's identity index.
+The save and the next live duplicate read (album details, the Problematic Files
+evaluation) read only the edited albums and the albums sharing their old or new duplicate
+identity, never the whole library's identity index. Gallery and search cards read the
+stored results instead (library.album_duplicate_results).
 """
 
 from __future__ import annotations
@@ -85,7 +87,7 @@ class _FakeConnection:
 
 
 def test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_production_album_count(monkeypatch):
-    """A save, then the next search or artist view of one page: the duplicate work grows with
+    """A save, then the next live duplicate read of one page: the duplicate work grows with
     the edited albums, not the library."""
     import music_app.services.library_browse_postgres as browse
 

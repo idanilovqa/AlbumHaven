@@ -12,7 +12,7 @@ from time import perf_counter
 from music_app.services.relation_projection_builder import (
     CURRENT_ALIAS_POLICY, LEGACY_ALIAS_POLICY,
     _album_facts, _display_choice, _is_va_name, _low_value_artist_key,
-    _normalize_key, build_postgres_relation_views, serialized_family_key,
+    _normalize_key, build_component_relation_views, build_postgres_relation_views, serialized_family_key,
 )
 from music_app.services.edit_tag_timings import persistence_stage
 from music_app.services.relation_projection_postgres import _first_row
@@ -262,12 +262,12 @@ def _load_affected_component(connection, library_id, old, new, cancel_requested,
         related = connection.execute("""select * from library.local_relation_album_facts
             where library_id=%s and connection_keys && %s::text[]""", (library_id, sorted(batch))).fetchall()
         component.update((row['album_id'], row) for row in related)
-        views = build_postgres_relation_views(
+        views = build_component_relation_views(
             [source for record in component.values() for source in record['source_rows']],
             cooperate=(lambda: relations._cooperate_with_foreground(cancel_requested)) if cancel_requested is not None else None)
         alias_views = [views]
         if include_compatibility:
-            alias_views.append(build_postgres_relation_views(
+            alias_views.append(build_component_relation_views(
                 [source for record in component.values() for source in record['source_rows']],
                 alias_policy=LEGACY_ALIAS_POLICY,
                 cooperate=(lambda: relations._cooperate_with_foreground(cancel_requested)) if cancel_requested is not None else None))
@@ -283,7 +283,7 @@ def _load_affected_component(connection, library_id, old, new, cancel_requested,
         for record in component.values():
             if target_keys.intersection(record['connection_keys']):
                 containers.update(key for key in record['connection_keys'] if key.startswith('container:'))
-    views = build_postgres_relation_views(
+    views = build_component_relation_views(
         [source for record in component.values() for source in record['source_rows']],
         cooperate=(lambda: relations._cooperate_with_foreground(cancel_requested)) if cancel_requested is not None else None)
     _restrict_component_views(views, names)
@@ -410,50 +410,15 @@ def _validate_pending_scan_receipt(connection, context, state, metadata, retaine
         raise RuntimeError('Retained legacy relations differ from the pending scan baseline.')
 
 
-def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
-    album_ids = sorted({int(value) for value in album_ids if value and int(value) > 0})
-    if not album_ids:
-        return set()
-    rows = connection.execute("""
-        with seed_albums as materialized (
-          select albums.id, library.duplicate_identity_text(albums.title) as title_identity
-          from library.local_albums albums
-          where albums.library_id=%(library_id)s
-            and (
-              albums.id=any(%(album_ids)s::bigint[])
-              or albums.metadata #>> '{stray_duplicate_of,album_id}'
-                   = any(%(album_id_texts)s::text[])
-            )
-        ), title_identities as materialized (
-          select distinct title_identity from seed_albums where title_identity <> ''
-        ), scoped_albums as materialized (
-            select albums.id, albums.album_key, albums.title, albums.release_year,
-                   library.duplicate_identity_text(albums.title) as title_identity,
-                   library.duplicate_identity_text(
-                     coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name)
-                   ) as artist_identity
-          from library.local_albums albums
-            join library.local_artists artists on artists.id=albums.artist_id
-          join title_identities
-            on title_identities.title_identity=library.duplicate_identity_text(albums.title)
-          where albums.library_id=%(library_id)s
-        ), active_tracks as materialized (
-          select tracks.id, tracks.album_id,
-            library.duplicate_identity_text(tracks.title) as title_identity,
-            tracks.duration_seconds,
-            row_number() over (
-              partition by tracks.album_id
-              order by coalesce(tracks.disc_number, 1),
-                coalesce(tracks.track_number, 2147483647), tracks.id
-            ) as track_position
-          from library.local_tracks tracks
-          join scoped_albums on scoped_albums.id=tracks.album_id
-          where tracks.library_id=%(library_id)s
-            and exists (
-              select 1 from library.local_track_files files
-              where files.track_id=tracks.id and files.scan_cache_stale is false
-            )
-        ), album_sizes as materialized (
+# The stray-copy rule, over any scoped_albums and active_tracks: the stored ones at publication,
+# the proposed ones for a save that has not been written (stray_fold_decision).
+# An album without an artist row (a compilation) is in the rule only when its album artist names one:
+# a blank or punctuation-only identity must never equal another, and the tie compares identities with "=".
+STRAY_NAMED_ALBUM_SQL = """(albums.artist_id is not null
+            or (library.duplicate_identity_text(albums.metadata ->> 'album_artist') collate "und-x-icu")
+                 ~ '[[:alnum:]]')"""
+
+STRAY_RULE_CTES = """        ), album_sizes as materialized (
           select album_id, count(*) as track_count
           from active_tracks group by album_id
         ), candidate_sources as materialized (
@@ -523,7 +488,57 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
           from scoped_albums
           left join chosen_sources
             on chosen_sources.stray_album_id=scoped_albums.id
-        ), changed as (
+"""
+
+
+def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
+    album_ids = sorted({int(value) for value in album_ids if value and int(value) > 0})
+    if not album_ids:
+        return set()
+    rows = connection.execute("""
+        with seed_albums as materialized (
+          select albums.id, library.duplicate_identity_text(albums.title) as title_identity
+          from library.local_albums albums
+          where albums.library_id=%(library_id)s
+            and (
+              albums.id=any(%(album_ids)s::bigint[])
+              or albums.metadata #>> '{stray_duplicate_of,album_id}'
+                   = any(%(album_id_texts)s::text[])
+            )
+        ), title_identities as materialized (
+          select distinct title_identity from seed_albums where title_identity <> ''
+        ), scoped_albums as materialized (
+            select albums.id, albums.album_key, albums.title, albums.release_year,
+                   library.duplicate_identity_text(albums.title) as title_identity,
+                   library.duplicate_identity_text(
+                     coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name)
+                   ) as artist_identity
+          from library.local_albums albums
+            left join library.local_artists artists on artists.id=albums.artist_id
+          join title_identities
+            on title_identities.title_identity=library.duplicate_identity_text(albums.title)
+          where albums.library_id=%(library_id)s
+            and """ + STRAY_NAMED_ALBUM_SQL + """
+        ), active_tracks as materialized (
+          select tracks.id, tracks.album_id,
+            library.duplicate_identity_text(tracks.title) as title_identity,
+            tracks.duration_seconds,
+            row_number() over (
+              partition by tracks.album_id
+              order by coalesce(tracks.disc_number, 1),
+                coalesce(tracks.track_number, 2147483647), tracks.id
+            ) as track_position
+          from library.local_tracks tracks
+          -- Through the scoped albums' tracks: a join lets the planner read every track
+          -- and file in the library for the few albums a save touches.
+          where tracks.album_id = any(array(select id from scoped_albums))
+            and tracks.library_id=%(library_id)s
+            and (
+              select true from library.local_track_files files
+              where files.track_id=tracks.id and files.scan_cache_stale is false
+              limit 1
+            )
+""" + STRAY_RULE_CTES + """        ), changed as (
           update library.local_albums albums
           set metadata=case when desired.ownership is null
             then coalesce(albums.metadata, '{}'::jsonb)-'stray_duplicate_of'
@@ -547,7 +562,7 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
     return {int(row['id']) for row in rows}
 
 
-def publish_affected_relation_projection(connection, *, album_ids=(), album_keys=(), track_paths=(), reason='structural_tag_edit', config=None, cancel_requested=None, expected_gallery_generation=None, prepare_compatibility=False):
+def publish_affected_relation_projection(connection, *, album_ids=(), album_keys=(), track_paths=(), reason='structural_tag_edit', config=None, cancel_requested=None, expected_gallery_generation=None, prepare_compatibility=False, compatibility_preparer=None):
     from music_app.services import relation_projection_postgres as relations
     context = _first_row(connection.execute(_CONTEXT))
     if context is None or context.get('normalized_builder_version') != relations.RELATION_PROJECTION_BUILDER_VERSION:
@@ -623,11 +638,15 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
                 where library_id=%s and album_id>0""", (library_id,)).fetchall():
             ids.add(row['album_id'])
             keys.update(row['album_keys'])
+    # One indexed lookup per kind of reference: an OR across them read every album of the library.
     current_albums =connection.execute("""select id,album_key from library.local_albums
-        where library_id=%(library_id)s and (id=any(%(album_ids)s::bigint[]) or album_key=any(%(album_keys)s::text[])
-          or id in (select tracks.album_id from library.local_track_files files
-            join library.local_tracks tracks on tracks.id=files.track_id
-            where tracks.library_id=%(library_id)s and files.private_path=any(%(paths)s::text[])))
+        where library_id=%(library_id)s and id=any(%(album_ids)s::bigint[])
+        union select id,album_key from library.local_albums
+        where library_id=%(library_id)s and album_key=any(%(album_keys)s::text[])
+        union select albums.id,albums.album_key from library.local_track_files files
+          join library.local_tracks tracks on tracks.id=files.track_id
+          join library.local_albums albums on albums.id=tracks.album_id and albums.library_id=%(library_id)s
+          where tracks.library_id=%(library_id)s and files.private_path=any(%(paths)s::text[])
         union all select 0 as id, null as album_key where exists (
           select 1 from library.local_track_files files join library.local_tracks tracks on tracks.id=files.track_id
           where tracks.library_id=%(library_id)s and tracks.album_id is null
@@ -665,7 +684,8 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     if expected_gallery_generation is not None:
         prior_generations.append(expected_gallery_generation)
     with persistence_stage('relation_publication.album_facts'):
-        rows = connection.execute(relations.load_relation_source_rows_sql(scoped=True), {'album_ids': sorted(ids)}).fetchall()
+        # A library-wide marker alone (album 0 or -1) names no album: nothing to load.
+        rows = relations.load_scoped_relation_source_rows(connection, ids) if ids else []
         current_keys = {row['id']: row['album_key'] for row in connection.execute(
             'select id,album_key from library.local_albums where library_id=%s and id=any(%s::bigint[])',
             (library_id, sorted(ids))).fetchall()}
@@ -689,7 +709,8 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
             'affected_relation_aliases': aliases,
         }
         return _finish_publication(connection, context, metadata, result, reason=reason, config=config,
-                                   copy_legacy_views=False, legacy_views=legacy_views, prepare_compatibility=prepare_compatibility)
+                                   copy_legacy_views=False, legacy_views=legacy_views, prepare_compatibility=prepare_compatibility,
+                                   compatibility_preparer=compatibility_preparer)
 
     with persistence_stage('relation_publication.component_load'):
         component, affected_names, _, views = _load_affected_component(
@@ -701,7 +722,7 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     legacy_touched_entries = None
     if compatibility_state is not None:
         with persistence_stage('relation_publication.compatibility_patch'):
-            legacy_component = _restrict_component_views(build_postgres_relation_views(
+            legacy_component = _restrict_component_views(build_component_relation_views(
                 [source for record in component.values() for source in record['source_rows']],
                 alias_policy=LEGACY_ALIAS_POLICY,
             ), affected_names)
@@ -728,7 +749,36 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     }
     return _finish_publication(connection, context, metadata, result, reason=reason, config=config,
                                legacy_views=legacy_views, prepare_compatibility=prepare_compatibility,
+                               compatibility_preparer=compatibility_preparer,
                                legacy_touched_entries=legacy_touched_entries)
+
+
+def publish_affected_relation_projection_or_defer(connection, **options):
+    """A user's write publishes its own albums when it can, and is never lost because it can't (owner,
+    2026-11-22: "Any edits user makes should be saved despite any background indexing or rescanning").
+
+    The publication runs in a savepoint of the write's own transaction, on its own connection. An
+    indexing-state failure (another transaction's library-wide marker, an unready or changed baseline,
+    sources changed meanwhile) rolls back the savepoint only: the write's rows and the albums its triggers
+    journaled commit, and the journal's single owner publishes them afterwards (rows A1-A10, R1). Its drain
+    takes the inventory publication lock this transaction holds, so it runs after the commit.
+    """
+    import psycopg
+
+    try:
+        with connection.transaction():
+            return publish_affected_relation_projection(connection, **options)
+    except (psycopg.OperationalError, psycopg.errors.QueryCanceled):
+        raise  # the connection or the statement is gone: not an indexing state
+    except Exception as error:
+        logging.getLogger(__name__).warning(
+            'Relation publication deferred to the journal owner: reason=%s error=%s',
+            options.get('reason'), type(error).__name__, exc_info=True)
+        if options.get('config'):
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+            queue_journaled_relation_drain(options['config'])
+        return {'relation_publication_deferred': True}
 
 
 def _patch_entry_contract(connection, library_id, views, affected_names, *, compatibility=False):
@@ -821,10 +871,14 @@ def _prepare_compatibility_in_transaction(connection, context, metadata, capture
     _store_compatibility_state(connection, library_id, metadata, stamp)
 
 
-def _finish_publication(connection, context, metadata, result, *, reason, config, copy_legacy_views=True, legacy_views=None, prepare_compatibility=False, legacy_touched_entries=None):
+def _finish_publication(connection, context, metadata, result, *, reason, config, copy_legacy_views=True, legacy_views=None, prepare_compatibility=False, compatibility_preparer=None, legacy_touched_entries=None):
     library_id = context['library_id']
     if prepare_compatibility:
-        _prepare_compatibility_in_transaction(connection, context, metadata, legacy_views)
+        # The library-wide compatibility build runs only for the explicit preparation that hands it in, never
+        # for a write's publication (6.5, BI-04): a write's path cannot reach it.
+        if compatibility_preparer is None:
+            raise RuntimeError('Compatibility preparation runs only from prepare_relation_compatibility.')
+        compatibility_preparer(connection, context, metadata, legacy_views)
     if legacy_views is not None:
         rebuilt = _first_row(connection.execute('select library.local_relation_compatibility_views(%s) as views', (library_id,)))
         if not rebuilt or not _relation_views_equal(rebuilt['views'], legacy_views):
@@ -862,13 +916,26 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
         connection.execute("""update library.libraries set metadata=jsonb_set(metadata,
             '{scan_cache,relation_projection}',%(metadata)s::jsonb),updated_at=now() where id=%(library_id)s""",
             {'library_id': library_id, 'metadata': _jsonb(metadata)})
-    connection.execute('delete from library.local_relation_dirty_albums where library_id=%s and album_id=any(%s::bigint[])',
-                       (library_id, result['processed_relation_album_ids']))
-    result['relation_compatibility_bridge_ms'] = (perf_counter() - bridge_started) * 1000
+    baseline_ready = keep_journal = False
     if config is not None:
         from music_app.services.gallery_projection_postgres import (
             gallery_membership_baseline_ready,
+            gallery_membership_headers_behind,
+        )
+        baseline_ready = gallery_membership_baseline_ready(connection, result['first_gallery_generation'])
+        # R3: the journal is never emptied ahead of the headers. A save leaves these albums journaled when a
+        # header is behind the journal's floor; the journal's owner (this replay) realigns it below instead.
+        keep_journal = reason != 'pending_source_changes' and not baseline_ready and (
+            gallery_membership_headers_behind(connection, result['first_gallery_generation']))
+    if not keep_journal:
+        connection.execute('delete from library.local_relation_dirty_albums where library_id=%s and album_id=any(%s::bigint[])',
+                           (library_id, result['processed_relation_album_ids']))
+    result['relation_compatibility_bridge_ms'] = (perf_counter() - bridge_started) * 1000
+    if config is not None:
+        from music_app.services.gallery_projection_postgres import (
             patch_gallery_membership_in_transaction,
+            patch_membership_per_header_in_transaction,
+            realign_headers_behind_journal,
         )
         if result['first_gallery_generation'] is None:
             raise RuntimeError('Affected library changes have no gallery publication journal.')
@@ -884,7 +951,7 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                 and target_generation == start + 1
             ):
                 raise RuntimeError('Library sources changed during scoped publication; retry reconciliation.')
-        if gallery_membership_baseline_ready(connection, result['first_gallery_generation']):
+        if baseline_ready:
             with persistence_stage('relation_publication.gallery_membership'):
                 patch_gallery_membership_in_transaction(
                     connection, config, affected_album_ids=result['affected_relation_album_ids'],
@@ -894,10 +961,22 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                     expected_target_generation=target_generation,
                 )
         else:
-            # Membership predates these changes (a restored database, an interrupted
-            # startup). Failing here blocked every later publication and save, so the
-            # relations are published and the caller rebuilds membership from them.
-            result['gallery_rebuild_required'] = True
+            # Edits always save (R3/R4): headers at different generations are each patched from their own.
+            # One behind the journal's floor (a restored database, an interrupted startup) keeps the
+            # journal, and the owner's drain realigns it.
+            with persistence_stage('relation_publication.gallery_membership'):
+                lagging = patch_membership_per_header_in_transaction(
+                    connection, config, affected_album_ids=result['affected_relation_album_ids'],
+                    affected_album_keys=result['affected_relation_album_keys'],
+                    alias_to_canonical=result['affected_relation_aliases'],
+                    journal_floor_generation=result['first_gallery_generation'],
+                    expected_target_generation=target_generation,
+                )
+            if lagging and reason == 'pending_source_changes':
+                with persistence_stage('relation_publication.gallery_realignment'):
+                    realign_headers_behind_journal(connection, config, lagging)
+            elif lagging:
+                result['gallery_headers_behind_journal'] = lagging
     return result
 
 
@@ -960,7 +1039,8 @@ def prepare_relation_compatibility(config, *, connect=None, cancel_requested=Non
         if pending:
             result = publish_affected_relation_projection(
                 connection, reason='pending_source_changes', config=config,
-                cancel_requested=cancel_requested, prepare_compatibility=True)
+                cancel_requested=cancel_requested, prepare_compatibility=True,
+                compatibility_preparer=_prepare_compatibility_in_transaction)
             result['compatibility_prepared'] = True
             return result
         snapshot = relations._relation_projection_scan_cache_from_row(

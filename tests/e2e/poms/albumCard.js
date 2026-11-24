@@ -255,6 +255,10 @@ export class AlbumCard extends BasePage {
     return this.artboxByAlbumName(albumName).locator('.album-artbox__missing-mark svg');
   }
 
+  duplicateMarkerByAlbumName(albumName) {
+    return this.cardByAlbumName(albumName).locator('.gallery-source-action--duplicate');
+  }
+
   missingAlertByAlbumName(albumName) {
     return new SmallAlert(this.cardByAlbumName(albumName).locator('[data-small-alert="error"]').first());
   }

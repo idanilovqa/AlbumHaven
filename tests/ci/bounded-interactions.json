@@ -5178,19 +5178,19 @@
       "proof": "contract",
       "cardinalities": {
         "small": 1,
-        "production": 200
+        "production": 1200
       },
       "budgets": {
-        "requests": 1,
+        "requests": 3,
         "timers": 1,
         "renderCommits": 1
       },
       "growth": {
         "metric": "requests",
-        "largeMinusSmallMax": 0
+        "largeMinusSmallMax": 2
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/pending-tag-edits.test.js",
-      "testIdentity": "bounded interaction: a retry pass sends one status request, keeps one retry timer and refreshes the view once however many saves it settles",
+      "testIdentity": "bounded interaction: a retry pass sends one status request per 500 waiting saves, keeps one retry timer and refreshes the view once however many saves it settles",
       "performanceTargets": [],
       "rollback": "Revert the batched status request; a retry pass asks about each waiting save with its own GET again, still with one retry timer and one view refresh."
     },

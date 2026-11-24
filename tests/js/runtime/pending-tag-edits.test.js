@@ -35,7 +35,7 @@ function loadPendingTagEdits({ answers, stored = null }) {
     refreshCurrentViewAfterBackgroundCompletion: async () => { calls.refreshes += 1; },
     fetch: async (url, options = {}) => {
       requests.push([options.method || 'GET', String(url), options.body ? JSON.parse(options.body) : null]);
-      const answer = answers.shift();
+      const answer = typeof answers === 'function' ? answers(JSON.parse(options.body)) : answers.shift();
       if (answer instanceof Error) throw answer;
       return { ok: answer.status < 400, status: answer.status, json: async () => answer.body };
     },
@@ -123,7 +123,7 @@ test('a page load resumes saves that were waiting and keeps failed ones for the 
   assert.deepEqual(api.list().map((entry) => entry.id), [SAVE_ID]);
 });
 
-test('bounded interaction: a retry pass sends one status request, keeps one retry timer and refreshes the view once however many saves it settles', async () => {
+test('bounded interaction: a retry pass sends one status request per 500 waiting saves, keeps one retry timer and refreshes the view once however many saves it settles', async () => {
   const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
   const retryPass = async (pendingSaves) => {
     const counter = createInteractionCounter();
@@ -170,11 +170,12 @@ test('bounded interaction: a retry pass sends one status request, keeps one retr
   };
   await measureScalePair({
     id: 'js:runtime/pending-tag-edits.js#schedule',
+    // Above the route's 500-id cap: a pass asks in chunks of 500, so 1,200 saves take 3 requests.
     small: 1,
-    large: 200,
+    large: 1200,
     run: retryPass,
-    budgets: { requests: 1, timers: 1, renderCommits: 1 },
-    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+    budgets: { requests: 3, timers: 1, renderCommits: 1 },
+    growth: { metric: 'requests', largeMinusSmallMax: 2 },
   });
 });
 
@@ -325,4 +326,20 @@ test('a status answer that rejects a save id keeps that save waiting and settles
   await runNext();
   assert.deepEqual(requests, [['POST', STATUS_URL, { ids: [SAVE_ID, OTHER_ID] }]], 'one request, never a resend of a rejected id');
   assert.deepEqual(api.list().map((entry) => [entry.id, entry.state]), [[SAVE_ID, 'waiting']]);
+});
+
+test('more waiting saves than one status request may carry all settle in the same pass (6.5, 11-23)', async () => {
+  const ids = Array.from({ length: 501 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+  // Each status request is answered for exactly the ids it carried.
+  const { api, requests, runNext } = loadPendingTagEdits({
+    answers: (body) => ({ status: 200, body: {
+      ok: true, requests: Object.fromEntries(body.ids.map((id) => [id, { found: true, status: 'completed' }])), invalid: [],
+    } }),
+  });
+  ids.forEach((id) => api.add({ id, payload: { ...payload, client_request_id: id }, album: { name: id } }));
+  await runNext();
+  assert.deepEqual(requests.map(([method, url, body]) => [method, url, body.ids.length]), [
+    ['POST', STATUS_URL, 500], ['POST', STATUS_URL, 1],
+  ], 'one request per 500 ids, each within the route cap');
+  assert.deepEqual(api.list(), [], 'the 501st save settled in the same pass');
 });

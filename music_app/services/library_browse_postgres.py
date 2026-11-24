@@ -7346,7 +7346,9 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
     size = entry.get("_physical_file_size")
     if type(size) is int and size == 0:
         yield "Empty audio file"
-    if entry.get("_mixed_album_folder") is True:
+    # A proven copy is a duplicate, whatever its folder holds (owner, 2026-11-24).
+    proven_copy = entry.get("local_album_membership_problem") == _OUTSIDE_COPY_REASON
+    if entry.get("_mixed_album_folder") is True and not proven_copy:
         yield "Mixed album metadata in one folder"
     if entry.get("local_album_membership_problem"):
         yield str(entry["local_album_membership_problem"])

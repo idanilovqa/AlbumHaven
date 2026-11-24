@@ -37,12 +37,14 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
   tagEditorActions,
   trackModalActions,
 }) => {
-  const gate = await holdStructuralSavePersistence({ lockSql: HOLD_INVENTORY_PUBLICATION });
+  let gate = null;
   let secondTab = null;
   try {
     await stepLogger.step('Rename the album while a publication holds the library; the new name shows at once', async () => {
       await galleryActions.goto(ARTIST_VIEW_URL);
       await galleryActions.waitForGalleryReady();
+      // The owner's scenario: the album is on screen when a scan takes the library, then the save is made.
+      gate = await holdStructuralSavePersistence({ lockSql: HOLD_INVENTORY_PUBLICATION });
       await galleryActions.selectAlbumDetailsByIdentity({ artist: FIXTURE_ARTIST, album: FINISHING_ALBUM, year: FINISHING_YEAR });
       await trackModalActions.waitForInteractiveSummary();
       await trackModalActions.openTagEditor();
@@ -97,7 +99,7 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
     });
   } finally {
     await secondTab?.close();
-    await gate.dispose();
+    await gate?.dispose();
   }
 });
 

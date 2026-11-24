@@ -7,6 +7,10 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.49 - 2026-11-23
+
+- Albums the watcher finds now appear in the Artist Tree without another navigation: a gallery answered before the library change was published is fetched again after 3, 6, 12, 24, 48 and 96 seconds, six times at most.
+
 ## 0.11.48 - 2026-11-22
 
 - Scrolling the gallery while its next page loads no longer leaves that scroll unfinished: the page added after the scroll settles now counts as rendered for it.

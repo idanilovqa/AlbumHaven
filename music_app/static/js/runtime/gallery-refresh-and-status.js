@@ -3,6 +3,9 @@
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
+// Refetches of a view whose gallery projection was stale, after 3, 6, 12, 24, 48 and 96 seconds.
+const STALE_PROJECTION_VIEW_REFRESH_LIMIT = 6;
+const STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS = 3000;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -1567,6 +1570,19 @@ async function fetchAndRender(url, push = true, options = {}) {
         state.ui.pendingInventoryMutationViewRefresh = false;
       }
     }
+    if (responseProjectionIsCurrent) {
+      state.ui.staleProjectionViewRefreshCount = 0;
+      state.ui.staleProjectionViewRefreshDueAt = null;
+    } else {
+      // The library change is not published in the gallery yet, and the status revision has
+      // already moved for it, so nothing else would ask again: an idle poll refetches, backing off.
+      const staleProjectionViewRefreshCount = Number(state.ui.staleProjectionViewRefreshCount || 0);
+      if (staleProjectionViewRefreshCount < STALE_PROJECTION_VIEW_REFRESH_LIMIT) {
+        state.ui.staleProjectionViewRefreshCount = staleProjectionViewRefreshCount + 1;
+        state.ui.staleProjectionViewRefreshDueAt = Date.now()
+          + STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS * (2 ** staleProjectionViewRefreshCount);
+      }
+    }
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
       artistCount: Number(state.view?.artist_count || 0),
@@ -2461,6 +2477,11 @@ async function pollStatus() {
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    const staleProjectionViewRefreshDueAt = Number(state.ui.staleProjectionViewRefreshDueAt);
+    if (staleProjectionViewRefreshDueAt > 0 && Date.now() >= staleProjectionViewRefreshDueAt) {
+      state.ui.staleProjectionViewRefreshDueAt = null;
+      state.ui.pendingInventoryMutationViewRefresh = true;
+    }
     if (
       state.ui.pendingInventoryMutationViewRefresh
       && !busyNow

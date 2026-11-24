@@ -50,6 +50,8 @@ class ProblemExclusionItem:
 class ProblemExclusionResult:
     applied_items: list[JsonDict]
     removed_legacy_row_keys: list[str]
+    # "pending" while a publication holds the library: the Ignore is kept and applied after it ends.
+    status: str
 
 
 def parse_problem_exclusion_items(payload: Mapping[str, object]) -> tuple[ProblemExclusionItem, ...]:
@@ -135,7 +137,7 @@ def create_problem_exclusions(
         for legacy_row_key in item.get("legacy_row_keys") or []
         if _text(legacy_row_key)
     })
-    create_ignored_repair_keys(
+    status = create_ignored_repair_keys(
         config,
         row_keys,
         album_keys_by_repair_key=album_keys_by_repair_key,
@@ -150,15 +152,16 @@ def create_problem_exclusions(
             for item in ordered_resolved
         ],
         removed_legacy_row_keys=legacy_row_keys,
+        status=status,
     )
 
 
-def revert_problem_exclusion(config: dict, raw_row_key: object) -> str:
+def revert_problem_exclusion(config: dict, raw_row_key: object) -> tuple[str, str]:
+    """(row key, "applied" or "pending" while a publication holds the library)."""
     row_key = _text(raw_row_key)
     if not row_key:
         raise ValueError("Missing ignored problem key")
-    delete_ignored_repair_keys(config, {row_key})
-    return row_key
+    return row_key, delete_ignored_repair_keys(config, {row_key})
 
 
 def _resolved_owner_matches(

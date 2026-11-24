@@ -33,6 +33,23 @@ def test_a_write_that_fails_keeps_no_grace(tmp_path: Path):
     assert suppression.contains(track) is False
 
 
+def test_a_failed_write_keeps_an_earlier_writes_grace_without_extending_it(tmp_path: Path):
+    now = [0.0]
+    suppression = LibraryWatchSuppression(grace_seconds=5.0, clock=lambda: now[0])
+    track = tmp_path / "track.mp3"
+
+    with suppression.suppress((track,)):
+        pass
+    now[0] = 3.0
+    with pytest.raises(PermissionError):
+        with suppression.suppress((track,)):
+            raise PermissionError("the file cannot be written")
+    assert suppression.contains(track) is True, "the earlier write's own events are still hidden"
+
+    now[0] = 5.01
+    assert suppression.contains(track) is False, "the failed write did not extend the grace"
+
+
 def test_nested_suppression_remains_active_until_outer_write_finishes(tmp_path: Path):
     suppression = LibraryWatchSuppression(grace_seconds=0.0, clock=lambda: 1.0)
     cover = tmp_path / "cover.jpg"

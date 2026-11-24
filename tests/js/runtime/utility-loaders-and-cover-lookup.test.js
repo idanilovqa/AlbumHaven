@@ -18,6 +18,7 @@ function loadUtilityLoaders(capture, state, overrides = {}) {
     fetch: capture.fetch,
     FormData: class FormData { append() {} },
     renderUtilityModalContent() {},
+    renderProblematicFilesTab() {},
     scheduleBrowserAnimationFrame(callback) { callback(); return 1; },
     showToast() {},
     ...overrides,

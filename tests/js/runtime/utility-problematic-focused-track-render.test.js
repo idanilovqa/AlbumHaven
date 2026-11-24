@@ -86,6 +86,10 @@ function loadProblematicLoader(fetch) {
     renderUtilityModalContent() {
       renders.push(context.state.utility.selectedProblematicKey);
     },
+    // The loaders draw their own tab; here every draw is recorded the same way.
+    renderProblematicFilesTab() {
+      context.renderUtilityModalContent();
+    },
     scheduleBrowserAnimationFrame(callback) {
       callback();
       return 1;

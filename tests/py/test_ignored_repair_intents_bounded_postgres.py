@@ -27,13 +27,13 @@ PUBLICATION_LOCK = "hashtext('album-haven:local-inventory-publication')"
 DRAIN_THREAD = "albumhaven-ignored-repair-intents"
 
 
-def _entry(music_dir, relative, album, number=1):
+def _entry(music_dir, relative, album, number=1, year=2026):
     path = Path(music_dir) / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"media fixture")
     return {"path": str(path), "mtime": path.stat().st_mtime, "size": path.stat().st_size, "album": album,
             "album_artist": "Owner", "artist": "Owner", "title": f"{album} song {number}", "track_number": number,
-            "disc_number": 1, "duration_seconds": 180, "year": 2026, "edition": "", "album_rating": 0,
+            "disc_number": 1, "duration_seconds": 180, "year": year, "edition": "", "album_rating": 0,
             "library_root_id": "intents-main", "library_root_category": "main_library", "exception_type": None}
 
 
@@ -59,6 +59,9 @@ def seeded_app(monkeypatch, tmp_path):
             "main_library_roots": [{"id": "intents-main", "path": str(music_dir), "layout_mode": "artist"}],
             "hoarding_library_roots": [], "new_arrivals_roots": []})
         entries = [_entry(music_dir, "Owner/Ignored Album/01.flac", "Ignored Album")]
+        # The page case's albums sort first: one with two problems (no cover, no year), one with one.
+        entries += [_entry(music_dir, "Owner/A Kept Album/01.flac", "A Kept Album", year=None),
+                    _entry(music_dir, "Owner/A Pending Album/01.flac", "A Pending Album")]
         entries += [_entry(music_dir, f"Other {index:05d}/Album {index:05d}/01.flac", f"Album {index:05d}")
                     for index in range(unrelated)]
         PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect).save_snapshot(
@@ -84,12 +87,16 @@ def _counted(counts):
         if threading.current_thread().name.startswith(DRAIN_THREAD):
             return original(self, query, params, *args, **kwargs)
         started = time.perf_counter()
+        cursor = None
         try:
-            return original(self, query, params, *args, **kwargs)
+            cursor = original(self, query, params, *args, **kwargs)
+            return cursor
         finally:
             counts.count("sql_statements")
             if PUBLICATION_LOCK in str(query):
                 counts.count("lock_wait_ms", (time.perf_counter() - started) * 1000)
+            if cursor is not None and "select intents.id" in str(query):
+                counts.count("pending_intent_rows", max(cursor.rowcount, 0))
 
     psycopg.Connection.execute = execute
     try:
@@ -194,3 +201,139 @@ def test_live_drain_applies_only_the_kept_intents(seeded_app, monkeypatch):
         small=SIZES[0], large=SIZES[1], run=run,
         budgets={"sql_statements": 5}, growth=("sql_statements", 0),
     )
+
+
+def test_live_rules_route_lays_pending_intents_over_its_page_without_growing(seeded_app, monkeypatch):
+    """6.5's overlay proof through the Rules route: with an Ignore stored, another pending and a pending Unignore of
+    the stored one, the real route shows the pending ones as made. Its statements do not grow with the library."""
+    from music_app.services import ignored_repair_intents
+    from tests.py.asgi_testing import decode_json, run_asgi_request
+
+    seed, setup_url = seeded_app
+    # The intents stay pending while the route reads them.
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+
+    def run(unrelated):
+        app, _config = seed(unrelated)
+        stored = _album_problem(app)
+        assert _ignore(app, stored) == "applied"
+        pending = {"row_key": f"{stored['album_key']}::problem-album::missing-year", "scope": "album",
+                   "album_key": stored["album_key"]}
+        with psycopg.connect(setup_url) as connection:
+            # A second rule kept back by a publication, as the bounded write records it.
+            connection.execute(
+                """insert into library.ignored_repair_intents (library_id, action, repair_keys, album_keys)
+                   select id, 'upsert', array[%s], jsonb_build_object(%s::text, %s::text)
+                   from library.libraries where name = 'Local Library'""",
+                (pending["row_key"], pending["row_key"], pending["album_key"]))
+        with _held_publication(setup_url):
+            assert _unignore(app, stored) == "pending"
+        counts = OperationCounts()
+        with _counted(counts):
+            status, _headers, body = run_asgi_request(app, "GET", "/utilities/rules")
+        assert status == 200, body
+        rule = next(rule for rule in decode_json(body)["rules"] if rule.get("key") == "problem-ignores")
+        shown = {item["row_key"] for item in rule.get("items") or []}
+        assert pending["row_key"] in shown and stored["row_key"] not in shown
+        counts.count("returned_rows", len(shown))
+        return counts
+
+    measure_scale_pair(
+        interaction_id="py:routes/api_wave_a_asgi_routes.py#utility_rules",
+        small=SIZES[0], large=SIZES[1], run=run,
+        budgets={"sql_statements": 0, "returned_rows": 1}, growth=("sql_statements", 0),
+    )
+
+
+def _page(app):
+    from tests.py.asgi_testing import decode_json, run_asgi_request
+
+    status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files", query={"limit": "50"})
+    assert status == 200, body
+    return {item["name"]: item for item in decode_json(body)["items"]}
+
+
+def _album_rows(app, item_key):
+    from tests.py.asgi_testing import decode_json, run_asgi_request
+
+    status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files/detail",
+                                              query={"album_key": item_key})
+    assert status == 200, body
+    return {row["reason"]: {"row_key": row["row_key"], "scope": "album", "album_key": row["album_key"]}
+            for row in decode_json(body)["album_problem_rows"]}
+
+
+def test_live_problematic_files_page_lays_pending_intents_over_its_page_without_growing(seeded_app, monkeypatch):
+    """6.5's overlay proof through the Problematic Files page (problematic_index.read_page): with an Ignore stored,
+    a pending Unignore of it and a pending Ignore of another album's only problem, the real page shows both as
+    made. Its statements do not grow with the library."""
+    from music_app.services import ignored_repair_intents, problematic_index
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    seed, setup_url = seeded_app
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+
+    def run(unrelated):
+        app, config = seed(unrelated)
+        repository = PostgresLibraryBrowseRepository(config)
+        problematic_index.prepare_for_serving(repository)
+        page = _page(app)
+        kept = _album_rows(app, page["A Kept Album"]["key"])
+        pending = _album_rows(app, page["A Pending Album"]["key"])
+        assert "Missing cover art" in kept and len(kept) >= 2 and list(pending) == ["Missing cover art"]
+        assert _ignore(app, kept["Missing cover art"]) == "applied"
+        problematic_index.prepare_for_serving(repository)
+        assert "Missing cover art" not in _page(app)["A Kept Album"]["problem_reasons"]
+        with _held_publication(setup_url):
+            assert _unignore(app, kept["Missing cover art"]) == "pending"
+            assert _ignore(app, pending["Missing cover art"]) == "pending"
+        counts = OperationCounts()
+        with _counted(counts):
+            shown = _page(app)
+        assert "Missing cover art" in shown["A Kept Album"]["problem_reasons"]
+        assert "A Pending Album" not in shown
+        counts.count("returned_rows", len(shown))
+        return counts
+
+    measure_scale_pair(
+        interaction_id="py:routes/api_read_asgi_routes.py#utilities_problematic_files",
+        small=SIZES[0], large=SIZES[1], run=run,
+        budgets={"sql_statements": 0}, growth=("sql_statements", 0),
+        # Calibration only: the registration of this proof waits for 6.5 (one entrypoint, one testIdentity).
+        registry={"interactions": [{
+            "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_files",
+            "cardinalities": {"small": SIZES[0], "production": SIZES[1]},
+            "budgets": {"sql_statements": 0}, "growth": {"metric": "sql_statements", "largeMinusSmallMax": 0},
+        }]},
+    )
+
+
+def test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait(seeded_app, monkeypatch):
+    """6.5 (11-24): Album Details reads the pending intents its own rows name (and any pending replacement of
+    every rule), never every pending intent: with 2 kept for this album and 50 for others, it reads 2."""
+    from music_app.services import ignored_repair_intents, rule_state_postgres
+    from tests.py.asgi_testing import decode_json, run_asgi_request
+
+    seed, setup_url = seeded_app
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+    # Each held write gives up after 50 ms instead of 500: the case makes 52 of them.
+    monkeypatch.setattr(rule_state_postgres, "PUBLICATION_WAIT_MS", 50)
+    app, _config = seed(SIZES[1])
+    page = _page(app)
+    kept = _album_rows(app, page["A Kept Album"]["key"])
+    others = [_album_rows(app, page[f"Album {index:05d}"]["key"])["Missing cover art"] for index in range(50)]
+    second = next(reason for reason in kept if reason != "Missing cover art")
+    assert _ignore(app, kept["Missing cover art"]) == "applied"
+    with _held_publication(setup_url):
+        assert _unignore(app, kept["Missing cover art"]) == "pending"
+        assert _ignore(app, kept[second]) == "pending"
+        for problem in others:
+            assert _ignore(app, problem) == "pending"
+    counts = OperationCounts()
+    with _counted(counts):
+        status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files/detail",
+                                                  query={"album_key": page["A Kept Album"]["key"]})
+    assert status == 200, body
+    reasons = {row["reason"] for row in decode_json(body)["album_problem_rows"]}
+    assert "Missing cover art" in reasons and second not in reasons
+    assert counts.pending_intent_rows == 2, counts

@@ -10477,14 +10477,31 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#utility_rules:route:GET /utilities/rules"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 0,
+        "returned_rows": 1
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_rules_route_lays_pending_intents_over_its_page_without_growing",
+      "testIdentity": "test_live_rules_route_lays_pending_intents_over_its_page_without_growing",
+      "rollback": "Deadlock part 3's read overlay: the Rules projection lays the pending ignored-repair intents over its rows in its one statement; reading them per rule or per album makes sql_statements grow."
     },
     {
       "id": "py:routes/api_wave_b_asgi_routes.py#create_loop_pitch_preview",

@@ -369,19 +369,24 @@ def _copy_publish(
 
 
 def _matches(path: Path, expected_bytes: int, expected_sha256: str) -> bool:
+    # One stat answers both "a regular file?" and "the expected size?".
     try:
-        if not path.is_file() or path.stat().st_size != expected_bytes:
-            return False
+        status = path.stat()
     except OSError:
         return False
-    return _fingerprint(path) == (expected_bytes, expected_sha256)
+    if not stat.S_ISREG(status.st_mode) or status.st_size != expected_bytes:
+        return False
+    return _digest(path) == (expected_bytes, expected_sha256)
 
 
 def _fingerprint(path: Path) -> tuple[int, str] | None:
     """The file's size and SHA-256, or None when it is missing or unreadable."""
+    return _digest(path) if path.is_file() else None
+
+
+def _digest(path: Path) -> tuple[int, str] | None:
+    """The size and SHA-256 of a path already known to be a regular file, or None when unreadable."""
     try:
-        if not path.is_file():
-            return None
         digest = hashlib.sha256()
         size = 0
         with path.open("rb") as handle:

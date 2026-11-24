@@ -940,7 +940,9 @@ function renderUtilityLogHistory() {
   els.detail.innerHTML = buildUtilityLogHistoryConsole(value);
 }
 
-function renderUtilityModalContent(options = {}) {
+// The open tab's shell: tab strip, panel roles and the other tabs' disposals. Null after it painted only the
+// loading shell (options.shellOnly).
+function renderUtilityModalShell(options) {
   const els = getUtilityModalElements();
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
@@ -979,10 +981,21 @@ function renderUtilityModalContent(options = {}) {
       if (els.count) els.count.textContent = '';
       if (els.sidebarLabel) els.sidebarLabel.textContent = selectedTab?.textContent?.trim() || '';
     }
-    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
-    if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
-    return;
+    finishUtilityModalRender(els);
+    return null;
   }
+  return { els, activeTab };
+}
+
+function finishUtilityModalRender(els) {
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
+}
+
+function renderUtilityModalContent(options = {}) {
+  const shell = renderUtilityModalShell(options);
+  if (!shell) return;
+  const { activeTab } = shell;
   if (activeTab === 'rules') {
     renderUtilityRules();
   } else if (activeTab === 'loops') {
@@ -998,8 +1011,16 @@ function renderUtilityModalContent(options = {}) {
   } else {
     renderProblematicFiles(options);
   }
-  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
-  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
+  finishUtilityModalRender(shell.els);
+}
+
+// The Problematic Files loaders paint only while their tab is open (each checks before it calls): that tab's
+// shell and list, never another tab's renderer.
+function renderProblematicFilesTab(options = {}) {
+  const shell = renderUtilityModalShell(options);
+  if (!shell) return;
+  renderProblematicFiles(options);
+  finishUtilityModalRender(shell.els);
 }
 
 const utilityTabAlignmentObservers = new WeakMap();

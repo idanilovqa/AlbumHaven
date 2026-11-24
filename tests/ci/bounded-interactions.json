@@ -10086,14 +10086,31 @@
       ],
       "owners": [
         "music_app/services/loose_track_store.py",
-        "music_app/__init__.py"
+        "music_app/__init__.py",
+        "music_app/services/library_inventory_postgres.py"
       ],
       "rules": [
+        "BI-05",
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 2000
+      },
+      "budgets": {
+        "pool_leases": 0,
+        "sql_statements": 5
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_loose_track_store_bounded_contracts.py::test_the_store_owner_builds_and_drains_on_connections_of_its_own_and_its_batches_stay_flat",
+      "testIdentity": "test_the_store_owner_builds_and_drains_on_connections_of_its_own_and_its_batches_stay_flat",
+      "rollback": "Dropping the store batch's connection argument makes the candidate loader lease a connection per batch: the _load_candidates guard and pool_leases fail. A per-item statement makes sql_statements grow."
     },
     {
       "id": "py:services/missing_album_rescan.py#MissingAlbumSearches._run",
@@ -14223,14 +14240,32 @@
         "py:music_app/services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm:background:executor"
       ],
       "owners": [
-        "music_app/services/library_browse_postgres.py"
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/loose_track_store.py",
+        "music_app/services/library_inventory_postgres.py"
       ],
       "rules": [
+        "BI-05",
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 2000
+      },
+      "budgets": {
+        "pool_leases": 0,
+        "sql_statements": 5
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_loose_track_store_bounded_contracts.py::test_the_loose_tracks_prewarm_builds_and_drains_on_connections_of_its_own_and_its_batches_stay_flat",
+      "testIdentity": "test_the_loose_tracks_prewarm_builds_and_drains_on_connections_of_its_own_and_its_batches_stay_flat",
+      "rollback": "Dropping the store batch's connection argument makes the candidate loader lease a connection per batch: the _load_candidates guard and pool_leases fail. A per-item statement makes sql_statements grow."
     },
     {
       "id": "py:services/library_browse_postgres.py#_run_utility_projection_rewarm",

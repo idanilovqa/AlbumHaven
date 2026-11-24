@@ -87,6 +87,8 @@ def _rows_by_track(candidates: Iterable[Mapping[str, object]]) -> dict[int, dict
 
 
 def _load_candidates(inventory: Any, connection: Any, track_ids: Iterable[int] | None = None) -> list[dict[str, object]]:
+    if connection is None:  # the loader would lease a connection of its own, once per batch
+        raise TypeError("A Loose Tracks store batch loads on its caller's connection; none was given.")
     return inventory.load_non_album_candidates(
         track_ids=track_ids, connection=connection, all_roots=True, unlimited=True,
     )

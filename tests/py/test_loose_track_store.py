@@ -83,3 +83,15 @@ def test_a_failed_build_from_before_a_restart_is_retried_at_its_stored_time(monk
 
     assert waits[0] == 120.0 and len(prepared) == 2
     assert reads == []
+
+
+def test_a_store_batch_refuses_to_load_candidates_without_its_callers_connection():
+    """The loader leases its own connection when none is given: a store batch must never reach that."""
+    import pytest
+
+    loaded = []
+    inventory = SimpleNamespace(load_non_album_candidates=lambda **options: loaded.append(options) or [])
+
+    with pytest.raises(TypeError, match="connection"):
+        loose_track_store._load_candidates(inventory, None, [1])
+    assert loaded == [], "no candidates load without the caller's connection"

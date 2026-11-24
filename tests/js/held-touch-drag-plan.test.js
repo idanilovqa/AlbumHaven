@@ -46,3 +46,18 @@ test('a label just before the threshold leaves no single-artist crossing', async
   const plan = planSingleArtistHeldDrag(geometry([400, 1180, 2400]), options);
   assert.equal(plan.feasible, false, JSON.stringify(plan));
 });
+
+test('each observed gallery height gets its own threshold, nearest start first', async () => {
+  const { planHeldDragForObservedHeights } = await import(moduleUrl);
+  // 6756 px content: a 656 px gallery puts the threshold at 852, a 614 px gallery at 1230.
+  const geometry = { scrollTop: 600, scrollHeight: 6756, labelBottoms: [500, 1016.6875, 1270.0625, 2300] };
+  const plans = planHeldDragForObservedHeights(geometry, [656, 614, 656], [], {
+    prefetchViewports: 8, maximumDragRatio: 0.38,
+  });
+  assert.deepEqual(plans.map(candidate => [candidate.clientHeight, candidate.plan.threshold, candidate.plan.feasible]),
+    [[656, 852, true], [614, 1230, false]]);
+  const remaining = planHeldDragForObservedHeights(geometry, [656, 614], [656], {
+    prefetchViewports: 8, maximumDragRatio: 0.38,
+  });
+  assert.deepEqual(remaining.map(candidate => candidate.clientHeight), [614]);
+});

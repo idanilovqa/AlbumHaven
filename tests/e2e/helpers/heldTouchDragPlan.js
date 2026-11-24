@@ -34,3 +34,20 @@ export function planSingleArtistHeldDrag(geometry, {
     inStartBand: scrollTop >= startLow && scrollTop <= startHigh,
   };
 }
+
+// The gallery bar has one height per artist context (one row, or two when the name needs the
+// controls' own row), and the threshold follows the gallery height under it. Plans the drag for every
+// gallery height seen so far that has not been ruled out, nearest start first; a plan only holds once
+// the bar settled at its start gives the gallery that height.
+export function planHeldDragForObservedHeights(geometry, observedHeights, rejectedHeights, options) {
+  return [...new Set(observedHeights)]
+    .filter(clientHeight => !rejectedHeights.includes(clientHeight))
+    .map(clientHeight => ({
+      clientHeight,
+      plan: planSingleArtistHeldDrag({ ...geometry, clientHeight }, {
+        ...options,
+        maximumDrag: Math.floor(clientHeight * options.maximumDragRatio),
+      }),
+    }))
+    .sort((left, right) => (left.plan.target ?? Infinity) - (right.plan.target ?? Infinity));
+}

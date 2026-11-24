@@ -16,7 +16,7 @@ import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHe
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
 import { observeGalleryTraffic, readGalleryRuntimeState } from '../helpers/passiveGalleryDiagnostics.js';
 import { isSearchLooseTracksPrefetchUrl } from '../helpers/productionViewObserver.js';
-import { planSingleArtistHeldDrag } from '../helpers/heldTouchDragPlan.js';
+import { planHeldDragForObservedHeights } from '../helpers/heldTouchDragPlan.js';
 
 const PREFETCH_VIEWPORTS = 8;
 const FULL_REFRESH_SEARCH_QUERY = 'Neal Morse';
@@ -242,34 +242,51 @@ async function dispatchTouchSwipe(ui, cdp, point, startY, endY) {
 
 // The held drag must cross the continuation threshold while one artist stays at the gallery top:
 // the bar's height follows that artist's name (owner: keep today's bar), so a drag that reaches the
-// next artist resizes the gallery and moves the app's own threshold under the gesture. Each step
-// measures with the settled bar of the artist on screen.
+// next artist resizes the gallery and moves the app's own threshold under the gesture. A plan is made
+// for each gallery height seen so far and holds only if the bar settled at its start gives that height.
 async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY) {
-  let plan = null;
-  for (let step = 0; step < 60; step += 1) {
+  const observedHeights = [];
+  const rejected = [];
+  let candidates = [];
+  for (let swipes = 0; swipes < 80;) {
     const bar = await ui.waitForGalleryBarSettled();
     const geometry = await ui.readGalleryContextGeometry();
+    observedHeights.push(geometry.clientHeight);
     const remaining = geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
     if (remaining <= geometry.clientHeight * PREFETCH_VIEWPORTS) {
-      throw new Error(`Mobile preposition crossed the continuation boundary: ${JSON.stringify({ geometry, bar })}`);
+      throw new Error(`Mobile preposition crossed the continuation boundary: ${JSON.stringify({ geometry, bar, rejected })}`);
     }
-    plan = planSingleArtistHeldDrag(geometry, {
-      prefetchViewports: PREFETCH_VIEWPORTS,
-      maximumDrag: Math.floor(geometry.clientHeight * 0.38),
-    });
-    if (!plan.feasible) {
-      throw new Error(`No artist section holds a held drag across the continuation threshold: ${JSON.stringify({ plan, bar })}`);
+    candidates = planHeldDragForObservedHeights(
+      geometry,
+      observedHeights,
+      rejected.map(entry => entry.clientHeight),
+      { prefetchViewports: PREFETCH_VIEWPORTS, maximumDragRatio: 0.38 },
+    );
+    const current = candidates.find(candidate => candidate.clientHeight === geometry.clientHeight);
+    if (current?.plan.feasible && current.plan.inStartBand && bar.kind === 'artist') {
+      return { bar, plan: current.plan };
     }
-    if (plan.inStartBand && bar.kind === 'artist') return { bar, plan };
-    const distance = Math.max(-280, Math.min(280, plan.target - geometry.scrollTop));
+    const next = candidates.find(candidate => candidate.plan.feasible);
+    if (!next) {
+      throw new Error(`No artist section holds a held drag across the continuation threshold: ${JSON.stringify({
+        scrollTop: geometry.scrollTop, scrollHeight: geometry.scrollHeight, bar, candidates, rejected,
+      })}`);
+    }
+    if (next.plan.inStartBand) {
+      // At this start the settled bar gives another gallery height, so this plan's threshold is wrong.
+      rejected.push({ clientHeight: next.clientHeight, settledClientHeight: geometry.clientHeight, bar, plan: next.plan });
+      continue;
+    }
+    const distance = Math.max(-280, Math.min(280, next.plan.target - geometry.scrollTop));
     if (distance >= 0) {
       await dispatchTouchSwipe(ui, cdp, point, lowerY, lowerY - distance - TOUCH_ACTIVATION_DISTANCE);
     } else {
       await dispatchTouchSwipe(ui, cdp, point, upperY, upperY - distance + TOUCH_ACTIVATION_DISTANCE);
     }
     await ui.waitForNativeScrollSettled();
+    swipes += 1;
   }
-  throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify(plan)}`);
+  throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify({ candidates, rejected })}`);
 }
 
 test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () => {

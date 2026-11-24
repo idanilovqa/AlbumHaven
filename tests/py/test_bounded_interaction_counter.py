@@ -397,3 +397,22 @@ def test_counting_drains_work_left_on_the_cover_render_executors_first(tmp_path,
         release.wait(5)
         threading.Event().wait(0.3)
     assert counts.stat_calls == 0
+
+
+
+def test_a_problematic_files_contract_measured_with_the_index_off_is_rejected(monkeypatch):
+    """6.5 (11-24): the server reads the persisted index, so a Problematic Files contract must too."""
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+
+    interaction_id = "py:routes/api_read_asgi_routes.py#utilities_problematic_files"
+    registry = {"interactions": [{
+        "id": interaction_id, "cardinalities": {"small": 1, "production": 2},
+        "budgets": {"sql_statements": 1}, "growth": {"metric": "sql_statements", "largeMinusSmallMax": 0},
+    }]}
+    options = {"interaction_id": interaction_id, "small": 1, "large": 2, "run": lambda _size: OperationCounts(),
+               "budgets": {"sql_statements": 1}, "growth": ("sql_statements", 0), "registry": registry}
+    monkeypatch.setenv("ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED", "0")
+    with pytest.raises(AssertionError, match="index off"):
+        measure_scale_pair(**options)
+    monkeypatch.setenv("ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED", "1")
+    measure_scale_pair(**options)

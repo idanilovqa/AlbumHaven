@@ -288,6 +288,7 @@ def test_live_problematic_files_page_lays_pending_intents_over_its_page_without_
     def run(unrelated):
         app, config = seed(unrelated)
         # The server's path: the persisted index (tests/py/conftest.py switches it off for every other test).
+        monkeypatch.setenv(problematic_index.ENABLED_KEY, "1")
         config[problematic_index.ENABLED_KEY] = "1"
         repository = PostgresLibraryBrowseRepository(config)
         problematic_index.prepare_for_serving(repository)

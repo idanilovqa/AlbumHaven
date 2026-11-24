@@ -1244,3 +1244,15 @@ def test_file_entry_round_trip_preserves_the_track_total(tmp_path, total):
 
     assert serialized["total_tracks"] == total
     assert cache_module.deserialize_file_entry(serialized)["total_tracks"] == total
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_file_entry_round_trip_preserves_the_multi_album_folder_flag(tmp_path, flag):
+    """Problematic Files reads the scan's verdict on the file's folder (owner's strict rule, 2026-11-24)."""
+    entry = _cache_entry(tmp_path / "song.flac")
+    entry["multi_album_folder"] = flag
+
+    serialized = cache_module.serialize_file_entry(entry)
+
+    assert serialized["multi_album_folder"] is flag
+    assert cache_module.deserialize_file_entry(serialized)["multi_album_folder"] is flag

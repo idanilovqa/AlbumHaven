@@ -72,3 +72,26 @@ def test_one_album_spanning_two_sibling_folders_disqualifies_both():
     entries = (_album(r"C:\Music\Covers", "Complete Album", (1, 2)) + _album(r"C:\Music\Covers", "Spanning Album", (19, 20))
                + _album(r"C:\Music\Various", "Other Complete", (1,), total=1) + _album(r"C:\Music\Various", "Spanning Album", (1, 2, 3)))
     assert _strict(entries) == set()
+
+
+def test_the_scan_stamps_each_file_with_its_folders_verdict(tmp_path):
+    """The scan stores the verdict per file, so Problematic Files reads it instead of judging folders."""
+    from music_app.services import scan_cache_persistence
+    from music_app.services.library import build_albums_from_file_cache
+
+    shared, mixed = tmp_path / "Shared", tmp_path / "Mixed"
+    entries = (_album(shared, "First Album", (1, 2)) + _album(shared, "Second Album", (1, 2))
+               + _album(mixed, "Third Album", (5,)) + _album(mixed, "Fourth Album", (6, 7)))
+    file_cache = {}
+    for entry in entries:
+        entry.update(mtime=1.0, size=4, title=entry["path"], duration_seconds=180, year=2001)
+        file_cache[entry["path"]] = entry
+    albums = build_albums_from_file_cache(file_cache)
+
+    *_rest, track_file_rows = scan_cache_persistence._inventory_rows_from_albums(file_cache, albums)
+
+    flags = {}
+    for row in track_file_rows:
+        metadata = getattr(row["metadata"], "obj", row["metadata"])
+        flags[row["private_path"]] = metadata["scan_cache"]["file_entry"].get("multi_album_folder")
+    assert flags == {entry["path"]: entry["path"].startswith(str(shared)) for entry in entries}

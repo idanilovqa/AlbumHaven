@@ -5708,6 +5708,7 @@ _OUTSIDE_COPIES_SQL = """
         and library.duplicate_identity_text(files.scan_file_album) = own.album_identity
         and library.duplicate_identity_year(files.scan_file_year) = own.album_year
         and files.scan_cache_stale is false
+        and files.scan_file_entry_is_object is true  -- the 0093 index's predicate, so the planner uses it
         and files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' = %(reason)s
         and files.private_path <> all(%(paths)s::text[])
       offset 0

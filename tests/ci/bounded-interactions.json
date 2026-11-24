@@ -6442,7 +6442,7 @@
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView",
-      "action": "fetchAndRender requests installed by refreshMissingAlbumView",
+      "action": "Refresh after a missing album's Re-scan or removal conflict: one reload of the current or pending view, whatever the albums shown",
       "entrypoints": [
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView:request:fetchAndRender"
       ],
@@ -6454,13 +6454,29 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/"
+          "/home-data",
+          "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 2000
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/tag-editor-and-optimistic-updates.test.js",
+      "testIdentity": "request capture: a missing album refresh reloads its own view once, or the pending view once",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; the missing album refresh is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum",

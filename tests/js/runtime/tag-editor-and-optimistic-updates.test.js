@@ -5520,6 +5520,34 @@ test('request capture: missing album removal posts once and refreshes its own vi
   });
 });
 
+test('request capture: a missing album refresh reloads its own view once, or the pending view once', async () => {
+  const id = 'js:runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView';
+  const album = { key: 'missing', inventory_status: 'missing' };
+  await measureInteractionContract(id, {
+    setup(albums) {
+      const { context } = createGalleryRefreshContext();
+      useRealViewUrls(context);
+      vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
+      const capture = createRequestCapture(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+      context.fetch = capture.fetch;
+      return { albums, capture, context };
+    },
+    async act({ albums, capture, context }) {
+      const before = capture.requests.length;
+      context.state.busy = false;
+      context.state.view = {
+        artist_groups: [{ artist: 'Synthetic Artist', albums: [album, ...Array.from({ length: albums }, (_, index) => ({ key: `kept-${index}` }))] }],
+      };
+      await context.refreshMissingAlbumView(album, 'missing', null);
+      await context.refreshMissingAlbumView(album, 'missing', { url: '/view-data?artist=Synthetic+Artist', push: false });
+      const requests = capture.requests.slice(before).map(({ url, options }) => ({ url, method: options.method }));
+      const shape = requests.map(({ url }) => [new URL(url, 'http://localhost').pathname, new URL(url, 'http://localhost').searchParams.get('artist')]);
+      assert.deepEqual(shape, [['/home-data', null], ['/view-data', 'Synthetic Artist']]);
+      return { requests };
+    },
+  });
+});
+
 // Owner (relayed 2026-11-22), case 59: a Re-scan that starts the background search says so, and a search
 // that ends without the album says how to bring it back. The search result is polled about every 1.5 s, at
 // most 30 s; a timeout frees the button with no extra toast.

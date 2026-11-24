@@ -15,6 +15,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (live fixture)
+from tests.py.test_problematic_loose_groups_postgres import loose_library  # noqa: F401 (live fixture)
 
 SETTLE_SECONDS = 10
 HOLD_INVENTORY_PUBLICATION = "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))"
@@ -96,7 +97,8 @@ class _PausingConnection:
         cursor = self._connection.execute(query, params)
         text = str(query).lower()
         if self._pause is not None and not self._written and (
-                "insert into library.ignored_repairs" in text or "insert into library.separate_releases" in text):
+                "insert into library.ignored_repairs" in text or "insert into library.separate_releases" in text
+                or "insert into library.exception_overrides" in text):
             self._written = True
             self._pause.reached.set()
             assert self._pause.resume.wait(SETTLE_SECONDS * 3), "The test never resumed the Rules writer."
@@ -175,7 +177,11 @@ def _assert_no_deadlock(errors, writer):
 
 @pytest.mark.parametrize("write", STARTED_DURING_A_SAVE.values(), ids=STARTED_DURING_A_SAVE.keys())
 def test_a_rules_writer_started_during_a_save_never_deadlocks_with_it(library, write):
-    """The save holds the album the Rules writer marks second; the writer starts; the save marks the other."""
+    _started_during_a_save(library, write)
+
+
+def _started_during_a_save(library, write):
+    """The save holds the key the Rules writer marks second; the writer starts; the save marks the other."""
     if write is _unignore_both:
         library.ignored_keys = library.ignore_beforehand()
     library.clear_marks()
@@ -198,7 +204,11 @@ def test_a_rules_writer_started_during_a_save_never_deadlocks_with_it(library, w
 
 @pytest.mark.parametrize("write", WRITERS.values(), ids=WRITERS.keys())
 def test_a_save_started_during_a_rules_writer_never_deadlocks_with_it(library, write):
-    """The Rules writer holds its first album; a save starts, marks the second, then wants the first."""
+    _save_started_during(library, write)
+
+
+def _save_started_during(library, write):
+    """The Rules writer holds its first key; a save starts, marks the second, then wants the first."""
     pause = _Pause()
     writer = _Writer(lambda: write(library, library.rules(pause)))
     errors = []
@@ -227,3 +237,53 @@ def test_a_save_started_during_a_rules_writer_never_deadlocks_with_it(library, w
     saver.join(SETTLE_SECONDS * 3)
     assert not saver.is_alive(), "The save never ended."
     _assert_no_deadlock([*errors, *([saver.error] if saver.error else [])], writer)
+
+
+# Exception overrides mark loose groups, not albums (0294's trigger): a save marks the groups of the loose files
+# it changes, under the inventory lock; an override marks its file's group, one row at a time.
+
+
+@pytest.fixture
+def loose(loose_library):
+    return _LooseGroups(loose_library)
+
+
+class _LooseGroups(_Library):
+    def __init__(self, fixture):
+        self.fixture = fixture
+        # Overrides are written in track-key (path) order, so Strays A's group is marked first.
+        self.paths = [fixture.strays["A"]["path"], fixture.strays["B"]["path"]]
+        with psycopg.connect(fixture.setup_url, row_factory=dict_row) as connection:
+            rows = {row["folder"].rsplit("/", 1)[-1]: row for row in connection.execute(
+                "select root_id, folder from library.problematic_loose_groups").fetchall()}
+        self.first, self.second = rows["strays a"], rows["strays b"]
+
+    def mark(self, connection, group):
+        connection.execute("select library.mark_problematic_loose_group(%s, %s)", (group["root_id"], group["folder"]))
+
+    def clear_marks(self):
+        with psycopg.connect(self.fixture.setup_url) as connection:
+            connection.execute("update library.problematic_loose_groups set marked_xid = null")
+
+    def marked(self):
+        with psycopg.connect(self.fixture.setup_url) as connection:
+            return sorted(row[0].rsplit("/", 1)[-1] for row in connection.execute(
+                "select folder from library.problematic_loose_groups where marked_xid is not null").fetchall())
+
+
+def _override_both(loose, adapter):
+    adapter.upsert_exception_overrides({path: "Non-album rarity" for path in loose.paths})
+
+
+def test_an_exception_override_write_marks_both_loose_groups(loose):
+    loose.clear_marks()
+    _override_both(loose, loose.rules())
+    assert loose.marked() == ["strays a", "strays b"]
+
+
+def test_an_exception_override_write_started_during_a_save_never_deadlocks_with_it(loose):
+    _started_during_a_save(loose, _override_both)
+
+
+def test_a_save_started_during_an_exception_override_write_never_deadlocks_with_it(loose):
+    _save_started_during(loose, _override_both)

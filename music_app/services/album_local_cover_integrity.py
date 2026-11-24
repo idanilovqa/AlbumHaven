@@ -40,11 +40,30 @@ def split_folder_covers(
     }
 
 
+def _chosen_cover(entry: Mapping[str, object]) -> bool:
+    """A user's or explicit choice, or a remote cover: never an automatic folder image."""
+    return (
+        str(entry.get("cover_selection_origin") or "").casefold() == "user"
+        or str(entry.get("cover_selection_provenance") or "").casefold() == "explicit"
+        or bool(entry.get("remote_cover_url"))
+    )
+
+
 def clear_ambiguous_folder_covers(
     file_cache: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
-    """Drop inferred folder art when one physical folder contains multiple releases."""
+    """Drop inferred folder art when one physical folder contains multiple releases.
+
+    Owner (11-22; strict rule 11-24): in a real multi-album folder (strict_multi_album_folders) whose
+    automatic covers are all the folder's one image, every album keeps that image until a different cover
+    is picked for one. Any other folder of several releases keeps this safeguard as before."""
+    from music_app.services.multi_album_folders import strict_multi_album_folders
+
     kept_split_covers = split_folder_covers(file_cache)
+    strict_folders = strict_multi_album_folders(
+        {**entry, "path": str(entry.get("path") or cache_path)} for cache_path, entry in file_cache.items()
+    )
+    automatic_images_by_folder: dict[str, set[str]] = {}
     albums_by_folder: dict[str, set[str]] = {}
     folder_by_cache_path: dict[str, str] = {}
     roots_by_cover_path: dict[str, set[str]] = {}
@@ -62,9 +81,13 @@ def clear_ambiguous_folder_covers(
             roots_by_cover_path.setdefault(cover_path.casefold(), set()).add(
                 physical_album_root(path)
             )
+            if physical_album_folder(cover_path) == folder and not _chosen_cover(entry):
+                automatic_images_by_folder.setdefault(folder, set()).add(cover_path.casefold())
 
     ambiguous_folders = {
-        folder for folder, albums in albums_by_folder.items() if len(albums) > 1
+        folder for folder, albums in albums_by_folder.items()
+        if len(albums) > 1
+        and not (folder in strict_folders and len(automatic_images_by_folder.get(folder, ())) == 1)
     }
     changed: dict[str, dict[str, object]] = {}
     for cache_path, entry in file_cache.items():
@@ -83,10 +106,8 @@ def clear_ambiguous_folder_covers(
             not path
             or not cover_path
             or not (ambiguous_inferred_cover or foreign_inferred_cover)
-            or str(entry.get("cover_selection_origin") or "").casefold() == "user"
-            or str(entry.get("cover_selection_provenance") or "").casefold() == "explicit"
+            or _chosen_cover(entry)
             or (folder_by_cache_path.get(cache_path), cover_path.casefold()) in kept_split_covers
-            or bool(entry.get("remote_cover_url"))
         ):
             continue
         for field in _LOCAL_COVER_FIELDS:

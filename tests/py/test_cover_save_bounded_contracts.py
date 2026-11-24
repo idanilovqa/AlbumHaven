@@ -1,7 +1,7 @@
 """A committed cover save works on the saved album, never on the library.
 
-Owner, 2026-11-21: "After album cover save Cover Look Up loads tremendously
-slow". The save dropped every utility projection, so what opened next rebuilt
+Reported 2026-11-21 (backlog case 31): Cover Look Up opened very slowly after
+a cover save. The save dropped every utility projection, so what opened next rebuilt
 the library's, and its runtime update copied and walked the whole library
 state. This contract drives the real save and Cover Look Up routes and the
 Rules projection over the real repository; only Postgres and its stores are

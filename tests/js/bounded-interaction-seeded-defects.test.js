@@ -828,8 +828,8 @@ const DEFECTS = [
     expected: /^rejected BI-08 event-loop-blocking:wait:concurrent\.futures\.wait@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_notes_mutate_reserved:route:(PATCH|DELETE) \/album-notes\/\{note_ref\}$/,
   },
   {
-    // Owner, 2026-11-21: "After album cover save Cover Look Up loads tremendously slow" (backlog
-    // case 31). Each save copied the whole file cache and walked every album for the saved tracks.
+    // Reported 2026-11-21 (backlog case 31): Cover Look Up opened very slowly after a cover save.
+    // Each save copied the whole file cache and walked every album for the saved tracks.
     id: 'BI-04 a cover save copying the library file cache',
     language: 'py',
     file: 'music_app/services/cover_state.py',

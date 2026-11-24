@@ -880,3 +880,38 @@ def test_membership_ignores_unknown_scanned_exception_text():
     assert rejected_local_album_paths(entries) == {
         str(Path("hoard/subset/01.flac")): "Duplicate track outside album folder",
     }
+
+
+def _copy_folder_library(root=1):
+    """Three albums in their own folders; a copy folder holds some of their songs, and a real
+    multi-album folder holds two albums whose songs exist nowhere else."""
+    entries, copies, real = [], set(), set()
+    for album_index, album in enumerate(("Album One", "Album Two", "Album Three"), start=1):
+        for number in (1, 2, 3):
+            track = _track(f"main/{album}", number, album=album, title=f"{album} song {number}",
+                           duration_seconds=170 + album_index * 10 + number)
+            entries.append({**asdict(track), "library_root_id": root})
+        for number in (1, 2):
+            copy = _track("main/Copied songs", number, album=album, title=f"{album} song {number}",
+                          duration_seconds=170 + album_index * 10 + number,
+                          path=Path("main/Copied songs") / f"{album_index}-{number:02d}.flac")
+            entries.append({**asdict(copy), "library_root_id": root})
+            copies.add(str(copy.path))
+    for album in ("Soundtrack A", "Soundtrack B"):
+        for number in (1, 2):
+            track = _track("main/Soundtracks", number, album=album, title=f"{album} theme {number}",
+                           path=Path("main/Soundtracks") / f"{album[-1]}-{number:02d}.flac")
+            entries.append({**asdict(track), "library_root_id": root})
+            real.add(str(track.path))
+    return entries, copies, real
+
+
+def test_a_copy_folder_keeps_every_copy_as_a_duplicate_track():
+    """Owner (2026-11-24): songs copied into a folder of random tracks are duplicates of their album's
+    tracks. A folder holding several albums never turns a proven copy into a mixed-folder problem."""
+    entries, copies, real = _copy_folder_library()
+
+    rejected = rejected_local_album_paths(entries)
+
+    assert rejected == {path: "Duplicate track outside album folder" for path in copies}
+    assert not real & set(rejected), "a real multi-album folder's songs exist nowhere else"

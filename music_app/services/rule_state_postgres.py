@@ -350,7 +350,9 @@ def ignored_repair_intents_with_failures(connection: Any) -> tuple[PendingIgnore
         failed.extend(
             {"row_key": key, "album_key": _text(album_keys.get(key)), "action": intent.get("action"),
              "failure": str(intent.get("failure") or ""), "failure_kind": str(intent.get("failure_kind") or "error"),
-             "failed_at": intent.get("failed_at")}
+             # As text: GET /utilities/rules sends this as JSON (FTC-UTIL-PROBLEMS-015).
+             "failed_at": failed_at.isoformat() if hasattr(failed_at := intent.get("failed_at"), "isoformat")
+             else failed_at}
             for key in sorted(_normalize_keys(intent.get("repair_keys")))
         )
     return PendingIgnoredRepairs.fold(pending), failed

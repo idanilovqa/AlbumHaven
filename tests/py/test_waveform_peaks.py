@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import threading
 from pathlib import Path
 import subprocess
 
@@ -320,21 +321,30 @@ def test_build_waveform_peaks_rejects_metadata_frame_missing_one_stereo_channel(
 
 
 @pytest.mark.parametrize(
-    ("platform_name", "expected_prefix", "expected_creationflags"),
+    ("platform_name", "current", "expected_prefix", "expected_creationflags"),
     [
         (
             "win32",
+            False,
             ("resolved-ffmpeg",),
             0x08000000 | 0x00004000,
         ),
-        ("linux", ("nice", "-n", "10", "resolved-ffmpeg"), 0),
+        ("linux", False, ("nice", "-n", "10", "resolved-ffmpeg"), 0),
+        ("win32", True, ("resolved-ffmpeg",), 0x08000000 | 0x00008000),
+        ("linux", True, ("resolved-ffmpeg",), 0),
     ],
-    ids=["windows-hidden-below-normal", "non-windows-nice-10"],
+    ids=[
+        "prefetch-windows-hidden-below-normal",
+        "prefetch-non-windows-nice-10",
+        "current-windows-hidden-above-normal",
+        "current-non-windows-not-niced",
+    ],
 )
-def test_build_waveform_peaks_launches_decoder_with_explicit_low_priority_policy(
+def test_build_waveform_peaks_launches_decoder_with_explicit_priority_policy(
     tmp_path,
     monkeypatch,
     platform_name,
+    current,
     expected_prefix,
     expected_creationflags,
 ):
@@ -360,6 +370,12 @@ def test_build_waveform_peaks_launches_decoder_with_explicit_low_priority_policy
             raising=False,
         )
         monkeypatch.setattr(
+            waveform_peaks.subprocess,
+            "ABOVE_NORMAL_PRIORITY_CLASS",
+            0x00008000,
+            raising=False,
+        )
+        monkeypatch.setattr(
             waveform_peaks,
             "resolve_ffmpeg_executable",
             lambda: "resolved-ffmpeg",
@@ -380,6 +396,7 @@ def test_build_waveform_peaks_launches_decoder_with_explicit_low_priority_policy
             (tmp_path / "priority.flac").resolve(),
             bins=1,
             cancel_event=asyncio.Event(),
+            current=current,
         )
 
         assert len(calls) == 1
@@ -667,7 +684,7 @@ def test_waveform_registry_allows_one_job_rejects_overlap_and_releases_after_com
         release = asyncio.Event()
         observed_cancel_events: list[asyncio.Event] = []
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             assert bins == BIN_COUNT
             observed_cancel_events.append(cancel_event)
             entered.set()
@@ -813,7 +830,7 @@ def test_waveform_registry_cache_only_miss_bypasses_occupied_builder_slot(tmp_pa
             def put_for_path(self, **_kwargs):
                 return True
 
-        async def builder(path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             assert bins == BIN_COUNT
             build_calls.append(path)
             observed_cancel_events.append(cancel_event)
@@ -951,6 +968,7 @@ def test_waveform_registry_rejects_cache_hit_when_file_identity_changes_during_l
             *,
             bins: int,
             cancel_event: asyncio.Event,
+            current: bool = False,
         ) -> WaveformPeaks:
             nonlocal build_calls
             build_calls += 1
@@ -981,6 +999,139 @@ def test_waveform_registry_rejects_cache_hit_when_file_identity_changes_during_l
     asyncio.run(scenario())
 
 
+def test_waveform_registry_playing_song_build_does_not_wait_for_a_slow_cache_read(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "playing.flac"
+        path.write_bytes(b"playing-source")
+        built = WaveformPeaks(left=(0.5,) * BIN_COUNT, right=(0.5,) * BIN_COUNT, sample_count=BIN_COUNT)
+        release_read = threading.Event()
+        writes: list[WaveformPeaks] = []
+
+        class SlowCacheDouble:
+            def get_for_path(self, **_kwargs):
+                release_read.wait(5)
+                return None
+
+            def put_for_path(self, **kwargs):
+                writes.append(kwargs["peaks"])
+                return True
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            return built
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=SlowCacheDouble())
+        try:
+            assert await asyncio.wait_for(
+                registry.run(path, bins=BIN_COUNT, current=True), timeout=1
+            ) is built
+        finally:
+            release_read.set()
+        assert writes == [built]
+
+    asyncio.run(scenario())
+
+
+def test_waveform_registry_cache_hit_answers_playing_song_and_stops_its_build(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "cached-playing.flac"
+        path.write_bytes(b"cached-source")
+        cached = WaveformPeaks(left=(0.25,) * BIN_COUNT, right=(0.25,) * BIN_COUNT, sample_count=BIN_COUNT)
+        entered = asyncio.Event()
+        stopped: list[bool] = []
+        loop = asyncio.get_running_loop()
+
+        class CacheDouble:
+            def get_for_path(self, **_kwargs):
+                asyncio.run_coroutine_threadsafe(entered.wait(), loop).result(5)
+                return cached
+
+            def put_for_path(self, **_kwargs):
+                raise AssertionError("a cache hit must not be rewritten")
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            entered.set()
+            await cancel_event.wait()
+            stopped.append(True)
+            raise asyncio.CancelledError()
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=CacheDouble())
+        assert await asyncio.wait_for(
+            registry.run(path, bins=BIN_COUNT, current=True), timeout=1
+        ) is cached
+        for _ in range(20):
+            if registry.active_job_count == 0:
+                break
+            await asyncio.sleep(0.01)
+        assert stopped == [True]
+        assert registry.active_job_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_waveform_registry_failed_playing_song_build_still_answers_from_the_cache(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "cached-broken-build.flac"
+        path.write_bytes(b"cached-source")
+        cached = WaveformPeaks(left=(0.25,) * BIN_COUNT, right=(0.25,) * BIN_COUNT, sample_count=BIN_COUNT)
+        release_read = threading.Event()
+
+        class SlowHitDouble:
+            def get_for_path(self, **_kwargs):
+                release_read.wait(5)
+                return cached
+
+            def put_for_path(self, **_kwargs):
+                raise AssertionError("a failed build must not write")
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            release_read.set()
+            raise RuntimeError("decoder unavailable")
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=SlowHitDouble())
+        assert await asyncio.wait_for(
+            registry.run(path, bins=BIN_COUNT, current=True), timeout=2
+        ) is cached
+
+    asyncio.run(scenario())
+
+
+def test_waveform_registry_shows_finished_peaks_before_the_cache_write(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "slow-write.flac"
+        path.write_bytes(b"slow-write-source")
+        built = WaveformPeaks(left=(0.75,) * BIN_COUNT, right=(0.75,) * BIN_COUNT, sample_count=BIN_COUNT)
+        release_write = threading.Event()
+        shown: list[WaveformPeaks] = []
+
+        class SlowWriteDouble:
+            def get_for_path(self, **_kwargs):
+                return None
+
+            def put_for_path(self, **_kwargs):
+                release_write.wait(5)
+                return True
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            return built
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=SlowWriteDouble())
+        run = asyncio.create_task(
+            registry.run(path, bins=BIN_COUNT, current=True, on_progress=shown.append)
+        )
+        try:
+            for _ in range(100):
+                if shown:
+                    break
+                await asyncio.sleep(0.01)
+            assert shown == [built]
+            assert not run.done()
+        finally:
+            release_write.set()
+        assert await asyncio.wait_for(run, timeout=1) is built
+
+    asyncio.run(scenario())
+
+
 def test_waveform_registry_cache_miss_stores_only_completed_peaks(tmp_path):
     async def scenario() -> None:
         path = tmp_path / "uncached.flac"
@@ -1005,7 +1156,7 @@ def test_waveform_registry_cache_miss_stores_only_completed_peaks(tmp_path):
         cache = CacheRepositoryDouble()
         build_calls = 0
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             nonlocal build_calls
             build_calls += 1
             assert bins == BIN_COUNT
@@ -1079,7 +1230,7 @@ def test_waveform_registry_cancellation_never_writes_partial_cache_entry(tmp_pat
 
         cache = CacheRepositoryDouble()
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             assert bins == BIN_COUNT
             entered.set()
             await cancel_event.wait()
@@ -1108,7 +1259,7 @@ def test_waveform_registry_shutdown_cancels_and_awaits_the_application_wide_job(
         entered = asyncio.Event()
         cancelled = asyncio.Event()
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             assert bins == BIN_COUNT
             entered.set()
             await cancel_event.wait()
@@ -1123,7 +1274,8 @@ def test_waveform_registry_shutdown_cancels_and_awaits_the_application_wide_job(
 
         assert cancelled.is_set() is True
         assert job.done() is True
-        with pytest.raises(asyncio.CancelledError):
+        # A request cut off by shutdown gets the busy answer, never a stray cancellation.
+        with pytest.raises(WaveformPeaksBusyError):
             await job
         assert registry.active_job_count == 0
         with pytest.raises(WaveformPeaksBusyError):
@@ -1144,7 +1296,7 @@ def test_waveform_registry_cancelled_shutdown_finishes_cleanup_before_preserving
             asyncio.get_running_loop().call_soon(checkpoint.set_result, None)
             await checkpoint
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             assert bins == BIN_COUNT
             entered.set()
             await cancel_event.wait()
@@ -1178,7 +1330,7 @@ def test_waveform_registry_cancelled_shutdown_finishes_cleanup_before_preserving
             await asyncio.wait_for(shutdown, timeout=1)
 
         assert registry.active_job_count == 0
-        assert registry._active_task is None
+        assert not registry._jobs
         with pytest.raises(WaveformPeaksBusyError):
             await registry.run(Path("after-shutdown.flac"), bins=BIN_COUNT)
 
@@ -1192,7 +1344,7 @@ def test_waveform_registry_caller_cancellation_signals_builder_waits_and_release
         observed_cancel_events: list[asyncio.Event] = []
         calls = 0
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             nonlocal calls
             calls += 1
             assert bins == BIN_COUNT
@@ -1232,7 +1384,7 @@ def test_waveform_registry_releases_admission_after_repeated_caller_cancellation
         builder_finished = asyncio.Event()
         calls = 0
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             nonlocal calls
             calls += 1
             assert bins == BIN_COUNT
@@ -1266,3 +1418,1136 @@ def test_waveform_registry_releases_admission_after_repeated_caller_cancellation
         assert calls == 2
 
     asyncio.run(scenario())
+
+
+class BlockingStream:
+    """Stdout that stays silent until the decoder is terminated, then reaches EOF."""
+
+    def __init__(self) -> None:
+        self.read_started = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def read(self, _size: int = -1) -> bytes:
+        self.read_started.set()
+        await self.released.wait()
+        return b""
+
+
+class BlockingProcess(FakeProcess):
+    def __init__(self) -> None:
+        super().__init__(stdout=BlockingStream())
+
+    def terminate(self) -> None:
+        super().terminate()
+        self.stdout.released.set()
+
+
+SEGMENT_SEEKS = ("0", "30.000000000", "60.000000000", "90.000000000")
+
+
+def _segment_payload(peaks: list[float]) -> bytes:
+    lines = []
+    for index, peak in enumerate(peaks):
+        lines.extend(
+            (
+                f"frame:{index} pts:{index} pts_time:{index}",
+                f"lavfi.astats.1.Peak_level={20 * math.log10(peak):.9f}",
+                f"lavfi.astats.2.Peak_level={20 * math.log10(peak / 2):.9f}",
+            )
+        )
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def _segment_seek(args: tuple[object, ...]) -> str:
+    return str(args[args.index("-ss") + 1]) if "-ss" in args else "0"
+
+
+def _segmented_build_setup(monkeypatch, processes_by_seek, calls) -> None:
+    # 120 s over 8 bins gives four 30 s segments of two bins each.
+    monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+    monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 120.0)
+    monkeypatch.setattr(waveform_peaks.os, "cpu_count", lambda: 8)
+
+    async def create_process(*args, **kwargs):
+        calls.append((args, kwargs))
+        return processes_by_seek[_segment_seek(args)]
+
+    monkeypatch.setattr(waveform_peaks, "start_child_process", create_process)
+
+
+def test_current_song_build_decodes_parallel_exact_segments_above_normal_priority(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        segment_peaks = dict(zip(SEGMENT_SEEKS, ([0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8])))
+        processes = {
+            seek: FakeProcess(stdout=FakeStream(_segment_payload(peaks)))
+            for seek, peaks in segment_peaks.items()
+        }
+        calls: list[ProcessCall] = []
+        _segmented_build_setup(monkeypatch, processes, calls)
+        monkeypatch.setattr(waveform_peaks.sys, "platform", "win32")
+        monkeypatch.setattr(
+            waveform_peaks.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False
+        )
+        monkeypatch.setattr(
+            waveform_peaks.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x00004000, raising=False
+        )
+        monkeypatch.setattr(
+            waveform_peaks.subprocess, "ABOVE_NORMAL_PRIORITY_CLASS", 0x00008000, raising=False
+        )
+
+        result = await build_waveform_peaks(
+            (tmp_path / "long.flac").resolve(),
+            bins=8,
+            cancel_event=asyncio.Event(),
+            current=True,
+        )
+
+        assert result.left == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
+        assert result.right == pytest.approx([0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4])
+        assert sorted(_segment_seek(args) for args, _kwargs in calls) == sorted(SEGMENT_SEEKS)
+        for args, kwargs in calls:
+            assert args[0] == "ffmpeg"
+            assert kwargs["creationflags"] == 0x08000000 | 0x00008000
+            audio_filter = str(args[args.index("-af") + 1])
+            if _segment_seek(args) == SEGMENT_SEEKS[-1]:
+                # The last segment runs to the end of the file.
+                assert "-t" not in args
+                assert "atrim" not in audio_filter
+            else:
+                # Interior segments stop at their exact boundary.
+                assert args[args.index("-t") + 1] == "31.000000000"
+                assert "atrim=end_sample=240000" in audio_filter
+        assert all(process.wait_calls == 1 for process in processes.values())
+        assert all(process.terminate_calls == 0 for process in processes.values())
+
+    asyncio.run(scenario())
+
+
+def test_current_song_segment_failure_terminates_and_reaps_every_other_decoder(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        blocked = {seek: BlockingProcess() for seek in SEGMENT_SEEKS if seek != "60.000000000"}
+        failing = FakeProcess(stdout=FakeStream(b""), stderr=b"decode failed", returncode=1)
+        calls: list[ProcessCall] = []
+        _segmented_build_setup(monkeypatch, {**blocked, "60.000000000": failing}, calls)
+
+        with pytest.raises(RuntimeError, match="decode failed"):
+            await asyncio.wait_for(
+                build_waveform_peaks(
+                    tmp_path / "long.flac",
+                    bins=8,
+                    cancel_event=asyncio.Event(),
+                    current=True,
+                ),
+                timeout=2,
+            )
+
+        assert len(calls) == 4
+        for process in blocked.values():
+            assert process.terminate_calls == 1
+            assert process.wait_calls == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stop", ["cancel-event", "caller-cancelled"])
+def test_current_song_cancellation_terminates_and_reaps_every_segment_decoder(
+    tmp_path,
+    monkeypatch,
+    stop,
+):
+    async def scenario() -> None:
+        processes = {seek: BlockingProcess() for seek in SEGMENT_SEEKS}
+        calls: list[ProcessCall] = []
+        _segmented_build_setup(monkeypatch, processes, calls)
+        cancel_event = asyncio.Event()
+        task = asyncio.create_task(
+            build_waveform_peaks(
+                tmp_path / "long.flac",
+                bins=8,
+                cancel_event=cancel_event,
+                current=True,
+            )
+        )
+        for process in processes.values():
+            await asyncio.wait_for(process.stdout.read_started.wait(), timeout=1)
+
+        if stop == "cancel-event":
+            cancel_event.set()
+        else:
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+
+        assert cancel_event.is_set() is True
+        for process in processes.values():
+            assert process.terminate_calls == 1
+            assert process.wait_calls == 1
+
+    asyncio.run(scenario())
+
+
+async def _until(predicate) -> None:
+    async def poll() -> None:
+        while not predicate():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(poll(), timeout=1)
+
+
+def _priority_builder(calls: list[tuple[str, bool]], *, prefetch_stopped: asyncio.Event):
+    async def builder(
+        path: Path,
+        *,
+        bins: int,
+        cancel_event: asyncio.Event,
+        current: bool = False,
+    ):
+        calls.append((path.name, current))
+        if not current:
+            # Like the real decoder, a prefetch runs until it is told to stop.
+            await cancel_event.wait()
+            prefetch_stopped.set()
+            raise asyncio.CancelledError()
+        return f"peaks:{path.name}"
+
+    return builder
+
+
+def test_current_song_request_preempts_prefetch_build_instead_of_getting_busy():
+    async def scenario() -> None:
+        calls: list[tuple[str, bool]] = []
+        prefetch_stopped = asyncio.Event()
+        registry = WaveformPeaksRegistry(
+            builder=_priority_builder(calls, prefetch_stopped=prefetch_stopped)
+        )
+        prefetch = asyncio.create_task(registry.run(Path("next.mp3"), bins=BIN_COUNT))
+        await _until(lambda: calls == [("next.mp3", False)])
+
+        playing = await asyncio.wait_for(
+            registry.run(Path("playing.mp3"), bins=BIN_COUNT, current=True),
+            timeout=1,
+        )
+
+        assert playing == "peaks:playing.mp3"
+        assert calls == [("next.mp3", False), ("playing.mp3", True)]
+        assert prefetch_stopped.is_set() is True
+        with pytest.raises(WaveformPeaksBusyError):
+            await asyncio.wait_for(prefetch, timeout=1)
+        assert registry.active_job_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_prefetch_request_yields_while_the_playing_song_builds():
+    async def scenario() -> None:
+        release = asyncio.Event()
+        calls: list[tuple[str, bool]] = []
+
+        async def builder(
+            path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False
+        ):
+            calls.append((path.name, current))
+            await release.wait()
+            return "peaks"
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        playing = asyncio.create_task(
+            registry.run(Path("playing.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await _until(lambda: calls == [("playing.mp3", True)])
+
+        with pytest.raises(WaveformPeaksBusyError):
+            await registry.run(Path("next.mp3"), bins=BIN_COUNT)
+
+        release.set()
+        assert await asyncio.wait_for(playing, timeout=1) == "peaks"
+        assert calls == [("playing.mp3", True)]
+
+    asyncio.run(scenario())
+
+
+def test_current_song_request_replaces_a_prefetch_of_the_same_song():
+    async def scenario() -> None:
+        calls: list[tuple[str, bool]] = []
+        prefetch_stopped = asyncio.Event()
+        registry = WaveformPeaksRegistry(
+            builder=_priority_builder(calls, prefetch_stopped=prefetch_stopped)
+        )
+        prefetch = asyncio.create_task(registry.run(Path("song.mp3"), bins=BIN_COUNT))
+        await _until(lambda: calls == [("song.mp3", False)])
+
+        playing = await asyncio.wait_for(
+            registry.run(Path("song.mp3"), bins=BIN_COUNT, current=True),
+            timeout=1,
+        )
+
+        assert playing == "peaks:song.mp3"
+        assert calls == [("song.mp3", False), ("song.mp3", True)]
+        with pytest.raises(WaveformPeaksBusyError):
+            await asyncio.wait_for(prefetch, timeout=1)
+
+    asyncio.run(scenario())
+
+
+def test_repeated_current_song_requests_share_one_build_until_the_last_caller_leaves():
+    async def scenario() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        cancel_events: list[asyncio.Event] = []
+
+        async def builder(
+            path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False
+        ):
+            cancel_events.append(cancel_event)
+            entered.set()
+            await release.wait()
+            return "peaks"
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        first = asyncio.create_task(
+            registry.run(Path("playing.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        second = asyncio.create_task(
+            registry.run(Path("playing.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await _until(lambda: registry._jobs and next(iter(registry._jobs)).waiters == 2)
+
+        # A seek or reload abandons the earlier request; the shared build keeps going.
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first, timeout=1)
+        assert cancel_events[0].is_set() is False
+
+        release.set()
+        assert await asyncio.wait_for(second, timeout=1) == "peaks"
+        assert len(cancel_events) == 1
+
+    asyncio.run(scenario())
+
+
+def test_current_song_builds_are_bounded_per_listening_device():
+    async def scenario() -> None:
+        release = asyncio.Event()
+
+        async def builder(
+            path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False
+        ):
+            await release.wait()
+            return path.name
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        names = [f"device-{index}.mp3" for index in range(waveform_peaks.CURRENT_SONG_MAX_BUILDS)]
+        running = [
+            asyncio.create_task(registry.run(Path(name), bins=BIN_COUNT, current=True))
+            for name in names
+        ]
+        await _until(lambda: registry.active_job_count == len(names))
+
+        with pytest.raises(WaveformPeaksBusyError):
+            await registry.run(Path("one-more.mp3"), bins=BIN_COUNT, current=True)
+
+        release.set()
+        assert await asyncio.gather(*running) == names
+
+    asyncio.run(scenario())
+
+
+def test_another_playing_song_stops_a_build_whose_callers_left_and_takes_its_place():
+    async def scenario() -> None:
+        abandoned_stopped = asyncio.Event()
+        finish_stopping = asyncio.Event()
+        release = asyncio.Event()
+
+        async def builder(
+            path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False
+        ):
+            if path.name == "skipped.mp3":
+                await cancel_event.wait()
+                abandoned_stopped.set()
+                # The decoder takes a moment to stop and drain.
+                await finish_stopping.wait()
+                raise asyncio.CancelledError()
+            await release.wait()
+            return path.name
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        others = [
+            asyncio.create_task(registry.run(Path(f"device-{index}.mp3"), bins=BIN_COUNT, current=True))
+            for index in range(waveform_peaks.CURRENT_SONG_MAX_BUILDS - 1)
+        ]
+        skipped = asyncio.create_task(
+            registry.run(Path("skipped.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await _until(lambda: registry.active_job_count == waveform_peaks.CURRENT_SONG_MAX_BUILDS)
+        skipped.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(skipped, timeout=1)
+        assert abandoned_stopped.is_set() is False, "the skipped song may still be asked for again"
+
+        replacement = asyncio.create_task(
+            registry.run(Path("next-song.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await asyncio.wait_for(abandoned_stopped.wait(), timeout=1)
+        release.set()
+        assert await asyncio.wait_for(replacement, timeout=1) == "next-song.mp3"
+
+        finish_stopping.set()
+        await asyncio.gather(*others)
+        await _until(lambda: registry.active_job_count == 0)
+
+    asyncio.run(scenario())
+
+
+def test_a_seek_rejoins_the_playing_song_build_instead_of_restarting_it():
+    async def scenario() -> None:
+        release = asyncio.Event()
+        cancel_events: list[asyncio.Event] = []
+
+        async def builder(
+            path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False
+        ):
+            cancel_events.append(cancel_event)
+            await release.wait()
+            return "peaks"
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        before_seek = asyncio.create_task(
+            registry.run(Path("playing.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await _until(lambda: len(cancel_events) == 1)
+        before_seek.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(before_seek, timeout=1)
+
+        after_seek = asyncio.create_task(
+            registry.run(Path("playing.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await asyncio.sleep(0)
+        release.set()
+
+        assert await asyncio.wait_for(after_seek, timeout=1) == "peaks"
+        assert len(cancel_events) == 1
+        assert cancel_events[0].is_set() is False
+
+    asyncio.run(scenario())
+
+
+def test_a_playing_song_build_nobody_asks_for_again_stops_after_the_rejoin_window(monkeypatch):
+    async def scenario() -> None:
+        stopped = asyncio.Event()
+
+        async def builder(
+            path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False
+        ):
+            await cancel_event.wait()
+            stopped.set()
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(waveform_peaks, "CURRENT_SONG_REJOIN_SECONDS", 0.05)
+        registry = WaveformPeaksRegistry(builder=builder)
+        caller = asyncio.create_task(
+            registry.run(Path("closed-tab.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await _until(lambda: registry.active_job_count == 1)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, timeout=1)
+
+        await asyncio.wait_for(stopped.wait(), timeout=1)
+        await _until(lambda: registry.active_job_count == 0)
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_stops_a_playing_song_build_waiting_to_be_rejoined():
+    async def scenario() -> None:
+        stopped = asyncio.Event()
+
+        async def builder(
+            path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False
+        ):
+            await cancel_event.wait()
+            stopped.set()
+            raise asyncio.CancelledError()
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        caller = asyncio.create_task(
+            registry.run(Path("playing.mp3"), bins=BIN_COUNT, current=True)
+        )
+        await _until(lambda: registry.active_job_count == 1)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, timeout=1)
+
+        await asyncio.wait_for(registry.shutdown(), timeout=1)
+
+        assert stopped.is_set() is True
+        assert registry.active_job_count == 0
+
+    asyncio.run(scenario())
+
+
+class FakeStdin:
+    def __init__(self) -> None:
+        self.written = bytearray()
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class WarmDecoder(FakeProcess):
+    def __init__(self, payload: bytes = b"", *, stdout=None) -> None:
+        super().__init__(stdout=stdout if stdout is not None else FakeStream(payload))
+        self.stdin = FakeStdin()
+
+
+def _chunk_payload(pairs: list[tuple[float, float]]) -> bytes:
+    lines = []
+    for index, (left, right) in enumerate(pairs):
+        lines.extend(
+            (
+                f"frame:{index} pts:{index * 400} pts_time:{index * 0.05}",
+                f"lavfi.astats.1.Peak_level={20 * math.log10(left):.9f}",
+                f"lavfi.astats.2.Peak_level={20 * math.log10(right):.9f}",
+            )
+        )
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+class OneDecoderPool:
+    def __init__(self, decoder) -> None:
+        self.decoder = decoder
+
+    def take(self):
+        decoder, self.decoder = self.decoder, None
+        return decoder
+
+
+def test_playing_song_build_names_the_file_to_a_started_decoder_and_folds_its_chunks(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        # One second over 4 bins: each 50 ms chunk's midpoint lands in one 250 ms bin.
+        pairs = [((index + 1) / 20, (20 - index) / 20) for index in range(20)]
+        decoder = WarmDecoder(_chunk_payload(pairs))
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 1.0)
+
+        async def no_spawn(*_args, **_kwargs):
+            raise AssertionError("a started decoder must be used instead of a new process")
+
+        monkeypatch.setattr(waveform_peaks, "start_child_process", no_spawn)
+        track = tmp_path / "it's here.mp3"
+        track.write_bytes(b"mp3")
+        progress: list[WaveformPeaks] = []
+
+        result = await build_waveform_peaks(
+            track,
+            bins=4,
+            cancel_event=asyncio.Event(),
+            current=True,
+            decoders=OneDecoderPool(decoder),
+            progress=progress.append,
+        )
+
+        assert result.left == pytest.approx([0.25, 0.5, 0.75, 1.0])
+        assert result.right == pytest.approx([1.0, 0.75, 0.5, 0.25])
+        script = decoder.stdin.written.decode("utf-8")
+        assert script.startswith("ffconcat version 1.0\n")
+        assert "file '" + track.resolve().as_posix().replace("'", "'\\''") + "'" in script
+        assert decoder.stdin.closed is True
+        assert decoder.wait_calls == 1
+        assert decoder.terminate_calls == 0
+        assert progress and progress[0].sample_count == 4
+
+    asyncio.run(scenario())
+
+
+def test_chunks_longer_than_a_bin_cover_every_bin_they_span():
+    folded = waveform_peaks._ChunkPeakBins(bins=8, duration_seconds=0.1)
+    folded.feed(_chunk_payload([(0.5, 0.25), (1.0, 0.75)]))
+
+    peaks = folded.peaks()
+
+    assert peaks.left == pytest.approx([0.5] * 4 + [1.0] * 4)
+    assert peaks.right == pytest.approx([0.25] * 4 + [0.75] * 4)
+
+
+def test_chunk_records_split_across_reads_fold_once_complete():
+    payload = _chunk_payload([(0.5, 0.25), (1.0, 0.75)])
+    folded = waveform_peaks._ChunkPeakBins(bins=2, duration_seconds=0.1)
+    for index in range(0, len(payload), 7):
+        folded.feed(payload[index:index + 7])
+
+    assert folded.chunks == 2
+    assert folded.peaks().left == pytest.approx([0.5, 1.0])
+
+
+def test_a_chunk_missing_its_left_channel_is_rejected():
+    folded = waveform_peaks._ChunkPeakBins(bins=2, duration_seconds=0.1)
+
+    with pytest.raises(RuntimeError, match="malformed"):
+        folded.feed(b"frame:0\nlavfi.astats.2.Peak_level=-6.0\n")
+
+
+@pytest.mark.parametrize("stop", ["cancel-event", "caller-cancelled"])
+def test_stopping_a_playing_song_build_reaps_its_started_decoder(tmp_path, monkeypatch, stop):
+    async def scenario() -> None:
+        decoder = WarmDecoder(stdout=BlockingStream())
+        decoder.terminate = lambda: (
+            setattr(decoder, "terminate_calls", decoder.terminate_calls + 1),
+            setattr(decoder, "returncode", 0),
+            decoder.stdout.released.set(),
+        )
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 60.0)
+        cancel_event = asyncio.Event()
+        task = asyncio.create_task(
+            build_waveform_peaks(
+                tmp_path / "playing.mp3",
+                bins=BIN_COUNT,
+                cancel_event=cancel_event,
+                current=True,
+                decoders=OneDecoderPool(decoder),
+            )
+        )
+        await asyncio.wait_for(decoder.stdout.read_started.wait(), timeout=1)
+
+        if stop == "cancel-event":
+            cancel_event.set()
+        else:
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+        assert decoder.stdin.closed is True
+        assert decoder.terminate_calls == 1
+        assert decoder.wait_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_duration_read_reaps_the_started_decoder(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        decoder = WarmDecoder(b"")
+
+        def unreadable(_path):
+            raise RuntimeError("audio duration is unavailable for waveform analysis")
+
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", unreadable)
+
+        with pytest.raises(RuntimeError, match="duration"):
+            await build_waveform_peaks(
+                tmp_path / "broken.mp3",
+                bins=BIN_COUNT,
+                cancel_event=asyncio.Event(),
+                current=True,
+                decoders=OneDecoderPool(decoder),
+            )
+
+        assert decoder.stdin.closed is True
+        assert decoder.wait_calls == 1, "the decoder is reaped, never left running"
+
+    asyncio.run(scenario())
+
+
+def test_a_file_name_with_a_line_break_never_reaches_a_started_decoder(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        pool = OneDecoderPool(WarmDecoder(b""))
+        process = FakeProcess(stdout=FakeStream(_segment_payload([0.5])))
+        calls: list[ProcessCall] = []
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 1.0)
+        monkeypatch.setattr(
+            waveform_peaks, "start_child_process", _process_factory(process, calls)
+        )
+
+        await build_waveform_peaks(
+            tmp_path / "line\nfile 'other.mp3'.mp3",
+            bins=1,
+            cancel_event=asyncio.Event(),
+            current=True,
+            decoders=pool,
+        )
+
+        assert pool.decoder is not None
+        assert pool.decoder.stdin.written == bytearray()
+        assert len(calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_prefetch_never_takes_a_started_decoder(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        pool = OneDecoderPool(WarmDecoder(b""))
+        process = FakeProcess(stdout=FakeStream(_segment_payload([0.5])))
+        calls: list[ProcessCall] = []
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 1.0)
+        monkeypatch.setattr(
+            waveform_peaks, "start_child_process", _process_factory(process, calls)
+        )
+
+        await build_waveform_peaks(
+            tmp_path / "next.flac", bins=1, cancel_event=asyncio.Event(), decoders=pool
+        )
+
+        assert pool.decoder is not None
+        assert len(calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_decoder_pool_keeps_started_decoders_ready_and_reaps_them_on_close(monkeypatch):
+    async def scenario() -> None:
+        launched: list[tuple[list[str], dict[str, object]]] = []
+        decoders: list[WarmDecoder] = []
+
+        async def launch(command, **kwargs):
+            launched.append((command, kwargs))
+            decoder = WarmDecoder(b"")
+            decoders.append(decoder)
+            return decoder
+
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_launch_decoder", launch)
+        pool = waveform_peaks.WaveformDecoderPool(size=2)
+
+        assert pool.take() is None
+        assert launched == [], "taking never starts a decoder that would compete with the build"
+        pool.fill()
+        await pool._filling
+        assert len(launched) == 2
+        command, kwargs = launched[0]
+        assert command[command.index("-i") + 1] == "pipe:0"
+        assert ("-f", "concat") in tuple(zip(command, command[1:]))
+        assert kwargs == {"current": True, "stdin": subprocess.PIPE}
+
+        decoders[1].returncode = 1
+        assert pool.take() is decoders[0], "a decoder that already exited is skipped"
+        pool.fill()
+        await pool._filling
+        await pool.close()
+
+        assert len(launched) == 4
+        for decoder in decoders[2:]:
+            assert decoder.stdin.closed is True
+            assert decoder.wait_calls >= 1
+        assert pool.take() is None
+        assert len(launched) == 4, "a closed pool starts nothing"
+
+    asyncio.run(scenario())
+
+
+def test_every_caller_of_a_build_sees_the_waveform_built_so_far():
+    async def scenario() -> None:
+        release = asyncio.Event()
+        published = asyncio.Event()
+
+        async def builder(
+            path: Path,
+            *,
+            bins: int,
+            cancel_event: asyncio.Event,
+            current: bool = False,
+            decoders=None,
+            progress=None,
+        ):
+            progress(WaveformPeaks(left=(0.25,) * bins, right=(0.0,) * bins, sample_count=bins))
+            published.set()
+            await release.wait()
+            return WaveformPeaks(left=(1.0,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+        class IdlePool:
+            def fill(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        registry = WaveformPeaksRegistry(builder=builder, decoder_pool=IdlePool())
+        first_seen: list[float] = []
+        late_seen: list[float] = []
+        first = asyncio.create_task(
+            registry.run(
+                Path("playing.mp3"),
+                bins=BIN_COUNT,
+                current=True,
+                on_progress=lambda peaks: first_seen.append(peaks.left[0]),
+            )
+        )
+        await asyncio.wait_for(published.wait(), timeout=1)
+        late = asyncio.create_task(
+            registry.run(
+                Path("playing.mp3"),
+                bins=BIN_COUNT,
+                current=True,
+                on_progress=lambda peaks: late_seen.append(peaks.left[0]),
+            )
+        )
+        await _until(lambda: late_seen == [0.25])
+
+        release.set()
+        assert (await first).left[0] == 1.0
+        assert (await late).left[0] == 1.0
+        assert first_seen == [0.25]
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_decoders_are_readied_when_a_song_is_selected_and_after_each_build(tmp_path):
+    async def scenario() -> None:
+        class CountingPool:
+            fills = 0
+
+            def fill(self) -> None:
+                CountingPool.fills += 1
+
+            async def close(self) -> None:
+                return None
+
+        async def builder(path, *, bins, cancel_event, current=False, decoders=None, progress=None):
+            assert CountingPool.fills == 1, "no decoder starts while the build itself runs"
+            return WaveformPeaks(left=(0.5,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+        track = tmp_path / "selected.mp3"
+        track.write_bytes(b"mp3")
+        registry = WaveformPeaksRegistry(builder=builder, decoder_pool=CountingPool())
+
+        assert await registry.get_cached(track, bins=BIN_COUNT) is None
+        assert CountingPool.fills == 1
+        await registry.run(track, bins=BIN_COUNT, current=True)
+        await _until(lambda: CountingPool.fills == 2)
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+class _SwitchBuilds:
+    """Builds that run until stopped or released, by file name."""
+
+    def __init__(self) -> None:
+        self.stops: dict[str, asyncio.Event] = {}
+        self.starts: list[str] = []
+        self.release = asyncio.Event()
+
+    async def __call__(self, path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+        self.stops[path.name] = cancel_event
+        self.starts.append(path.name)
+        released = asyncio.create_task(self.release.wait())
+        stopped = asyncio.create_task(cancel_event.wait())
+        await asyncio.wait({released, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        released.cancel()
+        stopped.cancel()
+        if cancel_event.is_set():
+            raise asyncio.CancelledError
+        return "peaks"
+
+    def ask(self, registry: WaveformPeaksRegistry, name: str, client=None) -> asyncio.Task:
+        options = {"client": client} if client else {}
+        return asyncio.create_task(registry.run(Path(name), bins=BIN_COUNT, current=True, **options))
+
+
+async def _leave(caller: asyncio.Task) -> None:
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(caller, timeout=1)
+
+
+def test_a_press_on_another_song_stops_the_previous_build_when_its_disconnect_arrives_late():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        previous = builds.ask(registry, "previous.mp3")
+        await _until(lambda: "previous.mp3" in builds.stops)
+        pressed = builds.ask(registry, "pressed.mp3")
+        await _until(lambda: "pressed.mp3" in builds.stops)
+
+        await _leave(previous)
+        try:
+            # At once, not after the rejoin window.
+            assert builds.stops["previous.mp3"].is_set() is True
+            assert builds.stops["pressed.mp3"].is_set() is False
+        finally:
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_press_that_joins_a_running_build_still_stops_the_previous_one():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        elsewhere = builds.ask(registry, "pressed.mp3")
+        await _until(lambda: "pressed.mp3" in builds.stops)
+        previous = builds.ask(registry, "previous.mp3")
+        await _until(lambda: "previous.mp3" in builds.stops)
+        await _leave(previous)
+        assert builds.stops["previous.mp3"].is_set() is False  # it may still be rejoined
+
+        pressed = builds.ask(registry, "pressed.mp3")
+        await asyncio.sleep(0)
+        try:
+            assert builds.stops["previous.mp3"].is_set() is True
+            assert builds.stops["pressed.mp3"].is_set() is False
+            assert builds.starts == ["pressed.mp3", "previous.mp3"]
+        finally:
+            for caller in (elsewhere, pressed):
+                caller.cancel()
+            await asyncio.gather(elsewhere, pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_press_stops_the_previous_build_before_its_own_file_is_looked_at(monkeypatch):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds, cache_repository=object())
+        looked_at = threading.Event()
+
+        def identity(path: Path, *, bins: int):
+            if path.name == "pressed.mp3":
+                looked_at.wait(5)
+            raise OSError("no cache identity in this test")
+
+        monkeypatch.setattr(registry, "_cache_identity", identity)
+        previous = builds.ask(registry, "previous.mp3")
+        await _until(lambda: "previous.mp3" in builds.stops)
+        await _leave(previous)
+
+        pressed = builds.ask(registry, "pressed.mp3")
+        try:
+            # A busy host takes hundreds of milliseconds for that look.
+            await _until(builds.stops["previous.mp3"].is_set)
+            assert "pressed.mp3" not in builds.stops
+        finally:
+            looked_at.set()
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_previous_song_admitted_after_the_press_stops_when_left(monkeypatch):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds, cache_repository=object())
+        looked_at = threading.Event()
+
+        def identity(path: Path, *, bins: int):
+            if path.name == "previous.mp3":
+                looked_at.wait(5)
+            raise OSError("no cache identity in this test")
+
+        monkeypatch.setattr(registry, "_cache_identity", identity)
+        previous = builds.ask(registry, "previous.mp3")
+        await asyncio.sleep(0)
+        pressed = builds.ask(registry, "pressed.mp3")
+        await _until(lambda: "pressed.mp3" in builds.stops)
+        looked_at.set()
+        await _until(lambda: "previous.mp3" in builds.stops)
+
+        await _leave(previous)
+        try:
+            assert builds.stops["previous.mp3"].is_set() is True
+        finally:
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_song_asked_for_again_after_another_keeps_its_rejoin_window():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        first = builds.ask(registry, "back.mp3")
+        await _until(lambda: "back.mp3" in builds.stops)
+        other = builds.ask(registry, "other.mp3")
+        await _until(lambda: "other.mp3" in builds.stops)
+        again = builds.ask(registry, "back.mp3")
+        await asyncio.sleep(0)
+
+        await _leave(first)
+        await _leave(again)  # a seek: it will be asked for again
+        assert builds.stops["back.mp3"].is_set() is False
+
+        rejoined = builds.ask(registry, "back.mp3")
+        await asyncio.sleep(0)
+        builds.release.set()
+        assert await asyncio.wait_for(rejoined, timeout=1) == "peaks"
+        assert builds.starts.count("back.mp3") == 1
+        await asyncio.gather(other, return_exceptions=True)
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+TAB = (1, "tab")
+SAME_ACCOUNT_OTHER_TAB = (1, "other-tab")
+OTHER_ACCOUNT_SAME_CLIENT_ID = (2, "tab")
+
+
+@pytest.mark.parametrize("someone_else", [SAME_ACCOUNT_OTHER_TAB, OTHER_ACCOUNT_SAME_CLIENT_ID])
+def test_someone_elses_song_does_not_end_a_seeks_rejoin_window(someone_else):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        seeking = builds.ask(registry, "seeking.mp3", TAB)
+        await _until(lambda: "seeking.mp3" in builds.stops)
+        await _leave(seeking)
+
+        # A press there, or a page there that only opens with a paused track.
+        other = builds.ask(registry, "theirs.mp3", someone_else)
+        await _until(lambda: "theirs.mp3" in builds.stops)
+        assert builds.stops["seeking.mp3"].is_set() is False
+
+        rejoined = builds.ask(registry, "seeking.mp3", TAB)
+        await asyncio.sleep(0)
+        builds.release.set()
+        assert await asyncio.wait_for(rejoined, timeout=1) == "peaks"
+        assert builds.starts.count("seeking.mp3") == 1
+        await asyncio.gather(other, return_exceptions=True)
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("someone_else", [SAME_ACCOUNT_OTHER_TAB, OTHER_ACCOUNT_SAME_CLIENT_ID])
+def test_someone_elses_song_asked_before_a_seek_leaves_its_build_to_rejoin(someone_else):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        seeking = builds.ask(registry, "seeking.mp3", TAB)
+        await _until(lambda: "seeking.mp3" in builds.stops)
+        other = builds.ask(registry, "theirs.mp3", someone_else)
+        await _until(lambda: "theirs.mp3" in builds.stops)
+
+        await _leave(seeking)
+        try:
+            assert builds.stops["seeking.mp3"].is_set() is False
+        finally:
+            other.cancel()
+            await asyncio.gather(other, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("left_before_the_press", [True, False])
+def test_a_press_stops_that_clients_previous_build_while_someone_else_also_plays(left_before_the_press):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        previous = builds.ask(registry, "previous.mp3", TAB)
+        await _until(lambda: "previous.mp3" in builds.stops)
+        if left_before_the_press:
+            await _leave(previous)
+        pressed = builds.ask(registry, "pressed.mp3", TAB)
+        await asyncio.sleep(0)
+        if not left_before_the_press:
+            await _leave(previous)
+        try:
+            assert builds.stops["previous.mp3"].is_set() is True
+            other = builds.ask(registry, "theirs.mp3", SAME_ACCOUNT_OTHER_TAB)
+            await _until(lambda: "theirs.mp3" in builds.stops)
+            assert builds.stops["pressed.mp3"].is_set() is False
+            other.cancel()
+            await asyncio.gather(other, return_exceptions=True)
+        finally:
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_build_two_clients_asked_for_lingers_until_both_moved_on():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        mine = builds.ask(registry, "shared.mp3", TAB)
+        await _until(lambda: "shared.mp3" in builds.stops)
+        theirs = builds.ask(registry, "shared.mp3", OTHER_ACCOUNT_SAME_CLIENT_ID)
+        await asyncio.sleep(0)
+        await _leave(theirs)
+        await _leave(mine)
+
+        my_next = builds.ask(registry, "my-next.mp3", TAB)
+        await _until(lambda: "my-next.mp3" in builds.stops)
+        try:
+            assert builds.stops["shared.mp3"].is_set() is False  # theirs may still rejoin
+            await _leave(my_next)
+            their_next = builds.ask(registry, "their-next.mp3", OTHER_ACCOUNT_SAME_CLIENT_ID)
+            await asyncio.sleep(0)
+            assert builds.stops["shared.mp3"].is_set() is True
+            their_next.cancel()
+            await asyncio.gather(their_next, return_exceptions=True)
+        finally:
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_pressed_song_takes_a_lingering_builds_slot_only_when_no_slot_is_free():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        seeking = builds.ask(registry, "seeking.mp3", TAB)
+        await _until(lambda: "seeking.mp3" in builds.stops)
+        await _leave(seeking)
+        playing = builds.ask(registry, "theirs.mp3", SAME_ACCOUNT_OTHER_TAB)
+        await _until(lambda: "theirs.mp3" in builds.stops)
+        assert builds.stops["seeking.mp3"].is_set() is False
+
+        pressed = builds.ask(registry, "pressed.mp3", OTHER_ACCOUNT_SAME_CLIENT_ID)
+        try:
+            # A song somebody waits for never waits behind a build nobody waits for.
+            await _until(lambda: "pressed.mp3" in builds.stops)
+            assert builds.stops["seeking.mp3"].is_set() is True
+            assert builds.stops["theirs.mp3"].is_set() is False
+        finally:
+            for caller in (playing, pressed):
+                caller.cancel()
+            await asyncio.gather(playing, pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_the_newest_song_of_each_client_stays_bounded():
+    async def scenario() -> None:
+        async def builder(path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            return "peaks"
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        limit = waveform_peaks.REMEMBERED_PLAYBACK_CLIENTS
+        for number in range(limit + 20):
+            await registry.run(Path("song.mp3"), bins=BIN_COUNT, current=True, client=(1, str(number)))
+        assert len(registry._newest_songs) == limit
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+

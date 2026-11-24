@@ -263,13 +263,10 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.current = track;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
-      String(track?.path || ''),
-      Number(state.player.streaming?.generation) || 0,
-    );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+  if (typeof loadPlayingWaveformPeaks === 'function') {
+    const playingWaveform = loadPlayingWaveformPeaks(String(track?.path || ''));
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   }
   state.player.waveform.renderToken += 1;
@@ -347,6 +344,10 @@ function showSelectedTrackImmediately(track, shouldAutoplay) {
 function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
+  if (typeof resumeRestingTrackWaveform === 'function') {
+    // Once the switch has settled: a song that started is the current one by then.
+    void Promise.resolve().then(resumeRestingTrackWaveform);
+  }
   renderSelectedTrackState(state.player.current);
 }
 
@@ -355,10 +356,14 @@ async function playTrackFromPayload(track, options = {}) {
   const shouldAutoplay = options.autoplay !== false;
   const requestedTrackPath = String(track?.path || '');
   const currentTrackPath = String(state.player.current?.path || '');
-  if (shouldAutoplay && requestedTrackPath && currentTrackPath
-      && requestedTrackPath !== currentTrackPath
+  // Replaced by this press: the current song, and one pressed before it that has yet to sound.
+  const replacesSong = [currentTrackPath, String(state.player.selectedTrack?.path || '')]
+    .some((replaced) => replaced && replaced !== requestedTrackPath);
+  if (shouldAutoplay && requestedTrackPath && replacesSong
       && typeof cancelStreamingWaveformGeneration === 'function') {
-    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+    cancelStreamingWaveformGeneration(
+      Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) || 0,
+    );
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
@@ -368,6 +373,10 @@ async function playTrackFromPayload(track, options = {}) {
     ? canStartPlaybackInThisTab(track)
     : true;
   if (pendingClaim === false) return false;
+  if (shouldAutoplay && typeof startSelectedTrackWaveformPeaks === 'function') {
+    // The waveform builds while the stream opens, not after it.
+    startSelectedTrackWaveformPeaks(requestedTrackPath);
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
@@ -465,6 +474,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(selectedTrackPath);
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -623,6 +633,8 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  // A gapless move sounds at the boundary itself.
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(promotedTrack.path);
   if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
@@ -999,6 +1011,9 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
+    // The controls follow the sound as soon as it stops, not after the listen-session and
+    // ownership round trips below.
+    updatePlayerUi();
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {

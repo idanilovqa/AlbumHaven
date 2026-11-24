@@ -249,11 +249,9 @@ async function updateWaveformAppearance(forceReload = false) {
   if (forceReload) {
     clearWaveformCanvas();
   }
-  const generation = Number(playback.generation ?? state.player.streaming?.generation) || 0;
+  // Peaks belong to the file, so a seek or replay of the same song keeps drawing them.
   const active = state.player.waveform.compactPeaks;
-  const waveform = active?.path === path && active.generation === generation
-    ? active.data
-    : null;
+  const waveform = active?.path === path ? active.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;
   const duration = Number(playback.duration) || 0;
   const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
@@ -262,19 +260,9 @@ async function updateWaveformAppearance(forceReload = false) {
 
 async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
-  const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-  const playback = getPlayerPlaybackSnapshot();
-  if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
-      || String(state.player.current?.path || '') !== currentPath) return;
-  const activePeaks = state.player.waveform.compactPeaks;
-  if (activePeaks?.path !== currentPath || activePeaks.generation !== generation
-      || activePeaks.data !== currentPeaks) {
-    state.player.waveform.compactPeaks = { path: currentPath, generation, data: currentPeaks };
-    await updateWaveformAppearance();
-  }
-  if (continuityPath
+  const currentPeaks = await loadPlayingWaveformPeaks(event.currentPath, generation);
+  if (currentPeaks && continuityPath
       && Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) === generation) {
     await loadWaveformPeaks(continuityPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   }

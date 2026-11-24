@@ -8,16 +8,20 @@ from dataclasses import dataclass
 import json
 import logging
 import math
+from pathlib import Path
 import subprocess
 import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from music_app.routes.playback_control_asgi import playback_config
-from music_app.services.library_roots import resolve_configured_media_path
+from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
+    resolve_configured_media_path,
+)
 from music_app.services.loops import resolve_loop_media_path
 from music_app.services.playback_io import run_playback_io
 from music_app.services.playback_seek_table import flac_seek_table
@@ -53,6 +57,7 @@ MAX_PCM_SAMPLE_RATE = 192_000
 MAX_CREDIT_FRAMES_PER_MESSAGE = MAX_PCM_SAMPLE_RATE
 MAX_TRACK_DURATION_SECONDS = 86_400
 MAX_TRACK_PATH_CHARACTERS = 32_768
+MAX_CLIENT_ID_CHARACTERS = 64
 PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS = 0
 PCM_SLOW_STEP_LOG_SECONDS = 1.0
 
@@ -87,6 +92,15 @@ def _observe_cancelled_task(task: asyncio.Task[Any]) -> None:
         task.result()
 
 
+def _resolve_waveform_media_path(config: dict[str, object], raw_path: str) -> Path | None:
+    # The root snapshot spares each waveform request a settings read from a possibly busy database.
+    return resolve_configured_media_path(
+        config,
+        raw_path,
+        configured_root_paths=configured_library_root_paths_snapshot(config),
+    )
+
+
 @router.get("/playback/waveform")
 async def playback_waveform(
     request: Request,
@@ -94,6 +108,9 @@ async def playback_waveform(
     loop_id: str = "",
     cachedOnly: str = "",
     bins: int = 280,
+    priority: str = "",
+    progressive: str = "",
+    client_id: str = "",
 ) -> Response:
     if bins not in {280, 720}:
         return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
@@ -113,7 +130,7 @@ async def playback_waveform(
             **loop_scope,
         )
         if loop_scope is not None
-        else await asyncio.to_thread(resolve_configured_media_path, request.app.state.config, requested_path)
+        else await asyncio.to_thread(_resolve_waveform_media_path, request.app.state.config, requested_path)
     )
     if resolved_path is None:
         return JSONResponse({"error": "Media file not found"}, status_code=404)
@@ -146,13 +163,7 @@ async def playback_waveform(
             _LOGGER.warning("Saved-loop waveform cache read failed: %s", error)
         else:
             if peaks is not None:
-                return JSONResponse(
-                    {
-                        "left": list(peaks.left),
-                        "right": list(peaks.right),
-                        "sampleCount": peaks.sample_count,
-                    }
-                )
+                return JSONResponse(_peaks_payload(peaks))
 
     if cachedOnly == "1":
         if loop_scope is not None:
@@ -166,18 +177,20 @@ async def playback_waveform(
             return JSONResponse({"error": str(error)}, status_code=429)
         if peaks is None:
             return Response(status_code=204)
-        return JSONResponse(
-            {
-                "left": list(peaks.left),
-                "right": list(peaks.right),
-                "sampleCount": peaks.sample_count,
-            }
-        )
+        return JSONResponse(_peaks_payload(peaks))
+
+    if priority == "current" and progressive == "1" and loop_scope is None:
+        # The account is the session's; the client id only tells that account's players apart.
+        actor = getattr(request.state, "current_actor", None)
+        client = (getattr(actor, "account_id", None), client_id[:MAX_CLIENT_ID_CHARACTERS])
+        return await _progressive_waveform_response(request, resolved_path, bins, client)
 
     peaks_task = asyncio.create_task(
         request.app.state.waveform_peaks_registry.run(
             resolved_path,
             bins=bins,
+            # Only the playing song's request may preempt other builds; prefetch yields.
+            current=priority == "current",
         )
     )
     disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))
@@ -220,13 +233,96 @@ async def playback_waveform(
             except Exception as error:
                 _LOGGER.warning("Saved-loop waveform cache write failed: %s", error)
 
-    return JSONResponse(
-        {
-            "left": list(peaks.left),
-            "right": list(peaks.right),
-            "sampleCount": peaks.sample_count,
-        }
+    return JSONResponse(_peaks_payload(peaks))
+
+
+def _peaks_payload(peaks: Any, **extra: object) -> dict[str, object]:
+    return {
+        "left": list(peaks.left),
+        "right": list(peaks.right),
+        "sampleCount": peaks.sample_count,
+        **extra,
+    }
+
+
+async def _progressive_waveform_response(
+    request: Request, path: Path, bins: int, client: tuple[object, str]
+) -> Response:
+    """Answer the playing song's peaks, streaming the waveform built so far while it builds.
+
+    A cached or already finished build answers as plain JSON, and a busy one as 429, so
+    only a running build streams: NDJSON lines with `complete` false, then the final line.
+    """
+    latest: list[Any] = []
+    changed = asyncio.Event()
+
+    def on_progress(peaks: Any) -> None:
+        latest[:] = [peaks]
+        changed.set()
+
+    peaks_task = asyncio.create_task(
+        request.app.state.waveform_peaks_registry.run(
+            path,
+            bins=bins,
+            current=True,
+            on_progress=on_progress,
+            client=client,
+        )
     )
+
+    async def next_update() -> bool:
+        """Wait for progress or the end of the build; True once the build ended."""
+        changed_task = asyncio.create_task(changed.wait())
+        try:
+            await asyncio.wait({peaks_task, changed_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            changed_task.cancel()
+        changed.clear()
+        return peaks_task.done()
+
+    first_update = asyncio.create_task(next_update())
+    # Until the response streams nothing else notices that the caller left for another song.
+    disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))
+    try:
+        await asyncio.wait({first_update, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
+        if not first_update.done():
+            peaks_task.cancel()
+            first_update.cancel()
+            await asyncio.gather(peaks_task, first_update, return_exceptions=True)
+            return Response(status_code=204)
+        finished = first_update.result()
+    except BaseException:
+        peaks_task.cancel()
+        first_update.cancel()
+        await asyncio.gather(peaks_task, first_update, return_exceptions=True)
+        raise
+    finally:
+        disconnect_task.cancel()
+        disconnect_task.add_done_callback(_observe_cancelled_task)
+    if finished:
+        try:
+            return JSONResponse(_peaks_payload(peaks_task.result()))
+        except WaveformPeaksBusyError as error:
+            return JSONResponse({"error": str(error)}, status_code=429)
+
+    async def lines():
+        try:
+            while True:
+                if latest:
+                    yield (json.dumps(_peaks_payload(latest[0], complete=False)) + "\n").encode()
+                if await next_update():
+                    break
+            try:
+                final = _peaks_payload(peaks_task.result(), complete=True)
+            except WaveformPeaksBusyError as error:
+                final = {"error": str(error)}
+            yield (json.dumps(final) + "\n").encode()
+        finally:
+            # A disconnect closes the stream; the build then waits briefly to be rejoined.
+            peaks_task.cancel()
+            await asyncio.gather(peaks_task, return_exceptions=True)
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
 def _gathered_failures(results: list[object]) -> list[BaseException]:

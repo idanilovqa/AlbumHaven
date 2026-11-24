@@ -10984,18 +10984,19 @@ function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
   return roleState;
 }
 
-function probeStreamingTrackWaveform(track) {
-  if (typeof probeCachedWaveformPeaks !== 'function') return;
+// The waveform is part of starting a song, so it is asked for when its stream opens.
+function loadStreamingTrackWaveform(track) {
+  if (typeof loadPlayingWaveformPeaks !== 'function') return;
   try {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
+    const playingWaveform = loadPlayingWaveformPeaks(
       String(track?.path || ''),
       streamingEngineState().generation,
     );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   } catch (_error) {
-    // Cached waveform probing is optional and must never interrupt playback.
+    // Waveform loading is optional and must never interrupt playback.
   }
 }
 
@@ -11065,7 +11066,7 @@ async function startBrowserStreamingTrack(track, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
     });
     if (!replacement) return null;
-    probeStreamingTrackWaveform(track);
+    loadStreamingTrackWaveform(track);
     replacement.targetBufferFrames = Math.min(
       streamingRoleCapacityFrames(replacement),
       streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
@@ -11165,7 +11166,7 @@ async function startBrowserStreamingTrack(track, {
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
-  probeStreamingTrackWaveform(track);
+  loadStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
     generation: engine.generation,
@@ -13563,6 +13564,7 @@ function adoptAndroidNativePlayback(persistedState) {
     const album = resolveAlbumForPlayerTrack(track);
     if (album) setAlbumPlaybackQueue(album, track.path);
   }
+  if (!playing && typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
   if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
   // A reload restores loops inactive, so Android's loop ends with the old document.
   clearAndroidNativeLoop();
@@ -17463,16 +17465,39 @@ function attachModalEvents() {
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
-// The server builds one waveform at a time, so player peaks keep waiting out another build
+// A busy answer means the server is building other waveforms first, so player peaks keep asking
 // at this pace for as long as their playback generation lasts.
 const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
-const playerWaveformPeakProbes = new Map();
+// Pending peak requests: whether each is for the playing song, and how to stop it.
+const playerWaveformPeakRequests = new WeakMap();
 const savedLoopWaveformPeakCache = new Map();
 let playerWaveformPeakGeneration = null;
 let playerWaveformPeakController = null;
 let playerWaveformPeakCurrentIdentity = null;
 let playerWaveformForegroundSuspensionDepth = 0;
+// The waveform request sent when Play was pressed, until the playing generation takes it.
+let playerWaveformStartRequest = null;
+// The track the page opened with, until another song sounds. Like a playing song's, its
+// waveform is never low priority (owner rule); its one request outlives its stream opening,
+// failing or starting to play.
+let playerWaveformRestingTrack = null;
+
+// Which player asks, so a press stops only this player's previous build. Kept for the page's life:
+// a claim that changes the tab's identity later does not change whose builds these are.
+let playerWaveformClientId = '';
+function getPlayerWaveformClientId() {
+  if (!playerWaveformClientId && typeof getPlaybackOwnershipTabId === 'function') {
+    playerWaveformClientId = String(getPlaybackOwnershipTabId() || '');
+  }
+  return playerWaveformClientId;
+}
+
+// The generation of the engine that plays: in the Android app the browser engine's never moves.
+function playerWaveformGeneration() {
+  const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
+  return Number(playback?.generation ?? state.player?.streaming?.generation) || 0;
+}
 
 function trimWaveformPeakCache() {
   while (playerWaveformPeakCache.size > 2) {
@@ -17490,9 +17515,6 @@ function cancelWaveformPeakLoads(generation) {
   const prefix = `${generation}\u0000`;
   for (const identity of playerWaveformPeakCache.keys()) {
     if (identity.startsWith(prefix)) playerWaveformPeakCache.delete(identity);
-  }
-  for (const identity of playerWaveformPeakProbes.keys()) {
-    if (identity.startsWith(prefix)) playerWaveformPeakProbes.delete(identity);
   }
   if (playerWaveformPeakCurrentIdentity?.startsWith(prefix)) {
     playerWaveformPeakCurrentIdentity = null;
@@ -17512,9 +17534,10 @@ function validateWaveformPeakPayload(payload, sampleCount) {
 
 function suspendPlayerWaveformPeakLoadsForForegroundView() {
   playerWaveformForegroundSuspensionDepth += 1;
-  const generation = Number(state.player?.streaming?.generation) || 0;
+  const generation = playerWaveformGeneration();
   if (String(state.player?.current?.path || '')) {
     cancelWaveformPeakLoads(generation);
+    stopRestingTrackWaveformRequest();
   }
   return { generation };
 }
@@ -17523,22 +17546,9 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   if (!suspension || playerWaveformForegroundSuspensionDepth < 1) return null;
   playerWaveformForegroundSuspensionDepth -= 1;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
-
-  const generation = Number(state.player?.streaming?.generation) || 0;
-  const path = String(state.player?.current?.path || '');
-  if (!path || generation !== Number(suspension.generation || 0)) return null;
-
-  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-  if (!peaks || playerWaveformForegroundSuspensionDepth > 0
-      || Number(state.player?.streaming?.generation) !== generation
-      || String(state.player?.current?.path || '') !== path) return null;
-  state.player.waveform.compactPeaks = { path, generation, data: peaks };
-  try {
-    await updateWaveformAppearance();
-  } catch (_error) {
-    // Optional waveform rendering must not interrupt foreground navigation.
-  }
-  return peaks;
+  // A stream that opened during the view load found loading suspended, so whichever track the
+  // player shows by now is asked for.
+  return loadPlayingWaveformPeaks(state.player?.current?.path);
 }
 
 function retainSavedLoopWaveformPeaks(loopIds) {
@@ -17603,7 +17613,168 @@ async function loadSavedLoopWaveformPeaks(loopId) {
   return entry.promise;
 }
 
-async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT, generation = 0) {
+// A building waveform streams as NDJSON: partial peaks, then the complete ones. A cached
+// or finished one answers as plain JSON.
+async function readWaveformPeakResponse(response, sampleCount, onPartial) {
+  if (!String(response.headers?.get?.('content-type') || '').includes('ndjson')) {
+    return { peaks: validateWaveformPeakPayload(await response.json(), sampleCount) };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffered.split('\n');
+    buffered = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const payload = JSON.parse(line);
+      if (payload.error) return { busy: true };
+      const peaks = validateWaveformPeakPayload(payload, sampleCount);
+      if (!peaks || payload.complete) return { peaks };
+      onPartial?.(peaks);
+    }
+    if (done) return { broken: true };
+  }
+}
+
+// Draws the playing song's waveform as far as it is built, never over a finished one.
+function showPartialWaveformPeaks(path, generation, peaks) {
+  const shown = state.player.waveform.compactPeaks;
+  if (String(state.player.current?.path || '') !== path
+      || playerWaveformGeneration() !== generation
+      || (shown?.path === path && !shown.partial)) return;
+  state.player.waveform.compactPeaks = { path, generation, data: peaks, partial: true };
+  if (typeof updateWaveformAppearance === 'function') {
+    void Promise.resolve(updateWaveformAppearance()).catch(() => {});
+  }
+}
+
+// Asks for one waveform, retrying while the server is busy building others first.
+async function fetchWaveformPeaks(rawPath, sampleCount, { current, signal, onPartial, stillWanted }) {
+  const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
+  if (current) {
+    query.set('priority', 'current');
+    query.set('progressive', '1');
+    const clientId = getPlayerWaveformClientId();
+    if (clientId) query.set('client_id', clientId);
+  }
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(`/playback/waveform?${query}`, { signal });
+    // 503 is a server that is not ready yet, so it is asked again as a busy one is.
+    const outcome = response.status === 429 || response.status === 503
+      ? { busy: true }
+      : response.ok
+        ? await readWaveformPeakResponse(response, sampleCount, onPartial).catch((error) => {
+          if (error?.name === 'TypeError') return { broken: true };
+          throw error;
+        })
+        : null;
+    // A build cut off mid-answer is asked again a few times, so a file that cannot be decoded
+    // stops being asked for.
+    if (outcome?.busy || (outcome?.broken && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length)) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
+          ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
+      });
+      if (signal.aborted || !stillWanted()) return null;
+      continue;
+    }
+    return outcome?.peaks || null;
+  }
+}
+
+// The page opened with this track in the player.
+function restTrackWaveform(path) {
+  stopRestingTrackWaveformRequest();
+  playerWaveformRestingTrack = { path: String(path || ''), controller: null, promise: null, waitingFor: null };
+}
+
+function stopRestingTrackWaveformRequest() {
+  const resting = playerWaveformRestingTrack;
+  if (!resting) return;
+  resting.controller?.abort();
+  resting.controller = null;
+  resting.promise = null;
+}
+
+function endTrackWaveformRest() {
+  stopRestingTrackWaveformRequest();
+  playerWaveformRestingTrack = null;
+}
+
+// Until the pressed song sounds, the resting track's waveform is the old one the player keeps
+// (owner, round 10), but it never slows the pressed song's: that builds alone, and the resting one
+// loads again once it is built or the switch ends without it.
+function endTrackWaveformRestOnSound(path) {
+  if (playerWaveformRestingTrack && playerWaveformRestingTrack.path !== String(path || '')) endTrackWaveformRest();
+}
+
+function resumeRestingTrackWaveform() {
+  const resting = playerWaveformRestingTrack;
+  if (!resting?.waitingFor) return;
+  resting.waitingFor = null;
+  if (String(state.player.current?.path || '') === resting.path) void loadPlayingWaveformPeaks(resting.path);
+}
+
+function loadRestingTrackWaveform(resting) {
+  if (resting.promise || resting.waitingFor || playerWaveformForegroundSuspensionDepth > 0) return resting.promise;
+  const controller = new AbortController();
+  resting.controller = controller;
+  resting.promise = fetchWaveformPeaks(resting.path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
+    current: true,
+    signal: controller.signal,
+    onPartial: (partial) => showPartialWaveformPeaks(resting.path, playerWaveformGeneration(), partial),
+    stillWanted: () => playerWaveformRestingTrack === resting,
+  }).catch(() => null).then((peaks) => {
+    if (resting.controller !== controller) return null;
+    if (!peaks) resting.promise = null;
+    return peaks;
+  });
+  return resting.promise;
+}
+
+// Play was pressed: the song's waveform starts building while its stream opens, and the
+// playing generation takes over this request instead of asking again.
+function startSelectedTrackWaveformPeaks(path) {
+  const rawPath = String(path || '');
+  if (playerWaveformStartRequest?.path === rawPath) return;
+  playerWaveformStartRequest?.controller.abort();
+  playerWaveformStartRequest = null;
+  const shown = state.player.waveform.compactPeaks;
+  if (!rawPath || playerWaveformForegroundSuspensionDepth > 0
+      || (shown?.path === rawPath && shown.data && !shown.partial)) return;
+  const resting = playerWaveformRestingTrack;
+  if (resting?.path === rawPath) {
+    resting.waitingFor = null;
+    void loadRestingTrackWaveform(resting);
+    return;
+  }
+  stopRestingTrackWaveformRequest();
+  const controller = new AbortController();
+  const promise = fetchWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
+    current: true,
+    signal: controller.signal,
+    onPartial: (partial) => showPartialWaveformPeaks(rawPath, playerWaveformGeneration(), partial),
+    stillWanted: () => true,
+  }).catch(() => null);
+  playerWaveformStartRequest = { path: rawPath, controller, promise };
+  if (!resting) return;
+  resting.waitingFor = promise;
+  void promise.then((peaks) => {
+    if (peaks && resting.waitingFor === promise) resumeRestingTrackWaveform();
+  });
+}
+
+// The playing song's peaks are asked for with `current`, so the server builds them first at
+// playback priority; any other load is a prefetch that yields to it.
+async function loadWaveformPeaks(
+  path,
+  sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
+  generation = 0,
+  { current = false } = {},
+) {
   const rawPath = String(path || '');
   if (!rawPath || ![PLAYER_WAVEFORM_PEAK_COUNT, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT].includes(sampleCount)) return null;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
@@ -17618,123 +17789,86 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
   const identity = `${generation}\u0000${sampleCount}\u0000${rawPath}`;
   if (playerWaveformPeakCache.has(identity)) {
     const cached = playerWaveformPeakCache.get(identity);
+    const pending = playerWaveformPeakRequests.get(cached);
     playerWaveformPeakCache.delete(identity);
-    playerWaveformPeakCache.set(identity, cached);
-    return cached;
-  }
-  const pendingProbe = playerWaveformPeakProbes.get(identity);
-  if (pendingProbe) {
-    let probed = null;
-    try {
-      probed = await pendingProbe;
-    } catch (_error) {
-      probed = null;
+    if (!current || !pending || pending.current) {
+      playerWaveformPeakCache.set(identity, cached);
+      return cached;
     }
-    if (probed) return probed;
-    if (playerWaveformPeakController?.signal.aborted
-        || state.player.streaming.generation !== generation) return null;
+    // This song is playing now: stop its prefetch and ask again at the playing song's priority.
+    pending.controller.abort();
   }
-  const controller = playerWaveformPeakController;
+  const started = current && sampleCount === PLAYER_WAVEFORM_DETAIL_PEAK_COUNT
+      && playerWaveformStartRequest?.path === rawPath
+    ? playerWaveformStartRequest
+    : null;
+  if (started) playerWaveformStartRequest = null;
+  const generationSignal = playerWaveformPeakController.signal;
+  const controller = started?.controller || new AbortController();
+  const abortWithGeneration = () => controller.abort();
+  generationSignal.addEventListener('abort', abortWithGeneration, { once: true });
+  const stillWanted = () => playerWaveformGeneration() === generation;
   let request;
   request = (async () => {
     let retained = false;
     try {
-      const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
-      for (let attempt = 0; ; attempt += 1) {
-        const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (response.status === 429) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
-              ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
-          });
-          if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
-          continue;
-        }
-        if (!response.ok) return null;
-        const peaks = validateWaveformPeakPayload(await response.json(), sampleCount);
-        if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
-        if (!peaks) return null;
-        retained = true;
-        return peaks;
-      }
+      const peaks = started
+        ? await started.promise
+        : await fetchWaveformPeaks(rawPath, sampleCount, {
+          current,
+          signal: controller.signal,
+          onPartial: current
+            ? (partial) => showPartialWaveformPeaks(rawPath, generation, partial)
+            : null,
+          stillWanted,
+        });
+      if (controller.signal.aborted || !stillWanted() || !peaks) return null;
+      retained = true;
+      return peaks;
     } catch (_error) {
       return null;
     } finally {
+      generationSignal.removeEventListener('abort', abortWithGeneration);
+      playerWaveformPeakRequests.delete(request);
       if (!retained && playerWaveformPeakCache.get(identity) === request) {
         playerWaveformPeakCache.delete(identity);
       }
     }
   })();
+  playerWaveformPeakRequests.set(request, { current, controller });
   playerWaveformPeakCache.set(identity, request);
   trimWaveformPeakCache();
   return request;
 }
 
-async function probeCachedWaveformPeaks(path, generation = 0) {
+// Starting a song asks for its waveform with the stream: the server answers a cached one at
+// once and otherwise builds it while playback starts, drawing it as it builds. A resting track
+// shares its one request instead, whichever generation asks.
+async function loadPlayingWaveformPeaks(path, generation = playerWaveformGeneration()) {
   const rawPath = String(path || '');
-  if (!rawPath) return null;
-  if (playerWaveformPeakGeneration !== generation) {
-    playerWaveformPeakController?.abort();
-    playerWaveformPeakController = new AbortController();
-    playerWaveformPeakGeneration = generation;
-    playerWaveformPeakCurrentIdentity = null;
-  } else if (!playerWaveformPeakController) {
-    playerWaveformPeakController = new AbortController();
+  if (!rawPath) {
+    endTrackWaveformRest();
+    return null;
   }
-  const identity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
-  let peaks = null;
-  if (playerWaveformPeakCache.has(identity)) {
-    const cached = playerWaveformPeakCache.get(identity);
-    playerWaveformPeakCache.delete(identity);
-    playerWaveformPeakCache.set(identity, cached);
-    try {
-      peaks = await cached;
-    } catch (_error) {
-      return null;
-    }
-  } else if (playerWaveformPeakProbes.has(identity)) {
-    try {
-      peaks = await playerWaveformPeakProbes.get(identity);
-    } catch (_error) {
-      return null;
-    }
-  } else {
-    const controller = playerWaveformPeakController;
-    let probe;
-    try {
-      probe = (async () => {
-        const query = new URLSearchParams({
-          path: rawPath,
-          bins: String(PLAYER_WAVEFORM_DETAIL_PEAK_COUNT),
-          cachedOnly: '1',
-        });
-        const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (!response.ok || response.status !== 200) return null;
-        const cachedPeaks = validateWaveformPeakPayload(
-          await response.json(),
-          PLAYER_WAVEFORM_DETAIL_PEAK_COUNT,
-        );
-        if (!cachedPeaks || controller.signal.aborted
-            || state.player.streaming.generation !== generation) return null;
-        return cachedPeaks;
-      })();
-      playerWaveformPeakProbes.set(identity, probe);
-      peaks = await probe;
-      if (!peaks) return null;
-      playerWaveformPeakCache.delete(identity);
-      playerWaveformPeakCache.set(identity, Promise.resolve(peaks));
-      trimWaveformPeakCache();
-    } catch (_error) {
-      return null;
-    } finally {
-      if (playerWaveformPeakProbes.get(identity) === probe) {
-        playerWaveformPeakProbes.delete(identity);
-      }
-    }
-  }
-  if (!peaks || state.player.streaming.generation !== generation
-      || String(state.player.current?.path || '') !== rawPath) return null;
-  playerWaveformPeakCurrentIdentity = identity;
+  const resting = playerWaveformRestingTrack?.path === rawPath ? playerWaveformRestingTrack : null;
+  // With another song current, the resting one's answer could not be shown; it only takes a slot.
+  if (!resting && String(state.player.current?.path || '') === rawPath) stopRestingTrackWaveformRequest();
+  const shown = state.player.waveform.compactPeaks;
+  // A seek or replay of the same song keeps its finished peaks.
+  const peaks = shown?.path === rawPath && shown.data && !shown.partial
+    ? shown.data
+    : resting
+      ? await loadRestingTrackWaveform(resting)
+      : await loadWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
+        current: true,
+      });
+  if (!peaks || String(state.player.current?.path || '') !== rawPath) return null;
+  // A resting track's peaks belong to the track, not to the stream that was opening meanwhile.
+  if (resting) generation = playerWaveformGeneration();
+  else if (playerWaveformGeneration() !== generation) return null;
+  const active = state.player.waveform.compactPeaks;
+  if (active?.path === rawPath && active.generation === generation && active.data === peaks) return peaks;
+  playerWaveformPeakCurrentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
   trimWaveformPeakCache();
   state.player.waveform.compactPeaks = { path: rawPath, generation, data: peaks };
   try {
@@ -17748,13 +17882,14 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
 async function promoteWaveformPeaks(completedPath, currentPath, generation) {
   const completedIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(completedPath || '')}`;
   const currentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(currentPath || '')}`;
-  let cached = playerWaveformPeakCache.get(currentIdentity);
-  let peaks = cached ? await cached : null;
-  if (!peaks && state.player.streaming.generation === generation) {
-    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-    cached = playerWaveformPeakCache.get(currentIdentity);
-    peaks = cached ? await cached : null;
+  if (playerWaveformGeneration() === generation) {
+    // The promoted song plays now, so a prefetch still building for it is upgraded.
+    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
+      current: true,
+    });
   }
+  const cached = playerWaveformPeakCache.get(currentIdentity);
+  const peaks = cached ? await cached : null;
   if (completedIdentity !== currentIdentity) {
     playerWaveformPeakCache.delete(completedIdentity);
   }
@@ -18745,11 +18880,9 @@ async function updateWaveformAppearance(forceReload = false) {
   if (forceReload) {
     clearWaveformCanvas();
   }
-  const generation = Number(playback.generation ?? state.player.streaming?.generation) || 0;
+  // Peaks belong to the file, so a seek or replay of the same song keeps drawing them.
   const active = state.player.waveform.compactPeaks;
-  const waveform = active?.path === path && active.generation === generation
-    ? active.data
-    : null;
+  const waveform = active?.path === path ? active.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;
   const duration = Number(playback.duration) || 0;
   const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
@@ -18758,19 +18891,9 @@ async function updateWaveformAppearance(forceReload = false) {
 
 async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
-  const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-  const playback = getPlayerPlaybackSnapshot();
-  if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
-      || String(state.player.current?.path || '') !== currentPath) return;
-  const activePeaks = state.player.waveform.compactPeaks;
-  if (activePeaks?.path !== currentPath || activePeaks.generation !== generation
-      || activePeaks.data !== currentPeaks) {
-    state.player.waveform.compactPeaks = { path: currentPath, generation, data: currentPeaks };
-    await updateWaveformAppearance();
-  }
-  if (continuityPath
+  const currentPeaks = await loadPlayingWaveformPeaks(event.currentPath, generation);
+  if (currentPeaks && continuityPath
       && Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) === generation) {
     await loadWaveformPeaks(continuityPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   }
@@ -40544,6 +40667,7 @@ function restorePlayerState() {
       } : {}),
       });
     };
+    if (typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
     const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
       ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
     const restoredRolePromise = !savedPaused
@@ -45981,13 +46105,10 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.current = track;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
-      String(track?.path || ''),
-      Number(state.player.streaming?.generation) || 0,
-    );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+  if (typeof loadPlayingWaveformPeaks === 'function') {
+    const playingWaveform = loadPlayingWaveformPeaks(String(track?.path || ''));
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   }
   state.player.waveform.renderToken += 1;
@@ -46065,6 +46186,10 @@ function showSelectedTrackImmediately(track, shouldAutoplay) {
 function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
+  if (typeof resumeRestingTrackWaveform === 'function') {
+    // Once the switch has settled: a song that started is the current one by then.
+    void Promise.resolve().then(resumeRestingTrackWaveform);
+  }
   renderSelectedTrackState(state.player.current);
 }
 
@@ -46073,10 +46198,14 @@ async function playTrackFromPayload(track, options = {}) {
   const shouldAutoplay = options.autoplay !== false;
   const requestedTrackPath = String(track?.path || '');
   const currentTrackPath = String(state.player.current?.path || '');
-  if (shouldAutoplay && requestedTrackPath && currentTrackPath
-      && requestedTrackPath !== currentTrackPath
+  // Replaced by this press: the current song, and one pressed before it that has yet to sound.
+  const replacesSong = [currentTrackPath, String(state.player.selectedTrack?.path || '')]
+    .some((replaced) => replaced && replaced !== requestedTrackPath);
+  if (shouldAutoplay && requestedTrackPath && replacesSong
       && typeof cancelStreamingWaveformGeneration === 'function') {
-    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+    cancelStreamingWaveformGeneration(
+      Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) || 0,
+    );
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
@@ -46086,6 +46215,10 @@ async function playTrackFromPayload(track, options = {}) {
     ? canStartPlaybackInThisTab(track)
     : true;
   if (pendingClaim === false) return false;
+  if (shouldAutoplay && typeof startSelectedTrackWaveformPeaks === 'function') {
+    // The waveform builds while the stream opens, not after it.
+    startSelectedTrackWaveformPeaks(requestedTrackPath);
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
@@ -46183,6 +46316,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(selectedTrackPath);
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -46341,6 +46475,8 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  // A gapless move sounds at the boundary itself.
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(promotedTrack.path);
   if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
@@ -46717,6 +46853,9 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
+    // The controls follow the sound as soon as it stops, not after the listen-session and
+    // ownership round trips below.
+    updatePlayerUi();
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {

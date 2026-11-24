@@ -40,6 +40,24 @@ class _Library:
     def mark(self, connection, album):
         connection.execute("select library.mark_problematic_album_dirty(%s, %s)", (self.library_id, album["id"]))
 
+    def clear_marks(self):
+        with psycopg.connect(self.fixture.setup_url) as connection:
+            connection.execute("delete from library.problematic_index_dirty_albums where library_id = %s",
+                               (self.library_id,))
+
+    def marked(self):
+        with psycopg.connect(self.fixture.setup_url) as connection:
+            return [row[0] for row in connection.execute(
+                "select album_id from library.problematic_index_dirty_albums where library_id = %s order by 1",
+                (self.library_id,)).fetchall()]
+
+    def ignore_beforehand(self):
+        """Both albums' ignored repairs, saved and committed before the test, their marks cleared."""
+        keys = {f"{album['album_key']}::problem-album::rule": album["album_key"] for album in (self.first, self.second)}
+        self.rules().upsert_ignored_repair_keys(keys, album_keys_by_repair_key=keys)
+        self.clear_marks()
+        return list(keys)
+
     def save(self):
         """A save's transaction: the inventory lock first, then its albums' marks."""
         connection = psycopg.connect(self.fixture.setup_url)
@@ -128,7 +146,23 @@ def _separate_both(library, adapter):
     adapter.save_separate_release_keys([library.first["album_key"], library.second["album_key"]])
 
 
+def _unignore_both(library, adapter):
+    """Removes both albums' ignored repairs in one statement."""
+    adapter.delete_ignored_repair_keys(library.ignored_keys)
+
+
 WRITERS = {"ignored repairs": _ignore_both, "separate releases": _separate_both}
+STARTED_DURING_A_SAVE = {**WRITERS, "ignored repairs removed": _unignore_both}
+
+
+@pytest.mark.parametrize("write", STARTED_DURING_A_SAVE.values(), ids=STARTED_DURING_A_SAVE.keys())
+def test_each_rules_writer_marks_both_albums(library, write):
+    """The two-writer cases mean something only if the writer marks both albums itself."""
+    if write is _unignore_both:
+        library.ignored_keys = library.ignore_beforehand()
+    library.clear_marks()
+    write(library, library.rules())
+    assert library.marked() == sorted([library.first["id"], library.second["id"]])
 
 
 def _assert_no_deadlock(errors, writer):
@@ -139,9 +173,12 @@ def _assert_no_deadlock(errors, writer):
     assert not failures, failures
 
 
-@pytest.mark.parametrize("write", WRITERS.values(), ids=WRITERS.keys())
+@pytest.mark.parametrize("write", STARTED_DURING_A_SAVE.values(), ids=STARTED_DURING_A_SAVE.keys())
 def test_a_rules_writer_started_during_a_save_never_deadlocks_with_it(library, write):
     """The save holds the album the Rules writer marks second; the writer starts; the save marks the other."""
+    if write is _unignore_both:
+        library.ignored_keys = library.ignore_beforehand()
+    library.clear_marks()
     errors = []
     save = library.save()
     try:

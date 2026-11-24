@@ -93,8 +93,13 @@ class PlaybackNetworkTest {
         assertEquals(cookieHeader, request.headers["Cookie"])
         assertEquals("csrf+value", request.headers[ShellSession.CSRF_HEADER])
         val body = JSONObject(request.body!!.utf8())
-        assertEquals(setOf("protocol", "clientId", "clientSurface", "claimToken", "state", "track"), body.keys().asSequence().toSet())
+        assertEquals(
+            setOf("protocol", "clientId", "clientSurface", "claimToken", "state", "track", "silencesItself"),
+            body.keys().asSequence().toSet(),
+        )
         assertEquals("mobile", body.getString("clientSurface"))
+        // The phone's render loop falls silent by itself five minutes without the server.
+        assertTrue(body.getBoolean("silencesItself"))
         assertTrue(body.isNull("claimToken"))
         assertEquals("playing", body.getString("state"))
         assertEquals(
@@ -102,6 +107,17 @@ class PlaybackNetworkTest {
             body.getJSONObject("track").keys().asSequence().toSet(),
         )
         assertFalse(request.body!!.utf8().contains("path"))
+    }
+
+    @Test
+    fun aRenewalOfAClaimKeptThroughAPauseSaysItIsPaused() {
+        server.enqueue(MockResponse.Builder().code(200).body("""{"protocol":1,"claimToken":"held"}""").build())
+        HttpPlaybackClaimApi(client, session()).acquire(TEST_CLIENT_ID, "held", track, paused = true)
+
+        val body = JSONObject(server.takeRequest(5, TimeUnit.SECONDS)!!.body!!.utf8())
+        val contract = JSONObject(java.io.File("../../../tests/fixtures/playback-handover-yield-v1.json").readText())
+        assertEquals(contract.getString("pausedRenewalState"), body.getString("state"))
+        assertEquals("held", body.getString("claimToken"))
     }
 
     @Test
@@ -219,10 +235,15 @@ class PlaybackNetworkTest {
         Thread.sleep(200)
 
         val listener = RecordingListener()
-        val socket = OkHttpPcmTransportFactory(client, session()).connect(listener)
+        val socket = OkHttpPcmTransportFactory(client, session(), TEST_CLIENT_ID).connect(listener)
         assertEquals("open", listener.next())
         val upgrade = server.takeRequest(5, TimeUnit.SECONDS)!!
         assertEquals("/playback/pcm", upgrade.url.encodedPath)
+        assertEquals("the socket names the client Play here elsewhere asks", TEST_CLIENT_ID, upgrade.url.queryParameter("client_id"))
+        // The shared yield contract: a paused phone says it answers a press elsewhere; an older build never does.
+        val yieldContract = org.json.JSONObject(java.io.File("../../../tests/fixtures/playback-handover-yield-v1.json").readText())
+        val (key, value) = yieldContract.getString("socketQuery").split("=")
+        assertEquals(value, upgrade.url.queryParameter(key))
         assertTrue(upgrade.connectionIndex in warmed)
         socket.close()
         assertEquals(1000, listener.next())

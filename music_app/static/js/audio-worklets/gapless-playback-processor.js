@@ -114,7 +114,7 @@
   }
 
   class GaplessPlaybackProcessor extends AudioWorkletProcessor {
-    constructor() {
+    constructor(options) {
       super();
       this.generation = 0;
       this.sampleRate = 0;
@@ -150,7 +150,29 @@
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
       this.consecutiveAlbumContinuity = false;
+      // The player fails closed: nothing sounds without a grant still inside the time
+      // allowed without the server. Kept here, so no frozen page or sleeping computer outlasts it.
+      this.awaitsPermission = options?.processorOptions?.awaitsPermission === true;
+      this.soundUntilWallMs = 0;
+      this.soundFramesLeft = 0;
       this.port.onmessage = ({ data }) => this.handleCommand(data);
+    }
+
+    // By the wall clock, which a computer's sleep cannot stop, and by the audio clock, which setting the
+    // wall clock back cannot extend.
+    permitSound(message) {
+      const untilMs = Number(message.untilMs) || 0;
+      const forMs = Math.min(Number(message.forMs) || 0, untilMs - Date.now());
+      this.soundUntilWallMs = untilMs;
+      this.soundFramesLeft = Math.max(0, Math.floor((forMs * sampleRate) / 1000));
+    }
+
+    // Time passes in every quantum, playing or not.
+    maySound(frames) {
+      if (!this.awaitsPermission) return true;
+      if (this.soundFramesLeft <= 0) return false;
+      this.soundFramesLeft -= frames;
+      return Date.now() < this.soundUntilWallMs;
     }
 
     reset(generation, timelineStartFrame = 0) {
@@ -188,6 +210,23 @@
       }
       if (message.type === 'seek-reset') {
         this.seekReset(message);
+        return;
+      }
+      if (message.type === 'may-sound') {
+        this.permitSound(message);
+        return;
+      }
+      if (message.type === 'silence-port') {
+        // A Worker's port: it reaches the audio thread while the page's own thread is busy.
+        this.silencePort = message.port;
+        this.silencePort.onmessage = () => { this.playing = false; };
+        return;
+      }
+      if (message.type === 'silence') {
+        // Whatever the generation: zeros from the next quantum on. Every position rendered before this
+        // was posted before the answer, so the page then knows the last frame it sent out.
+        this.playing = false;
+        this.port.postMessage({ type: 'silenced' });
         return;
       }
       if (!this.configured || message.generation !== this.generation) return;
@@ -747,7 +786,9 @@
       right.fill(0);
       this.commitPreparedSeek();
       this.commitBufferedSeek(left.length);
-      if (!this.playing || !this.configured) return true;
+      const maySound = this.maySound(left.length);
+      // Held, it consumes nothing: it goes on from this frame.
+      if (!maySound || !this.playing || !this.configured) return true;
       if (!this.current.firstFrameReported && !this.current.eos
           && this.current.bufferedFrames < this.startupBufferFrames) return true;
       if (this.rebuffering) {

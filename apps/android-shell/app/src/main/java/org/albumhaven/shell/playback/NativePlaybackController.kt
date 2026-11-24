@@ -105,7 +105,8 @@ data class LoopRange(val startFrame: Long, val endFrame: Long, val sampleRate: I
 
 /**
  * [keepCurrent] says the current item is the one already playing: only the queue around it
- * changes, as when the web's queue changes under the playing track.
+ * changes, as when the web's queue changes under the playing track. [takeover] says Play was
+ * pressed while another client plays: this client's claim replaces that client's.
  */
 data class QueueLoad(
     val queueRevision: Long,
@@ -115,6 +116,7 @@ data class QueueLoad(
     val loop: LoopRange?,
     val autoplay: Boolean,
     val keepCurrent: Boolean = false,
+    val takeover: Boolean = false,
 )
 
 enum class NativePlaybackState(val wire: String) {
@@ -242,7 +244,13 @@ class NativePlaybackController(
     @Volatile var snapshot = NativePlaybackSnapshot(clientId, NativePlaybackState.IDLE, 0, null, 0, 0)
         private set
 
-    private val claims = PlaybackClaimOwner(claimApi, clientId, io, ::post, clock, ::onClaimEvent)
+    private val claims = PlaybackClaimOwner(claimApi, clientId, io, ::post, clock, ::onClaimEvent) {
+        // Where the song is, so another device can take it over there.
+        queue.getOrNull(index)?.durationMs?.takeIf { it > 0 }?.let { ClaimPosition(positionMs().coerceIn(0, it), it) }
+    }
+
+    /** The loaded queue's Play replaces another client's claim: pressed while that client plays. */
+    private var takeOverOnPlay = false
 
     private val listens = ListenSessions(
         deviceId = deviceId,
@@ -472,12 +480,22 @@ class NativePlaybackController(
         var written = 0
         guarded {
             claims.tick()
+            maybeAnswerHandover()
+            maybeAnswerYield()
             maybeReconnect()
             maybeRecoverStalledStart()
-            // A stream may buffer while the claim is requested; only an owner is heard, and a pause
-            // the owner made finishes its fade even once the claim is given back.
+            // A stream may buffer while the claim is requested; only the claim's holder is heard, and only within its
+            // five minutes without the server. A fade that can no longer be heard ends at once: the claim
+            // is given back only after it.
             val wasPausing = pausing()
-            written = if (loaded && (mayBeHeard() || pausing())) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            val audible = mayBeHeard()
+            if (loaded && wasPausing && !audible) engine?.pause(immediate = true)
+            written = if (loaded && audible) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            // Resumed on the claim its pause kept: only once it sounds does it say it plays again.
+            if (written > 0 && renewOnceHeard) {
+                renewOnceHeard = false
+                claims.publishNow()
+            }
             if (wasPausing && !pausing()) pauseSettled()
             if (timing.awaitingAudible) sink?.let { timing.heard(clock(), it.heardFrames()) }
             maybeFinishDrainedQueue()
@@ -496,6 +514,9 @@ class NativePlaybackController(
         if (loaded && mayBeHeard()) return RENDER_WAIT_MS
         val next = listOfNotNull(
             claims.nextDeadlineMs(),
+            handoverAnswer?.atMs,
+            pendingYield?.atMs,
+            pauseHoldUntilMs,
             reconnectAtMs,
             shutdownDeadlineMs,
             warmUntilMs?.let { minOf(it, lastWarmMs + KEEP_WARM_MS) },
@@ -574,6 +595,7 @@ class NativePlaybackController(
         recoveryAttempted = false
         changeListenTrack(outgoing, outgoingPositionMs)
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
+        takeOverOnPlay = load.autoplay && load.takeover
         if (load.autoplay) {
             requestPlay(start)
         } else {
@@ -616,7 +638,8 @@ class NativePlaybackController(
             return
         }
         val now = clock()
-        if (!claims.owned) {
+        // Silent by rule (waiting for the server, or five minutes without it) is not stalled.
+        if (!mayBeHeard()) {
             startWaitSinceMs = now
             return
         }
@@ -649,6 +672,7 @@ class NativePlaybackController(
         timing.mark(StartTiming.Stage.GATE, clock())
         wantPlay = true
         releasePending = false
+        pauseHoldUntilMs = null
         startRetried = false
         // A replaced or resumed item reports loading, so its first frame is a fresh `playing`.
         setState(NativePlaybackState.LOADING)
@@ -658,7 +682,10 @@ class NativePlaybackController(
         if (transportOpen && !loaded) startEngineAt(index, heldPositionMs)
         val requestRevision = revision
         val requestIndex = index
-        claims.acquire(item.claimTrack()) { outcome ->
+        val takeOver = takeOverOnPlay.also { takeOverOnPlay = false }
+        // A claim its pause kept answers at once with no request; the server hears it plays once it sounds.
+        renewOnceHeard = claims.owned && !takeOver
+        claims.acquire(item.claimTrack(), takeOver) { outcome ->
             if (!wantPlay || revision != requestRevision || index != requestIndex) return@acquire
             when (outcome) {
                 ClaimOutcome.GRANTED -> {
@@ -667,7 +694,7 @@ class NativePlaybackController(
                 }
                 ClaimOutcome.BLOCKED -> {
                     wantPlay = false
-                    // Unloading silences an instant start at once: another client owns playback.
+                    // Another client owns playback: what was buffered is never heard.
                     unload("ownership-blocked")
                     setState(NativePlaybackState.PAUSED)
                 }
@@ -679,16 +706,16 @@ class NativePlaybackController(
                 }
             }
         }
-        // Sound starts from what is buffered now; the claim's answer arrives meanwhile.
+        // A claim already held starts from what is buffered now.
         startWhenReady()
         listens.begin(item.listenTrack(), heldPositionMs / 1000.0)
     }
 
     /**
-     * Playback is heard while it owns the claim, and also while a play asks for it: the owner chose
-     * an instant start from the buffer (2026-11-08). A refused claim silences it on its answer.
+     * Playback is heard only while it holds the claim, and for five minutes without the server: nothing
+     * starts without the server's answer. A play fills its buffer while it asks.
      */
-    private fun mayBeHeard(): Boolean = claims.owned || (wantPlay && claims.acquiring)
+    private fun mayBeHeard(): Boolean = claims.maySound()
 
     /**
      * Starts or resumes once the socket is ready, or the stream plays on without one, and the claim
@@ -934,7 +961,7 @@ class NativePlaybackController(
     private fun pauseNow(silenceAtOnce: Boolean = false) {
         if (state == NativePlaybackState.IDLE || state == NativePlaybackState.ENDED) return
         measureListening()
-        engine?.takeIf { loaded }?.pause(immediate = silenceAtOnce)
+        engine?.takeIf { loaded }?.pause(immediate = silenceAtOnce || !mayBeHeard())
         if (loaded) heldPositionMs = positionMs()
         if (wantPlay) listens.pause(heldPositionMs / 1000.0)
         wantPlay = false
@@ -943,7 +970,16 @@ class NativePlaybackController(
             endDrainUntilMs = null
             sink?.pause()
         }
-        retireClaim()
+        // The claim stays a while, so Play sounds at once and asks nothing; another device's press meanwhile
+        // asks this one, which yields once nothing of it sounds ([answerYield]).
+        renewOnceHeard = false
+        if (claims.owned) {
+            releasePending = false
+            pauseHoldUntilMs = clock() + PAUSE_HOLD_MS
+            claims.holdThroughPause()
+        } else {
+            retireClaim()
+        }
         setState(NativePlaybackState.PAUSED)
     }
 
@@ -1011,6 +1047,7 @@ class NativePlaybackController(
             }
         }
         if (state == NativePlaybackState.ENDED) setState(NativePlaybackState.PAUSED)
+        claims.publishNow()
         emit { NativePlaybackEvent.Position(it) }
     }
 
@@ -1107,12 +1144,141 @@ class NativePlaybackController(
         transport = transports.connect(object : PcmTransportListener {
             override fun onOpen() = post { if (epoch == transportEpoch) transportOpened() }
             // Controls reach a stopped engine too, so it can close a stream the server confirms late.
-            override fun onText(text: String) = post { if (epoch == transportEpoch) engine?.onServerText(text) }
+            override fun onText(text: String) =
+                post { if (epoch == transportEpoch && !answerHandover(text)) engine?.onServerText(text) }
             override fun onBinary(bytes: ByteArray) =
                 post { if (epoch == transportEpoch && loaded) engine?.onBinary(bytes) }
             override fun onClosed(code: Int) = post { if (epoch == transportEpoch) transportClosed(code) }
         })
     }
+
+    /**
+     * Play here on another device asks this one over the socket: it asks whether the
+     * press is still wanted. Told to stop, it falls silent
+     * at once and, once the paused output's last buffer has left the device, answers the item it
+     * sounded and where, so the two never sound at once. A skip silences the outgoing item at
+     * once and a gapless move changes the item at its boundary, so the queue's current item is the one
+     * that sounds. With nothing sounding or wanted it says it is silent, and nobody waits for it.
+     * True when [text] was the handover's and not the stream's.
+     */
+    private fun answerHandover(text: String): Boolean {
+        if (!text.contains("\"handover")) return false
+        val message = runCatching { JSONObject(text) }.getOrNull() ?: return false
+        val requestId = message.optString("requestId")
+        when (message.optString("type")) {
+            "handover-done" -> {
+                val playsOn = stoppedForHandover && !message.optBoolean("takenOver", true) && !wantPlay
+                stoppedForHandover = false
+                // A press refused after it stopped never leaves it stopped.
+                if (playsOn) {
+                    handoverAnswer = null
+                    requestPlay()
+                }
+                return true
+            }
+            "handover" -> {
+                // It stops for nothing yet: the question may have waited until the press was over.
+                val wanted = JSONObject().put("type", "handover-wanted").put("requestId", requestId)
+                transport?.send(wanted.toString())
+                return true
+            }
+            "handover-stop" -> Unit
+            "handover-yield" -> {
+                if (pausedOnClaim()) pendingYield = PendingYield(clock() + HANDOVER_DRAIN_MS, requestId)
+                else declineYield(requestId)
+                return true
+            }
+            else -> return false
+        }
+        val wasPlaying = wantPlay
+        val item = queue.getOrNull(index)
+        val token = if (item == null) null else claims.handOver()
+        if (item == null || token == null) {
+            if (!wantPlay) {
+                val silent = JSONObject().put("type", "handover-silent").put("requestId", requestId)
+                handoverAnswer = HandoverAnswer(clock() + HANDOVER_DRAIN_MS, silent.toString())
+            }
+            return true
+        }
+        stoppedForHandover = stoppedForHandover || wasPlaying
+        // Read once paused: what is still in the sink is not heard, so it is not skipped there.
+        val heardMs = positionMs()
+        val position = if (item.durationMs > 0) {
+            JSONObject().put("ms", heardMs.coerceIn(0, item.durationMs)).put("durationMs", item.durationMs)
+        } else {
+            JSONObject.NULL
+        }
+        val track = JSONObject()
+            .put("playbackRef", item.playbackRef)
+            .put("title", item.title)
+            .put("artist", item.artist)
+            .put("album", item.album)
+            .put("artworkUrl", item.artworkUrl ?: JSONObject.NULL)
+        val answer = JSONObject()
+            .put("type", "handover-answer")
+            .put("requestId", requestId)
+            .put("claimToken", token)
+            .put("track", track)
+            .put("position", position)
+        handoverAnswer = HandoverAnswer(clock() + HANDOVER_DRAIN_MS, answer.toString())
+        return true
+    }
+
+    /** Sends the answer once the output drained; none when it was played again meanwhile. */
+    private fun maybeAnswerHandover() {
+        val pending = handoverAnswer ?: return
+        if (clock() < pending.atMs) return
+        handoverAnswer = null
+        if (!wantPlay) transport?.send(pending.text)
+    }
+
+    private class HandoverAnswer(val atMs: Long, val text: String)
+
+    /** Paused within its hold, the claim still its own: the one state in which it yields to another device's press. */
+    private fun pausedOnClaim() = !wantPlay && claims.owned && pauseHoldUntilMs != null
+
+    /**
+     * A press on another device asked this paused one whether nothing of it sounds. Only from the output's
+     * real state, as for Play here: once the paused output's last buffer has left the device, a fade
+     * included, and only if it is still paused on its claim, it drops the claim and says so, so its own next
+     * Play asks the server. Played again meanwhile, or no longer holding the claim, it declines.
+     */
+    private fun maybeAnswerYield() {
+        val pending = pendingYield ?: return
+        if (clock() < pending.atMs) return
+        if (pausedOnClaim() && pausing()) {
+            pendingYield = PendingYield(clock() + HANDOVER_DRAIN_MS, pending.requestId)
+            return
+        }
+        pendingYield = null
+        if (!pausedOnClaim()) {
+            declineYield(pending.requestId)
+            return
+        }
+        pauseHoldUntilMs = null
+        releasePending = false
+        claims.handOver()
+        transport?.send(JSONObject().put("type", "handover-silent").put("requestId", pending.requestId).toString())
+    }
+
+    private fun declineYield(requestId: String) {
+        transport?.send(JSONObject().put("type", "handover-declined").put("requestId", requestId).toString())
+    }
+
+    private class PendingYield(val atMs: Long, val requestId: String)
+
+    private var pendingYield: PendingYield? = null
+
+    /** Until when a pause keeps the claim; null when it holds none for a pause. */
+    private var pauseHoldUntilMs: Long? = null
+
+    /** A Play on the claim its pause kept tells the server it plays again once its first frames are written. */
+    private var renewOnceHeard = false
+
+    private var handoverAnswer: HandoverAnswer? = null
+
+    /** It was playing when Play here elsewhere stopped it, and has not heard how that press ended. */
+    private var stoppedForHandover = false
 
     private fun transportOpened() {
         transportOpen = true
@@ -1179,6 +1345,7 @@ class NativePlaybackController(
 
     /** Pause, stop, end and errors release ownership once the listen writes for them drain. */
     private fun retireClaim() {
+        pauseHoldUntilMs = null
         if (!claims.owned) {
             releasePending = false
             claims.release()
@@ -1188,7 +1355,9 @@ class NativePlaybackController(
     }
 
     private fun maybeRelease() {
-        if (!releasePending || effectsInFlight > 0) return
+        pauseHoldUntilMs?.let { until -> if (clock() >= until) retireClaim() }
+        // Released is what lets another device sound: never during this one's fade.
+        if (!releasePending || effectsInFlight > 0 || pausing()) return
         releasePending = false
         claims.release()
     }
@@ -1414,6 +1583,10 @@ class NativePlaybackController(
         /** How long connections stay warm after the handshake or after this client last owned playback. */
         const val KEEP_WARM_FOR_MS = 30L * 60 * 1000
         const val END_DRAIN_MARGIN_MS = 500L
+        /** What a paused output may still have in the device's own buffers; not measured on a device. */
+        const val HANDOVER_DRAIN_MS = 250L
+        /** How long a pause keeps the claim, so Play sounds at once with no request; the web's is the same. */
+        const val PAUSE_HOLD_MS = 12_000L
         /** How long an owned start may wait for its first PCM before it is reopened, then failed. */
         const val START_STALL_MS = 15_000L
         /** How long a shutdown keeps the claim for the listen writes still in flight. */

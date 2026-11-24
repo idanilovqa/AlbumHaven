@@ -24,13 +24,20 @@ import java.util.concurrent.TimeUnit
 
 /** `PUT`/`DELETE /playback/state` as the `mobile` client surface. */
 class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session: ShellSession) : PlaybackClaimApi {
-    override fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse {
+    override fun acquire(
+        clientId: String,
+        claimToken: String?,
+        track: ClaimTrack,
+        takeover: Boolean,
+        position: ClaimPosition?,
+        paused: Boolean,
+    ): ClaimResponse {
         val body = JSONObject()
             .put("protocol", 1)
             .put("clientId", clientId)
             .put("clientSurface", "mobile")
             .put("claimToken", claimToken ?: JSONObject.NULL)
-            .put("state", "playing")
+            .put("state", if (paused) "paused" else "playing")
             .put(
                 "track",
                 JSONObject()
@@ -40,6 +47,10 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
                     .put("album", track.album)
                     .put("artworkUrl", track.artworkUrl ?: JSONObject.NULL),
             )
+        // The render loop keeps this promise: see PlaybackClaimOwner.maySound.
+        body.put("silencesItself", true)
+        if (takeover) body.put("takeover", true)
+        position?.let { body.put("position", JSONObject().put("ms", it.ms).put("durationMs", it.durationMs)) }
         return try {
             execute("PUT", body).use { response ->
                 when {
@@ -169,16 +180,20 @@ class OkHttpConnectionWarmer(
 private const val PING_SECONDS = 25L
 
 /** `/playback/pcm` over OkHttp, authenticated like the page that selected the origin. */
-class OkHttpPcmTransportFactory(client: OkHttpClient, private val session: ShellSession) :
-    PcmTransportFactory {
+class OkHttpPcmTransportFactory(
+    client: OkHttpClient,
+    private val session: ShellSession,
+    /** Whom the socket plays for, so Play here on another device can ask it; empty asks nobody. */
+    private val clientId: String = "",
+) : PcmTransportFactory {
     // A paused socket carries no audio; proxies such as Cloudflare close a WebSocket idle for about
     // 100 seconds, which would cost a resume a reconnect and a refetch. Pings keep it open.
     private val client = client.newBuilder().pingInterval(PING_SECONDS, TimeUnit.SECONDS).build()
 
     override fun connect(listener: PcmTransportListener): PcmTransport {
-        // OkHttp upgrades an http(s) URL itself.
+        // OkHttp upgrades an http(s) URL itself. `yields=1`: paused, it answers whether nothing of it sounds.
         val request = session.authorize(Request.Builder(), withCsrf = false)
-            .url("${session.origin()}/playback/pcm")
+            .url("${session.origin()}/playback/pcm" + if (clientId.isEmpty()) "" else "?client_id=$clientId&yields=1")
             .build()
         val socket = client.newWebSocket(request, Adapter(listener))
         return object : PcmTransport {

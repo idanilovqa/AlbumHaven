@@ -519,7 +519,9 @@ function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) 
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
-    return false;
+    // A lapsed lease saves no listen, but the claim still holds until this page says it is leaving.
+    return typeof stagePlaybackOwnershipHandoff === 'function'
+      ? stagePlaybackOwnershipHandoff(null, snapshot) : false;
   }
   if (typeof stagePlaybackOwnershipHandoff !== 'function') {
     session.completionState = 'done';

@@ -310,6 +310,12 @@ metadata markers to listen history.
 
 Apply `0104` and then `0105`, with their checksums recorded, before starting an
 application version that reads or writes playback claims or reload handoffs.
+
+Migration `0202_create_playback_last_played.sql` adds one keyed record per account
+and library: the song a claim last played and the place it was last heard at, once
+no client can take that claim up any more. Play here continues it; any start and
+sign-out remove it. It stores no holder, token or credential. The table is
+additive, and older application versions leave it unused.
 Existing application versions remain compatible with both additive migrations.
 For rollback, stop or roll back the claim-aware application before changing this
 schema. Prefer retaining the table and nullable columns: expired claim and

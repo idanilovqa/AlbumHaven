@@ -2,6 +2,132 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/playAfterPause.spec.js",
+    "case": "FTC-PLAYER-030 Pressing Play within 12 seconds of Pause sounds sooner than pressing Play after those 12 seconds, on a normal and a 4x slower processor",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": ["playback:play-after-pause-timing"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["held-play-asks-nothing-before-sound", "held-sounds-sooner-than-round-trip", "audible-resumed-track"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:play-after-pause-timing",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["playback:silent-holder-closed-browser"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["silent-holder-gives-way", "first-press-plays", "no-refused-claim"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-silent-holder",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": ["playback:live-holder-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["press-shows-overlay-at-once", "never-starts-then-stops"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-live-holder",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": ["playback:page-load-then-first-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["page-load-claim-gives-way", "single-press-plays"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-page-load-press",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 5,
+    "databaseScenarios": ["playback:press-another-song-title"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["pressed-title-never-reverts"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-title-steady",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": ["playback:closed-tab-then-play-elsewhere"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["closed-tab-claim-gives-way", "single-press-plays-elsewhere"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-closed-tab",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["playback:two-context-takeover-at-position"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["visible-elsewhere-overlay", "pressable-play-above-dimming", "takeover-continues-song-at-position", "single-audible-owner"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-takeover",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/playbackOwnership.spec.js",
     "case": "FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate paused listens",
     "profile": "functional-core",

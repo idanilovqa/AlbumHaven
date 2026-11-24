@@ -1,6 +1,7 @@
 function getPlayerElements() {
   return {
     player: document.querySelector('.global-player'),
+    elsewhere: document.querySelector('[data-player-elsewhere]'),
     coverButton: document.getElementById('player-cover-button'),
     play: document.getElementById('player-play'),
     title: document.getElementById('player-title'),
@@ -228,6 +229,16 @@ function setPlayerSeekbarPresentation(isWaveform) {
   });
 }
 
+function keepsHeldWaveform(held, path, waveform, playback) {
+  const { selectedTrack, current, streaming } = state.player;
+  // Started, but no frame of it has sounded. The snapshot is the playing engine's: in the Android app
+  // the web engine's mode never moves.
+  if (held.path !== path) return (playback.mode ?? streaming?.mode) === 'starting';
+  if (!selectedTrack || selectedTrack.path === path) return false;
+  // Pressed: the old song plays on with its own progress until its peaks or its clock are replaced.
+  return !waveform || Boolean(playback.src && current?.src && playback.src !== current.src);
+}
+
 async function updateWaveformAppearance(forceReload = false) {
   if (typeof refreshUtilityLoopStereoWaveforms === 'function') refreshUtilityLoopStereoWaveforms();
   const els = getPlayerElements();
@@ -241,7 +252,10 @@ async function updateWaveformAppearance(forceReload = false) {
     els.waveformCanvas.hidden = false;
   }
   if (!isWaveform || !els.waveformCanvas || !path) {
-    if (!path) clearWaveformCanvas();
+    if (!path) {
+      if (state.player.waveform) state.player.waveform.shown = null;
+      clearWaveformCanvas();
+    }
     return;
   }
   const renderToken = forceReload ? state.player.waveform.renderToken + 1 : state.player.waveform.renderToken;
@@ -257,6 +271,14 @@ async function updateWaveformAppearance(forceReload = false) {
   if (state.player.waveform.renderToken !== renderToken) return;
   const duration = Number(playback.duration) || 0;
   const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
+  // The waveform follows the sound, not the press: the last one drawn stays where it was until the
+  // pressed song sounds.
+  const held = state.player.waveform.shown;
+  if (held && keepsHeldWaveform(held, path, waveform, playback)) {
+    drawWaveformOnCanvas(els.waveformCanvas, held.data, held.progressRatio);
+    return;
+  }
+  state.player.waveform.shown = waveform ? { path, data: waveform, progressRatio } : null;
   drawWaveformOnCanvas(els.waveformCanvas, waveform, progressRatio);
 }
 

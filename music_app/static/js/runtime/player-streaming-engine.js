@@ -7,6 +7,26 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
+const STREAMING_SILENCE_ACK_MS = 1000;
+// For a browser that does not report its output latency; the context asks for large playback buffers.
+const STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS = 0.2;
+const STREAMING_OUTPUT_DRAIN_MARGIN_MS = 20;
+// Play here in another tab of this browser must silence this one even while its main thread is busy
+// (never both at once): a Worker hears that tab and holds a port to the audio thread.
+// It acts only on a takeover that names this tab's client, which the server gives only to its account.
+const STREAMING_SILENCE_RELAY_SOURCE = `let clientId = '';
+let port = null;
+let channel = null;
+onmessage = ({ data }) => {
+  clientId = data.clientId;
+  if (data.port) port = data.port;
+  if (channel) return;
+  channel = new BroadcastChannel(data.channel);
+  channel.onmessage = (event) => {
+    const message = event.data || {};
+    if (port && clientId && message.type === 'taken-over' && message.clientId === clientId) port.postMessage('silence');
+  };
+};`;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
@@ -253,6 +273,17 @@ function recordStreamingRenderedPcmEvidence(roleState, message) {
     if (Number.isFinite(sample)) evidence.samples.push(sample);
   }
   if (message.audible === true) engine.audibleStreamId = roleState.streamId;
+  const resumeSound = engine.resumeSound;
+  if (resumeSound && resumeSound.streamId === roleState.streamId && roleState.role === 'current'
+      && message.frames > 0 && message.nonZeroSamples > 0) {
+    engine.resumeSound = null;
+    resumeSound.onFirstSound();
+  }
+  // The first non-silent frames of the current song rendered after a resume, on the page clock.
+  if (engine.diagnostics.resumedAtMs > 0 && !engine.diagnostics.resumeFirstFrameAtMs
+      && roleState.role === 'current' && message.frames > 0 && message.nonZeroSamples > 0) {
+    engine.diagnostics.resumeFirstFrameAtMs = performance.now();
+  }
   if (roleState.streamId === engine.audibleStreamId || message.audible === true) {
     engine.diagnostics.renderedPcmEvidence = evidence;
   }
@@ -568,6 +599,118 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   return true;
 }
 
+// Which client this socket plays for, so Play here elsewhere can ask it, and that it answers a yield
+// (`yields=1`: paused, whether nothing of it sounds). Never an engine's with its own claim: in the app
+// that client's socket is the native player's, and only it can answer.
+function streamingSocketClientQuery() {
+  if (typeof currentPlaybackEngine === 'function' && currentPlaybackEngine().holdsOwnClaim) return '';
+  const clientId = typeof getPlaybackOwnershipTabId === 'function' ? getPlaybackOwnershipTabId() : '';
+  return clientId ? `?client_id=${encodeURIComponent(clientId)}&yields=1` : '';
+}
+
+// What sounds: the current role, which stays the old song until a switch cuts over. Its place is the
+// seek's target once seeked, and the start's place before any audio.
+function getSoundingStreamingPlayback() {
+  const engine = streamingEngineState();
+  const track = engine.roles.current?.track;
+  if (!track) return null;
+  return {
+    track,
+    seconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
+    durationSeconds: Number(engine.snapshot.duration) || Number(track.durationSeconds) || 0,
+  };
+}
+
+// Play here elsewhere may start only after this tab is silent, so two tabs never play at the same
+// time. Resolves once nothing more is rendered, to a function that resolves once what was
+// rendered has left the output, true if it is still silent then. Null when the audio thread never said so.
+async function silenceStreamingPlaybackForHandover() {
+  const engine = streamingEngineState();
+  // A start or resume on its way may not sound after this.
+  engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
+  const { context, node } = engine;
+  if (!node || context?.state !== 'running') return async () => engine.snapshot.paused !== false;
+  if (!engine.pendingSilence) {
+    const pending = {};
+    pending.promise = new Promise((resolve) => {
+      const timer = setTimeout(() => pending.settle(false), STREAMING_SILENCE_ACK_MS);
+      pending.settle = (silent) => {
+        clearTimeout(timer);
+        engine.pendingSilence = null;
+        resolve(silent);
+      };
+    });
+    engine.pendingSilence = pending;
+    node.port.postMessage({ type: 'silence' });
+  }
+  if (!await engine.pendingSilence.promise) return null;
+  return async () => {
+    await waitOutStreamingOutputLatency(context);
+    return engine.snapshot.paused !== false;
+  };
+}
+
+// Tells the audio thread how long it may sound: not at all without a grant (a stream still loads), and
+// never past the time allowed without the server.
+function syncStreamingSoundPermission(node = streamingEngineState().node) {
+  if (!node || typeof playbackSoundPermission !== 'function') return;
+  node.port.postMessage({ type: 'may-sound', ...playbackSoundPermission() });
+}
+
+// What was rendered is heard only after the output's latency: "I am silent" waits that long.
+function waitOutStreamingOutputLatency(context) {
+  const latencySeconds = (Number(context.baseLatency) || 0)
+    + (Number(context.outputLatency) || STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS);
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.ceil(latencySeconds * 1000) + STREAMING_OUTPUT_DRAIN_MARGIN_MS);
+  });
+}
+
+// For output that already ended: a suspended context has nothing left to play out.
+async function drainStreamingOutput() {
+  const { context } = streamingEngineState();
+  if (context?.state === 'running') await waitOutStreamingOutputLatency(context);
+}
+
+// Tells the relay which client this tab is now and, given a new [node], hands it a port to that node.
+function connectStreamingSilenceRelay(node = null) {
+  const engine = streamingEngineState();
+  if (typeof Worker !== 'function' || typeof MessageChannel !== 'function'
+      || typeof PLAYBACK_OWNERSHIP_CHANNEL_NAME !== 'string'
+      || typeof getPlaybackOwnershipTabId !== 'function') return;
+  if (!node && !engine.silenceRelay) return;
+  try {
+    if (!engine.silenceRelay) {
+      const url = URL.createObjectURL(new Blob([STREAMING_SILENCE_RELAY_SOURCE], { type: 'text/javascript' }));
+      engine.silenceRelay = new Worker(url);
+      URL.revokeObjectURL(url);
+    }
+    const message = { channel: PLAYBACK_OWNERSHIP_CHANNEL_NAME, clientId: getPlaybackOwnershipTabId() };
+    if (!node) {
+      engine.silenceRelay.postMessage(message);
+      return;
+    }
+    const link = new MessageChannel();
+    node.port.postMessage({ type: 'silence-port', port: link.port1 }, [link.port1]);
+    engine.silenceRelay.postMessage({ ...message, port: link.port2 }, [link.port2]);
+  } catch (error) {
+    // Without it the page's own thread still silences this tab; playback never depends on the relay.
+    engine.diagnostics.silenceRelayError = String(error?.message || error);
+  }
+}
+
+// An answer that cannot be sent never fails playback.
+function sendStreamingHandoverAnswer(message) {
+  const { socket } = streamingEngineState();
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(message));
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function sendStreamingControl(message) {
   const engine = streamingEngineState();
   const socket = engine.socket;
@@ -804,6 +947,33 @@ function handleStreamingControl(message) {
       fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
       sizeBytes: Number(message.sizeBytes) || 0,
     });
+    return;
+  }
+  if (message.type === 'handover') {
+    // It stops for nothing yet: the question may have waited behind audio until the press was over.
+    sendStreamingHandoverAnswer({ type: 'handover-wanted', requestId: message.requestId });
+    return;
+  }
+  if (message.type === 'handover-stop') {
+    if (typeof answerPlaybackHandover === 'function') {
+      void Promise.resolve(answerPlaybackHandover(message.requestId)).catch((error) => {
+        console.warn('[AlbumHaven][Playback] Play here elsewhere was not answered.', error);
+      });
+    }
+    return;
+  }
+  if (message.type === 'handover-done') {
+    if (typeof settlePlaybackHandover === 'function') void settlePlaybackHandover();
+    return;
+  }
+  if (message.type === 'handover-yield') {
+    if (typeof yieldPausedPlaybackClaim === 'function') {
+      void Promise.resolve(yieldPausedPlaybackClaim(message.requestId)).catch((error) => {
+        console.warn('[AlbumHaven][Playback] A press elsewhere was not answered.', error);
+      });
+    } else {
+      sendStreamingHandoverAnswer({ type: 'handover-declined', requestId: message.requestId });
+    }
     return;
   }
   const roleState = streamingRoleForId(message.streamId);
@@ -1519,6 +1689,10 @@ function handleStreamingPcm(buffer) {
 
 function handleStreamingWorkletMessage(message) {
   const engine = streamingEngineState();
+  if (message?.type === 'silenced') {
+    engine.pendingSilence?.settle(true);
+    return;
+  }
   if (!message || message.generation !== engine.generation) {
     engine.diagnostics.staleMessages += 1;
     return;
@@ -1874,6 +2048,7 @@ function handleStreamingWorkletMessage(message) {
         && pendingReplacement.currentStreamId === current.streamId
         && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
       if (!engine.snapshot.paused) {
+        syncStreamingSoundPermission();
         engine.node.port.postMessage({ type: 'play', generation: engine.generation });
       }
       return;
@@ -2151,9 +2326,13 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
           numberOfInputs: 0,
           numberOfOutputs: 1,
           outputChannelCount: [2],
+          ...(typeof playbackSoundPermission === 'function'
+            ? { processorOptions: { awaitsPermission: true } } : {}),
         });
         node.connect(context.destination);
         node.port.onmessage = ({ data }) => handleStreamingWorkletMessage(data);
+        connectStreamingSilenceRelay(node);
+        syncStreamingSoundPermission(node);
         node.onprocessorerror = (event) => {
           if (engine.node !== node) return;
           failStreamingEngine('processor', event, 'processor-error');
@@ -2163,7 +2342,7 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
       }
       if (engine.socket) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
+      socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm${streamingSocketClientQuery()}`);
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => {
         flushStreamingControls();
@@ -2664,7 +2843,10 @@ async function startBrowserStreamingTrack(track, {
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
   engine.mode = 'starting';
+  engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.resumedAtMs = 0;
+  engine.diagnostics.resumeFirstFrameAtMs = 0;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
@@ -2787,6 +2969,7 @@ async function pauseBrowserStreaming() {
   const engine = streamingEngineState();
   const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
+  engine.resumeSound = null;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
@@ -2802,10 +2985,13 @@ async function pauseBrowserStreaming() {
   if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
 
+/** [onFirstSound]: called once, on the resumed song's first audible rendered frame; a pause, seek, start or
+ * cleanup before then drops it. */
 async function resumeBrowserStreaming(
   expectedStartRequestId = null,
   onPlaybackStarted = null,
   expectedCurrentRole = null,
+  onFirstSound = null,
 ) {
   const engine = streamingEngineState();
   const startRequestId = expectedStartRequestId
@@ -2842,6 +3028,17 @@ async function resumeBrowserStreaming(
   if (expectedStartRequestId === null) {
     engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   }
+  syncStreamingSoundPermission(node);
+  // Diagnostics: a resume's first audible frame is stamped when the processor reports it
+  // ([recordStreamingRenderedPcmEvidence]). A start's autoplay posts its play here too, before its song ever
+  // sounded: only a song that already sounded resumes.
+  if (engine.roles.current?.firstFrameNotified) {
+    engine.diagnostics.resumedAtMs = performance.now();
+    engine.diagnostics.resumeFirstFrameAtMs = 0;
+  }
+  engine.resumeSound = typeof onFirstSound === 'function' && engine.roles.current
+    ? { streamId: engine.roles.current.streamId, onFirstSound }
+    : null;
   node.port.postMessage({ type: 'play', generation });
   engine.snapshot.paused = false;
   maybeGrantDeferredReplacementCredit();
@@ -2868,6 +3065,7 @@ async function seekBrowserStreaming(seconds) {
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;
   if (!current) return null;
+  engine.resumeSound = null;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (engine.pendingPromotion) {
     const pendingPromotion = engine.pendingPromotion;
@@ -3150,7 +3348,10 @@ async function cleanupStreamingResources(reason, {
     engine.mode = 'stopped';
     delete engine.diagnostics.lastError;
   }
+  engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.resumedAtMs = 0;
+  engine.diagnostics.resumeFirstFrameAtMs = 0;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };

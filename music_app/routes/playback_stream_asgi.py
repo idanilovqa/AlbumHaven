@@ -11,6 +11,7 @@ import math
 import subprocess
 import time
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
@@ -19,6 +20,7 @@ from starlette.websockets import WebSocketDisconnect
 from music_app.routes.playback_control_asgi import playback_config
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.loops import resolve_loop_media_path
+from music_app.services.playback_handover import PlaybackHandoverHub
 from music_app.services.playback_io import run_playback_io
 from music_app.services.playback_seek_table import flac_seek_table
 from music_app.services.playback_encoded import (
@@ -48,6 +50,8 @@ MAX_PLAYBACK_CONNECTIONS = 6
 MAX_PLAYBACK_DECODERS = 8
 MAX_DECODERS_PER_CONNECTION = 2
 MAX_CONTROL_MESSAGE_BYTES = 16_384
+_HANDOVER_ANSWER_KEYS = {"type", "requestId", "claimToken", "track", "position"}
+_HANDOVER_REQUEST_KEYS = {"type", "requestId"}
 MIN_PCM_SAMPLE_RATE = 8_000
 MAX_PCM_SAMPLE_RATE = 192_000
 MAX_CREDIT_FRAMES_PER_MESSAGE = MAX_PCM_SAMPLE_RATE
@@ -382,6 +386,7 @@ def _log_slow_stream_step(step: str, stream: _PlaybackStream, started_at: float)
 
 class PlaybackPcmRegistry:
     def __init__(self) -> None:
+        self.handover = PlaybackHandoverHub()
         self._connections: set[_PlaybackPcmConnection] = set()
         self._active_decoder_count = 0
         self._lock = asyncio.Lock()
@@ -404,6 +409,7 @@ class PlaybackPcmRegistry:
             return connection
 
     async def release_connection(self, connection: _PlaybackPcmConnection) -> None:
+        self.handover.unregister(connection.send_event)
         async with self._lock:
             self._connections.discard(connection)
 
@@ -448,6 +454,8 @@ class _PlaybackPcmConnection:
         self._transport_failed = asyncio.Event()
         self._closed = False
         self._finalized = False
+        # The connection's identity in the handover hub, and how the hub writes to it.
+        self.send_event = self._send_json
 
     async def _send_json(self, event: dict[str, Any]) -> None:
         async with self._send_lock:
@@ -577,6 +585,20 @@ class _PlaybackPcmConnection:
         # A paused client's socket carries nothing; proxies close an idle WebSocket after about
         # 100 seconds, so clients that cannot send WebSocket pings send this instead.
         if command_type == "keepalive" and set(control) == {"type"}:
+            return True
+        # The holder's reply to Play here elsewhere. One that came too late, or for another ask, is dropped.
+        if command_type == "handover-answer" and set(control) == _HANDOVER_ANSWER_KEYS:
+            self._registry.handover.answer(self.send_event, control)
+            return True
+        if command_type == "handover-wanted" and set(control) == _HANDOVER_REQUEST_KEYS:
+            self._registry.handover.wanted(self.send_event, control["requestId"])
+            return True
+        if command_type == "handover-silent" and set(control) == _HANDOVER_REQUEST_KEYS:
+            self._registry.handover.silent(self.send_event, control["requestId"])
+            return True
+        # A holder asked to yield that plays, or is about to.
+        if command_type == "handover-declined" and set(control) == _HANDOVER_REQUEST_KEYS:
+            self._registry.handover.declined(self.send_event, control["requestId"])
             return True
         await self.reject(CLOSE_INVALID_CONTROL)
         return False
@@ -1235,4 +1257,23 @@ async def playback_pcm_socket(websocket: WebSocket) -> None:
     if connection is None:
         await websocket.close(code=CLOSE_ADMISSION_EXHAUSTED)
         return
+    client_id = _socket_client_id(websocket)
+    account_id = getattr(getattr(websocket.state, "current_actor", None), "account_id", None)
+    if client_id and account_id is not None:
+        registry.handover.register(account_id, client_id, connection.send_event, yields=_socket_yields(websocket))
     await connection.run()
+
+
+def _socket_yields(websocket: WebSocket) -> bool:
+    """Whether the socket's client answers a yield (`?yields=1`): a paused holder asked whether nothing of it
+    sounds. An installed app of an older build never says so, and so is never asked."""
+    return getattr(websocket, "query_params", {}).get("yields", "") == "1"
+
+
+def _socket_client_id(websocket: WebSocket) -> str | None:
+    """The playback client a socket speaks for (`?client_id=`): who Play here elsewhere can ask."""
+    value = getattr(websocket, "query_params", {}).get("client_id", "")
+    try:
+        return value.lower() if str(UUID(value)) == value.lower() else None
+    except ValueError:
+        return None

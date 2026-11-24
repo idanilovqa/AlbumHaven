@@ -822,6 +822,21 @@
       "rollback": "Test-only contract; the worklet is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its message entrypoint."
     },
     {
+      "id": "js:audio-worklets/gapless-playback-processor.js#GaplessPlaybackProcessor.handleCommand",
+      "action": "message listeners installed by GaplessPlaybackProcessor.handleCommand (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/audio-worklets/gapless-playback-processor.js#GaplessPlaybackProcessor.handleCommand:event:message"
+      ],
+      "owners": [
+        "music_app/static/js/audio-worklets/gapless-playback-processor.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:capability-ui.js#install",
       "action": "DOMContentLoaded/click listeners installed by install",
       "entrypoints": [
@@ -4823,6 +4838,28 @@
       "rollback": "Revert the ownership presentation comparison in syncMirroredPlaybackState; every broadcast from another tab then repaints the whole player and waveform again. No data or API change."
     },
     {
+      "id": "js:runtime/playback-ownership-helpers.js#mayEngineStart",
+      "action": "playbackOwnershipRequest requests installed by mayEngineStart (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#mayEngineStart:request:playbackOwnershipRequest"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/state"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest",
       "action": "Select tracks in a burst, renew the claim, release it, and be refused by another owner",
       "entrypoints": [
@@ -4889,6 +4926,37 @@
       }
     },
     {
+      "id": "js:runtime/playback-ownership-helpers.js#publishPlaybackPositionSoon",
+      "action": "setTimeout timers installed by publishPlaybackPositionSoon (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#publishPlaybackPositionSoon:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 6,
+        "production": 2160
+      },
+      "budgets": {
+        "requests": 2,
+        "renderCommits": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
+      "testIdentity": "bounded interaction: a burst of seeks publishes the claimed place at most twice",
+      "performanceTargets": [],
+      "rollback": "Revert publishPlaybackPositionSoon; Play here elsewhere then reads the place a seek, start or gapless move left from the next renewal instead. No data or API change."
+    },
+    {
       "id": "js:runtime/playback-ownership-helpers.js#requestPlaybackClaim",
       "action": "playbackOwnershipRequest requests installed by requestPlaybackClaim",
       "entrypoints": [
@@ -4939,6 +5007,21 @@
       "testIdentity": "bounded interaction: a playback ownership heartbeat repaints the player only when the lock changes",
       "performanceTargets": [],
       "rollback": "Revert the ownership presentation comparison in syncMirroredPlaybackState and acceptPlaybackClaim; every 10-second heartbeat then repaints the whole player and waveform again. No data or API change."
+    },
+    {
+      "id": "js:runtime/playback-ownership-helpers.js#waitToAskAgain",
+      "action": "setTimeout timers installed by waitToAskAgain (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#waitToAskAgain:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/player-browser-playback-integration.js#observeBrowserPlaybackAudioContext",
@@ -5087,6 +5170,22 @@
       "testIdentity": "request capture: one listen posts each session write once on listen-session endpoints",
       "performanceTargets": [],
       "rollback": "Test-only request-capture contract; playback requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:runtime/player-loop-playback.js#afterNextPlayerPaint",
+      "action": "requestAnimationFrame/setTimeout timers installed by afterNextPlayerPaint (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-loop-playback.js#afterNextPlayerPaint:timer:requestAnimationFrame",
+        "js:music_app/static/js/runtime/player-loop-playback.js#afterNextPlayerPaint:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-loop-playback.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/player-loop-playback.js#attachPlayerEvents",
@@ -5296,6 +5395,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-streaming-engine.js#connectStreamingSilenceRelay",
+      "action": "Worker workers installed by connectStreamingSilenceRelay (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSilenceRelay:worker:Worker"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-streaming-engine.js#keepStreamingSocketAlive",
       "action": "setInterval timers installed by keepStreamingSocketAlive",
       "entrypoints": [
@@ -5381,6 +5495,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-streaming-engine.js#silenceStreamingPlaybackForHandover",
+      "action": "setTimeout timers installed by silenceStreamingPlaybackForHandover (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#silenceStreamingPlaybackForHandover:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrack",
       "action": "setTimeout timers installed by startBrowserStreamingTrack",
       "entrypoints": [
@@ -5400,6 +5529,21 @@
       "action": "setTimeout timers installed by waitForStreamingReplacementCushion",
       "entrypoints": [
         "js:music_app/static/js/runtime/player-streaming-engine.js#waitForStreamingReplacementCushion:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#waitOutStreamingOutputLatency",
+      "action": "setTimeout timers installed by waitOutStreamingOutputLatency (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#waitOutStreamingOutputLatency:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/player-streaming-engine.js"
@@ -11007,14 +11151,32 @@
         "py:music_app/routes/playback_control_asgi.py#acquire_playback:route:PUT /playback/state"
       ],
       "owners": [
-        "music_app/routes/playback_control_asgi.py"
+        "music_app/routes/playback_control_asgi.py",
+        "music_app/services/mp3_stream_map.py"
       ],
       "rules": [
         "BI-04",
+        "BI-06",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 1,
+        "open_calls": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_playback_seek_table.py::test_a_claim_naming_its_song_by_path_prepares_only_that_songs_stream",
+      "testIdentity": "test_a_claim_naming_its_song_by_path_prepares_only_that_songs_stream",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/playback_control_asgi.py#playback_refs",

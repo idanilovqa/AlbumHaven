@@ -76,17 +76,22 @@ class StartTimingTest {
     }
 
     @Test
-    fun aPlayIsHeardFromItsBufferBeforeTheClaimAnswers() {
+    fun aPlayIsHeardOnlyOnceTheClaimAnswers() {
         val claimIo = ManualExecutor()
         val harness = ControllerHarness(first, claimIo = claimIo, outputModel = true)
         harness.load(1, first)
-        harness.runUntil { harness.timings.isNotEmpty() }
+        repeat(20) { harness.step() }
 
-        // The owner chose an instant start: sound does not wait for the claim's round trip.
+        // Nothing starts without the server's answer, so two clients never sound at once: the
+        // stream fills its buffer, nothing is heard, and the start is not over.
+        assertTrue(harness.timings.isEmpty())
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
+
+        claimIo.drain()
+        harness.runUntil { harness.timings.isNotEmpty() }
         val timing = fields(harness.timings.single())
         assertEquals("audible", timing["outcome"])
-        assertEquals("-", timing["claim"])
-        claimIo.drain()
+        assertTrue(ms(timing, "claim") <= ms(timing, "audible"))
         harness.runUntil { harness.state() == NativePlaybackState.ENDED }
     }
 
@@ -153,8 +158,8 @@ class StartTimingTest {
         assertEquals("-", resumed["open"])
         assertEquals("-", resumed["first_write"])
         assertEquals("true", resumed["socket_reused"])
-        // The resume is heard from the output's buffer before the claim's round trip answers.
-        assertEquals("-", resumed["claim"])
+        // The resume is heard from the output's buffer once the claim is granted again.
+        assertTrue(ms(resumed, "claim") <= ms(resumed, "audible"))
 
         // Play while already playing starts nothing new.
         harness.controller.play(1)

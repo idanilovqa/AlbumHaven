@@ -43,6 +43,11 @@ function loadHelper(overrides = {}) {
     stopStreamingPlayback: () => Promise.resolve(),
     startStreamingTrack: () => Promise.resolve({ generation: 1, streamId: 1 }),
     canRestoreActivePlayback: () => true,
+    // These restores are the same tab's next page: its own state, handed on moments ago.
+    canThisTabResumePlayback: () => true,
+    getSessionStorageItem: (key) => (key === 'albumhaven.playerTabState.v1'
+      ? context.getLocalStorageItem(context.PLAYER_STATE_STORAGE_KEY) : ''),
+    removeSessionStorageItem: () => true,
     getAlbumIdentity: (album) => String(album?.key || ''),
     resolveAlbumForPlayerTrack: () => null,
     setAlbumPlaybackQueue: () => {},
@@ -385,6 +390,7 @@ test('delayed pageshow cannot autoplay with an expired restore claim', async () 
   });
   const ownershipPath = path.join(path.dirname(helperPath), 'playback-ownership-helpers.js');
   vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), context, { filename: ownershipPath });
+  context.canThisTabResumePlayback = () => true;
   context.restorePlayerState();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(typeof initialPageshow, 'function');
@@ -1690,4 +1696,60 @@ test('a restore inside the APK re-attaches to the native queue instead of starti
   // Outside the APK the bridge answers null synchronously and nothing waits for it.
   const browser = await run(null);
   assert.deepEqual(browser.starts, [[persistedTrack.path, 12]]);
+});
+
+// A new tab opens paused; a tab resumes only what that same tab played.
+function openedTab({ own = null, ownHandover = true } = {}) {
+  const shared = { track: { src: '/track?path=theirs.flac', path: 'C:/Music/theirs.flac', title: 'Theirs' },
+    currentTime: 40, paused: false };
+  const starts = [];
+  const claimed = [];
+  const removed = [];
+  let context = null;
+  context = loadHelper({
+    getLocalStorageItem: () => JSON.stringify(shared),
+    getSessionStorageItem: (key) => (key === 'albumhaven.playerTabState.v1' && own ? JSON.stringify(own) : ''),
+    removeSessionStorageItem: (key) => removed.push(key),
+    canThisTabResumePlayback: () => ownHandover,
+    canRestoreActivePlayback: (parsed) => { claimed.push(parsed.track.title); return true; },
+    startStreamingTrack: async (track, options) => { starts.push([track.title, options.startSeconds, options.autoplay]); },
+    setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+    resolveAlbumForPlayerTrack: () => null,
+    isActivePlaybackOwner: () => true,
+    window: { addEventListener: (type, listener) => { if (type === 'pageshow') queueMicrotask(listener); } },
+  });
+  return { context, starts, claimed, removed };
+}
+
+test('a new tab opens the saved song paused and claims nothing', async () => {
+  const tab = openedTab({ ownHandover: false });
+
+  tab.context.restorePlayerState();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(tab.claimed, []);
+  assert.deepEqual(tab.starts, [['Theirs', 40, false]]);
+});
+
+test('a reloaded tab resumes what it was playing, not what another tab saved since', async () => {
+  const tab = openedTab({ own: { track: { src: '/track?path=mine.flac', path: 'C:/Music/mine.flac', title: 'Mine' },
+    currentTime: 12, paused: false } });
+
+  tab.context.restorePlayerState();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(tab.claimed, ['Mine']);
+  assert.deepEqual(tab.starts, [['Mine', 12, true]]);
+  assert.ok(tab.removed.includes('albumhaven.playerTabState.v1'), 'a copy of the tab cannot use it again');
+});
+
+test('a tab with its own state but no live hand-over opens paused', async () => {
+  const tab = openedTab({ ownHandover: false, own: { track: { src: '/track?path=mine.flac', path: 'C:/Music/mine.flac',
+    title: 'Mine' }, currentTime: 12, paused: false } });
+
+  tab.context.restorePlayerState();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(tab.claimed, []);
+  assert.equal(tab.starts[0][2], false);
 });

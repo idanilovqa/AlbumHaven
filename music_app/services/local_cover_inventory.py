@@ -185,6 +185,11 @@ class _WorkQueue:
         with self._lock:
             return self._due(background)[1] is not None
 
+    def depth(self):
+        """How many keys an open and a change are each waiting on, for a request's diagnostics."""
+        with self._lock:
+            return len(self._opened), len(self._changed)
+
     def take(self, *, background):
         with self._lock:
             pending, key = self._due(background)
@@ -666,29 +671,59 @@ class LocalCoverInventoryWorker:
         self._unresolved = _UnresolvedContexts()
         self._foreground_at = time.monotonic()
         # What the worker has finished since start, so a request waiting for one folder is woken by
-        # the worker instead of polling Postgres (freeze guard BI-05).
+        # the worker instead of polling Postgres (freeze guard BI-05). Each finish takes the next ticket.
         self._finished = threading.Condition()
-        self._finished_marks = {}
+        self._finished_ticket = 0
+        self._finished_marks = {}  # key -> (ticket of its last finish, monotonic time of it)
+        self._working = None  # what the worker is reading now, for a request's diagnostics
 
     def _mark_finished(self, key):
         with self._finished:
-            self._finished_marks[key] = self._finished_marks.get(key, 0) + 1
+            self._finished_ticket += 1
+            self._finished_marks.pop(key, None)  # the oldest finish is dropped first
+            self._finished_marks[key] = (self._finished_ticket, time.monotonic())
             if len(self._finished_marks) > 512:
                 self._finished_marks.pop(next(iter(self._finished_marks)))
             self._finished.notify_all()
 
-    def _wait_for_mark(self, key, timeout):
+    def finished_ticket(self):
+        """Taken before a request's first read: its waits then count every finish after it.
+
+        FTC-COVERS-019P: a request that began counting only when it began waiting missed a folder the
+        worker listed while the request was still reading Postgres, and slept to its deadline."""
         with self._finished:
-            seen = self._finished_marks.get(key, 0)
-            self._finished.wait_for(lambda: self._finished_marks.get(key, 0) != seen, timeout=max(0.0, timeout))
+            return self._finished_ticket
 
-    def wait_for_context(self, paths, timeout):
-        """Wait until the worker has resolved the folder of these tracks, or until `timeout`."""
-        self._wait_for_mark(("context", context_key(paths)), timeout)
+    def _wait_for_mark(self, key, since, timeout):
+        """How the wait ended: already finished, woken by the worker, or at the deadline; and when the
+        worker last finished the key."""
+        started = time.monotonic()
+        with self._finished:
+            finished_at = self._finished_marks.get(key, (0, None))[1]
+            finished = lambda: self._finished_marks.get(key, (0, None))[0] > since
+            already = finished()
+            woken = already or self._finished.wait_for(finished, timeout=max(0.0, timeout))
+        return {
+            "outcome": "finished_before_wait" if already else "woken" if woken else "deadline",
+            "waited_ms": round((time.monotonic() - started) * 1000),
+            "timeout_ms": round(max(0.0, timeout) * 1000),
+            "last_finished_before_wait_ms": None if finished_at is None else round((started - finished_at) * 1000),
+        }
 
-    def wait_for_listing(self, root, timeout):
-        """Wait until the worker has listed this folder, or until `timeout`."""
-        self._wait_for_mark(("root", root_key(root)), timeout)
+    def wait_for_context(self, paths, since, timeout):
+        """Wait until the worker has resolved the folder of these tracks after ticket `since`, or until `timeout`."""
+        return self._wait_for_mark(("context", context_key(paths)), since, timeout)
+
+    def wait_for_listing(self, root, since, timeout):
+        """Wait until the worker has listed this folder after ticket `since`, or until `timeout`."""
+        return self._wait_for_mark(("root", root_key(root)), since, timeout)
+
+    def queue_depth(self):
+        """What this process's worker has queued and is reading at a request's start; no paths."""
+        depth = {"working": self._working}
+        for name, queue in (("contexts", self._contexts), ("listings", self._listings), ("rechecks", self._rechecks)):
+            depth[f"{name}_opened"], depth[f"{name}_changed"] = queue.depth()
+        return depth
 
     def note_foreground_activity(self):
         self._foreground_at = time.monotonic()
@@ -894,6 +929,7 @@ class LocalCoverInventoryWorker:
                         from music_app.services.cover_workflow import resolve_album_root_from_track_paths
                         # A stored row's flag may be an older open's; only this process's queue says who asked.
                         foreground = self._contexts.taken_was_opened
+                        self._working = "context_opened" if foreground else "context_changed"
                         cancelled = lambda: self._cancel_requested(foreground)
                         try:
                             album_root = resolve_album_root_from_track_paths(self.config, set(context["track_paths"]), cancel_requested=cancelled)
@@ -919,7 +955,7 @@ class LocalCoverInventoryWorker:
                         except (OSError, ValueError):
                             self.repository.defer_context(context["context_key"], context["revision"])
                             self._contexts.retry(key, delay=_RETRY_SECONDS)
-                    key = None
+                    key = self._working = None
                     if self._stop.is_set():
                         return
                     root = self._listings.take(background=background)
@@ -928,6 +964,7 @@ class LocalCoverInventoryWorker:
                         self._listings.put_back(root, delay=pending["retry_in"])
                         pending = None
                     if pending:
+                        self._working = "listing_opened" if self._listings.taken_was_opened else "listing_changed"
                         cancelled = lambda: self._cancel_requested(self._listings.taken_was_opened)
                         try:
                             candidates = discover_local_cover_inventory(pending["root_path"], self.config, cancel_requested=cancelled)
@@ -950,3 +987,5 @@ class LocalCoverInventoryWorker:
                     self._listings.put_back(root, delay=_RETRY_SECONDS)
                 self._logger.exception("Local cover inventory refresh failed.")
                 self._stop.wait(5.0)
+            finally:
+                self._working = None

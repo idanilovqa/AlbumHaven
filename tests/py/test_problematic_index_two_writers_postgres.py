@@ -122,12 +122,12 @@ class _Pause:
 class _Writer(Thread):
     def __init__(self, work):
         super().__init__(daemon=True)
-        self.work, self.error = work, None
+        self.work, self.error, self.result = work, None, None
         self.start()
 
     def run(self):
         try:
-            self.work()
+            self.result = self.work()
         except Exception as error:
             self.error = error
 

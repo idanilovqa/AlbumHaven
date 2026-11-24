@@ -63,9 +63,19 @@ def _drained(library):
 
 
 def _timed(write):
+    """A write made while the test holds the publication: on its own thread, so a write that waits for the
+    lock fails here instead of hanging the test, which releases the lock only afterwards."""
     started = monotonic()
-    result = write()
-    return result, monotonic() - started
+    writer = _Writer(write)
+    writer.join(ANSWER_SECONDS * 3)
+    assert not writer.is_alive(), "The write is still waiting for the held publication."
+    if writer.error is not None:
+        raise writer.error
+    return writer.result, monotonic() - started
+
+
+def _answered(write):
+    return _timed(write)[0]
 
 
 WRITERS = {
@@ -132,8 +142,8 @@ def test_pending_intents_apply_in_the_order_they_were_made(library, last):
         assert _ignore(library, keys) == "applied"
     save = library.save()
     try:
-        assert first(library, keys) == "pending"
-        assert second(library, keys) == "pending"
+        assert _answered(lambda: first(library, keys)) == "pending"
+        assert _answered(lambda: second(library, keys)) == "pending"
         assert _shown(library) == expected
     finally:
         save.rollback()
@@ -150,7 +160,7 @@ def test_an_intent_applies_once_and_reapplying_its_effect_changes_nothing(librar
     keys = _keys(library)
     save = library.save()
     try:
-        assert _ignore(library, keys) == "pending"
+        assert _answered(lambda: _ignore(library, keys)) == "pending"
     finally:
         save.rollback()
         save.close()
@@ -174,7 +184,7 @@ def test_a_drain_started_during_a_held_publication_waits_for_it_and_never_applie
     keys = _keys(library)
     save = library.save()
     try:
-        assert _ignore(library, keys) == "pending"
+        assert _answered(lambda: _ignore(library, keys)) == "pending"
         drain = _Writer(lambda: ignored_repair_intents.drain(library.fixture.config))
         drain.join(ANSWER_SECONDS * 2)
         assert drain.is_alive(), "The drain did not wait for the publication."
@@ -225,7 +235,7 @@ def test_a_pending_ignore_shows_after_a_reload_in_the_rules_the_details_and_the_
     item_key, row_key, album_key, reason = _first_album_problem(library, repository)
     save = library.save()
     try:
-        assert _ignore(library, {row_key: album_key}) == "pending"
+        assert _answered(lambda: _ignore(library, {row_key: album_key})) == "pending"
         ignored, detail_rows, reasons = _shown(repository, item_key)
         assert row_key in ignored
         assert row_key not in detail_rows
@@ -244,7 +254,7 @@ def test_a_pending_unignore_shows_after_a_reload_in_the_rules_and_the_details(li
     assert _ignore(library, {row_key: album_key}) == "applied"
     save = library.save()
     try:
-        assert _unignore(library, {row_key: album_key}) == "pending"
+        assert _answered(lambda: _unignore(library, {row_key: album_key})) == "pending"
         ignored, detail_rows, _reasons = _shown(repository, item_key)
         assert row_key not in ignored
         assert row_key in detail_rows

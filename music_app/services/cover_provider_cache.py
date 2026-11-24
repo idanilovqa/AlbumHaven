@@ -102,7 +102,11 @@ class CoverSearchCache:
 
     def set(self, key: str, value: dict[str, object]) -> None:
         with self._lock:
+            self._staged.pop(key, None)
             self._staged[key] = dict(value)
+            # Answers that are never written (browse-only, no database, failed saves) stay bounded.
+            while len(self._staged) > _STAGED_ENTRY_LIMIT:
+                del self._staged[next(iter(self._staged))]
 
     def save(self) -> None:
         if not self.database_url or not self.writable:
@@ -152,10 +156,35 @@ def cover_cache_writable(config) -> bool:
     return config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True
 
 
+_STAGED_ENTRY_LIMIT = 4096
+_PROCESS_CACHES: dict[tuple[str, bool], CoverSearchCache] = {}
+_PROCESS_CACHES_LOCK = threading.Lock()
+
+
+def cover_search_cache_for(config) -> CoverSearchCache:
+    """This process's cache for the app database and writer role. Cover batches share it, so an answer not
+    yet written, or never written in a browse-only app, still spares the next batch a provider search."""
+    key = (str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip(), cover_cache_writable(config))
+    with _PROCESS_CACHES_LOCK:
+        cache = _PROCESS_CACHES.get(key)
+        if cache is None:
+            cache = _PROCESS_CACHES[key] = CoverSearchCache(key[0], writable=key[1])
+        return cache
+
+
+_SHARED_CACHE_CONFIG: dict[str, object] = {"ALBUM_HAVEN_APP_DATABASE_URL": Config.ALBUM_HAVEN_APP_DATABASE_URL}
+
+
 def configure_shared_cover_search_cache(config) -> None:
-    """Points the process cache that provider helpers use at this app's database and writer role."""
-    _MUSICBRAINZ_RELEASE_DISK_CACHE.database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-    _MUSICBRAINZ_RELEASE_DISK_CACHE.writable = cover_cache_writable(config)
+    """Points the provider helpers' default cache at this app's database and writer role."""
+    global _SHARED_CACHE_CONFIG
+    _SHARED_CACHE_CONFIG = {
+        key: config.get(key) for key in ("ALBUM_HAVEN_APP_DATABASE_URL", "SHARED_LIBRARY_BROWSE_ONLY")
+    }
+
+
+def _shared_cover_search_cache() -> CoverSearchCache:
+    return cover_search_cache_for(_SHARED_CACHE_CONFIG)
 
 
 def import_cover_search_cache_file(config, *, connect=None, stop_requested=None) -> dict[str, object]:
@@ -202,9 +231,6 @@ def import_cover_search_cache_file(config, *, connect=None, stop_requested=None)
         )
     _LOGGER.info("Cover provider cache import finished entries=%d", total)
     return {"status": "imported", "total": total}
-
-
-_MUSICBRAINZ_RELEASE_DISK_CACHE = CoverSearchCache(Config.ALBUM_HAVEN_APP_DATABASE_URL)
 
 
 def _replace_search_symbols(value: str) -> str:
@@ -260,7 +286,7 @@ def _get_musicbrainz_release_disk_cache(
     *,
     cache: CoverSearchCache | None = None,
 ) -> list[dict] | None:
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _MUSICBRAINZ_RELEASE_DISK_CACHE_LOCK:
         cached = disk_cache.get(_musicbrainz_release_disk_cache_key(cache_key))
     releases = cached.get("releases") if isinstance(cached, dict) else None
@@ -278,7 +304,7 @@ def _set_musicbrainz_release_disk_cache(
     sanitized_releases = [dict(item) for item in releases if isinstance(item, dict)]
     if not sanitized_releases:
         return
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _MUSICBRAINZ_RELEASE_DISK_CACHE_LOCK:
         disk_cache.set(
             _musicbrainz_release_disk_cache_key(cache_key),
@@ -299,7 +325,7 @@ def _get_caa_results_disk_cache(
     *,
     cache: CoverSearchCache | None = None,
 ) -> list[dict] | None:
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _CAA_RESULTS_CACHE_LOCK:
         cached = disk_cache.get(_caa_results_disk_cache_key(cache_key))
     if not isinstance(cached, dict):
@@ -322,7 +348,7 @@ def _set_caa_results_disk_cache(
     sanitized_candidates = [dict(item) for item in candidates if isinstance(item, dict)]
     if not sanitized_candidates:
         return
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _CAA_RESULTS_CACHE_LOCK:
         disk_cache.set(
             _caa_results_disk_cache_key(cache_key),

@@ -101,14 +101,15 @@ def _start_library_warmup(
                         raise
                     except Exception:
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
-                if import_cover_cache is not None:
+                if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
+                    return
+                ensure_relations(runtime, cancel_requested=stop_requested)
+                # After relation readiness: the one-time backfill never delays artist pages at startup.
+                if import_cover_cache is not None and not stop_requested.is_set():
                     try:
                         import_cover_cache(runtime.config, stop_requested=stop_requested)
                     except Exception:
                         runtime.logger.exception("Cover provider cache import failed.")
-                if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
-                    return
-                ensure_relations(runtime, cancel_requested=stop_requested)
                 return
             hydrated = hydrate(runtime)
             if stop_requested.is_set():

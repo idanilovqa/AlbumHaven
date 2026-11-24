@@ -121,16 +121,34 @@ def test_a_browse_only_app_reads_answers_but_never_writes_them():
 
 
 def test_the_process_cache_follows_the_app_database_and_writer_role(monkeypatch):
-    shared = CoverSearchCache()
-    monkeypatch.setattr(cover_provider_cache, "_MUSICBRAINZ_RELEASE_DISK_CACHE", shared)
+    monkeypatch.setattr(cover_provider_cache, "_PROCESS_CACHES", {})
+    monkeypatch.setattr(cover_provider_cache, "_SHARED_CACHE_CONFIG", {})
 
     cover_provider_cache.configure_shared_cover_search_cache(
         {"ALBUM_HAVEN_APP_DATABASE_URL": " postgresql://app ", "SHARED_LIBRARY_BROWSE_ONLY": True},
     )
-    assert (shared.database_url, shared.writable) == ("postgresql://app", False)
+    browse_only = cover_provider_cache._shared_cover_search_cache()
+    assert (browse_only.database_url, browse_only.writable) == ("postgresql://app", False)
 
-    cover_provider_cache.configure_shared_cover_search_cache({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"})
-    assert shared.writable is True
+    writer_config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}
+    cover_provider_cache.configure_shared_cover_search_cache(writer_config)
+    writer = cover_provider_cache._shared_cover_search_cache()
+    assert writer.writable is True
+    # Provider helpers and cover batches share one cache per database and writer role.
+    assert writer is cover_provider_cache.cover_search_cache_for(writer_config)
+    assert writer is not browse_only
+
+
+def test_answers_that_are_never_written_stay_bounded(monkeypatch):
+    monkeypatch.setattr(cover_provider_cache, "_STAGED_ENTRY_LIMIT", 2)
+    cache = CoverSearchCache(writable=False)
+    for key in ("first", "second", "third"):
+        cache.set(key, {"missing": True})
+    cache.set("second", {"missing": False})
+
+    assert cache.get("first") is None
+    assert cache.get("third") == {"missing": True}
+    assert cache.get("second") == {"missing": False}
 
 
 def test_a_failed_write_keeps_the_staged_answer_for_the_next_save(caplog):
@@ -294,7 +312,7 @@ def test_cover_query_key_preserves_automatic_refresh_normalization():
 
 def test_musicbrainz_release_disk_cache_namespace_filters_and_skips_empty(monkeypatch):
     cache = CoverSearchCache()
-    monkeypatch.setattr(cover_provider_cache, "_MUSICBRAINZ_RELEASE_DISK_CACHE", cache)
+    monkeypatch.setattr(cover_provider_cache, "_shared_cover_search_cache", lambda: cache)
     monkeypatch.setattr(cover_provider_cache.time, "time", lambda: 1234.0)
 
     cover_provider_cache._set_musicbrainz_release_disk_cache("artist::album", ["malformed"])
@@ -327,7 +345,7 @@ def test_musicbrainz_release_disk_cache_namespace_filters_and_skips_empty(monkey
 def test_caa_results_disk_cache_namespace_filters_ttl_and_skips_empty(monkeypatch):
     cache = CoverSearchCache()
     now = 2_000.0
-    monkeypatch.setattr(cover_provider_cache, "_MUSICBRAINZ_RELEASE_DISK_CACHE", cache)
+    monkeypatch.setattr(cover_provider_cache, "_shared_cover_search_cache", lambda: cache)
     monkeypatch.setattr(cover_provider_cache.time, "time", lambda: now)
 
     cover_provider_cache._set_caa_results_disk_cache("release-1", ["malformed"])

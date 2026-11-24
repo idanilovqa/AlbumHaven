@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import pytest
 
 from tests.e2e.support import isolatedPostgres
+from tests.py.postgres_column_dependents import triggers_depending_on_columns_set_aside
 
 from music_app.services.utils import MOJIBAKE_CANDIDATE_MARKERS, looks_like_mojibake
 
@@ -121,15 +122,22 @@ def test_problematic_file_projection_migration_upgrades_and_reruns_idempotently(
             connection.execute(
                 "alter table library.local_artists drop column if exists scan_name_problem_candidate"
             )
-            connection.execute(f"alter table library.local_track_files {drop_columns_sql}")
-            connection.execute(
-                """
-                create index local_track_files_active_track_projection_idx
-                on library.local_track_files (track_id)
-                """
-            )
+            # Later migrations' triggers depend on these columns (0294's WHEN clauses read
+            # scan_cache_stale). The pre-0021 schema had neither, so they step aside while 0021
+            # rebuilds the columns and return unchanged; the rerun below then proves 0021 stays
+            # idempotent with them in place.
+            with triggers_depending_on_columns_set_aside(
+                connection, "library.local_track_files", GENERATED_COLUMNS,
+            ):
+                connection.execute(f"alter table library.local_track_files {drop_columns_sql}")
+                connection.execute(
+                    """
+                    create index local_track_files_active_track_projection_idx
+                    on library.local_track_files (track_id)
+                    """
+                )
 
-            connection.execute(migration_sql)
+                connection.execute(migration_sql)
             first_catalog = _generated_column_catalog(connection)
             assert connection.execute(
                 "select to_regclass('library.local_track_files_active_track_projection_idx')"

@@ -997,6 +997,8 @@ function checkStreamingSocketLiveness({ readLate = false } = {}) {
   const deadline = engine.socketReadDeadline;
   if (seekWaits && deadline?.socket === socket && performance.now() < deadline.atMs) return;
   engine.socketReadDeadline = null;
+  // Not even the heartbeat for 5 s: the server cannot be reached, said until a probe is answered.
+  if (!seekWaits && typeof noteServerUnreachable === 'function') noteServerUnreachable();
   replaceSilentStreamingSocket(socket);
 }
 

@@ -6241,6 +6241,22 @@ test('request capture: history steps request the restored view once, Home throug
   });
 });
 
+test('Back from a search shows the address it reaches without the search at once, before its view loads', async () => {
+  const { context } = freshlyLoadedGallery('http://localhost/?q=neal+morse', { ...ROOT_GALLERY, query: 'neal morse' });
+  const input = context.document.getElementById('search-input');
+  input.value = 'neal morse';
+
+  context.window.location.href = 'http://localhost/';
+  context.handleGalleryBootstrapPopState();
+
+  assert.equal(input.value, '', 'cleared with the step, not when Home has loaded');
+  assert.equal(context.state.ui.searchDraftQuery, '');
+  context.window.location.href = 'http://localhost/?q=broadcast';
+  context.handleGalleryBootstrapPopState();
+  assert.equal(input.value, 'broadcast');
+  await settleGallery();
+});
+
 // Gallery handlers with `artistCount` counted loaded artist groups. Timers run
 // only when fired; requests and cover resumes are counted.
 function countedGalleryHandlers(artistCount, options = {}) {

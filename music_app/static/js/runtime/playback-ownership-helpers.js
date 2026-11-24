@@ -1107,7 +1107,10 @@ async function takeOverAtConfirmedPlace() {
       clientSurface: native ? 'mobile' : 'private_web', takeover: true, confirm: true });
   } catch (error) {
     if (version === ownership.requestVersion) {
-      if (error?.status !== 422) notifyBlockedPlaybackStart();
+      // Without the server nothing moves here, and the other tab plays on: the network is what failed.
+      if (error?.unanswered && typeof showToast === 'function') {
+        showToast('Can’t move playback here without a network connection.', 'error', 2800);
+      } else if (error?.status !== 422) notifyBlockedPlaybackStart();
       else if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
       void handlePlaybackOwnershipEvent();
     }

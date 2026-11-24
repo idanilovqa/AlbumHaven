@@ -2144,9 +2144,15 @@ function isServerUnreachable() {
   return serverReachability.unreachable;
 }
 
+// The page's Offline line and read-only follow this state in every tab (app-copy.js).
+function tellAppCopyReachability(unreachable) {
+  if (typeof window !== 'undefined') window.AlbumHavenAppCopy?.setServerUnreachable?.(unreachable);
+}
+
 function noteServerReachable() {
   if (!serverReachability.unreachable) return;
   serverReachability.unreachable = false;
+  tellAppCopyReachability(false);
   clearTimeout(serverReachability.timer);
   serverReachability.timer = 0;
   const recovery = { copyServed: serverReachability.copyServed };
@@ -2169,7 +2175,13 @@ function noteServerUnreachable() {
   }
   if (serverReachability.unreachable) return;
   serverReachability.unreachable = true;
+  tellAppCopyReachability(true);
   scheduleReachabilityProbe();
+}
+
+// The device going offline is known at once: the open page says so without waiting for a request.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('offline', () => noteServerUnreachable());
 }
 
 function scheduleReachabilityProbe() {
@@ -4797,7 +4809,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
 // OfflineNotice (approved v004, unreachable server state): plain text with a muted crossed-out
 // cloud, no box, border or tint. `line` is one line with the small cloud before it, both on one
-// centerline (the end of a kept gallery, the kept-library notice). `message` is centered: the small
+// centerline and centred as a group (the end of a kept gallery, the kept-library notice). `message` is centered: the small
 // cloud and a bold, larger title on one centerline, then the detail in muted text (Album Details and
 // a gallery view that cannot load). The Jinja renderer is components/offline-notice.html; both share
 // css/runtime/offline-notice.css.
@@ -9703,6 +9715,8 @@ function checkStreamingSocketLiveness({ readLate = false } = {}) {
   const deadline = engine.socketReadDeadline;
   if (seekWaits && deadline?.socket === socket && performance.now() < deadline.atMs) return;
   engine.socketReadDeadline = null;
+  // Not even the heartbeat for 5 s: the server cannot be reached, said until a probe is answered.
+  if (!seekWaits && typeof noteServerUnreachable === 'function') noteServerUnreachable();
   replaceSilentStreamingSocket(socket);
 }
 
@@ -16717,7 +16731,10 @@ async function takeOverAtConfirmedPlace() {
       clientSurface: native ? 'mobile' : 'private_web', takeover: true, confirm: true });
   } catch (error) {
     if (version === ownership.requestVersion) {
-      if (error?.status !== 422) notifyBlockedPlaybackStart();
+      // Without the server nothing moves here, and the other tab plays on: the network is what failed.
+      if (error?.unanswered && typeof showToast === 'function') {
+        showToast('Can’t move playback here without a network connection.', 'error', 2800);
+      } else if (error?.status !== 422) notifyBlockedPlaybackStart();
       else if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
       void handlePlaybackOwnershipEvent();
     }
@@ -54863,6 +54880,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// Back and Forward show the search of the address they reach at once, not once its view has loaded.
+function showHistoryStepSearch(href) {
+  const input = typeof document === 'undefined' ? null : document.getElementById?.('search-input');
+  if (!input) return;
+  const query = String(parseBrowserUrlState(href).query || '');
+  if (input.value === query) return;
+  input.value = query;
+  updateGallerySearchDraftQuery(query);
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(input);
+}
+
 // A history step onto the address of the view already shown (a duplicate history entry) keeps
 // that view: reloading it is navigation that changes nothing (owner, 11-18).
 function historyStepShowsCurrentView(href) {
@@ -54875,6 +54903,7 @@ function historyStepShowsCurrentView(href) {
 function handleGalleryBootstrapPopState(options = {}) {
   if (!options.parentViewUrl && !options.galleryAnchorArtist && historyStepShowsCurrentView(getBrowserLocationHref())) return;
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
+  showHistoryStepSearch(parentViewUrl);
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist
     ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })

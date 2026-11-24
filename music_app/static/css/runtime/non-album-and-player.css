@@ -963,6 +963,11 @@ white-space: nowrap;
 position: relative;
 z-index: 6;
 }
+/* At phone width the cluster holding Play is its own stacking layer: it rises above the overlay too. */
+.global-player.is-playing-elsewhere:not(.is-compact) .player-play-cluster {
+position: relative;
+z-index: 6;
+}
 .player-timeline-wrap.is-idle :is(.player-waveform-canvas) {
 opacity: 0;
 }

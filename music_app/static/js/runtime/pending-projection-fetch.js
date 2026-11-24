@@ -38,9 +38,15 @@ function isServerUnreachable() {
   return serverReachability.unreachable;
 }
 
+// The page's Offline line and read-only follow this state in every tab (app-copy.js).
+function tellAppCopyReachability(unreachable) {
+  if (typeof window !== 'undefined') window.AlbumHavenAppCopy?.setServerUnreachable?.(unreachable);
+}
+
 function noteServerReachable() {
   if (!serverReachability.unreachable) return;
   serverReachability.unreachable = false;
+  tellAppCopyReachability(false);
   clearTimeout(serverReachability.timer);
   serverReachability.timer = 0;
   const recovery = { copyServed: serverReachability.copyServed };
@@ -63,7 +69,13 @@ function noteServerUnreachable() {
   }
   if (serverReachability.unreachable) return;
   serverReachability.unreachable = true;
+  tellAppCopyReachability(true);
   scheduleReachabilityProbe();
+}
+
+// The device going offline is known at once: the open page says so without waiting for a request.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('offline', () => noteServerUnreachable());
 }
 
 function scheduleReachabilityProbe() {

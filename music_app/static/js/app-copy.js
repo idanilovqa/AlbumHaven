@@ -11,7 +11,8 @@
 // account is signed in: another account, or none, deletes the copy and loads the page again; no
 // answer makes the copy read-only, with its Offline notice and every write hidden, until one comes.
 // The notice means unreachable (no answer, a gateway error, or the device offline), never slow. Each
-// answer lets the runtime bring the view up to date in place (onServerAnswer).
+// answer lets the runtime bring the view up to date in place (onServerAnswer). In every tab, however
+// it started, the notice and read-only also follow the runtime's reachability (setServerUnreachable).
 (function appCopy(root) {
   'use strict';
 
@@ -38,6 +39,9 @@
     const answerListeners = [];
     let shell = null;
     let readOnly = false;
+    // The runtime's one reachability state: a failed request or probe, a silent playback socket, or
+    // the device going offline.
+    let serverUnreachable = false;
     let answered = false;
     let retryTimer = 0;
     // A browser's last save; a page the worker loaded from the server is already kept.
@@ -86,6 +90,19 @@
     function showNotice(on) {
       const notice = document.getElementById('app-copy-offline-notice');
       if (notice) notice.hidden = !on;
+    }
+
+    // The server is unreachable or answers again, in any tab: the line and read-only follow, except
+    // that a page started from the copy stays read-only until its own account check is answered.
+    function setServerUnreachable(on) {
+      if (serverUnreachable === on) return;
+      serverUnreachable = on;
+      if (on) {
+        setReadOnly(true);
+        showNotice(true);
+      } else if (!startedFromCopy || answered) {
+        setReadOnly(false);
+      }
     }
 
     function setReadOnly(on) {
@@ -187,7 +204,8 @@
     }
     if (startedFromCopy) void confirmAccount();
 
-    return { startedFromCopy, viewMissing, isReadOnly: () => readOnly, adoptShell, forget, onServerAnswer };
+    return { startedFromCopy, viewMissing, isReadOnly: () => readOnly, adoptShell, forget, onServerAnswer,
+      setServerUnreachable };
   }
 
   if (typeof module === 'object' && module.exports) module.exports = { createAppCopyClient };

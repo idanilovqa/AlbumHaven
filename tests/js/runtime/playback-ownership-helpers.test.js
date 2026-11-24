@@ -2793,3 +2793,14 @@ test('a Play while its yield drains renews its claim, and the yield declines', a
   assert.equal(state.player.ownership.activeClaim.claimToken, 'held-claim');
   assert.deepEqual(states, ['playing'], 'the Play asks the server, with the claim it still holds');
 });
+
+test('Play here with no network says the network is what failed, and the other tab plays on', async () => {
+  const toasts = [];
+  const tab = claimingTab(() => { throw new TypeError('Failed to fetch'); },
+    { state: playingElsewhereState(), showToast: (message) => toasts.push(message) });
+
+  assert.equal(await tab.context.takeOverPlaybackHere(), false);
+
+  assert.deepEqual(toasts, ['Can’t move playback here without a network connection.']);
+  assert.equal(tab.context.state.player.ownership.blockedReason, 'playing_in_another_tab');
+});

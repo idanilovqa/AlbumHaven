@@ -2705,6 +2705,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// Back and Forward show the search of the address they reach at once, not once its view has loaded.
+function showHistoryStepSearch(href) {
+  const input = typeof document === 'undefined' ? null : document.getElementById?.('search-input');
+  if (!input) return;
+  const query = String(parseBrowserUrlState(href).query || '');
+  if (input.value === query) return;
+  input.value = query;
+  updateGallerySearchDraftQuery(query);
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(input);
+}
+
 // A history step onto the address of the view already shown (a duplicate history entry) keeps
 // that view: reloading it is navigation that changes nothing (owner, 11-18).
 function historyStepShowsCurrentView(href) {
@@ -2717,6 +2728,7 @@ function historyStepShowsCurrentView(href) {
 function handleGalleryBootstrapPopState(options = {}) {
   if (!options.parentViewUrl && !options.galleryAnchorArtist && historyStepShowsCurrentView(getBrowserLocationHref())) return;
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
+  showHistoryStepSearch(parentViewUrl);
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist
     ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })

@@ -1,6 +1,6 @@
 // OfflineNotice (approved v004, unreachable server state): plain text with a muted crossed-out
 // cloud, no box, border or tint. `line` is one line with the small cloud before it, both on one
-// centerline (the end of a kept gallery, the kept-library notice). `message` is centered: the small
+// centerline and centred as a group (the end of a kept gallery, the kept-library notice). `message` is centered: the small
 // cloud and a bold, larger title on one centerline, then the detail in muted text (Album Details and
 // a gallery view that cannot load). The Jinja renderer is components/offline-notice.html; both share
 // css/runtime/offline-notice.css.

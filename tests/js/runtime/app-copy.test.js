@@ -397,3 +397,29 @@ test('IAR-W14: an ordinary copy on a connected device still waits for the accoun
   await settle();
   assert.equal(notice.hidden, true);
 });
+
+test('a page loaded online shows the Offline line and turns changes off while the server cannot be reached', async () => {
+  const { client, env, notice, settle } = setup({ marker: 'network' });
+  await settle();
+
+  client.setServerUnreachable(true);
+  assert.equal(notice.hidden, false, 'the line shows without a request having to fail on screen');
+  assert.equal(client.isReadOnly(), true);
+  assert.deepEqual(env.readOnlyCalls, [true]);
+
+  client.setServerUnreachable(false);
+  assert.equal(notice.hidden, true);
+  assert.equal(client.isReadOnly(), false);
+  assert.deepEqual(env.readOnlyCalls, [true, false]);
+});
+
+test('a page started from the copy stays read-only after the server answers until its account check does', async () => {
+  const { client, env, notice } = setup({ marker: 'cache', answer: () => new Promise(() => {}) });
+
+  client.setServerUnreachable(true);
+  client.setServerUnreachable(false);
+
+  assert.equal(client.isReadOnly(), true, 'its own account check is still on its way');
+  assert.equal(notice.hidden, false);
+  assert.equal(env.readOnlyCalls.at(-1), true);
+});

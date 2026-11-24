@@ -2705,7 +2705,7 @@ test('FTC-TAGS-008 keeps terminal failure actionable and opens the exact Log His
   assert.ok(caseStart >= 0 && caseEnd > caseStart);
   assert.match(caseSource, /utilityLogHistoryActions/);
   // The file write fails on the real media path (no interception): the page shows the owner's copy, and the
-  // path and raw error stay in Log History.
+  // raw error stays in Log History with every path shown as "[path]" (Log History never shows a path).
   assert.doesNotMatch(caseSource, /page\.route\(|temporarilyRevokeRuntimeDeletePrivileges/);
   assert.match(caseSource, /temporarilyMakeGeneratedMp3Unavailable\(\{[\s\S]*?filename: FAILURE_FIXTURE_TRACK/);
   assert.match(caseSource, /applyAndWaitForFailure\(\{ expectedErrorPattern: \/\^Save failed: Read-only files\$\/u \}\)/);
@@ -2713,8 +2713,11 @@ test('FTC-TAGS-008 keeps terminal failure actionable and opens the exact Log His
   assert.match(caseSource, /expect\(failure\.alertText\)\.not\.toContain\(FAILURE_FIXTURE_TRACK\)/);
   assert.match(
     caseSource,
-    /openLogHistoryFromFailure\(\)[\s\S]*?utilityLogHistoryActions\.waitForReady\(\)[\s\S]*?readVisibleHistoryText\(\)\)\.toContain\(failureError\)/,
+    /openLogHistoryFromFailure\(\)[\s\S]*?utilityLogHistoryActions\.waitForReady\(\)[\s\S]*?const historyText = await utilityLogHistoryActions\.readVisibleHistoryText\(\);\s*expect\(historyText\)\.toContain\(redactedFailureError\)/,
   );
+  assert.match(caseSource, /expect\(redactedFailureError\)\.toContain\('\[path\]'\)/);
+  assert.match(caseSource, /unwritableTrack\.sourcePath,[\s\S]*?expect\(historyText\)\.not\.toContain\(realPath\)/);
+  assert.doesNotMatch(caseSource, /\.toContain\(failureError\)/);
 });
 
 test('FTC-TAGS-020 completion observation uses the authoritative edit POST without save-task polling', () => {

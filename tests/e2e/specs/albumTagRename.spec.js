@@ -753,7 +753,21 @@ test('FTC-TAGS-008 keeps a failed file write readable without false success and 
     expect(failure.alertText).not.toContain(FAILURE_FIXTURE_TRACK);
     await tagEditorActions.openLogHistoryFromFailure();
     await utilityLogHistoryActions.waitForReady();
-    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failureError);
+    // Log History never shows a path (owner privacy rule): the raw error appears with each path as "[path]".
+    const escapedTrack = FAILURE_FIXTURE_TRACK.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const redactedFailureError = failureError
+      .replace(new RegExp(`(["'])[^"']*${escapedTrack}\\1`, 'gu'), '[path]')
+      .replace(new RegExp(`(?:[A-Za-z]:[\\\\/]|/)[^"']*?${escapedTrack}`, 'gu'), '[path]');
+    expect(redactedFailureError).toContain('[path]');
+    const historyText = await utilityLogHistoryActions.readVisibleHistoryText();
+    expect(historyText).toContain(redactedFailureError);
+    for (const realPath of [
+      unwritableTrack.sourcePath,
+      `${FAILURE_FIXTURE_ALBUM}/${FAILURE_FIXTURE_TRACK}`,
+      `${FAILURE_FIXTURE_ALBUM}\\${FAILURE_FIXTURE_TRACK}`,
+    ]) {
+      expect(historyText).not.toContain(realPath);
+    }
     await settingsModalAppBarActions.closeSettings();
     await trackModalActions.waitForExactAlbumDetails({
       title: albumDetailsTitle(FAILURE_FIXTURE_ALBUM),

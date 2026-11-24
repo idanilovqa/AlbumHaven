@@ -393,6 +393,7 @@ def test_background_hydration_contract_publishes_the_inventory_without_probing_f
         lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="postgres"),
     )
     monkeypatch.setattr(state_module, "load_exception_overrides", lambda _config: {})
+    monkeypatch.setattr(state_module, "resolve_media_host_history_scope", lambda _config: None)
     monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", InlineExecutor())
     monkeypatch.setattr(state_module, "_prewarm_root_browse_payload_for_state", lambda *_args: None)
     config = {

@@ -7142,8 +7142,11 @@ function renderLibraryLoader(data = {}, options = {}) {
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
-  if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
-    virtualGrid.onResize();
+  if (galleryWasHidden && !shouldShow) {
+    if (scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') virtualGrid.onResize();
+    // The gallery bar keeps its context while the gallery is hidden; the reveal leaves scrollTop
+    // unchanged, so no scroll event resolves it for the view rendered meanwhile.
+    if (typeof updateGalleryMainScrollContext === 'function') updateGalleryMainScrollContext();
   }
   setDomPropertyIfChanged(backButton, 'hidden', false);
   setDomPropertyIfChanged(phaseGuide, 'hidden', !scanPageVisible);

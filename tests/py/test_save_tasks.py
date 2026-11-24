@@ -2454,7 +2454,7 @@ def test_merging_committed_entries_never_replaces_a_broken_live_file_cache(live_
     library_state = {"file_cache": live_file_cache}
 
     with pytest.raises(TypeError):
-        save_tasks_module._merge_file_cache_entries(library_state, {"track.mp3": {"path": "track.mp3"}})
+        save_tasks_module.merge_file_cache_entries(library_state, {"track.mp3": {"path": "track.mp3"}})
 
     assert library_state == {"file_cache": live_file_cache}
 
@@ -2465,9 +2465,9 @@ def test_merging_committed_entries_never_changes_the_live_cache_keys_under_a_rea
     reader = iter(live_file_cache.items())
     next(reader)
 
-    replaced = save_tasks_module._merge_file_cache_entries(
+    replaced = save_tasks_module.merge_file_cache_entries(
         library_state, {"a.mp3": {"path": "a.mp3", "album": "New"}})
-    added = save_tasks_module._merge_file_cache_entries(library_state, {"c.mp3": {"path": "c.mp3"}})
+    added = save_tasks_module.merge_file_cache_entries(library_state, {"c.mp3": {"path": "c.mp3"}})
 
     # A replaced entry is merged in place; a new track republishes a copy, so the reader finishes.
     assert replaced is live_file_cache and live_file_cache["a.mp3"]["album"] == "New"

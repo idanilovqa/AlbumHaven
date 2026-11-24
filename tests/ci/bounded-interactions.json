@@ -11413,7 +11413,13 @@
       },
       "command": "python -m pytest tests/py/test_cover_workflow.py::test_delete_local_cover_contract_reselects_within_the_album_at_production_library_size tests/py/test_cover_state.py::test_cover_gallery_contract_reads_only_the_selected_album_at_production_library_size tests/py/test_cover_workflow.py::test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size",
       "testIdentity": "test_delete_local_cover_contract_reselects_within_the_album_at_production_library_size",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "rollback": "Revert the contract test commit; no product code changed for this interaction.",
+      "forbiddenWork": [
+        "library-state-scan",
+        "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/state.py#invalidate_targeted_library_projections"
+      ]
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_local_select",
@@ -11453,19 +11459,29 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_at_production_library_size",
       "testIdentity": "test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_at_production_library_size",
-      "rollback": "Revert fix(covers) request-local inventory and fix(move) artist probe, with their contracts."
+      "rollback": "Revert fix(covers) request-local inventory and fix(move) artist probe, with their contracts.",
+      "forbiddenWork": [
+        "library-state-scan",
+        "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/state.py#invalidate_targeted_library_projections"
+      ]
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image_save",
-      "action": "Serve POST /utilities/cover-lookup/pasted-image-save",
+      "action": "Save a pasted cover, then open Cover Look Up and Rules",
       "entrypoints": [
         "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image_save:route:POST /utilities/cover-lookup/pasted-image-save"
       ],
       "owners": [
         "music_app/routes/api_wave_d_asgi_routes.py",
         "music_app/services/album_local_cover_integrity.py",
+        "music_app/services/cache.py",
+        "music_app/services/cover_state.py",
         "music_app/services/cover_workflow.py",
-        "music_app/services/covers.py"
+        "music_app/services/covers.py",
+        "music_app/services/library_album_index.py",
+        "music_app/services/library_browse_postgres.py"
       ],
       "rules": [
         "BI-04",
@@ -11479,18 +11495,27 @@
         "production": 1000
       },
       "budgets": {
-        "builder_calls": 1,
-        "candidate_rows": 2,
-        "filesystem_enumerations": 0,
-        "stat_calls": 0
+        "sql_statements": 2,
+        "returned_rows": 3,
+        "builder_calls": 0,
+        "candidate_rows": 0,
+        "membership_rows": 0,
+        "invalidations": 0,
+        "worker_wakes": 1
       },
       "growth": {
-        "metric": "candidate_rows",
+        "metric": "returned_rows",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_api_wave_d_asgi_routes.py::test_selected_cover_inventory_contract_builds_only_the_selected_album_at_production_library_size tests/py/test_album_local_cover_integrity.py::test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count tests/py/test_cover_workflow.py::test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size",
-      "testIdentity": "test_selected_cover_inventory_contract_builds_only_the_selected_album_at_production_library_size",
-      "rollback": "Revert fix(covers) request-local inventory, with its contract."
+      "command": "python -m pytest tests/py/test_cover_save_bounded_contracts.py::test_cover_save_contract_next_cover_lookup_and_rules_grow_with_the_saved_album",
+      "testIdentity": "test_cover_save_contract_next_cover_lookup_and_rules_grow_with_the_saved_album",
+      "rollback": "Revert the scoped cover-save invalidation and its contract.",
+      "forbiddenWork": [
+        "library-state-scan",
+        "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/state.py#invalidate_targeted_library_projections"
+      ]
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_remote_image",
@@ -14130,7 +14155,8 @@
       },
       "budgets": {
         "builder_calls": 7,
-        "generation_changes": 4
+        "generation_changes": 4,
+        "unrelated_reads": 6
       },
       "growth": {
         "metric": "builder_calls",
@@ -14139,6 +14165,22 @@
       "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
       "testIdentity": "test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+      "action": "Run scheduler schedule_full_gallery_projection_refresh",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh:scheduler:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
     },
     {
       "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh",
@@ -15626,7 +15668,11 @@
       },
       "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_production_album_count",
       "testIdentity": "test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_production_album_count",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "rollback": "Revert the contract test commit; no product code changed for this interaction.",
+      "forbiddenWork": [
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+        "py:music_app/services/state.py#invalidate_targeted_library_projections"
+      ]
     },
     {
       "id": "py:services/state.py#_hydrate_library_state_worker",

@@ -435,6 +435,62 @@ def test_live_targeted_invalidation_publishes_new_album_to_gallery(
     assert any(item["artist"] == "I'm with Her" for item in sidebar["artists_sidebar"])
 
 
+def test_live_cover_changes_keep_rules_current_and_leave_the_gallery_published(
+    watcher_repair_inventory,
+    monkeypatch,
+):
+    from music_app.services import cache, library_browse_postgres as browse
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+    fixture = watcher_repair_inventory
+    config, connect = fixture.config, isolatedPostgres._connect
+    first = fixture.entry("Owner/Alpha/01.flac", album="Alpha")
+    second = fixture.entry("Owner/Beta/01.flac", album="Beta")
+    last = fixture.entry("Owner/Gamma/01.flac", album="Gamma")
+    fixture.seed(first, second, last)
+    with connect(fixture.setup_url) as connection:
+        connection.execute("""
+            insert into library.ignored_versions (library_id, version_key)
+            select library_id, album_key from library.local_albums where title = 'Alpha'
+        """)
+    ensure_relation_projection_ready(config, connect=connect)
+    gallery.ensure_gallery_projection_ready(config, connect=connect)
+    monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: fixture.adapter)
+    repository = browse.PostgresLibraryBrowseRepository(config, connect=connect)
+
+    # Problematic Files reads its persisted index, which the journal keeps current per album
+    # (problematic_index); Rules is the cached projection a cover change patches.
+    def opened():
+        return repository.build_utility_rules_payload()
+
+    browse.invalidate_postgres_utility_projection_cache(database_url=fixture.runtime_url)
+    opened()
+    # (album, cover edge; None clears): the ignored version gaining, changing and losing its cover,
+    # and another album's cover, which Rules does not show.
+    for entry, edge in ((first, 1200), (second, 1200), (first, 300), (first, None)):
+        cover = Path(entry["path"]).with_name("cover.jpg")
+        if edge:
+            cover.write_bytes(f"cover {edge}".encode())
+            options = {"local_cover_width": edge, "local_cover_height": edge, "cover_revision": f"revision-{edge}"}
+        else:
+            options = {"clear_selection": True}
+        cache.persist_cover_selection_for_tracks_for_config(
+            config, {entry["path"]}, cover if edge else None, **options,
+        )
+        with monkeypatch.context() as patch:
+            patch.setattr(browse, "_utility_rules_projection_payload",
+                          lambda _rows: pytest.fail("a cover change rebuilt Rules"))
+            scoped = opened()
+        browse.invalidate_postgres_utility_projection_cache(database_url=fixture.runtime_url)
+        assert scoped == opened()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(browse.PostgresLibraryBrowseRepository, "_load_relation_alias_maps",
+                      lambda *_args, **_kwargs: pytest.fail("a published gallery loaded the alias maps"))
+        assert gallery.ensure_gallery_projection_ready(config, connect=connect) == {"built": 0}
+
+
 def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready(
     watcher_repair_inventory, monkeypatch,
 ):

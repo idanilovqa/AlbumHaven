@@ -116,6 +116,12 @@ _UTILITY_PROJECTION_CACHE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
+# The cached projections that show cover state. A cover change leaves them cached
+# and notes the changed track paths here, each with a token for that change; the
+# next read reloads only those albums. Problematic Files is not one: its persisted
+# index re-evaluates the albums the database journal marks.
+_COVER_DEPENDENT_KINDS = ("rules",)
+_UTILITY_COVER_CHANGES: dict[tuple[str, str], dict[str, object]] = {}
 # The last complete Problematic Files list survives invalidation so the first
 # page and early search answer at once while the fresh list rebuilds.
 # A list someone opened is rebuilt in the background after each library change,
@@ -200,6 +206,7 @@ def invalidate_postgres_utility_projection_cache(
                 if key[1] in normalized_kinds
             }
         for cache_key in affected_keys:
+            _UTILITY_COVER_CHANGES.pop(cache_key, None)
             _UTILITY_PROJECTION_GENERATIONS[cache_key] = (
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
@@ -390,6 +397,25 @@ def _run_utility_projection_rewarm(cache_key: tuple[str, str], rewarm: Callable[
     with _UTILITY_PROJECTION_CACHE_LOCK:
         _UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
     rewarm()
+
+
+def record_cover_change_in_utility_projections(
+    *,
+    database_url: object,
+    track_paths: Iterable[str],
+) -> None:
+    """A committed cover change alters only its albums' rows of the projections
+    that show covers; every other projection keeps what it cached."""
+    normalized_database_url = str(database_url or "").strip()
+    if not normalized_database_url:
+        return
+    changes = dict.fromkeys(track_paths, object())
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        for kind in _COVER_DEPENDENT_KINDS:
+            cache_key = (normalized_database_url, kind)
+            # With nothing cached or being built, the next build reads this change itself.
+            if cache_key in _UTILITY_PROJECTION_CACHE or cache_key in _UTILITY_PROJECTION_SINGLEFLIGHT:
+                _UTILITY_COVER_CHANGES.setdefault(cache_key, {}).update(changes)
 
 
 def _request_flag(value: object) -> bool:
@@ -3691,19 +3717,38 @@ class PostgresLibraryBrowseRepository:
 
     def build_utility_rules_payload(self) -> dict[str, object]:
         kind = "rules"
-        cached_payload = self._get_cached_utility_projection(kind)
-        if cached_payload is not None:
-            return cached_payload
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            cache_key = self._utility_projection_cache_key(kind)
-            generation = (
-                _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
-                if cache_key is not None
-                else None
-            )
-        payload = _utility_rules_projection_payload(self._load_utility_rules_rows())
-        self._set_cached_utility_projection(kind, payload, expected_generation=generation)
-        return deepcopy(payload)
+
+        def cached() -> dict[str, object] | None:
+            self._apply_cover_changes(kind, self._utility_rules_with_reloaded_covers)
+            return self._get_cached_utility_projection(kind)
+
+        def build(generation: int | None) -> dict[str, object]:
+            payload = _utility_rules_projection_payload(self._load_utility_rules_rows())
+            self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+            return deepcopy(payload)
+
+        # One build at a time, so none can cache over a cover change applied meanwhile.
+        return self._build_utility_projection_once(kind, cached, build)
+
+    def _utility_rules_with_reloaded_covers(
+        self,
+        payload: Mapping[str, object],
+        track_paths: set[str],
+    ) -> dict[str, object]:
+        """The cached Rules with the current covers of those albums' version exceptions."""
+        with self._browse_connection_context() as connection:
+            covers = {
+                str(album["album_key"]): {
+                    "cover_path": album.get("album_cover_path"),
+                    "cover_revision": album.get("album_cover_revision"),
+                }
+                for album in _load_cover_change_albums(connection, track_paths)
+            }
+        return {**payload, "rules": [
+            {**rule, "albums": [{**album, **covers.get(album["key"], {})} for album in rule["albums"]]}
+            if "albums" in rule else rule
+            for rule in payload["rules"]
+        ]}
 
     def resolve_problem_exclusion_items(
         self,
@@ -4676,6 +4721,32 @@ class PostgresLibraryBrowseRepository:
             if payload is None:
                 return None
             return deepcopy(payload) if copy_payload else payload
+
+    def _apply_cover_changes(
+        self,
+        kind: str,
+        reload_albums: Callable[[Mapping[str, object], set[str]], dict[str, object]],
+    ) -> None:
+        """Bring the cached projection up to the cover changes noted since it was built."""
+        cache_key = self._utility_projection_cache_key(kind)
+        while True:
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                payload = _UTILITY_PROJECTION_CACHE.get(cache_key)
+                changes = dict(_UTILITY_COVER_CHANGES.get(cache_key) or {})
+            if payload is None or not changes:
+                return
+            updated = reload_albums(payload, set(changes))
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                # Another read or a rebuild replaced the payload: apply to that one.
+                if _UTILITY_PROJECTION_CACHE.get(cache_key) is not payload:
+                    continue
+                _UTILITY_PROJECTION_CACHE[cache_key] = updated
+                pending = _UTILITY_COVER_CHANGES.get(cache_key, {})
+                # A change noted during the reload waits for the next read.
+                for path, change in changes.items():
+                    if pending.get(path) is change:
+                        del pending[path]
+                return
 
     def _set_cached_utility_projection(
         self,
@@ -14027,6 +14098,26 @@ def _execute_problematic_sql(
         with _UTILITY_PROJECTION_CACHE_LOCK:
             _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES.add(database_url)
         return connection.execute(build_sql(False), params)
+
+
+def _load_cover_change_albums(connection: Any, track_paths: set[str]) -> list[Mapping[str, object]]:
+    rows = connection.execute("""
+        /* cover_change_albums */
+        select distinct albums.id as album_id, albums.album_key,
+          albums.cover_path as album_cover_path,
+          albums.metadata ->> 'cover_revision' as album_cover_revision
+        from app.bootstrap_owners owners
+        join library.libraries libraries on libraries.owner_account_id = owners.account_id
+          and libraries.name = 'Local Library' and libraries.library_kind = 'local'
+        join library.local_albums albums on albums.library_id = libraries.id
+        join library.local_tracks tracks on tracks.album_id = albums.id
+          and tracks.library_id = albums.library_id
+        join library.local_track_files files on files.track_id = tracks.id
+        where owners.owner_key = 'local-bootstrap-owner'
+          and files.private_path = any(%(track_paths)s::text[])
+          and files.scan_cache_stale is false
+    """, {"track_paths": sorted(track_paths)}).fetchall()
+    return [_row_mapping(row) for row in rows]
 
 
 def _utility_rules_sql() -> str:

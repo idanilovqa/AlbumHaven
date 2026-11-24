@@ -5,7 +5,8 @@ thread, so a request that needs a few selected albums reads them by key or by
 track path instead of walking every album in the library. A request that
 rebuilds a few albums republishes the list through `replace_library_albums`,
 which derives the new index from the current one instead of re-walking every
-album.
+album, and one that changes a few tracks merges their file-cache entries
+through `merge_file_cache_entries`.
 """
 
 from __future__ import annotations
@@ -180,6 +181,29 @@ def replace_library_albums(
     index = library_album_index(library_state).replaced(removed, added, sort_key=sort_key)
     library_state[_INDEX_STATE_KEY] = index
     library_state["albums"] = index.albums
+
+
+def merge_file_cache_entries(
+    library_state: dict[str, object],
+    entries: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    """Merge committed entries into the live file cache and return the live cache.
+
+    Readers on other threads iterate the cache without a lock, so its keys
+    never change in place: entries that only replace existing tracks are merged
+    in place, and any new track republishes a merged copy."""
+    file_cache = library_state.get("file_cache")
+    if not isinstance(file_cache, dict):
+        # Replacing it would silently drop every other track's entry.
+        raise TypeError("The live library file cache is not a mapping; refusing to replace it.")
+    if entries.keys() <= file_cache.keys():
+        file_cache.update(entries)
+    else:
+        file_cache = library_state["file_cache"] = {**file_cache, **entries}
+    # Non-album candidates are cached under the cache's identity, which an
+    # in-place merge keeps.
+    library_state.pop("_view_payload_non_album_candidate_cache", None)
+    return file_cache
 
 
 def library_album_index(library_state: Mapping[str, object]) -> LibraryAlbumIndex:

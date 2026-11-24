@@ -77,6 +77,67 @@ async def home_data(request):
     assert hazard["via"] == ["ensure_views", "build_relation_views"]
 
 
+def test_an_entry_rejects_only_the_work_it_forbids_itself(tmp_path: Path):
+    _write(tmp_path, "music_app/services/covers.py", """
+def wipe():
+    pass
+
+def save(library_state):
+    wipe()
+    return dict(library_state.get("file_cache") or {})
+""")
+    _write(tmp_path, "music_app/routes/covers.py", """
+from music_app.services.covers import save
+
+@router.post("/save")
+def scoped(request):
+    return save(request.state)
+
+@router.post("/rescan")
+def library_wide(request):
+    return save(request.state)
+""")
+    entry = "py:music_app/routes/covers.py#scoped:route:POST /save"
+    analysis = discovery.analyze_python_repository(
+        tmp_path,
+        library_state_collections=["file_cache"],
+        forbidden_work={entry: {"library-state-scan", "py:music_app/services/covers.py#wipe"}},
+    )
+    rejected = {(item["entrypoint"], item["operation"]) for item in analysis["hazards"] if item["reject"]}
+    assert rejected == {
+        (entry, "library-state-scan:file_cache"),
+        (entry, "forbidden-work:py:music_app/services/covers.py#wipe"),
+    }
+
+
+def test_forbidden_work_must_name_a_discovered_definition_exactly(tmp_path: Path):
+    _write(tmp_path, "music_app/services/covers.py", """
+class Real:
+    def wipe(self):
+        pass
+
+class Other:
+    pass
+
+def save():
+    def finish():
+        pass
+    finish()
+""")
+    _write(tmp_path, "music_app/routes/covers.py", """
+@router.post("/save")
+def scoped(request):
+    return None
+""")
+    entry = "py:music_app/routes/covers.py#scoped:route:POST /save"
+    owner = "py:music_app/services/covers.py#"
+    exact = {f"{owner}Real.wipe", f"{owner}save.<locals>.finish", "library-state-scan"}
+    misnamed = {f"{owner}Other.wipe", f"{owner}wipe", f"{owner}finish", "py:music_app/services/gone.py#save"}
+    analysis = discovery.analyze_python_repository(tmp_path, forbidden_work={entry: exact | misnamed})
+    rejected = {item["operation"] for item in analysis["hazards"] if item["reject"]}
+    assert rejected == {f"unknown-forbidden-work:{target}" for target in misnamed}
+
+
 def test_a_callback_inside_unpacked_options_is_followed_through_every_hand_off(tmp_path: Path):
     _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
     _write(tmp_path, "music_app/services/saves.py", """

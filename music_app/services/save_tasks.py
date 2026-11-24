@@ -25,6 +25,7 @@ from music_app.services.cache import (
 )
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.edit_state import affected_album_track_paths
+from music_app.services.library_album_index import merge_file_cache_entries
 from music_app.services.non_album_view_payloads import album_container_sibling_entries
 from music_app.services.edit_tag_timings import EditTagTimingRecorder, collect_persistence_stages
 from music_app.services.metadata import normalize_exception_value
@@ -323,30 +324,6 @@ def _live_file_cache_entries(
         for path in paths
         if (entry := file_cache.get(path, baseline_file_cache.get(path))) is not None
     }
-
-
-def _merge_file_cache_entries(
-    library_state: dict[str, object],
-    entries: dict[str, JsonDict],
-) -> dict[str, JsonDict]:
-    """Merge committed entries into the live file cache, under the caller's
-    state-mutation guard, and return the live cache.
-
-    Readers on other threads iterate the cache without that guard, so its keys
-    never change in place: entries that only replace existing tracks are merged
-    in place, and any new track republishes a merged copy."""
-    file_cache = library_state.get("file_cache")
-    if not isinstance(file_cache, dict):
-        # Replacing it would silently drop every other track's entry.
-        raise TypeError("The live library file cache is not a mapping; refusing to replace it.")
-    if entries.keys() <= file_cache.keys():
-        file_cache.update(entries)
-    else:
-        file_cache = library_state["file_cache"] = {**file_cache, **entries}
-    # Non-album candidates are cached under the cache's identity, which an
-    # in-place merge keeps.
-    library_state.pop("_view_payload_non_album_candidate_cache", None)
-    return file_cache
 
 
 def _structurally_inherited_cover_entries(
@@ -774,7 +751,7 @@ def _finalize_save_task(
                 rebase_latest,
                 paths=set(changed_entries),
             )
-        current_file_cache = _merge_file_cache_entries(
+        current_file_cache = merge_file_cache_entries(
             st,
             _rebase_non_cover_cache_entry_changes(
                 baseline_file_cache=rebase_baseline,
@@ -1088,7 +1065,7 @@ def finalize_structural_tag_edit_save_task(
                 for path in changed_paths
                 if isinstance(updated_file_cache.get(path), dict)
             }
-            current_file_cache = _merge_file_cache_entries(
+            current_file_cache = merge_file_cache_entries(
                 st,
                 _rebase_committed_structural_entry_changes(
                     baseline_file_cache=operation_baseline,
@@ -1104,7 +1081,7 @@ def finalize_structural_tag_edit_save_task(
             if persistence_result.get("cover_inherited_from_structural_edit") is True:
                 inherited_paths.update(changed_paths)
             if inherited_paths:
-                current_file_cache = _merge_file_cache_entries(
+                current_file_cache = merge_file_cache_entries(
                     st,
                     _structurally_inherited_cover_entries(
                         file_cache=current_file_cache,

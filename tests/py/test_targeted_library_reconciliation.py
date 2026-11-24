@@ -910,6 +910,32 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     }]
 
 
+def test_cover_only_invalidation_refreshes_no_library_projection(monkeypatch):
+    from music_app.services import state
+
+    for name in (
+        "schedule_gallery_projection_refresh",
+        "invalidate_problematic_albums_payload_cache",
+        "invalidate_utility_rules_payload_cache",
+        "invalidate_postgres_utility_projection_cache",
+        "PostgresLibraryBrowseRepository",
+    ):
+        monkeypatch.setattr(state, name, lambda *_args, **_kwargs: pytest.fail("a cover-only commit reached library-wide work"))
+    library_state = {
+        "_view_payload_root_browse_cache": {"cached": True},
+        "_problematic_albums_payload_cache": {"items": []},
+        "_utility_rules_payload_cache": {"rules": []},
+        "inventory_mutation_revision": 3,
+    }
+
+    state.invalidate_targeted_cover_projections(library_state, revision=3, affected_album_keys=("artist::album",))
+
+    assert library_state["_view_payload_root_browse_cache"] == {}
+    assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
+    assert "_problematic_albums_payload_cache" not in library_state
+    assert "_utility_rules_payload_cache" not in library_state
+
+
 def test_targeted_projection_invalidation_queues_the_settings_prewarm(monkeypatch):
     from music_app.services import state
 

@@ -363,7 +363,11 @@ def relation_projection_stale_reason(scan_cache: object) -> str:
     relation_views = scan_cache.get("relation_views")
     if not relation_projection_structure_complete(relation_views):
         return "missing_projection" if not relation_views else "incomplete_projection"
-    metadata = scan_cache.get(RELATION_PROJECTION_METADATA_KEY)
+    return relation_projection_metadata_stale_reason(scan_cache.get(RELATION_PROJECTION_METADATA_KEY))
+
+
+def relation_projection_metadata_stale_reason(metadata: object) -> str:
+    """Why a structurally complete projection is stale, from its metadata alone."""
     if not isinstance(metadata, Mapping):
         return "missing_readiness_metadata"
     if str(metadata.get("status") or "") != "ready":

@@ -28,6 +28,7 @@ from music_app.services.cover_refresh_runtime import (
     start_manual_cover_refresh_request,
 )
 from music_app.services.cover_refresh_planning import build_cover_refresh_jobs
+from music_app.services.cover_state import drop_in_memory_cover_payloads
 from music_app.services.exception_overrides import load_exception_overrides
 from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_hydration import hydrate_library_state_from_disk
@@ -124,15 +125,7 @@ def invalidate_targeted_library_projections(
 
     With the event's complete track paths, the Problematic Files list is
     patched for those files' albums instead of rebuilt for the whole library."""
-    with _CACHE_LOCK:
-        browse_cache = library_state.get("_view_payload_root_browse_cache")
-        if isinstance(browse_cache, dict):
-            browse_cache.clear()
-        library_state["inventory_mutation_revision"] = max(
-            0, int(revision or 0),
-            int(library_state.get("inventory_mutation_revision") or 0),
-        )
-        library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
+    _mark_targeted_albums(library_state, revision=revision, affected_album_keys=affected_album_keys)
     if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         schedule_gallery_projection_refresh(config)
     if track_paths:
@@ -150,6 +143,36 @@ def invalidate_targeted_library_projections(
         # As after a scan: rebuild the dropped projections in the background
         # (when prewarm is enabled) so the next Problematic Files open is warm.
         PostgresLibraryBrowseRepository(config).queue_settings_projection_prewarm()
+
+
+def invalidate_targeted_cover_projections(
+    library_state: dict[str, object],
+    *,
+    revision: int,
+    affected_album_keys: tuple[str, ...],
+) -> None:
+    """Invalidate what a cover-only commit changed. Gallery membership, aliases
+    and duplicates don't read covers, and the commit itself noted the albums in
+    the Postgres projections that do."""
+    _mark_targeted_albums(library_state, revision=revision, affected_album_keys=affected_album_keys)
+    drop_in_memory_cover_payloads(library_state)
+
+
+def _mark_targeted_albums(
+    library_state: dict[str, object],
+    *,
+    revision: int,
+    affected_album_keys: tuple[str, ...],
+) -> None:
+    with _CACHE_LOCK:
+        browse_cache = library_state.get("_view_payload_root_browse_cache")
+        if isinstance(browse_cache, dict):
+            browse_cache.clear()
+        library_state["inventory_mutation_revision"] = max(
+            0, int(revision or 0),
+            int(library_state.get("inventory_mutation_revision") or 0),
+        )
+        library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
 
 
 def queue_watcher_cover_refresh_for_track_paths_for_state(
@@ -402,9 +425,8 @@ def _drain_watcher_cover_refresh_queue(
                 and result.get("changed")
                 and affected_album_keys
             ):
-                invalidate_targeted_library_projections(
+                invalidate_targeted_cover_projections(
                     library_state,
-                    config,
                     revision=revision,
                     affected_album_keys=affected_album_keys,
                 )

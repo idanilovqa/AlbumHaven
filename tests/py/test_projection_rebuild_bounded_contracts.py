@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
 from tests.py.bounded_interactions import OperationCounts, assert_plateau, measure_scale_pair
 from tests.py.test_relation_projection_postgres import _config, _morse_rows, _ProjectionDatabase
 
@@ -122,6 +123,7 @@ class _GalleryProjectionStore:
         self.generation = 1
         self.published: set[tuple[str, int]] = set()
         self.publications = 0
+        self.relations_stale = False
 
     def connect(self, *_args, **_kwargs):
         return _GalleryConnection(self)
@@ -139,7 +141,13 @@ class _GalleryConnection:
 
     def execute(self, sql, params=None):
         rows: list[dict[str, object]] = []
-        if "to_regclass('library.gallery_projection_state')" in sql:
+        if "as relation_projection" in sql:
+            rows = [{"relation_projection": {
+                "status": "ready", "builder_version": RELATION_PROJECTION_BUILDER_VERSION,
+                "source_fingerprint": "changed" if self.store.relations_stale else "built",
+                "built_from_fingerprint": "built",
+            }}]
+        elif "to_regclass('library.gallery_projection_state')" in sql:
             rows = [{"installed": True}]
         elif "information_schema.columns" in sql:
             rows = [{"compatible": True}]
@@ -183,10 +191,16 @@ def test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at
 
     def run(trigger_count: int) -> OperationCounts:
         store = _GalleryProjectionStore()
+        alias_loads = [0]
+
+        def load_alias_maps(**_kwargs):
+            alias_loads[0] += 1
+            return {"alias_to_canonical": {}, "canonical_to_aliases": {}}
+
         # The browse repository reads ready relations and no missing albums.
         repository = SimpleNamespace(
             _connect_to_database=store.connect,
-            _load_relation_alias_maps=lambda **_kwargs: {"alias_to_canonical": {}, "canonical_to_aliases": {}},
+            _load_relation_alias_maps=load_alias_maps,
             _load_missing_album_rows=lambda **_kwargs: [],
         )
         monkeypatch.setattr(browse, "PostgresLibraryBrowseRepository", lambda *_args, **_kwargs: repository)
@@ -209,7 +223,17 @@ def test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at
         projection.schedule_gallery_projection_refresh(config)
         executor.run_all()
         assert store.publications == 4
-        return OperationCounts(builder_calls=passes[0], generation_changes=store.publications)
+        # Two rebuilds load the library's alias maps, once before and once for
+        # each scope; the passes that find both scopes published load none.
+        loads = alias_loads[0]
+        assert loads == 6
+        # Published scopes don't hide a relation rebuild that is still due.
+        store.relations_stale = True
+        projection.ensure_gallery_projection_ready(config)
+        assert alias_loads[0] == loads + 1
+        return OperationCounts(
+            builder_calls=passes[0] - 1, generation_changes=store.publications, unrelated_reads=loads,
+        )
 
     measure_scale_pair(run=run, **_registered(interaction_id))
 

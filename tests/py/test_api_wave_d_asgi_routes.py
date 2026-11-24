@@ -6387,7 +6387,7 @@ def test_selected_cover_inventory_contract_builds_only_the_selected_album_at_pro
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import library as library_module
     from music_app.services import library_browse_postgres
-    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.bounded_interactions import OperationCounts
     from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
     selected_paths = {str(tmp_path / "Selected" / "Album" / name) for name in ("01.mp3", "02.mp3")}
@@ -6432,11 +6432,8 @@ def test_selected_cover_inventory_contract_builds_only_the_selected_album_at_pro
         assert library_state["file_cache"] is shared_cache and library_state["albums"] is shared_albums
         return counts
 
-    measure_scale_pair(
-        interaction_id="py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image_save",
-        small=20,
-        large=1_000,
-        run=run,
-        budgets={"builder_calls": 1, "candidate_rows": 2, "filesystem_enumerations": 0, "stat_calls": 0},
-        growth=("candidate_rows", 0),
-    )
+    # The helper's own bound; test_cover_save_bounded_contracts measures the route.
+    for album_count in (20, 1_000):
+        counts = run(album_count)
+        assert counts.builder_calls == 1 and counts.candidate_rows == 2
+        assert counts.filesystem_enumerations == 0 and counts.stat_calls == 0

@@ -365,8 +365,8 @@ def save_cache_to_disk_for_config(
     )
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     if isinstance(adapter, PostgresScanCacheAdapter):
-        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-        schedule_gallery_projection_refresh(config, connect=adapter._connect)
+        from music_app.services.gallery_projection_postgres import schedule_full_gallery_projection_refresh
+        schedule_full_gallery_projection_refresh(config, connect=adapter._connect)
     return result
 
 
@@ -444,9 +444,9 @@ def _persist_cache_updates(
         before_commit=complete_in_transaction if hooks else None,
         rebase_under_lock=rebased,
     )
-    from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+    from music_app.services.gallery_projection_postgres import schedule_full_gallery_projection_refresh
 
-    schedule_gallery_projection_refresh(config, connect=getattr(adapter, "_connect", None))
+    schedule_full_gallery_projection_refresh(config, connect=getattr(adapter, "_connect", None))
     return {**result, "projection_mode": "stale"}
 
 
@@ -541,16 +541,19 @@ def persist_cover_selection_for_tracks_for_config(
     **options,
 ) -> dict[str, object]:
     """Commit one album's cover selection over its own connection."""
-    result = _select_runtime_scan_cache_adapter(config).persist_cover_selection(
-        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
-    )
+    try:
+        result = _select_runtime_scan_cache_adapter(config).persist_cover_selection(
+            track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+        )
+    finally:
+        _record_cover_change(config, track_paths)
     _refresh_local_cover_inventory_after_selection(config, track_paths, options)
     if any(int(result.get(field) or 0) for field in ("album_rows_updated", "track_rows_updated", "track_file_rows_updated")):
         # The commit journaled the album for relations (migration 0108); its owner drains just those
         # albums, queued off the response path.
-        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
 
-        schedule_gallery_projection_refresh(config, incremental_membership=True)
+        queue_journaled_relation_drain(config)
     return result
 
 
@@ -562,11 +565,25 @@ def persist_cover_selection_in_shared_transaction(
 ) -> dict[str, object]:
     """Commit one album's cover selection on the cover run's shared connection,
     so a batch of albums costs one connection."""
-    result = _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
-        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
-    )
+    try:
+        result = _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
+            track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+        )
+    finally:
+        _record_cover_change(config, track_paths)
     _refresh_local_cover_inventory_after_selection(config, track_paths, options)
     return result
+
+
+def _record_cover_change(config: dict[str, object], track_paths: set[str]) -> None:
+    # Also after a failure, which can follow the commit: noting an album that
+    # did not change only reloads that album.
+    from music_app.services.library_browse_postgres import record_cover_change_in_utility_projections
+
+    record_cover_change_in_utility_projections(
+        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+        track_paths=track_paths,
+    )
 
 
 def _refresh_local_cover_inventory_after_selection(

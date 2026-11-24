@@ -716,14 +716,23 @@ def _first_build_ready(config, connect=None) -> bool:
         return journaled is None
 
 
-def queue_journaled_relation_drain(config):
+def queue_journaled_relation_drain(config, *, connect=None):
     """The owner of a committed write's journaled albums (library.local_relation_dirty_albums) outside a scan,
-    the watcher, a tag save and startup: the keyed incremental drain, queued off the response path. It also
-    retries the catch-up of any verified save whose back-off has run out (owner's rule, 2026-11-23)."""
+    the watcher and startup: the keyed incremental drain, queued off the response path. It also retries the
+    catch-up of any verified save whose back-off has run out (owner's rule, 2026-11-23)."""
     from music_app.services.tag_edit_catch_up import retry_waiting_catch_ups
 
     retry_waiting_catch_ups()
-    return schedule_gallery_projection_refresh(config, incremental_membership=True)
+    # A writer on its own connection factory (the structural save) passes it; the others use the default.
+    options = {} if connect is None else {"connect": connect}
+    return schedule_gallery_projection_refresh(config, incremental_membership=True, **options)
+
+
+def schedule_full_gallery_projection_refresh(config, *, connect=None):
+    """The whole-library form: prepares every common scope from the published relations, after a snapshot
+    save or a targeted inventory mutation. A scoped save queues `queue_journaled_relation_drain` instead;
+    the freeze guard forbids this form on those saves by this name (backlog case 31)."""
+    return schedule_gallery_projection_refresh(config, connect=connect)
 
 
 def schedule_gallery_projection_refresh(
@@ -927,16 +936,34 @@ def finish_full_relation_publication(connection, config, relation_views):
 def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None, view_state=None, allow_shared_seed=False):
     """Publish each common scope from its own coherent source snapshot.
 
+    When every scope is already published from current relations, this returns
+    before it loads the library's alias maps.
+
     While a relation rebuild is pending, the scopes first publish with the last
     published families, so watcher-found artists show at once (ungrouped until
     their relations exist); the rebuilt relations then change the source
     generation and the scopes publish again.
     """
     from music_app.services import library_browse_postgres as browse
-    from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
+    from music_app.services.relation_projection_postgres import (
+        _raise_if_projection_cancelled, relation_projection_metadata_stale_reason,
+    )
     repository = browse.PostgresLibraryBrowseRepository(config, connect=connect)
     scopes = ([view_state] if view_state is not None else
               [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})])
+
+    def published_and_current():
+        with repository._connect_to_database() as connection:
+            context = gallery_projection_context(connection)
+            if not context or not all(_ready_header(connection, context, state) for state in scopes):
+                return False
+            # A ready header implies a complete relation structure, so the small
+            # metadata object alone says whether a relation rebuild is still due.
+            row = _first(connection.execute("""
+                select metadata #> '{scan_cache,relation_projection}' as relation_projection
+                from library.libraries where id = %(library_id)s
+            """, {"library_id": context["library_id"]})) or {}
+            return not relation_projection_metadata_stale_reason(row.get("relation_projection"))
 
     def publish_scopes():
         built = 0
@@ -962,6 +989,9 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
             built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect, **options))
         return built
 
+    _raise_if_projection_cancelled(cancel_requested)
+    if published_and_current():
+        return {"built": 0}
     built = 0
     if repository._load_relation_alias_maps().get("projection_stale_reason"):
         from music_app.services.relation_projection_postgres import ensure_relation_projection_ready

@@ -282,6 +282,9 @@ class _EmptyMissingAlbumConnection:
             "library.local_album_artist_identities",
         )):
             return _InventoryCursor()
+        from music_app.services.library_browse_postgres import _OUTSIDE_COPIES_SQL
+        if sql == _OUTSIDE_COPIES_SQL:  # no copies outside the album folder in these fixtures
+            return _InventoryCursor()
         assert _is_missing_album_query(sql)
         assert not params
         return _InventoryCursor()

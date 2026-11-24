@@ -2289,6 +2289,7 @@ class PostgresLibraryBrowseRepository:
         if musicbrainz_artist:
             detail_album["musicbrainz_artist"] = musicbrainz_artist
         _annotate_album_payload_problematic_tracks([detail_album], rows)
+        _annotate_album_tracks_with_outside_copies(connection, detail_album)
         detail_album["poor_art_quality"] = (
             "Poor art quality" in _problematic_album_reasons(detail_album)
         )
@@ -5606,6 +5607,66 @@ def _effective_row_exception_type(row_payload: Mapping[str, object]) -> str:
             file_entry.get("exception_type"),
         )
     return normalize_exception_value(effective_exception_value)
+
+
+_OUTSIDE_COPY_REASON = "Duplicate track outside album folder"
+
+# The copies of one album's tracks: files the scan classified as a duplicate outside their album folder,
+# found through the album's own duplicate identities (0093 index), never by reading the library.
+_OUTSIDE_COPIES_SQL = """
+    with own as materialized (
+      select distinct library.duplicate_identity_text(files.scan_file_album_artist) as artist_identity,
+        library.duplicate_identity_text(files.scan_file_album) as album_identity,
+        library.duplicate_identity_year(files.scan_file_year) as album_year
+      from library.local_track_files files
+      where files.private_path = any(%(paths)s::text[]) and files.scan_cache_stale is false
+    )
+    select copies.private_path,
+      copies.metadata #>> '{scan_cache,file_entry,title}' as title,
+      coalesce(nullif(copies.metadata #>> '{scan_cache,file_entry,artist}', ''),
+               copies.metadata #>> '{scan_cache,file_entry,album_artist}') as artist,
+      tracks.duration_seconds
+    from own
+    cross join lateral (
+      select files.private_path, files.metadata, files.track_id
+      from library.local_track_files files
+      where library.duplicate_identity_text(files.scan_file_album_artist) = own.artist_identity
+        and library.duplicate_identity_text(files.scan_file_album) = own.album_identity
+        and library.duplicate_identity_year(files.scan_file_year) = own.album_year
+        and files.scan_cache_stale is false
+        and files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' = %(reason)s
+        and files.private_path <> all(%(paths)s::text[])
+      offset 0
+    ) copies
+    join library.local_tracks tracks on tracks.id = copies.track_id
+    where own.artist_identity <> '' and own.album_identity <> ''
+"""
+
+
+def _annotate_album_tracks_with_outside_copies(connection: Any, album: dict[str, object]) -> None:
+    """Owner (2026-11-24): an album track with a copy outside the album folder shows the Problematic Files
+    icon, and it leads to the copy's entry. Matched by the membership rule's own track signature."""
+    from music_app.services.album_local_membership import _duration, _text
+
+    tracks = [track for track in album.get("tracks") or [] if isinstance(track, dict) and track.get("path")]
+    if not tracks:
+        return
+    copies: dict[tuple[str, str, int], str] = {}
+    for row in connection.execute(_OUTSIDE_COPIES_SQL, {
+        "paths": [str(track["path"]) for track in tracks], "reason": _OUTSIDE_COPY_REASON,
+    }).fetchall():
+        payload = _row_mapping(row)
+        signature = (_text(payload.get("title")), _text(payload.get("artist")), _duration(payload.get("duration_seconds")))
+        path = str(payload.get("private_path") or "")
+        if path and (signature not in copies or path < copies[signature]):
+            copies[signature] = path
+    for track in tracks:
+        if track.get("is_problematic"):
+            continue
+        copy = copies.get((_text(track.get("title")), _text(track.get("artist") or track.get("album_artist")),
+                           _duration(track.get("duration_seconds"))))
+        if copy:
+            track.update(is_problematic=True, problem_reasons=[_OUTSIDE_COPY_REASON], problem_track_path=copy)
 
 
 def _annotate_album_payload_problematic_tracks(

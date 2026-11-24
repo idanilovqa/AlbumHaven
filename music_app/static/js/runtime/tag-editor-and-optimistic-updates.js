@@ -2570,6 +2570,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
         problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
+        problemTrackPath: String(track.problem_track_path || ''),
         isSearchMatch: discMatchesSearch || matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
         sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };

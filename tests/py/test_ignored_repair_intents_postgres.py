@@ -337,3 +337,64 @@ def test_intents_a_drain_keeps_failing_to_apply_are_failed_after_its_last_attemp
     assert _pending(library) == 1
     assert _shown(library) == set(), "a failed intent is no longer shown as made"
     assert any("failed" in record.getMessage() for record in caplog.records)
+
+
+# 6.5 (11-24): "stuck" is counted only from the moment the lock was free and a drain was due, never while a
+# publication holds the library. The bound comes from config (ALBUM_HAVEN_IGNORE_INTENT_STALL_SECONDS).
+STALL_SECONDS = 1
+
+
+def test_a_scan_holding_the_lock_past_the_bound_never_makes_a_waiting_ignore_stuck(library, monkeypatch):
+    from music_app.services import ignored_repair_intents
+
+    keys = _keys(library)
+    config = {**library.fixture.config, "ALBUM_HAVEN_IGNORE_INTENT_STALL_SECONDS": STALL_SECONDS}
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+    save = library.save()
+    try:
+        assert _answered(lambda: _ignore(library, keys)) == "pending"
+        drain = _Writer(lambda: ignored_repair_intents.drain(config))
+        drain.join(STALL_SECONDS * 3)
+        assert drain.is_alive(), "the drain waits for the publication"
+        later = _Writer(lambda: ignored_repair_intents.drain(config))
+        later.join(STALL_SECONDS * 2)
+    finally:
+        save.rollback()
+        save.close()
+    for waiting in (drain, later):
+        waiting.join(30)
+        assert not waiting.is_alive() and waiting.error is None, waiting.error
+    assert _failed(library) == {}
+    assert _stored(library) == set(keys)
+    assert _pending(library) == 0
+
+
+def test_an_intent_a_drain_could_not_apply_once_the_lock_was_free_is_stuck_after_the_bound(library, monkeypatch):
+    from time import sleep
+
+    from music_app.services import ignored_repair_intents, rule_state_postgres
+
+    keys = _keys(library)
+    config = {**library.fixture.config, "ALBUM_HAVEN_IGNORE_INTENT_STALL_SECONDS": STALL_SECONDS}
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+    monkeypatch.setattr(ignored_repair_intents, "_schedule_retry", lambda _config: None)
+    save = library.save()
+    try:
+        assert _answered(lambda: _ignore(library, keys)) == "pending"
+    finally:
+        save.rollback()
+        save.close()
+
+    def broken(_connection):
+        raise RuntimeError("the drain cannot run")
+
+    monkeypatch.setattr(rule_state_postgres, "apply_pending_ignored_repair_intents", broken)
+    # The lock is free and the drain is due, but it fails: the clock starts now.
+    ignored_repair_intents._drain_queued(config, config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    assert _failed(library) == {}
+    sleep(STALL_SECONDS + 1)
+    ignored_repair_intents._drain_queued(config, config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    failed = _failed(library)
+    assert set(failed) == set(keys)
+    assert {item["failure_kind"] for item in failed.values()} == {"stuck"}
+    assert _shown(library) == set(), "a stuck intent is no longer shown as made"

@@ -338,6 +338,15 @@ inferred for them, so those devices are refused until the app attests again. The
 table's existing grants cover the column. For rollback, roll back the application
 first; the column can stay.
 
+Migration `0299_create_android_attestation_revocations.sql` adds
+`app.android_attestation_revocations`, the revoked attestation certificate serials
+(lowercase hex, keyed by serial, from Google's status list or the operator), and
+`app.android_attestation_revocation_sources`, which records when Google's list was
+last imported; a server configured to use that list fails closed until it has a row. It replaces the status file the server parsed on every attest request. The
+application role may only read both tables; `scripts/android_attestation_revocations.py`
+writes them through the migrator role. For rollback, roll back the application first
+(the older version reads the file again); the tables can stay.
+
 Migration `0086_create_root_gallery_projection.sql` adds the derived,
 library-scoped Gallery projection and its transactional invalidation boundary.
 Rollback first disables projection readers and writers, then removes its triggers,

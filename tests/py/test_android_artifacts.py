@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import logging
 from datetime import timedelta
@@ -27,6 +28,7 @@ from music_app.services.android_artifact_access import (
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.current_actor import ActorState, CurrentActor
 from music_app.services.private_route_boundary import _is_public, install_private_route_boundary
+from scripts import android_attestation_revocations as revocations
 from tests.e2e.support import isolatedPostgres
 from tests.py.android_attestation_testing import NOW, SIGNER, AttestationPki
 from tests.py.test_isolated_postgres_live import _dedicated_database_urls_or_skip, _drop_application_schemas
@@ -612,15 +614,25 @@ def test_a_failed_signature_does_not_refresh_the_device_key(world):
     assert last_used() == world.clock.now
 
 
-def _status_list(world, tmp_path, content):
+def _load_status_list(world, tmp_path, entries):
+    """What an operator does: save Google's list, then run the import command."""
     path = tmp_path / "attestation-status.json"
-    path.write_text(content, encoding="utf-8")
-    world.environ[ATTESTATION_STATUS_ENV] = str(path)
+    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    world.environ[ATTESTATION_STATUS_ENV] = "configured"
+    assert revocations.main(["import", "--file", str(path)], environ={
+        "ALBUM_HAVEN_MIGRATOR_DATABASE_URL": world.db.setup_url}, connect=isolatedPostgres._connect,
+        clock=world.clock, stdout=io.StringIO()) == 0
+
+
+def _revocations(world):
+    with isolatedPostgres._connect(world.db.setup_url) as connection:
+        return {row["serial"]: (row["source"], row["reason"]) for row in connection.execute(
+            "select serial, source, reason from app.android_attestation_revocations")}
 
 
 def test_a_chain_with_a_listed_certificate_cannot_attest(world, tmp_path):
     # Google lists serials in uppercase hex, sometimes with leading zeros.
-    _status_list(world, tmp_path, json.dumps({"entries": {"01F2E": {"status": "REVOKED", "reason": "KEY_COMPROMISE"}}}))
+    _load_status_list(world, tmp_path, {"01F2E": {"status": "REVOKED", "reason": "KEY_COMPROMISE"}})
     status, body, _ = _attest(world, intermediate_serial=0x1F2E)
     assert (status, body["code"]) == (403, "attestation_refused")
     with isolatedPostgres._connect(world.db.setup_url) as connection:
@@ -628,17 +640,30 @@ def test_a_chain_with_a_listed_certificate_cannot_attest(world, tmp_path):
     assert _attest(world, intermediate_serial=0x1F2F)[0] == 200
 
 
-@pytest.mark.parametrize(
-    "content",
-    [None, "not json", "[]", '{"entries": 5}', '{"entries": "01F2E"}', '{"entries": null}', '{"entries": []}'],
-    ids=["missing", "garbage", "not-an-object", "entries-not-an-object", "entries-a-string", "entries-null",
-         "entries-empty-list"],
-)
-def test_an_unreadable_status_list_fails_closed_before_the_challenge_is_spent(world, tmp_path, content):
-    if content is None:
-        world.environ[ATTESTATION_STATUS_ENV] = str(tmp_path / "absent.json")
-    else:
-        _status_list(world, tmp_path, content)
+def test_an_operator_revocation_applies_without_a_status_list(world):
+    environ = {"ALBUM_HAVEN_MIGRATOR_DATABASE_URL": world.db.setup_url}
+
+    def run(*argv):
+        return revocations.main(list(argv), environ=environ, connect=isolatedPostgres._connect, clock=world.clock,
+                                stdout=io.StringIO())
+
+    assert run("add", "--serial", "1F2E", "--reason", "lost phone") == 0
+    assert _attest(world, intermediate_serial=0x1F2E)[1]["code"] == "attestation_refused"
+    assert run("remove", "--serial", "01f2e") == 0
+    assert _attest(world, intermediate_serial=0x1F2E)[0] == 200
+
+
+def test_a_reimported_status_list_drops_only_its_own_stale_serials(world, tmp_path):
+    environ = {"ALBUM_HAVEN_MIGRATOR_DATABASE_URL": world.db.setup_url}
+    _load_status_list(world, tmp_path, {"0A": {"reason": "KEY_COMPROMISE"}, "0B": {}})
+    assert revocations.main(["add", "--serial", "c"], environ=environ, connect=isolatedPostgres._connect,
+                            clock=world.clock, stdout=io.StringIO()) == 0
+    _load_status_list(world, tmp_path, {"B": {"reason": "SUSPENDED"}, "C": {"reason": "KEY_COMPROMISE"}})
+    assert _revocations(world) == {"b": ("status-list", "SUSPENDED"), "c": ("operator", "")}
+
+
+def test_a_configured_status_list_that_was_never_loaded_fails_closed_before_the_challenge_is_spent(world):
+    world.environ[ATTESTATION_STATUS_ENV] = "configured"
     challenge = _challenge(world, "attest")
     chain, _ = world.pki.chain(_raw(challenge))
     payload = {"protocol": 1, "channel": "sandbox", "challenge": challenge, "chain": _chain_payload(chain)}

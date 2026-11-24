@@ -343,6 +343,38 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
         isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_performance_restore_publishes_common_scopes_at_current_generation(watcher_repair_inventory):
+    """FTC-COVERS-019P: a performance restore leaves the app nothing to publish at startup, as in production.
+
+    Otherwise its first start builds both common scopes after relation readiness and a measured read answers
+    gallery_projection_pending meanwhile.
+    """
+    import importlib.util
+
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import library_browse_postgres as browse
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Owner/Restored/one.flac", album="Restored"), startup_baseline=False)
+    common_scopes = [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})]
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        context = gallery.gallery_projection_context(connection)
+        assert [gallery._ready_header(connection, context, scope) for scope in common_scopes] == [None, None]
+
+    loader_path = Path(__file__).parents[2] / "scripts" / "ci" / "load-fixture-profile.py"
+    spec = importlib.util.spec_from_file_location("album_haven_ci_fixture_loader_live", loader_path)
+    loader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loader)
+    loader.prepare_relation_projection(fixture.setup_url)
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        context = gallery.gallery_projection_context(connection)
+        headers = [gallery._ready_header(connection, context, scope) for scope in common_scopes]
+    assert all(header is not None for header in headers), "both common scopes publish at the current generation"
+    assert {header["source_generation"] for header in headers} == {context["generation"]}
+    assert headers[0]["album_count"] == 1
+
+
 def test_live_targeted_invalidation_publishes_new_album_to_gallery(
     watcher_repair_inventory,
     monkeypatch,

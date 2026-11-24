@@ -235,6 +235,24 @@ def _registry_mismatches(
     ]
 
 
+# 6.5 (11-24): a contract for a Problematic Files route or the index's own work measures the server's path, the
+# persisted index. tests/py/conftest.py switches the index off for every other test, so such a contract must
+# switch it on (ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED); each one also asserts what it read came from the index.
+PROBLEMATIC_INDEX_CONTRACT_PREFIXES = (
+    "py:routes/api_read_asgi_routes.py#utilities_problematic_file",
+    "py:services/problematic_index.py#",
+)
+
+
+def _problematic_index_mismatches(interaction_id: str) -> list[str]:
+    if not interaction_id.startswith(PROBLEMATIC_INDEX_CONTRACT_PREFIXES):
+        return []
+    enabled = os.environ.get("ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED", "1").strip().casefold()
+    if enabled in {"0", "false", "no"}:
+        return [f"{interaction_id}: measured with the Problematic Files index off; the server reads the index"]
+    return []
+
+
 def measure_scale_pair(
     *,
     interaction_id: str,
@@ -249,7 +267,7 @@ def measure_scale_pair(
     if not (0 < small < large):
         raise ValueError(f"{interaction_id}: scale pair needs 0 < small < large")
     actual = {"small": small, "large": large, "budgets": dict(budgets), "growth": None if growth is None else tuple(growth)}
-    mismatches = _registry_mismatches(interaction_id, actual, registry)
+    mismatches = [*_registry_mismatches(interaction_id, actual, registry), *_problematic_index_mismatches(interaction_id)]
     if mismatches:
         raise AssertionError("\n".join(mismatches))
     small_counts = run(small)

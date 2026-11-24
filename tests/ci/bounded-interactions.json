@@ -9681,6 +9681,7 @@
         "music_app/routes/api_read_asgi_routes.py",
         "music_app/services/library_album_index.py",
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/problematic_index.py",
         "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
@@ -9696,9 +9697,9 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 3,
+        "sql_statements": 4,
         "filesystem_enumerations": 0,
-        "returned_rows": 12,
+        "returned_rows": 13,
         "pending_intent_rows": 2
       },
       "growth": {
@@ -9707,7 +9708,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 3 is not a flat allowance: the contract asserts exactly 2 statements with no candidate folder and exactly 3 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes. Deadlock part 3 (6.5, 11-24): one more statement is the pending-intents read scoped to the album's own key and files (pending_intent_rows 2 in this contract; the 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait)."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. Index on, as the server (6.5, 11-24; supersedes the index-off 2/3): problematic_index.listed_as_missing (1 row), the relation alias read, the pending-intents read scoped to the album's key and files (pending_intent_rows 2), and with candidate folders the narrowing's one read (12 rows): 3 or 4 statements. The 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query",
@@ -9720,6 +9721,7 @@
         "music_app/routes/api_read_asgi_routes.py",
         "music_app/services/library_album_index.py",
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/problematic_index.py",
         "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
@@ -9735,9 +9737,9 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 3,
+        "sql_statements": 4,
         "filesystem_enumerations": 0,
-        "returned_rows": 12,
+        "returned_rows": 13,
         "pending_intent_rows": 2
       },
       "growth": {
@@ -9746,7 +9748,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 3 is not a flat allowance: the contract asserts exactly 2 statements with no candidate folder and exactly 3 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes. Deadlock part 3 (6.5, 11-24): one more statement is the pending-intents read scoped to the album's own key and files (pending_intent_rows 2 in this contract; the 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait)."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. Index on, as the server (6.5, 11-24; supersedes the index-off 2/3): problematic_index.listed_as_missing (1 row), the relation alias read, the pending-intents read scoped to the album's key and files (pending_intent_rows 2), and with candidate folders the narrowing's one read (12 rows): 3 or 4 statements. The 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_files",

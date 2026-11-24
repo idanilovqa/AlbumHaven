@@ -1450,6 +1450,12 @@ class _DetailConnection:
         text = str(sql)
         if text.startswith("SET LOCAL"):
             return SimpleNamespace(fetchall=lambda: [])
+        if "'Album not found' as missing" in text:
+            # problematic_index.listed_as_missing: the index lists this album as present.
+            self.current["asked_the_index"] = True
+            self.counts.sql_statements += 1
+            self.counts.returned_rows += 1
+            return SimpleNamespace(fetchone=lambda: {"missing": False})
         if "library.ignored_repair_intents" in text:
             self.counts.sql_statements += 1
             # Scoped to the album's own rows: its key and its files, never every pending intent.
@@ -1478,9 +1484,12 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
     """D3 (6.5, 2026-11-24): with candidate folders, the mixed-folder narrowing adds exactly one statement,
     however many folders, and reads only those folders' files."""
     from music_app.routes import api_read_asgi_routes
-    from music_app.services import library_browse_postgres, problematic_albums
+    from music_app.services import library_browse_postgres, problematic_albums, problematic_index
 
     interaction_id, path, query = route
+    # The server's path (6.5, 11-24): the persisted index is on, so a Postgres detail first asks it whether the
+    # album is listed as missing (tests/py/conftest.py switches it off for every other test).
+    monkeypatch.setenv(problematic_index.ENABLED_KEY, "1")
     # The Postgres rule-state store holds no ignored repairs for this library.
     monkeypatch.setattr(problematic_albums, "load_ignored_repair_keys", lambda _config: set())
     current: dict[str, object] = {}
@@ -1551,13 +1560,16 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
         assert len(payload["tracks"]) == 12
         assert "Encoding problem" in payload["problem_reasons"]
         if backend == "postgres":
+            # The detail's index marker: it asked the persisted index first, as the server does.
+            assert current.pop("asked_the_index", False)
             # The pending Ignore and Unignore show as made: the cover problem is ignored, the encoding problem back.
             assert "Missing cover art" not in payload["problem_reasons"]
             assert not payload.get("album_problem_rows")
-            # The alias read and the pending-intents read; the narrowing's one read with any number of candidate
-            # folders. The intents read returns this album's two kept intents (6.5, 11-24).
-            assert counts.sql_statements == (3 if candidate_folders else 2)
-            assert counts.returned_rows == (12 if candidate_folders else 0)
+            # The index's listed-as-missing read (1 row), the alias read and the pending-intents read; the
+            # narrowing's one read with any number of candidate folders (6.5, 11-24). The intents read returns this
+            # album's two kept intents.
+            assert counts.sql_statements == (4 if candidate_folders else 3)
+            assert counts.returned_rows == (13 if candidate_folders else 1)
             assert counts.pending_intent_rows == 2
         return counts
 

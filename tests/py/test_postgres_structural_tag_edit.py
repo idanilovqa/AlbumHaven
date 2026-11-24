@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
 
 from tests.e2e.support import isolatedPostgres
+from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (live fixture)
 
 try:
     import psycopg
@@ -3198,3 +3200,62 @@ def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_
         and "insert into library.local_track_files" not in _normalized_sql(sql)
         for sql, _params in connection.executed
     )
+
+
+def _save_album_edit_live(fixture, entries, paths, album):
+    previous = {path: dict(entries[path]) for path in paths}
+    updated = {path: {**entries[path], "album": album} for path in paths}
+    fixture.adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
+        updated_file_entries=updated, changed_field_names={"album"})
+    fixture.adapter.persist_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
+        updated_file_entries=updated, changed_field_names={"album"})
+    entries.update(updated)
+
+
+def test_live_restored_track_keeps_its_album_folder_cover_across_the_next_folder_pass(
+        watcher_repair_inventory, monkeypatch):
+    """FTC-TAGS-009: after a moved track comes back, the next watcher or scan pass of the folder keeps the cover.
+
+    The folder still holds a split-off album, so a fresh read sees two albums in one folder and drops the
+    inferred folder cover; only the split-off track carries the inheritance mark. Owner (2026-11-17): the
+    cover belongs to the folder, so every album in it keeps the cover (a folder default, not a user choice).
+    """
+    from music_app.services import gallery_projection_postgres
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", lambda *a, **k: None)
+    folder = Path(fixture.roots[0]["path"]) / "Owner" / "Split Album"
+    folder.mkdir(parents=True, exist_ok=True)
+    cover = folder / "cover.jpg"
+    cover.write_bytes(b"folder cover")
+    entries = {}
+    for number in (1, 2, 3):
+        entry = fixture.entry(f"Owner/Split Album/{number:02d}.flac", album="Split Album")
+        entry.update(track_number=number, cover_path=str(cover), cover_selection_origin="automatic")
+        entries[entry["path"]] = entry
+    fixture.seed(*entries.values())
+    first, second, _third = sorted(entries)
+    _save_album_edit_live(fixture, entries, [first], "Split Album 2")
+    _save_album_edit_live(fixture, entries, [second], "Split Album 3")
+    _save_album_edit_live(fixture, entries, [first], "Split Album")
+
+    def album_covers():
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            rows = connection.execute("""select albums.title, albums.cover_path
+                from library.local_albums albums where albums.title like 'Split Album%%'
+                  and exists (select 1 from library.local_tracks tracks join library.local_track_files files
+                    on files.track_id=tracks.id and files.scan_cache_stale is false where tracks.album_id=albums.id)
+                order by albums.title""").fetchall()
+        return {row["title"]: row["cover_path"] for row in rows}
+
+    assert album_covers() == {"Split Album": str(cover), "Split Album 3": str(cover)}
+    fixture.config["IMAGE_EXTENSIONS"] = {".jpg"}
+    reread = {path: {key: value for key, value in entry.items()
+                     if not key.startswith("cover_")} for path, entry in entries.items()}
+    TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: dict(reread[str(path)]), wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(root_id="repair-main", paths=tuple(Path(path) for path in sorted(entries)),
+                                deleted_paths=(), deleted_subtrees=(), moves=()))
+    assert album_covers() == {"Split Album": str(cover), "Split Album 3": str(cover)}

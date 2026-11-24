@@ -25,10 +25,26 @@ def inferred_local_cover_belongs_to_track(cover_path: object, track_path: object
     )
 
 
+def split_folder_covers(
+    file_cache: Mapping[str, Mapping[str, object]],
+) -> set[tuple[str, str]]:
+    """(folder, cover) pairs that an in-folder split handed to the album it created.
+
+    Owner (2026-11-17): the cover belongs to the folder, so both halves of the split keep it.
+    """
+    return {
+        (physical_album_folder(entry.get("path") or path), cover_path.casefold())
+        for path, entry in file_cache.items()
+        if entry.get("cover_inherited_from_structural_edit") is True
+        and (cover_path := str(entry.get("cover_path") or "").strip())
+    }
+
+
 def clear_ambiguous_folder_covers(
     file_cache: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
     """Drop inferred folder art when one physical folder contains multiple releases."""
+    kept_split_covers = split_folder_covers(file_cache)
     albums_by_folder: dict[str, set[str]] = {}
     folder_by_cache_path: dict[str, str] = {}
     roots_by_cover_path: dict[str, set[str]] = {}
@@ -69,7 +85,7 @@ def clear_ambiguous_folder_covers(
             or not (ambiguous_inferred_cover or foreign_inferred_cover)
             or str(entry.get("cover_selection_origin") or "").casefold() == "user"
             or str(entry.get("cover_selection_provenance") or "").casefold() == "explicit"
-            or entry.get("cover_inherited_from_structural_edit") is True
+            or (folder_by_cache_path.get(cache_path), cover_path.casefold()) in kept_split_covers
             or bool(entry.get("remote_cover_url"))
         ):
             continue

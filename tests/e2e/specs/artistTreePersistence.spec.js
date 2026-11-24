@@ -98,17 +98,22 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
     await expect(page.locator('#artist-tree-navigation-button')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]'))
       .toHaveAttribute('aria-pressed', 'false');
+    // The tree still shows the current (Metallica) results until the new search is submitted; the check starts on
+    // the first frame after Enter, so it covers exactly the time the new search runs.
     // parity-check: allow-read-only-measurement-evaluate -- record, on every frame, which tree entries are visible
     await page.evaluate(() => {
       const frames = [];
       window.__new005Frames = frames;
+      document.getElementById('search-input').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') window.__new005Submitted = true;
+      }, { capture: true });
       const read = () => {
         const visible = [...document.querySelectorAll('#sidebar-list [data-sidebar-artist]')]
           .filter((node) => node.checkVisibility?.({ visibilityProperty: true }))
           .map((node) => node.getAttribute('data-sidebar-artist'));
         const loader = document.getElementById('library-loader');
-        frames.push({ metallica: visible.includes('Metallica'), mastodon: visible.includes('Mastodon'),
-          loading: Boolean(loader && !loader.hidden) });
+        frames.push({ submitted: Boolean(window.__new005Submitted), metallica: visible.includes('Metallica'),
+          mastodon: visible.includes('Mastodon'), loading: Boolean(loader && !loader.hidden) });
         if (!window.__new005Stop) requestAnimationFrame(read);
       };
       requestAnimationFrame(read);
@@ -118,10 +123,12 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
     await expect(page.locator('#sidebar-list [data-sidebar-artist="Mastodon"]').first()).toBeVisible();
     await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksModal).toBeHidden();
     const frames = await page.evaluate(() => { window.__new005Stop = true; return window.__new005Frames; });
+    const submitted = frames.findIndex((frame) => frame.submitted);
+    expect(submitted, 'the new search was submitted while frames were recorded').toBeGreaterThanOrEqual(0);
     const firstMastodon = frames.findIndex((frame) => frame.mastodon);
-    expect(firstMastodon, 'the new results render in the tree').toBeGreaterThanOrEqual(0);
-    const beforeResults = frames.slice(0, firstMastodon);
-    expect(beforeResults.filter((frame) => frame.metallica), JSON.stringify(frames.slice(0, firstMastodon + 1))).toEqual([]);
+    expect(firstMastodon, 'the new results render in the tree').toBeGreaterThanOrEqual(submitted);
+    const whileSearching = frames.slice(submitted, firstMastodon);
+    expect(whileSearching.filter((frame) => frame.metallica), JSON.stringify(frames.slice(0, firstMastodon + 1))).toEqual([]);
     expect(frames.slice(firstMastodon).some((frame) => frame.metallica)).toBe(false);
   });
   await stepLogger.step('INT-033: on a phone the Loose Tracks page header shows "Loose Tracks / N tracks"', async () => {

@@ -4603,10 +4603,12 @@ class PostgresLibraryBrowseRepository:
 
     def _load_utility_rules_rows(self) -> list[object]:
         with self._browse_connection_context() as connection:
-            from music_app.services.rule_state_postgres import pending_ignored_repairs
+            from music_app.services.rule_state_postgres import ignored_repair_intents_with_failures
 
-            cursor = connection.execute(_utility_rules_sql(), _utility_rules_params(pending_ignored_repairs(connection)))
-            return list(cursor.fetchall())
+            pending, failed = ignored_repair_intents_with_failures(connection)
+            cursor = connection.execute(_utility_rules_sql(), _utility_rules_params(pending))
+            # A failed intent's rules are listed apart: the Rules tab reports them (6.5, 11-24).
+            return [*cursor.fetchall(), *({"row_kind": "failed_problem_ignore", **item} for item in failed)]
 
     def wait_for_inventory_publication(self, *, timeout_seconds: float) -> bool:
         """Wait, at most ``timeout_seconds``, for a publication holding the inventory lock to commit.
@@ -8056,8 +8058,12 @@ def _utility_rules_projection_payload(rows: list[object]) -> dict[str, object]:
     ignored_version_keys: set[str] = set()
     version_albums_by_key: dict[str, dict[str, object]] = {}
     problem_items_by_key: dict[str, dict[str, object]] = {}
+    failed_ignores: list[dict[str, object]] = []
     for row in rows:
         row_payload = _row_mapping(row)
+        if row_payload.get("row_kind") == "failed_problem_ignore":
+            failed_ignores.append({key: row_payload.get(key) for key in ("row_key", "action", "failure", "failed_at")})
+            continue
         ignored_version_key = str(row_payload.get("ignored_version_key") or "").strip()
         if ignored_version_key:
             ignored_version_keys.add(ignored_version_key)
@@ -8084,6 +8090,7 @@ def _utility_rules_projection_payload(rows: list[object]) -> dict[str, object]:
     ]
     return {
         "ok": True,
+        "failed_ignored_repairs": failed_ignores,
         "rules": [
             {
                 "key": "version-exceptions",

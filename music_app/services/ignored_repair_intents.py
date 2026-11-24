@@ -14,6 +14,8 @@ from threading import Lock
 from music_app.services.runtime_shutdown import create_daemon_executor
 
 _LOGGER = logging.getLogger(__name__)
+# Passes a drain may fail as a whole before the intents it could not apply are failed (6.5: never pending forever).
+DRAIN_ATTEMPTS = 3
 _EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-ignored-repair-intents")
 _QUEUED: set[str] = set()
 _QUEUED_LOCK = Lock()
@@ -33,9 +35,8 @@ def drain(config: Mapping[str, object]) -> int:
         with connection.transaction():
             connection.execute(inventory_publication_advisory_lock_sql())
             applied = apply_pending_ignored_repair_intents(connection)
-    if applied:
-        # The Rules projection showed these as pending; now they are stored (as after a direct write).
-        invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=("rules",))
+    # The Rules showed these as pending; now they are stored, or failed (as after a direct write).
+    invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=("rules",))
     return applied
 
 
@@ -57,9 +58,28 @@ def _drain_queued(config: dict[str, object], database_url: str) -> None:
         _QUEUED.discard(database_url)
     try:
         drain(config)
-    except Exception:
+    except Exception as error:
         _LOGGER.warning("Applying kept ignored-repair intents failed; the next write or startup retries.",
                         exc_info=True)
+        _count_failed_attempt(config, database_url, error)
+
+
+def _count_failed_attempt(config: Mapping[str, object], database_url: str, error: Exception) -> None:
+    """One failed pass counts against every pending intent; after DRAIN_ATTEMPTS they are failed and logged."""
+    from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
+    from music_app.services.postgres_connections import leased_connection
+    from music_app.services.rule_state_postgres import fail_ignored_repair_intents_after_a_failed_drain
+
+    try:
+        with leased_connection(database_url) as connection:
+            failed = fail_ignored_repair_intents_after_a_failed_drain(connection, error, DRAIN_ATTEMPTS)
+    except Exception as counting_error:  # the pass's own traceback is already logged
+        _LOGGER.warning("Counting a failed ignored-repair drain failed too: %s", counting_error)
+        return
+    if failed:
+        _LOGGER.warning("Ignored-repair intents failed after %d drain attempts and were not applied (rules %s).",
+                        DRAIN_ATTEMPTS, ", ".join(failed))
+        invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=("rules",))
 
 
 def wait_for_background_work(timeout: float = 120) -> None:

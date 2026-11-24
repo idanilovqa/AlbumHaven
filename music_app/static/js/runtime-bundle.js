@@ -24770,6 +24770,19 @@ function buildUtilityCompactTable(config) {
   return buildCompactDataTable(config);
 }
 
+// The Ignore and Unignore changes the library could not apply after a publication held them back: never
+// left showing as pending, they are reported here until the same rule is changed again (6.5, 11-24).
+function buildFailedProblemIgnoresAlert() {
+  const failed = Array.isArray(state.utility.failedIgnoredRepairs) ? state.utility.failedIgnoredRepairs : [];
+  if (!failed.length) return '';
+  const rules = failed.map((item) => String(item?.row_key || '')).filter(Boolean);
+  return buildOnPageAlertHtml({
+    severity: 'error',
+    title: failed.length === 1 ? 'A rule change was not applied' : `${failed.length} rule changes were not applied`,
+    message: `${rules.join(', ')}. ${String(failed[0]?.failure || '').trim()} Change the rule again to retry.`,
+  });
+}
+
 function buildProblemIgnoresRuleDetail(rule) {
   const albumItems = (Array.isArray(rule?.album_items) ? rule.album_items : []).filter(matchesUtilityRuleSearch);
   const fileItems = (Array.isArray(rule?.file_items) ? rule.file_items : []).filter(matchesUtilityRuleSearch);
@@ -24813,6 +24826,7 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
+        ${buildFailedProblemIgnoresAlert()}
         ${!albumItems.length && !fileItems.length ? `<p class="utility-detail-meta">${rule.album_items?.length || rule.file_items?.length ? 'No problem exclusions match your search.' : 'No problem exclusions yet.'}</p>` : ''}
         ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
@@ -24857,6 +24871,7 @@ function buildProblemIgnoresRuleDetail(rule) {
     <div class="utility-rule-detail">
       <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
       <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
+      ${buildFailedProblemIgnoresAlert()}
       <div class="utility-rule-album-list">${rows}</div>
     </div>
   `;
@@ -34217,6 +34232,8 @@ async function loadUtilityRules(force = false) {
       state.utility.rules = mergePendingProblemExclusionRules(
         Array.isArray(data.rules) ? data.rules : [],
       );
+      // 6.5 (11-24): Ignore or Unignore changes a held publication kept back and the drain could not apply.
+      state.utility.failedIgnoredRepairs = Array.isArray(data.failed_ignored_repairs) ? data.failed_ignored_repairs : [];
       if (Array.isArray(data.ignored_version_keys)) {
         mergeViewPayload({
           ignored_version_keys: data.ignored_version_keys,

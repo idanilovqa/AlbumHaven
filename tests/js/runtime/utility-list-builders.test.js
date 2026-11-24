@@ -8816,3 +8816,21 @@ test('watchSaveTask keeps watching a finishing save past the usual polls until i
   assert.equal(notices.length, 1, 'the "Tags still updating" notice shows once');
   assert.ok(Math.max(...waits) <= 5000 && Math.max(...waits) > 500, `polling slowed to at most 5 s: ${Math.max(...waits)}`);
 });
+
+// 6.5 (11-24): an Ignore or Unignore the library could not apply after a held publication is reported in the
+// problem exclusions rule through the shared alert, never left showing as pending.
+test('the problem exclusions rule reports rule changes that were not applied through the shared alert', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const rule = { key: 'problem-ignores', title: 'Problem exclusions', album_items: [], file_items: [] };
+  context.state.utility.failedIgnoredRepairs = [];
+  assert.doesNotMatch(context.buildUtilityRuleDetail(rule), /on-page-alert/);
+  context.state.utility.failedIgnoredRepairs = [{
+    row_key: 'mono::queued::problem-album::missing-cover-art', action: 'upsert',
+    failure: 'Not applied after 3 attempts.', failed_at: '2026-11-24T18:00:00Z',
+  }];
+  const html = context.buildUtilityRuleDetail(rule);
+  assert.match(html, /data-on-page-alert="error"/);
+  assert.match(html, /A rule change was not applied/);
+  assert.match(html, /mono::queued::problem-album::missing-cover-art/);
+  assert.match(html, /Not applied after 3 attempts\./);
+});

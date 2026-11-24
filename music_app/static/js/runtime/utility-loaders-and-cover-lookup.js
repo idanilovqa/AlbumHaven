@@ -1147,6 +1147,8 @@ async function loadUtilityRules(force = false) {
       state.utility.rules = mergePendingProblemExclusionRules(
         Array.isArray(data.rules) ? data.rules : [],
       );
+      // 6.5 (11-24): Ignore or Unignore changes a held publication kept back and the drain could not apply.
+      state.utility.failedIgnoredRepairs = Array.isArray(data.failed_ignored_repairs) ? data.failed_ignored_repairs : [];
       if (Array.isArray(data.ignored_version_keys)) {
         mergeViewPayload({
           ignored_version_keys: data.ignored_version_keys,

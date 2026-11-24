@@ -14,7 +14,12 @@ create table if not exists library.ignored_repair_intents (
   -- The albums and files the intent names (rule_state_postgres.ignored_repair_identity): a read of one
   -- album's or one page's problems takes only the intents that name its rows.
   scope_identities text[] not null default '{}'::text[],
-  recorded_at timestamptz not null default now()
+  recorded_at timestamptz not null default now(),
+  -- A drain never leaves an intent pending forever: one it cannot apply, or that its last attempt still left
+  -- pending, is failed here, logged, and listed in the Rules until the same rule is written again.
+  drain_attempts integer not null default 0,
+  failed_at timestamptz,
+  failure text
 );
 create index if not exists ignored_repair_intents_library_order_idx
   on library.ignored_repair_intents (library_id, id);

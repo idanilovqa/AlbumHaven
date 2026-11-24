@@ -459,7 +459,7 @@ test('tag-save permission fault injection is isolated, allowlisted, and idempote
   const { temporarilyRevokeRuntimeDeletePrivileges } = await import(moduleUrl);
   const validEnv = {
     ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-      'postgresql://album_haven_migrator_f_123_1_2@localhost:5432/album_haven_ci_f_123_1_2',
+      'postgresql://album_haven_migrator_f_123_1_2@localhost:54329/album_haven_ci_f_123_1_2',
   };
   let rejectedExecCount = 0;
   const rejectedExec = async () => {
@@ -473,7 +473,7 @@ test('tag-save permission fault injection is isolated, allowlisted, and idempote
       {
         env: {
           ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-            'postgresql://album_haven_migrator@localhost:5432/album_haven_core',
+            'postgresql://album_haven_migrator@localhost:54329/album_haven_core',
         },
         execFileAsync: rejectedExec,
         platform: 'win32',

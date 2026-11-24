@@ -33,7 +33,7 @@ function element(initial = {}) {
   };
 }
 
-function loadLoginRuntime({ reply } = {}) {
+function loadLoginRuntime({ reply, replies = [reply], now = () => 0 } = {}) {
   const csrfToken = element({ value: 'first-token' });
   const form = element({
     action: 'https://music.test/login',
@@ -44,22 +44,34 @@ function loadLoginRuntime({ reply } = {}) {
   const toggle = element({ textContent: 'Show' });
   const submit = element({ disabled: false, textContent: 'Sign in' });
   const failure = element({ hidden: true });
+  const expired = element({ hidden: false });
   const selectors = new Map([
     ['.login-form', form],
     ['#login-password', password],
     ['.login-password-toggle', toggle],
     ['.login-submit', submit],
     ['.login-alert', failure],
+    ['.login-expired', expired],
   ]);
   const stages = [];
   const events = new Map();
+  const documentEvents = new Map();
+  const doc = {
+    visibilityState: 'visible',
+    querySelector: (selector) => selectors.get(selector) || null,
+    addEventListener: (name, fn) => documentEvents.set(name, fn),
+  };
   const requests = [];
   const navigations = [];
   const nativeSubmits = [];
   const fetch = async (url, options) => {
-    requests.push({ url, options, stagesAtRequest: [...stages], submitAtRequest: { ...submit } });
-    if (reply instanceof Error) throw reply;
-    const { status, body, contentType = 'application/json' } = reply;
+    requests.push({
+      url, options, body: options.body?.toString(), stagesAtRequest: [...stages],
+      submitAtRequest: { ...submit },
+    });
+    const next = replies.length > 1 ? replies.shift() : replies[0];
+    if (next instanceof Error) throw next;
+    const { status, body, contentType = 'application/json' } = next;
     return {
       ok: status >= 200 && status < 300,
       headers: { get: (name) => (name === 'content-type' ? contentType : null) },
@@ -73,7 +85,8 @@ function loadLoginRuntime({ reply } = {}) {
       fetch,
       location: { assign: (target) => navigations.push(target) },
     },
-    document: { querySelector: (selector) => selectors.get(selector) || null },
+    document: doc,
+    Date: { now },
     FormData: function FormData(target) {
       assert.equal(target, form);
       return [['username', username.value], ['password', password.value], ['csrf_token', csrfToken.value]];
@@ -88,8 +101,8 @@ function loadLoginRuntime({ reply } = {}) {
     return prevented;
   };
   return {
-    form, username, password, toggle, submit, failure, csrfToken, stages, events,
-    requests, navigations, nativeSubmits, submitForm,
+    form, username, password, toggle, submit, failure, expired, csrfToken, stages, events,
+    documentEvents, doc, requests, navigations, nativeSubmits, submitForm,
   };
 }
 
@@ -162,6 +175,91 @@ for (const [name, reply] of [
     assert.equal(ui.failure.hidden, true);
   });
 }
+
+const EXPIRED = { status: 400, body: { csrf_token: 'fresh-token', expired: true } };
+
+test('an expired sign-in token is replaced and the typed sign-in retried once', async () => {
+  const ui = loadLoginRuntime({ replies: [EXPIRED, { status: 200, body: { redirect: '/' } }] });
+  await ui.submitForm();
+
+  assert.deepEqual(ui.requests.map((request) => request.body), [
+    'username=Rendref&password=typed-secret&csrf_token=first-token',
+    'username=Rendref&password=typed-secret&csrf_token=fresh-token',
+  ]);
+  assert.deepEqual(ui.navigations, ['/']);
+  assert.equal(ui.failure.hidden, true);
+  assert.deepEqual(ui.nativeSubmits, []);
+});
+
+for (const [name, second] of [
+  ['rejected credentials', { status: 401, body: { csrf_token: 'after-failure' } }],
+  ['a second expired token', { status: 400, body: { csrf_token: 'after-failure', expired: true } }],
+]) {
+  test(`a retry answered with ${name} shows the normal failure without a third attempt`, async () => {
+    const ui = loadLoginRuntime({ replies: [EXPIRED, second] });
+    await ui.submitForm();
+
+    assert.equal(ui.requests.length, 2);
+    assert.deepEqual(ui.navigations, []);
+    assert.equal(ui.failure.hidden, false);
+    assert.equal(ui.expired.hidden, true);
+    assert.equal(ui.csrfToken.value, 'after-failure');
+    assert.equal(ui.password.value, '');
+    assert.equal(ui.submit.disabled, false);
+    assert.deepEqual(ui.nativeSubmits, []);
+  });
+}
+
+test('a sign-in started during a token refresh posts the refreshed token', async () => {
+  let clock = 0;
+  const ui = loadLoginRuntime({
+    replies: [
+      { status: 200, body: { csrf_token: 'refreshed-token' } },
+      { status: 200, body: { redirect: '/' } },
+    ],
+    now: () => clock,
+  });
+  clock = 9 * 60 * 1000 + 1;
+  ui.documentEvents.get('visibilitychange')();
+  await ui.submitForm();
+
+  assert.equal(ui.requests.length, 2);
+  assert.equal(ui.requests[1].body, 'username=Rendref&password=typed-secret&csrf_token=refreshed-token');
+  assert.deepEqual(ui.navigations, ['/']);
+});
+
+test('a page shown again after nine minutes fetches a fresh sign-in token first', async () => {
+  let clock = 0;
+  const ui = loadLoginRuntime({
+    reply: { status: 200, body: { csrf_token: 'refreshed-token' } },
+    now: () => clock,
+  });
+
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  clock = 8 * 60 * 1000;
+  ui.documentEvents.get('visibilitychange')();
+  await settle();
+  assert.equal(ui.requests.length, 0, 'a recent token is kept');
+
+  clock = 9 * 60 * 1000 + 1;
+  ui.doc.visibilityState = 'hidden';
+  ui.documentEvents.get('visibilitychange')();
+  await settle();
+  assert.equal(ui.requests.length, 0, 'a hidden page waits');
+
+  ui.doc.visibilityState = 'visible';
+  ui.documentEvents.get('visibilitychange')();
+  await settle();
+  assert.equal(ui.requests.length, 1);
+  assert.equal(ui.requests[0].options.method, undefined);
+  assert.equal(ui.requests[0].options.headers.Accept, 'application/json');
+  assert.equal(ui.csrfToken.value, 'refreshed-token');
+
+  clock += 9 * 60 * 1000 + 1;
+  ui.events.get('pageshow')({ persisted: true });
+  await settle();
+  assert.equal(ui.requests.length, 2, 'a history return refreshes too');
+});
 
 test('a sign-in in flight ignores repeat submissions and history return restores controls', async () => {
   const ui = loadLoginRuntime({ reply: { status: 200, body: { redirect: '/' } } });

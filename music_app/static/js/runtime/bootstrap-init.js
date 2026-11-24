@@ -43,6 +43,7 @@ if (typeof prepareStreamingPlaybackEngine === 'function'
     scheduleBrowserTimeout(prepareIdlePlayback, 0);
   }
 }
+if (typeof dropViewFromHistoryState === 'function') dropViewFromHistoryState();
 const bootstrapSearchParams = new URL(window.location.href).searchParams;
 const galleryDisplayPreferenceResolutionOptions = {
   hasExplicitGalleryDisplayOverride: bootstrapSearchParams.has('gallery_display'),

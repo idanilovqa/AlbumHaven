@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 from uuid import uuid4
 

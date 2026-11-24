@@ -20,7 +20,12 @@ const powerShellExecutable = process.platform === 'win32' ? windowsPowerShell : 
 
 test('functional bootstrap uses the requested PostgreSQL port for provision and teardown', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
-  assert.match(source, /\[ValidateRange\(1, 65535\)\]\[int\]\$PostgresPort = 5432/u);
+  // The parameter exists; its default is the throwaway port the environment names (5432 only on GitHub's runner).
+  assert.match(source, /\[ValidateRange\(1, 65535\)\]\[int\]\$PostgresPort = \$\(/u);
+  assert.match(source, /if \(\$env:ALBUM_HAVEN_TEST_POSTGRES_PORT\) \{ \[int\]\$env:ALBUM_HAVEN_TEST_POSTGRES_PORT \}/u);
+  assert.match(source, /elseif \(\$env:GITHUB_ACTIONS -ceq 'true'\) \{ 5432 \} else \{ 0 \}/u);
+  // One variable: nothing after the parameter block assigns the port again.
+  assert.doesNotMatch(source, /^\s*\$postgresPort\s*=/imu);
   const script = `
 $source = Get-Content -Raw -LiteralPath '${runnerPath.replace(/'/g, "''")}'
 $tokens = $null; $parseErrors = $null
@@ -44,26 +49,35 @@ Invoke-PostgresBootstrap -Mode Teardown -DatabaseSuffix test -RunnerTemp unused 
   assert.deepEqual(calls.map((call) => call[call.indexOf('-Mode') + 1]), ['Provision', 'Teardown']);
 });
 
-test('functional admin password lookup rejects other PostgreSQL ports', () => {
+test('functional admin password lookup reads only localhost at the throwaway port and refuses 5432 off GitHub', () => {
   const script = `
 $source = Get-Content -Raw -LiteralPath '${runnerPath.replace(/'/g, "''")}'
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
-$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PostgresAdminPassword' }, $true)
-Invoke-Expression $definition.Extent.Text
+foreach ($name in @('Assert-ThrowawayPostgresPort', 'Get-PostgresAdminPassword')) {
+  $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+  Invoke-Expression $definition.Extent.Text
+}
 function Get-Content { param($LiteralPath) $script:entries }
+$env:GITHUB_ACTIONS = $null
 $PostgresPort = 49972
-$script:entries = @('localhost:5432:*:postgres:other', '127.0.0.1:49972:*:postgres:owned')
+$script:entries = @('localhost:5432:*:postgres:other', '127.0.0.1:49972:*:postgres:loopback', 'localhost:49972:*:postgres:owned')
 if ((Get-PostgresAdminPassword unused) -ne 'owned') { throw 'Wrong target credential selected' }
-$script:entries = @('localhost:5432:*:postgres:other')
+$script:entries = @('localhost:5432:*:postgres:other', '127.0.0.1:49972:*:postgres:loopback', '*:*:*:postgres:wildcard')
 $rejected = $false
 try { $null = Get-PostgresAdminPassword unused } catch { $rejected = $true }
-if (-not $rejected) { throw 'Other port must be rejected' }
+if (-not $rejected) { throw 'Only a localhost entry at the throwaway port may be read' }
+foreach ($port in @(5432, 0)) {
+  $PostgresPort = $port
+  $script:entries = @('localhost:5432:*:postgres:other')
+  $refused = $false
+  try { $null = Get-PostgresAdminPassword unused } catch { $refused = $_.Exception.Message -match 'throwaway' }
+  if (-not $refused) { throw "Port $port must be refused outside GitHub Actions" }
+}
+$env:GITHUB_ACTIONS = 'true'
 $PostgresPort = 5432
-if ((Get-PostgresAdminPassword unused) -ne 'other') { throw 'Default port compatibility lost' }
-$PostgresPort = 49972
-$script:entries = @('*:*:*:postgres:wildcard')
-if ((Get-PostgresAdminPassword unused) -ne 'wildcard') { throw 'Wildcard compatibility lost' }
+if ((Get-PostgresAdminPassword unused) -ne 'other') { throw "GitHub's own service port must be accepted there" }
+$env:GITHUB_ACTIONS = $null
 Write-Output 'verified'
 `;
   const result = spawnSync(powerShellExecutable, ['-NoProfile', '-Command', script], {

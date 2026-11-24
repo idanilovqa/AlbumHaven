@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 
 import { resolveWritableFixtureMediaRoot } from './fixtureMediaRoot.js';
+import { resolveIsolatedE2ESetupConnection } from './isolatedPostgresConnection.js';
 
 const require = createRequire(import.meta.url);
 const { resolvePlaywrightPython } = require('../../../scripts/playwright-python.cjs');
@@ -232,6 +233,7 @@ export async function createWatchedAlbumFixture(options = {}) {
 
 // Call only while the managed application is stopped.
 export async function stageLegacyTrackFileWithoutScanSource(trackPath) {
+  resolveIsolatedE2ESetupConnection(process.env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL);
   const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
   const ownedPath = assertOwnedPath(mediaRoot, trackPath);
   await execFileAsync(resolvePlaywrightPython(process.env), [

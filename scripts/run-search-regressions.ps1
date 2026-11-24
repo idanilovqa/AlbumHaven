@@ -7,7 +7,11 @@ param(
     [string]$Pgbin = $env:PGBIN,
     [string]$ChromeExecutable = $env:PLAYWRIGHT_CHROME_EXECUTABLE,
     [ValidateSet('17', '18')][string]$PostgresMajor = '18',
-    [ValidateRange(1, 65535)][int]$PostgresPort = 5432,
+    # Same default as the functional runner, which refuses 5432 outside GitHub Actions.
+    [ValidateRange(1, 65535)][int]$PostgresPort = $(
+        if ($env:ALBUM_HAVEN_TEST_POSTGRES_PORT) { [int]$env:ALBUM_HAVEN_TEST_POSTGRES_PORT }
+        elseif ($env:GITHUB_ACTIONS -ceq 'true') { 5432 } else { 0 }
+    ),
     [ValidateRange(1025, 65000)][int]$PerformanceBasePort = 4710
 )
 

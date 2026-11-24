@@ -1017,6 +1017,13 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
 
     assert third["alias_to_canonical"] == {"Alias": "Updated canonical"}
     assert calls == ["identity", "full", "identity", "identity", "full"]
+
+    # A cache hit costs the same at any library size: the maps are shared, only the envelope is per caller.
+    fourth = default_empty_relation_alias_projection(repository, connection=connection)
+    fifth = default_empty_relation_alias_projection(repository, connection=connection)
+    assert fourth is not fifth
+    for name in ("alias_to_canonical", "canonical_to_aliases"):
+        assert fourth[name] is fifth[name]
     browse.invalidate_postgres_utility_projection_cache(
         database_url=database_url,
         kinds=("relation-alias-maps",),

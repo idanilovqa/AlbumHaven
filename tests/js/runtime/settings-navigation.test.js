@@ -302,8 +302,8 @@ for (const selection of [
       assert.equal(app.historyIndex, 1);
       assert.equal(app.historyEntries.length, 2);
       assert.deepEqual(app.window.history.state, newestState);
-      assert.equal(app.window.history.state.selected_artist, selection.selected_artist);
-      assert.equal(app.window.history.state.all_artists, selection.all_artists);
+      // The address names the choice; the state keeps its place in the navigation and none of the view.
+      assert.deepEqual(Object.keys(app.window.history.state), ['albumHavenNavigationPosition']);
       assert.equal(app.host.hidden, true);
       assert.equal(app.shell.hidden, false);
       assert.equal(app.shell.childNodes[0].textContent, selection.name);
@@ -418,7 +418,7 @@ for (const direction of ['back', 'forward']) {
 
 test('cancelled gallery history navigation preserves the dirty Appearance screen and snapshot', async () => {
   const app = harness({ library: true, initialPath: '/?artist=Initial' });
-  app.pushLibraryView({ url: '/?artist=Current' }, { selected_artist: 'Current' });
+  app.pushLibraryView({ url: '/?artist=Current' });
   let prompts = 0;
   app.window.AlbumHavenAppearance = { instance: { allowLeave() { prompts++; return false; } } };
 
@@ -427,7 +427,7 @@ test('cancelled gallery history navigation preserves the dirty Appearance screen
 
   assert.equal(app.location.search, '?artist=Current');
   assert.equal(app.historyIndex, 1);
-  assert.equal(app.window.history.state.selected_artist, 'Current');
+  assert.equal(app.window.history.state.albumHavenNavigationPosition, 1);
   assert.equal(app.host.hidden, true);
   assert.equal(app.galleryPops.length, 0);
   assert.equal(prompts, 1);
@@ -478,10 +478,9 @@ test('failed Settings history fetch restores the original entry without overwrit
 test('library history retains its existing fallback when Settings navigation is absent', () => {
   const app = harness({ library: true, initialPath: '/' });
   app.window.AlbumHavenSettingsNavigation.instance = null;
-  const snapshot = { selected_artist: 'Standalone' };
-  app.pushLibraryView({ url: '/?artist=Standalone' }, snapshot);
+  app.pushLibraryView({ url: '/?artist=Standalone', selected_artist: 'Standalone' });
   assert.equal(app.location.search, '?artist=Standalone');
-  assert.deepEqual(app.window.history.state, snapshot);
+  assert.equal(JSON.stringify(app.window.history.state), '{}');
 });
 
 test('an untracked pop during rollback releases navigation after restoring the displayed snapshot', async () => {

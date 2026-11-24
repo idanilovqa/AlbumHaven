@@ -16,6 +16,11 @@ import psycopg
 from psycopg import sql
 import zstandard
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tests.e2e.support import localPostgresGuard  # noqa: E402
+
+localPostgresGuard.install()
+
 
 ALLOWED_FIXTURE_TABLES = frozenset(
     {

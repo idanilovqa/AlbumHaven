@@ -29,3 +29,13 @@ test('Postgres helpers preserve the reviewed local fallback without PGBIN', () =
     /PGBIN must be an absolute path/,
   );
 });
+
+test('outside GitHub Actions the psql helpers refuse the installed server', async () => {
+  const { resolveIsolatedE2ESetupConnection } = await import('../e2e/helpers/isolatedPostgresConnection.js');
+  const url = (port) => `postgresql://album_haven_migrator@localhost${port}/album_haven_fake_e2e`;
+  for (const port of ['', ':5432']) {
+    assert.throws(() => resolveIsolatedE2ESetupConnection(url(port), {}), /local tests never connect/);
+    assert.ok(resolveIsolatedE2ESetupConnection(url(port), { GITHUB_ACTIONS: 'true' }));
+  }
+  assert.ok(resolveIsolatedE2ESetupConnection(url(':54329'), {}));
+});

@@ -7,7 +7,12 @@ param(
     [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string[]]$Cases,
     [string]$FixtureDistribution,
     [string]$PythonPath = $env:PLAYWRIGHT_PYTHON,
-    [ValidateRange(1, 65535)][int]$PostgresPort = 5432,
+    # GitHub's runner owns port 5432; on any other machine that is the installed server, possibly
+    # production's, so a local run names a throwaway cluster's port (Assert-ThrowawayPostgresPort).
+    [ValidateRange(1, 65535)][int]$PostgresPort = $(
+        if ($env:ALBUM_HAVEN_TEST_POSTGRES_PORT) { [int]$env:ALBUM_HAVEN_TEST_POSTGRES_PORT }
+        elseif ($env:GITHUB_ACTIONS -ceq 'true') { 5432 } else { 0 }
+    ),
     [ValidateSet('17', '18')][string]$PostgresMajor = '18',
     [string]$Pgbin = 'C:\PostgreSQL\18\bin'
 )
@@ -18,6 +23,11 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding
 
 $expectedRelease = 'fixtures-v1.0.30'
+function Assert-ThrowawayPostgresPort {
+    if ($PostgresPort -lt 1 -or ($PostgresPort -eq 5432 -and $env:GITHUB_ACTIONS -cne 'true')) {
+        throw 'Set -PostgresPort or ALBUM_HAVEN_TEST_POSTGRES_PORT to a throwaway cluster''s port (not 5432), or run the hosted gates.'
+    }
+}
 $fixtureProfile = 'functional-core'
 $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $contractPath = Join-Path $repositoryRoot 'tests\ci\functional-shards.json'
@@ -160,12 +170,13 @@ function Import-EnvironmentFile([string]$Path) {
 }
 
 function Get-PostgresAdminPassword([string]$PgpassPath) {
+    Assert-ThrowawayPostgresPort
     foreach ($line in (Get-Content -LiteralPath $PgpassPath)) {
-        if ($line -match "^(?:localhost|127\.0\.0\.1|\*):(?:$PostgresPort|\*):(?:\*|postgres):postgres:(.+)$") {
+        if ($line -match "^localhost:${PostgresPort}:(?:\*|postgres):postgres:(.+)`$") {
             return $Matches[1].Replace('\:', ':').Replace('\\', '\')
         }
     }
-    throw "PGPASSFILE has no loopback:$PostgresPort entry for the postgres role: $PgpassPath"
+    throw "PGPASSFILE has no localhost:${PostgresPort} entry for the postgres role: $PgpassPath"
 }
 
 function Assert-OwnedTempRoot([string]$Candidate) {

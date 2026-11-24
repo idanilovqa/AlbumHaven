@@ -2215,11 +2215,7 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
     }
   }
   if (typeof buildUrl === 'function' && window?.history?.replaceState) {
-    window.history.replaceState(
-      { ...window.history.state, ...state.view },
-      '',
-      buildUrl(state.view),
-    );
+    replaceBrowserViewState(state.view);
   }
   return true;
 }
@@ -2634,9 +2630,7 @@ async function watchSaveTask(taskId, context = {}) {
                 continue;
               }
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
-                window.history.replaceState(
-                  { ...window.history.state, ...state.view }, '', buildUrl(state.view),
-                );
+                replaceBrowserViewState(state.view);
               }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(

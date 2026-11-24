@@ -8,7 +8,9 @@ const repositoryRoot = path.resolve(__dirname, '..', '..');
 
 test('search gate forwards its isolated PostgreSQL port to both browser runners', () => {
   const source = fs.readFileSync(path.join(repositoryRoot, 'scripts/run-search-regressions.ps1'), 'utf8');
-  assert.match(source, /\[ValidateRange\(1, 65535\)\]\[int\]\$PostgresPort = 5432/u);
+  assert.match(source, /\[ValidateRange\(1, 65535\)\]\[int\]\$PostgresPort = \$\(/u);
+  assert.match(source, /if \(\$env:ALBUM_HAVEN_TEST_POSTGRES_PORT\) \{ \[int\]\$env:ALBUM_HAVEN_TEST_POSTGRES_PORT \}/u);
+  assert.match(source, /elseif \(\$env:GITHUB_ACTIONS -ceq 'true'\) \{ 5432 \} else \{ 0 \}/u);
   assert.match(source, /& powershell\.exe[^]*?-File \$functionalRunner[^]*?-PostgresPort \$PostgresPort/u);
   assert.match(source, /& \$performanceRunner[^]*?-PostgresPort \$PostgresPort/u);
 });

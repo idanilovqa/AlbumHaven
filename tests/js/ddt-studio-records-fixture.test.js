@@ -37,7 +37,7 @@ for number in range(1, 17):
     env: {
       ALBUM_HAVEN_E2E_TEMP_ROOT: TEMP_ROOT,
       ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-        'postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e',
+        'postgresql://album_haven_migrator@127.0.0.1:54329/album_haven_fake_e2e',
     },
     pythonCommand: python,
     execFileAsync: async (command, args, options) => args[0] === '-c'
@@ -112,7 +112,7 @@ test('uses the nested writable media tree for the synthetic large-library profil
       ALBUM_HAVEN_FIXTURE_ROOT: profileRoot,
       ALBUM_HAVEN_MEDIA_ROOT: mediaRoot,
       ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-        'postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e',
+        'postgresql://album_haven_migrator@127.0.0.1:54329/album_haven_fake_e2e',
     },
     execFileAsync: async (command, args) => {
       calls.push({ command, args });
@@ -199,7 +199,7 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
     env: {
       ALBUM_HAVEN_E2E_TEMP_ROOT: TEMP_ROOT,
       ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-        'postgresql://album_haven_migrator:secret@127.0.0.1:5432/album_haven_fake_e2e',
+        'postgresql://album_haven_migrator:secret@127.0.0.1:54329/album_haven_fake_e2e',
     },
     execFileAsync,
     platform: 'win32',
@@ -333,7 +333,7 @@ test('rejects fixture roots outside the managed E2E contract before spawning', a
       env: {
         ALBUM_HAVEN_E2E_TEMP_ROOT: '',
         ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-          'postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e',
+          'postgresql://album_haven_migrator@127.0.0.1:54329/album_haven_fake_e2e',
       },
       execFileAsync: async () => {
         spawned = true;

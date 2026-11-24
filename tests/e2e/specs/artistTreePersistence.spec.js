@@ -187,7 +187,7 @@ for (const hydrationCase of [
       await hydrationRequested;
       await openingLooseTracks;
       await expect(page.locator('#non-album-modal-subtitle'))
-        .toHaveText(/^Loading loose tracks across library/);
+        .toHaveText(/^Loading loose tracks across the library/);
 
       if (hydrationCase.expandArtistTree) {
         await navigationPanelActions.setArtistTreeFolded(false);

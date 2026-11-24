@@ -1421,8 +1421,10 @@ class _CandidateFolderConnection:
         return SimpleNamespace(fetchall=lambda: found)
 
 
-@pytest.mark.parametrize("candidate_folders", [0, 1, 5])
-@pytest.mark.parametrize("backend", ["in-memory", "postgres"])
+# The mixed-folder narrowing belongs to the Postgres projection: only that backend has candidate folders.
+@pytest.mark.parametrize(("backend", "candidate_folders"), [
+    ("in-memory", 0), ("postgres", 0), ("postgres", 1), ("postgres", 5),
+])
 @pytest.mark.parametrize("route", [
     ("py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail", "/utilities/problematic-files/broadcast::tender buttons", {}),
     ("py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query", "/utilities/problematic-files/detail",
@@ -1433,8 +1435,6 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
 ):
     """D3 (6.5, 2026-11-24): with candidate folders, the mixed-folder narrowing adds exactly one statement,
     however many folders, and reads only those folders' files."""
-    if backend == "in-memory" and candidate_folders:
-        pytest.skip("the narrowing belongs to the Postgres projection")
     from music_app.routes import api_read_asgi_routes
     from music_app.services import library_browse_postgres, problematic_albums
 

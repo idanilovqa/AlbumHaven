@@ -670,3 +670,32 @@ test('queried album absence uses full applied artist surface while positive targ
   projection.busy = true;
   assert.equal((await owner.readAlbumTargetState(absent, { fullProjection: true })).busy, true);
 });
+
+// FTC-TAGS-043 (run 45359719308): while a save is held, the renamed card is on screen but no server
+// response names it yet, so the canonical wait cannot pass before the save answers.
+const HELD_SAVE_SNAPSHOT = {
+  activeLoader: false, activeRequestUrl: '', attachedMatch: true, busy: false, canonicalApplied: true,
+  canonicalInventoryComplete: true, canonicalMatch: true, canonicalReadyMatch: false, canonicalQuery: '',
+  expectedAlbum: 'Renamed Album', expectedArtist: 'Artist', expectedQuery: '', inputQuery: '',
+  locationQuery: '', pendingViewTransition: false, startupHydrating: false,
+};
+
+test('the canonical album wait cannot pass before a held save answers', async () => {
+  const { classifyGalleryAlbumTargetState } = await import(galleryActionsUrl);
+  assert.deepEqual(classifyGalleryAlbumTargetState(HELD_SAVE_SNAPSHOT), {
+    status: 'retryable', reason: 'canonical membership awaiting applied evidence',
+  });
+});
+
+test('a shown album card is ready only when attached, inside the gallery viewport and unobscured', async () => {
+  const { classifyShownAlbumCard } = await import(galleryActionsUrl);
+  const shown = { attached: true, intersects: true, exposed: true };
+  assert.deepEqual(classifyShownAlbumCard(shown), { status: 'ready', reason: 'card shown' });
+  assert.deepEqual(classifyShownAlbumCard({ ...shown, exposed: false }), { status: 'retryable', reason: 'card obscured' });
+  assert.deepEqual(classifyShownAlbumCard({ ...shown, intersects: false }), {
+    status: 'retryable', reason: 'card outside the gallery viewport',
+  });
+  assert.deepEqual(classifyShownAlbumCard({ attached: false, intersects: false, exposed: false }), {
+    status: 'retryable', reason: 'card not attached',
+  });
+});

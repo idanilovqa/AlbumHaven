@@ -254,10 +254,10 @@ def test_live_rules_route_lays_pending_intents_over_its_page_without_growing(see
     )
 
 
-def _page(app):
+def _page(app, limit="50"):
     from tests.py.asgi_testing import decode_json, run_asgi_request
 
-    status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files", query={"limit": "50"})
+    status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files", query={"limit": limit})
     assert status == 200, body
     return {item["name"]: item for item in decode_json(body)["items"]}
 
@@ -328,7 +328,8 @@ def test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait
     # Each held write gives up after 50 ms instead of 500: the case makes 52 of them.
     monkeypatch.setattr(rule_state_postgres, "PUBLICATION_WAIT_MS", 50)
     app, _config = seed(SIZES[1])
-    page = _page(app)
+    # The route's largest page: the two named albums and the 50 others it needs all fit.
+    page = _page(app, limit="200")
     kept = _album_rows(app, page["A Kept Album"]["key"])
     others = [_album_rows(app, page[f"Album {index:05d}"]["key"])["Missing cover art"] for index in range(50)]
     second = next(reason for reason in kept if reason != "Missing cover art")

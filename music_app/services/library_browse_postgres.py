@@ -5979,7 +5979,8 @@ def _load_duplicate_candidate_album_ids(
     # Compare only compact tag identities before loading full file metadata. The
     # keyed read returns a superset of Python's NFC/casefold rule on every server
     # (see its PostgreSQL 17 arm); callers verify each candidate exactly.
-    if album_keys and _duplicate_identity_helpers_available(connection):
+    if album_keys:
+        _require_duplicate_identity_helpers(connection, repository._database_url)
         return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
     kind = "duplicate-identities"
     fingerprint = _duplicate_inventory_fingerprint(connection)
@@ -6046,6 +6047,22 @@ def _duplicate_identity_helpers_available(connection: Any) -> bool:
         ) as available
     """).fetchone())
     return bool(row and row.get("available") is True)
+
+
+# Databases whose duplicate identity helpers this process has seen: checked once per database, not per read.
+_DUPLICATE_IDENTITY_HELPERS_READY: set[str] = set()
+
+
+def _require_duplicate_identity_helpers(connection: Any, database_url: str) -> None:
+    """Fails loudly, once per process and database, when the keyed duplicate read cannot run."""
+    if database_url in _DUPLICATE_IDENTITY_HELPERS_READY:
+        return
+    if not _duplicate_identity_helpers_available(connection):
+        raise RuntimeError(
+            "Album Haven cannot read duplicate albums: library.duplicate_identity_text and "
+            f"library.duplicate_identity_year are missing. Apply migrations {problematic_index.DUPLICATE_IDENTITY_MIGRATIONS}."
+        )
+    _DUPLICATE_IDENTITY_HELPERS_READY.add(database_url)
 
 
 def _load_duplicate_candidate_album_ids_for_keys(

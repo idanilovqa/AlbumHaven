@@ -45,11 +45,55 @@ def test_keyed_duplicate_candidates_run_on_every_server_version(monkeypatch):
                     else [{"album_id": 1, "pg17_superset": False}, {"album_id": 2, "pg17_superset": True}])
             return type("Cursor", (), {"fetchone": lambda _self: rows[0], "fetchall": lambda _self: rows})()
 
+    monkeypatch.setattr(browse, "_DUPLICATE_IDENTITY_HELPERS_READY", set())
     monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint",
                         lambda _connection: pytest.fail("PostgreSQL 17 must not load the whole-library index"))
     repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-pg17-keyed"})
     assert browse._load_duplicate_candidate_album_ids(Connection(), ["one"], repository=repository) == [1, 2]
     assert len(statements) == 2 and "album_key = any(%(album_keys)s::text[])" in statements[1]
+
+
+class _ProbeCountingConnection:
+    def __init__(self, helpers: bool):
+        self.helpers, self.probes, self.statements = helpers, 0, []
+
+    def execute(self, sql, params=None):
+        self.statements.append(sql)
+        if "to_regprocedure" in sql:
+            self.probes += 1
+            rows = [{"available": self.helpers}]
+        else:
+            rows = [{"album_id": 1, "pg17_superset": False}]
+        return type("Cursor", (), {"fetchone": lambda _self: rows[0], "fetchall": lambda _self: rows})()
+
+
+def test_duplicate_identity_helpers_are_checked_once_per_process_and_database(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    monkeypatch.setattr(browse, "_DUPLICATE_IDENTITY_HELPERS_READY", set())
+    first = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "helpers-once-a"})
+    other = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "helpers-once-b"})
+    connection = _ProbeCountingConnection(helpers=True)
+    for _batch in range(3):
+        assert browse._load_duplicate_candidate_album_ids(connection, ["one"], repository=first) == [1]
+    assert connection.probes == 1, "no per-batch to_regprocedure"
+    browse._load_duplicate_candidate_album_ids(connection, ["one"], repository=other)
+    assert connection.probes == 2, "each database is checked once"
+
+
+def test_missing_duplicate_identity_helpers_fail_loudly_by_migration(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    monkeypatch.setattr(browse, "_DUPLICATE_IDENTITY_HELPERS_READY", set())
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint",
+                        lambda _connection: pytest.fail("no fallback to the whole-library identity index"))
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "helpers-missing"})
+    connection = _ProbeCountingConnection(helpers=False)
+    for _attempt in range(2):  # never remembered as ready
+        with pytest.raises(RuntimeError, match="0093_add_duplicate_identity_lookup_index.sql and "
+                                               "0118_fold_accents_in_duplicate_identity.sql"):
+            browse._load_duplicate_candidate_album_ids(connection, ["one"], repository=repository)
+    assert all("to_regprocedure" in sql for sql in connection.statements)
 
 
 def test_postgres17_arm_is_gated_by_version_and_bounded_by_the_requested_year():

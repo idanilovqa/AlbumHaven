@@ -10416,8 +10416,8 @@ def test_postgres_selected_artist_payload_suppresses_family_without_contributing
 
 
 def test_postgres_album_detail_payload_loads_tracks_for_album_key(monkeypatch):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -10923,8 +10923,8 @@ def test_postgres_selected_artist_blank_override_masks_embedded_non_album_value(
 def test_postgres_album_detail_payload_excludes_persisted_non_album_override_and_keeps_sibling(
     monkeypatch,
 ):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     from music_app.services.library_browse_postgres import (
         PostgresLibraryBrowseRepository,
         _album_detail_sql,
@@ -10971,8 +10971,8 @@ def test_postgres_album_detail_payload_excludes_persisted_non_album_override_and
 def test_postgres_album_detail_blank_override_masks_embedded_non_album_value(
     monkeypatch,
 ):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     from music_app.services.library_browse_postgres import (
         PostgresLibraryBrowseRepository,
     )
@@ -11041,8 +11041,8 @@ def test_postgres_album_detail_payload_omits_album_when_all_tracks_have_persiste
 
 
 def test_postgres_album_projections_mark_full_scope_for_incomplete_track_order(monkeypatch):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import (
         PostgresLibraryBrowseRepository,
@@ -11256,8 +11256,8 @@ def test_album_detail_sql_keeps_joint_credit_album_without_synthetic_owner_artis
 
 
 def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_artist_credit(monkeypatch):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import (
         PostgresLibraryBrowseRepository,
@@ -13312,44 +13312,6 @@ def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_
     assert _duplicate_candidate_ids_from_index(_duplicate_candidate_index_from_rows(rows), ["1"]) == [1, 2]
 
 
-def test_duplicate_candidate_lookup_uses_python_identity_before_helper_migration(monkeypatch):
-    import music_app.services.library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository({
-        "ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-pre-migration-test",
-    })
-    monkeypatch.setattr(
-        browse,
-        "_duplicate_inventory_fingerprint",
-        lambda _connection: {"fingerprint": (1,), "observed_at": 1},
-    )
-
-    class Connection:
-        info = type("Info", (), {"server_version": 180000})()
-
-        def execute(self, sql, _params=None):
-            normalized = " ".join(sql.split()).lower()
-            if "to_regprocedure" in normalized:
-                return type("Cursor", (), {"fetchone": lambda _self: {"available": False}})()
-            if "library.duplicate_identity_text" in normalized:
-                raise AssertionError("pre-migration databases must not use duplicate identity helpers")
-            return self
-
-        def fetchall(self):
-            return [
-                {"album_id": 1, "album_key": "one", "album_artist": "Artist",
-                 "album": "One", "year": 2001},
-                {"album_id": 2, "album_key": "two", "album_artist": "Artist",
-                 "album": "Two", "year": 2002},
-            ]
-
-    assert browse._load_duplicate_candidate_album_ids(
-        Connection(),
-        ["one", "two"],
-        repository=repository,
-    ) == [1, 2]
-
-
 def test_requested_duplicate_identity_sql_uses_exact_indexed_domain_identity():
     from music_app.services.library_browse_postgres import (
         _duplicate_candidate_album_ids_for_keys_sql,
@@ -13442,8 +13404,8 @@ def test_duplicate_identity_prewarm_cache_reuses_only_same_library_inventory_fin
 
 @pytest.mark.parametrize("race", ["newer_snapshot", "invalidation", "changed_inventory"])
 def test_duplicate_identity_cache_does_not_publish_after_a_newer_snapshot_or_invalidation(monkeypatch, race):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     import music_app.services.library_browse_postgres as browse
 
     repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-cache-race-test"})
@@ -17750,8 +17712,8 @@ def test_utility_rules_invalidation_during_load_rejects_stale_cache_commit(monke
 
 
 def test_postgres_library_browse_problematic_detail_ignores_e2e_fixture_file(monkeypatch, tmp_path):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     from music_app.services import library_browse_postgres as module
 
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -18390,8 +18352,8 @@ def test_postgres_search_batch_loads_private_album_rating_overlays(monkeypatch):
 
 
 def test_postgres_album_detail_batch_loads_private_rating_and_keeps_tag_rating(monkeypatch):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
-                        lambda _connection: False)  # The fake answers the whole-library identity index only.
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     import music_app.services.album_details as album_details_module
     from music_app.services import library_browse_postgres as browse_module
 
@@ -20514,6 +20476,7 @@ def test_short_browse_reads_lease_the_pool_and_long_or_writing_ones_do_not(
     from uuid import uuid4
 
     browse, opened = _record_browse_connections(monkeypatch)
+    monkeypatch.setattr(browse, "_require_duplicate_identity_helpers", lambda _connection, _url: None)
     monkeypatch.setattr(
         browse.PostgresLibraryBrowseRepository, "_load_relation_alias_maps", default_empty_relation_alias_projection,
     )

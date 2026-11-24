@@ -8779,9 +8779,8 @@ def test_live_problematic_files_flags_an_app_rating_that_differs_from_the_file_t
     )["problem_reasons"]
 
 
-@pytest.mark.parametrize("candidate_lookup", ["postgres-18-helpers", "postgres-17-identity-index"])
 def test_live_tag_save_moves_duplicate_badges_at_once_and_keeps_untouched_albums_cached(
-    watcher_repair_inventory, monkeypatch, candidate_lookup,
+    watcher_repair_inventory, monkeypatch,
 ):
     """FTC-TAGS-015: a save keeps the duplicate projections, so the next search and artist
     view stay fast. An edit that creates a duplicate pair badges both albums at once; the edit
@@ -8790,8 +8789,6 @@ def test_live_tag_save_moves_duplicate_badges_at_once_and_keeps_untouched_albums
     from music_app.services.cache import persist_structural_tag_edit_for_config
 
     fixture = watcher_repair_inventory
-    if candidate_lookup == "postgres-17-identity-index":
-        monkeypatch.setattr(browse, "_duplicate_identity_helpers_available", lambda connection: False)
     monkeypatch.setattr(browse.problematic_index, "queue_maintenance", lambda repository: None)
     browse.invalidate_postgres_utility_projection_cache()
 
@@ -8844,10 +8841,6 @@ def test_live_tag_save_moves_duplicate_badges_at_once_and_keeps_untouched_albums
         bystander_key = album_key(bystander)
         save(entry, **changes)
         assert bystander_key in cached_absence_keys(), "The save kept the untouched album's cached absence."
-        if candidate_lookup == "postgres-17-identity-index":
-            assert repository._get_cached_utility_projection("duplicate-identities"), (
-                "The save moved the identity index forward instead of discarding it."
-            )
 
     assert badges() == [False, False, False]
     save_keeps_untouched_albums_cached(second, album="Same Release")

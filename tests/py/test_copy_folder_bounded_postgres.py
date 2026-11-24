@@ -176,9 +176,11 @@ _INDEXES = {
     # B: the copy lookup goes through the duplicate identity index (0093).
     "copies": ("local_track_files_active_duplicate_identity_idx",),
     # D3: candidate folders by private path and physical parent (0088), other albums' files by album id.
-    "candidate folders": ("local_track_files_private_path_idx", "local_track_files_active_physical_parent_idx",
-                          "local_tracks_album_id_idx"),
+    "candidate folders": ("local_track_files_private_path_idx", "local_track_files_active_physical_parent_idx"),
 }
+# At 200 albums the default planner reads local_tracks (a few hundred rows) sequentially, which is cheaper there;
+# that the "files elsewhere" check can use the album-id index is shown with sequential scans off.
+_STRUCTURAL_INDEXES = {"candidate folders": ("local_tracks_album_id_idx",)}
 
 
 def _plans(seed, setup_url, *, seqscan):
@@ -200,4 +202,13 @@ def test_live_added_reads_reach_their_indexes_with_the_default_planner(seeded_ap
     every index the added reads rely on."""
     plans = _plans(*seeded_app, seqscan=True)
     missing = [(read, index) for read, indexes in _INDEXES.items() for index in indexes if index not in plans[read]]
+    assert not missing, (missing, plans)
+
+
+def test_live_album_id_index_structural_proof(seeded_app):
+    """Structural proof (sequential scans off): the candidate folders' "files elsewhere" check can reach other
+    albums' files through local_tracks_album_id_idx, so it stays keyed by album at any library size."""
+    plans = _plans(*seeded_app, seqscan=False)
+    missing = [(read, index) for read, indexes in _STRUCTURAL_INDEXES.items()
+               for index in indexes if index not in plans[read]]
     assert not missing, (missing, plans)

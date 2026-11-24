@@ -425,6 +425,41 @@ def _apply_ignored_repair_intent(connection: Any, intent: Mapping[str, object]) 
         connection.execute(_delete_ignored_repairs_except_sql(), (repair_keys,))
 
 
+def fail_stuck_ignored_repair_intents(connection: Any, stall_seconds: float) -> list[str]:
+    """One statement, run by the drain at its start and at a failed end (never on a request or a poll):
+    intents due longer than ``stall_seconds`` are failed as 'stuck'; then, while no publication holds the
+    inventory lock, the clock starts for every pending intent not yet due. Returns the stuck intents' rules."""
+    rows = connection.execute(_fail_stuck_ignored_repair_intents_sql(), {"stall_seconds": float(stall_seconds)}).fetchall()
+    return sorted({key for row in rows for key in _normalize_keys(_row_mapping(row, ("repair_keys",)).get("repair_keys"))})
+
+
+def _fail_stuck_ignored_repair_intents_sql() -> str:
+    return """
+        with lock_key as (
+          select hashtext('album-haven:local-inventory-publication')::bigint as key
+        ), lock_free as (
+          select not exists (
+            select 1 from pg_catalog.pg_locks locks, lock_key
+            where locks.locktype = 'advisory' and locks.granted and locks.objsubid = 1
+              and locks.classid = ((lock_key.key >> 32) & 4294967295)::oid
+              and locks.objid = (lock_key.key & 4294967295)::oid
+          ) as free
+        ), stuck as (
+          update library.ignored_repair_intents
+          set failed_at = now(), failure_kind = 'stuck',
+              failure = 'Still waiting after the library finished updating.'
+          where failed_at is null and due_since < now() - make_interval(secs => %(stall_seconds)s)
+          returning id, repair_keys
+        ), due as (
+          update library.ignored_repair_intents
+          set due_since = now()
+          where failed_at is null and due_since is null and (select free from lock_free)
+          returning id
+        )
+        select repair_keys from stuck
+    """
+
+
 def _fail_ignored_repair_intents_sql() -> str:
     return ("update library.ignored_repair_intents set failed_at = now(), failure = %s, failure_kind = 'error' "
             "where id = any(%s::bigint[])")

@@ -199,7 +199,7 @@ def test_live_drain_applies_only_the_kept_intents(seeded_app, monkeypatch):
     measure_scale_pair(
         interaction_id="py:services/ignored_repair_intents.py#_drain_queued",
         small=SIZES[0], large=SIZES[1], run=run,
-        budgets={"sql_statements": 5}, growth=("sql_statements", 0),
+        budgets={"sql_statements": 6}, growth=("sql_statements", 0),
     )
 
 

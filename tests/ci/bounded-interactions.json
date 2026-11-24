@@ -16355,7 +16355,7 @@
         "production": 200
       },
       "budgets": {
-        "sql_statements": 5
+        "sql_statements": 6
       },
       "growth": {
         "metric": "sql_statements",
@@ -16363,7 +16363,7 @@
       },
       "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_drain_applies_only_the_kept_intents",
       "testIdentity": "test_live_drain_applies_only_the_kept_intents",
-      "rollback": "The drain reads only the kept intents; reading or rewriting every ignored repair makes sql_statements grow."
+      "rollback": "The drain reads and writes only the kept intents, plus one stuck check (6.5, 11-24: due since the lock was free, a partial index on due_since); reading or rewriting every ignored repair makes sql_statements grow."
     }
   ]
 }

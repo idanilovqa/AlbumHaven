@@ -3948,6 +3948,7 @@ function watcherRefreshFixture() {
   fixture.refreshes = [];
   fixture.context.loadProblematicFiles = async (force, options) => {
     assert.equal(options?.preserveSelectedDetail, true);
+    assert.equal(options?.reuseSameVersion, true, 'a status reload keeps a list read at the same version');
     fixture.refreshes.push(force);
     return [];
   };
@@ -3991,6 +3992,21 @@ test('watcher health ordering is stable and simultaneous inventory changes refre
   await fixture.observe({ state: 'warning', problems: [...problems].reverse() }, 13);
   assert.deepEqual(fixture.refreshes, [true]);
   assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 1);
+});
+
+test('a finished cover job reloads Problematic Files as a status reload of the current version', async () => {
+  const fixture = watcherRefreshFixture();
+  const reloads = [];
+  fixture.context.loadProblematicFiles = async (force, options) => { reloads.push([force, options]); return []; };
+  fixture.context.shouldAutoRefreshViewAfterCoverCompletion = () => false;
+  fixture.context.state.wasCoverPollingBusy = true;
+  const pending = fixture.context.pollStatus();
+  fixture.pendingRequests[0].resolveWith({
+    inventory_mutation_revision: 12, watcher_health: { state: 'healthy', problems: [] },
+    covers_in_progress: false, covers_outcome: 'completed',
+  });
+  await pending;
+  assert.deepEqual(JSON.parse(JSON.stringify(reloads)), [[true, { reuseSameVersion: true }]]);
 });
 
 test('watcher health changes do not load an unused utility', async () => {

@@ -2189,17 +2189,25 @@ def validate_synthetic_scale(profile: str, definition: dict, preset: str | None)
 
 
 def prepare_relation_projection(database_url: str) -> None:
-    """Publish normal product relationships before a persisted-startup benchmark."""
+    """Publish what a production server starts with: relationships, then the common gallery scopes.
+
+    Without the gallery headers the app's first start builds root and New Arrivals after relation
+    readiness, and a measured read answers gallery_projection_pending meanwhile (FTC-COVERS-019P).
+    """
     validate_database_url(database_url)
     repository_root = str(Path(__file__).resolve().parents[2])
     if repository_root not in sys.path:
         sys.path.insert(0, repository_root)
+    from music_app.services.gallery_projection_postgres import initialize_gallery_membership
     from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
 
-    result = ensure_relation_projection_ready({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": database_url}
+    result = ensure_relation_projection_ready(config)
     if not result.get("ready"):
         raise RuntimeError("Fixture relation projection did not become ready")
-    print(json.dumps({"fixture_relation_projection": "ready", "preparation_ms": result.get("duration_ms")}))
+    initialize_gallery_membership(config)
+    print(json.dumps({"fixture_relation_projection": "ready", "fixture_gallery_scopes": "ready",
+                      "preparation_ms": result.get("duration_ms")}))
 
 
 def load_fixture_profile(

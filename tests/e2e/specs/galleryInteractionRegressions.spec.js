@@ -144,11 +144,12 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
         const panelBounds=panel.getBoundingClientRect();
         const triggerBounds=trigger?.getBoundingClientRect();
         const playerBounds=player?.getBoundingClientRect();
-        const connector=getComputedStyle(panel,'::before');
+        // The connector is the shared trigger-anchor join drawn by the open trigger (eea310882), not a panel ::before.
+        const connector=trigger?getComputedStyle(trigger,'::after'):null;
         return {
-          connectorHeight:parseFloat(connector.height),
-          connectorVisible:connector.display!=='none'&&connector.visibility!=='hidden',
-          connectorWidth:parseFloat(connector.width),
+          connectorHeight:parseFloat(connector?.height)||0,
+          connectorVisible:Boolean(trigger?.classList.contains('trigger-anchor-open')&&connector.display!=='none'&&connector.visibility!=='hidden'),
+          connectorWidth:parseFloat(connector?.width)||0,
           panelClipPath:getComputedStyle(panel).clipPath,
           panelBottom:panelBounds.bottom,
           panelTop:panelBounds.top,
@@ -168,7 +169,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
       expect(opened.connectorVisible).toBe(true);
       expect(opened.connectorWidth).toBeGreaterThan(0);
       expect(opened.connectorHeight).toBeGreaterThan(0);
-      expect(opened.panelClipPath).toBe('none');
+      expect(opened.panelClipPath).toMatch(/^(none|inset\(0px)/);
       expect(opened.panelBottom).toBeLessThanOrEqual(opened.playerTop+1);
       expect(opened.panelTop).toBeCloseTo(opened.triggerBottom-1,0);
       expect(opened.triggerOwner).toBe('divider');
@@ -203,7 +204,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
       expect(farScrolled.connectorVisible).toBe(true);
       expect(farScrolled.connectorWidth).toBeGreaterThan(0);
       expect(farScrolled.connectorHeight).toBeGreaterThan(0);
-      expect(farScrolled.panelClipPath).toBe('none');
+      expect(farScrolled.panelClipPath).toMatch(/^(none|inset\(0px)/);
       expect(farScrolled.triggerTop).toBeGreaterThanOrEqual(0);
       expect(farScrolled.triggerBottom).toBeLessThanOrEqual(farScrolled.viewportHeight);
       expect(farScrolled.panelTop).toBeGreaterThanOrEqual(0);

@@ -195,10 +195,10 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   // same line and size.
   // parity-check: allow-read-only-measurement-evaluate -- header geometry of the real phone pages
   const readHeader = (pg) => pg.evaluate(() => {
-    const box = (selector) => { const node = document.querySelector(selector); if (!node || !node.getClientRects().length) return null;
+    const box = (selector) => { const node = [...document.querySelectorAll(selector)].find((match) => match.getClientRects().length); if (!node) return null;
       const bounds = node.getBoundingClientRect(); return { x: Math.round(bounds.x), y: Math.round(bounds.y), height: Math.round(bounds.height), bottom: Math.round(bounds.bottom), fontSize: getComputedStyle(node).fontSize }; };
     return { hamburger: box('#mobile-library-button'), title: box('[data-gallery-bar-instance="gallery"] .gallery-bar__title'),
-      summary: box('[data-gallery-bar-instance="gallery"] .gallery-bar__artist-mobile-summary .gallery-bar__summary-count'),
+      summary: box('[data-gallery-bar-instance="gallery"] .gallery-bar__summary-count'),
       back: box('#mobile-back-button'),
       pageHamburger: box('#mobile-settings-button'), pageTitle: box('#mobile-page-title'), picker: box('#mobile-settings-section-button') };
   });
@@ -206,9 +206,10 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   // Measure the settled gallery, never the start-up loader in front of it.
   await phoneSession.galleryActions.waitForGalleryReady();
   await expect(phone.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]')).toHaveText('Mastodon');
-  // Owner (11-24): the album count sits under the band name. On a phone artist bar it is the count in the
-  // artist summary line (the plain summary line is hidden there).
-  await expect(phone.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__artist-mobile-summary .gallery-bar__summary-count'))
+  // Owner (11-24): the album count sits under the band name. The bar holds the count twice and shows one: the
+  // artist summary line in a scrolled family section ("artist"), the plain summary line for an artist with no
+  // family ("single-artist", as here). Measure the shown one.
+  await expect(phone.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__summary-count:visible'))
     .toHaveText(/^\d+ albums?$/);
   const gallery = await readHeader(phone);
   expect(gallery.summary.y - gallery.title.bottom).toBeLessThanOrEqual(3);

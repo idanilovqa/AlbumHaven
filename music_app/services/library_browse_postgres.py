@@ -2741,8 +2741,10 @@ class PostgresLibraryBrowseRepository:
                         *matching_sidebar_artists,
                     ],
                 )
+                # The auto-selected best match leads the gallery; the tree stays alphabetical.
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups,
+                    alphabetical=True,
                 )
                 payload["artist_count"] = len(sidebar_groups)
                 selected_family_keys = {

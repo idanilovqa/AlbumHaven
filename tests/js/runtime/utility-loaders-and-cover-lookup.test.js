@@ -167,3 +167,43 @@ test('request capture: closing Settings resumes a deferred view on its own endpo
     },
   });
 });
+
+// Android 2 report via 6.5 (FTC-UTIL-PROBLEMS-009): the status poll forces a reload on a cover-job completion
+// or an inventory or health change. One landing while the page's own load is in flight, or just after it,
+// refetched the unchanged complete list.
+function statusRaceLoaders() {
+  const capture = createRequestCapture(url => jsonResponse(url.endsWith('?limit=50')
+    ? { complete: false, items: [{ key: 'album-0', name: 'Album 0', detail_loaded: false }] }
+    : { complete: true, items: [{ key: 'album-0', name: 'Album 0', detail_loaded: false }, { key: 'album-1', name: 'Album 1', detail_loaded: false }] }));
+  const state = utilityState();
+  state.status = { inventory_mutation_revision: 7, watcher_health: { state: 'healthy', problems: [] } };
+  const context = loadUtilityLoaders(capture, state, {
+    getUtilityModalElements: () => ({ overlay: { hidden: false } }),
+    scheduleBrowserTimeout: () => 0,
+    clearBrowserTimeout() {},
+  });
+  // As pollStatus calls it after a status change, and after a cover job completes.
+  const statusReload = () => context.loadProblematicFiles(true, { preserveSelectedDetail: true, reuseSameVersion: true });
+  return { capture, context, state, statusReload };
+}
+
+test('a status reload during and right after the page load of the same inventory version fetches nothing more', async () => {
+  const { capture, context, statusReload } = statusRaceLoaders();
+  const pageLoad = context.loadProblematicFiles(true);
+  const during = statusReload();
+  await Promise.all([pageLoad, during]);
+  const after = await statusReload();
+  assert.equal(after.length, 2, 'the committed complete list answers the reload');
+  assert.deepEqual(capture.urls(), ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+});
+
+test('a status reload after the inventory version changed still refetches the list', async () => {
+  const { capture, context, state, statusReload } = statusRaceLoaders();
+  await context.loadProblematicFiles(true);
+  state.status = { ...state.status, inventory_mutation_revision: 8 };
+  await statusReload();
+  assert.deepEqual(capture.urls(), [
+    '/utilities/problematic-files?limit=50', '/utilities/problematic-files',
+    '/utilities/problematic-files?limit=50', '/utilities/problematic-files',
+  ]);
+});

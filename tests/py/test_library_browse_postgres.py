@@ -3100,7 +3100,6 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
         if "transaction_timestamp() as observed_at" in command
         or command in {
             browse_module._duplicate_candidate_album_ids_for_keys_sql(),
-            browse_module._duplicate_identity_index_rows_sql(),
             browse_module._duplicate_source_rows_for_album_ids_sql(),
         }
         or "files.scan_file_album as album" in command
@@ -12230,7 +12229,6 @@ def test_problematic_loose_public_key_preserves_projected_identity_bytes():
     )
 
 
-
 class _NoLooseRulesConnection:
     """The loose loader reads its groups' exclusion rules, then the pending ones, over the connection; these
     cases have none."""
@@ -13239,21 +13237,6 @@ def test_duplicate_sources_only_projection_drives_active_file_lookup_from_select
     assert "from library.local_track_files files join selected_tracks" not in active_file_lookup
 
 
-def test_duplicate_compact_candidates_use_domain_unicode_artist_title_year_identity():
-    from music_app.services.library_browse_postgres import _duplicate_candidate_ids_from_index, _duplicate_candidate_index_from_rows
-
-    def row(identifier, artist="Straße", album="Café", year="2001"):
-        return {"album_id": identifier, "album_key": str(identifier),
-                "album_artist": artist, "album": album, "year": year}
-
-    rows = [row(1), row(2, artist="STRASSE", album="  Cafe\u0301  "),
-            row(3, artist="Other"), row(4, album="Other"), row(5, year="2002"),
-            row(6, year=None), row(7, year=None)]
-    # Invalid requested albums still load for existing diagnostics; unrelated
-    # Unicode spelling and missing identities must not expand into full files.
-    assert _duplicate_candidate_ids_from_index(_duplicate_candidate_index_from_rows(rows), ["1", "6"]) == [1, 2, 6]
-
-
 def test_duplicate_identity_values_match_postgres_slash_year_normalization():
     from music_app.services.library import _duplicate_album_identity_values
 
@@ -13276,40 +13259,6 @@ def test_duplicate_identity_ignores_case_and_latin_accents_but_not_cyrillic_lett
     assert _duplicate_album_identity_values("Ария", "Ёлка", 1987) != _duplicate_album_identity_values(
         "Ария", "Елка", 1987,
     )
-
-
-def test_duplicate_compact_candidate_index_does_not_construct_track_models(monkeypatch):
-    import music_app.models.library as library_models
-    from music_app.services.library_browse_postgres import (
-        _duplicate_candidate_index_from_rows,
-    )
-
-    class UnexpectedTrackConstruction:
-        def __init__(self, **_kwargs):
-            raise AssertionError("compact duplicate identities must not construct Track models")
-
-    monkeypatch.setattr(library_models, "Track", UnexpectedTrackConstruction)
-
-    assert _duplicate_candidate_index_from_rows([
-        {
-            "album_id": 1,
-            "album_key": "one",
-            "album_artist": "Straße",
-            "album": "Café",
-            "year": "2001",
-        }
-    ]) == [(1, "one", ("strasse", "cafe", 2001))]
-
-
-def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_validation():
-    from music_app.services.library_browse_postgres import _duplicate_candidate_ids_from_index, _duplicate_candidate_index_from_rows
-
-    rows = [{"album_id": identifier, "album_key": str(identifier),
-             "album_artist": "Artist", "album": album, "year": "2001"}
-            for identifier, album in [(1, "Title"), (2, "Title"), (2, "Conflicting")]]
-    # Full physical-container validation rejects conflicting tags later; the
-    # candidate step must not discard the album's other rows prematurely.
-    assert _duplicate_candidate_ids_from_index(_duplicate_candidate_index_from_rows(rows), ["1"]) == [1, 2]
 
 
 def test_requested_duplicate_identity_sql_uses_exact_indexed_domain_identity():
@@ -13362,75 +13311,6 @@ def test_requested_duplicate_identity_sql_returns_only_cross_container_identitie
     assert "roots.is_active is true" in sql
     assert "group by album_artist_identity, album_identity, album_year" in sql
     assert "having count(distinct (library_root_id, folder)) > 1" in sql
-
-
-@pytest.mark.parametrize("changed_field", range(6))
-def test_duplicate_identity_prewarm_cache_reuses_only_same_library_inventory_fingerprint(monkeypatch, changed_field):
-    import music_app.services.library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-cache-test"})
-    browse.invalidate_postgres_utility_projection_cache()
-    state = {"fingerprint": (1, 1, 1, 1, 1, 1), "observed_at": 1}
-    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda connection: dict(state))
-
-    class Connection:
-        reads = 0
-
-        def execute(self, sql, params):
-            self.reads += 1
-            return self
-
-        def fetchall(self):
-            return [{"album_id": 1, "album_key": "one", "album": "Title", "album_artist": "Artist", "year": 2001}]
-
-    connection = Connection()
-    load = lambda: browse._load_duplicate_candidate_album_ids(connection, [], repository=repository)
-
-    repository._set_cached_utility_projection(
-        "duplicate-identities",
-        {**state, "index": [(1, "one", ("artist", "title", 2001))]},
-    )
-    assert load() == []
-    assert load() == []
-    assert connection.reads == 0
-    fingerprint = list(state["fingerprint"])
-    fingerprint[changed_field] = 2
-    state.update(fingerprint=tuple(fingerprint), observed_at=2)
-    assert load() == []
-    assert connection.reads == 1
-    assert repository._get_cached_utility_projection("duplicate-identities")["fingerprint"] == tuple(fingerprint)
-    browse.invalidate_postgres_utility_projection_cache()
-
-
-@pytest.mark.parametrize("race", ["newer_snapshot", "invalidation", "changed_inventory"])
-def test_duplicate_identity_cache_does_not_publish_after_a_newer_snapshot_or_invalidation(monkeypatch, race):
-    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
-                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
-    import music_app.services.library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-cache-race-test"})
-    browse.invalidate_postgres_utility_projection_cache()
-    state = {"fingerprint": (1, 1, 1, 1, 1), "observed_at": 1}
-    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda connection: dict(state))
-    newer = {"fingerprint": (1, 2, 2, 1, 1), "observed_at": 2, "index": []}
-
-    class Connection:
-        def execute(self, sql, params):
-            if race == "newer_snapshot":
-                repository._set_cached_utility_projection("duplicate-identities", newer)
-            elif race == "invalidation":
-                browse.invalidate_postgres_utility_projection_cache()
-            else:
-                state["fingerprint"] = (1, 2, 2, 1, 1)
-            return self
-
-        def fetchall(self):
-            return [{"album_id": 1, "album_key": "one"}]
-
-    assert browse._load_duplicate_candidate_album_ids(Connection(), ["one"], repository=repository) == [1]
-    cached = repository._get_cached_utility_projection("duplicate-identities")
-    assert cached == (newer if race == "newer_snapshot" else None)
-    browse.invalidate_postgres_utility_projection_cache()
 
 
 class _TagSaveRetentionConnection:
@@ -13521,38 +13401,6 @@ def test_tag_save_keeps_duplicate_absence_except_albums_the_edit_can_change(monk
         assert sorted(cached["albums"]) == ["untagged", "untouched"]
     else:
         assert cached is None
-    browse.invalidate_postgres_utility_projection_cache()
-
-
-def test_tag_save_reloads_only_the_identity_index_rows_the_edit_can_change(monkeypatch):
-    """The Postgres 17 identity index moves past a save by re-reading only the edited albums
-    and the albums sharing their old or new identity; the rest of the library is not read."""
-    import music_app.services.library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "tag-save-retention-test"})
-    browse.invalidate_postgres_utility_projection_cache()
-    old, new, other = ("twin", "old release", 2001), ("twin", "new release", 2001), ("other", "kept", 2001)
-    repository._set_cached_utility_projection("duplicate-identities", {
-        "fingerprint": (1, "7", "roots", 1, None, 0), "observed_at": 1, "index": [
-            (11, "edited", old), (12, "old-twin", old), (13, "new-twin", new), (14, "untouched", other),
-        ],
-    })
-    connection = _retain_after_tag_save(
-        monkeypatch, revision=(1, "8", "roots", 1, None, 0), scope=({11}, {"edited"}, {new}),
-        previous_entries=[{"album_artist": "Twin", "album": "Old Release", "year": 2001}],
-        rows=[
-            {"album_id": 11, "album_key": "edited", "album_artist": "Twin", "album": "New Release", "year": "2001"},
-            {"album_id": 12, "album_key": "old-twin", "album_artist": "Twin", "album": "Old Release", "year": "2001"},
-            {"album_id": 13, "album_key": "new-twin", "album_artist": "Twin", "album": "New Release", "year": "2001"},
-        ],
-    )
-    assert connection.reads == [{"album_ids": [11, 12, 13]}]
-    cached = repository._get_cached_utility_projection("duplicate-identities")
-    assert cached["fingerprint"] == (1, "8", "roots", 1, None, 0)
-    assert sorted(cached["index"]) == [
-        (11, "edited", new), (12, "old-twin", old), (13, "new-twin", new), (14, "untouched", other),
-    ]
-    assert browse._duplicate_candidate_ids_from_index(cached["index"], ["edited"]) == [11, 13]
     browse.invalidate_postgres_utility_projection_cache()
 
 
@@ -14257,32 +14105,6 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
             "connection": calls[2]["connection"],
         },
     ]
-    browse.invalidate_postgres_utility_projection_cache()
-
-
-def test_duplicate_identity_prewarm_lookup_borrows_read_only_cache_without_deepcopy(monkeypatch):
-    import music_app.services.library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-cache-read-test"}
-    )
-    browse.invalidate_postgres_utility_projection_cache()
-    fingerprint = {"fingerprint": (1, 1, 1, 1, 1, 1), "observed_at": 1}
-    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: fingerprint)
-
-    class ReadOnlyCache(dict):
-        def __deepcopy__(self, _memo):
-            raise AssertionError("Duplicate identity lookup must not copy the complete index")
-
-    cache_key = repository._utility_projection_cache_key("duplicate-identities")
-    with browse._UTILITY_PROJECTION_CACHE_LOCK:
-        browse._UTILITY_PROJECTION_CACHE[cache_key] = ReadOnlyCache(
-            {**fingerprint, "index": [(1, "one", None)]}
-        )
-
-    assert browse._load_duplicate_candidate_album_ids(
-        object(), [], repository=repository
-    ) == []
     browse.invalidate_postgres_utility_projection_cache()
 
 
@@ -17359,33 +17181,6 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
     ]
     assert maintained == [repository]
 
-
-def test_postgres_library_browse_duplicate_identity_prewarm_builds_compact_index(monkeypatch):
-    from contextlib import nullcontext
-    from music_app.services import library_browse_postgres as module
-
-    connection = object()
-    calls = []
-    repository = module.PostgresLibraryBrowseRepository({
-        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
-    })
-    monkeypatch.setattr(repository, "_search_connection_context", lambda: nullcontext(connection))
-    monkeypatch.setattr(
-        module,
-        "_load_duplicate_candidate_album_ids",
-        lambda active_connection, album_keys, *, repository: calls.append(
-            (active_connection, album_keys, repository)
-        ) or [],
-    )
-    cache_key = repository._utility_projection_cache_key("duplicate-identities")
-
-    repository._run_utility_projection_prewarm(
-        "duplicate-identities",
-        cache_key,
-        module._UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0),
-    )
-
-    assert calls == [(connection, [], repository)]
 
 def test_loose_tracks_prewarm_prepares_the_store_and_caches_nothing(monkeypatch):
     """Case 64 (6.5's ruling) replaces the cached snapshot and its invalidation re-warm: the loose-tracks

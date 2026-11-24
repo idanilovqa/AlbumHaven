@@ -236,3 +236,65 @@ def test_ascii_only_identities_add_no_superset_candidates(library):
     results = _duplicate_results(library, [keys["One"], keys["Other"], keys["Elsewhere"]])
     assert results[keys["One"]]["has_duplicate_files"] is True
     assert keys["Other"] not in results and keys["Elsewhere"] not in results
+
+
+def test_no_keys_read_no_duplicate_candidates_and_run_no_statement():
+    import music_app.services.library_browse_postgres as browse
+
+    class Connection:
+        def execute(self, sql, params=None):
+            pytest.fail(f"no statement for no keys: {' '.join(sql.split())[:80]}")
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "no-keys"})
+    assert browse._load_duplicate_candidate_album_ids(Connection(), [], repository=repository) == []
+
+
+def test_no_whole_library_duplicate_identity_index_remains():
+    """Candidates always come from the keyed, indexed read: nothing builds, caches or refreshes a
+    whole-library identity index (startup, save or request)."""
+    import music_app.services.library_browse_postgres as browse
+
+    for gone in ("_duplicate_identity_index_rows_sql", "_duplicate_candidate_index_from_rows",
+                 "_duplicate_candidate_ids_from_index"):
+        assert not hasattr(browse, gone), gone
+    assert "duplicate-identities" not in browse._UTILITY_PROJECTION_KINDS
+
+
+def test_one_album_save_refresh_runs_no_whole_library_identity_sql(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    statements = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            statements.append(" ".join(sql.split()))
+            rows = ([{"library_id": 1, "inventory_revision": "2", "root_versions": [], "root_count": 1,
+                      "override_versions": None, "override_count": 0, "observed_at": 2}]
+                    if "inventory_mutation_revision" in sql else [])
+            return type("Cursor", (), {"fetchone": lambda _self: rows[0] if rows else None,
+                                       "fetchall": lambda _self: rows})()
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "one-album-save-refresh"}
+    monkeypatch.setattr(browse, "_connect", lambda _url: Connection())
+    monkeypatch.setattr(browse.problematic_index, "queue_maintenance", lambda _repository: None)
+    repository = browse.PostgresLibraryBrowseRepository(config)
+    repository._set_cached_utility_projection("duplicate-absence", {
+        "fingerprint": (1, "1", [], 1, None, 0), "observed_at": 1, "albums": {},
+    })
+    # A process that still held an identity index (the old startup prewarm's) gets no refresh SQL for it.
+    repository._set_cached_utility_projection("duplicate-identities", {
+        "fingerprint": (1, "1", [], 1, None, 0), "observed_at": 1, "index": [(1, "a::b", ("a", "b", 2001))],
+    })
+    browse.refresh_postgres_utility_projections_after_edit(
+        config, track_paths=["/music/a/01.flac"],
+        previous_entries=[{"album_artist": "A", "album": "B", "year": 2001}],
+    )
+    assert statements, "the refresh ran"
+    assert not [sql for sql in statements if "select distinct albums.id as album_id" in sql], statements
+    browse.invalidate_postgres_utility_projection_cache()

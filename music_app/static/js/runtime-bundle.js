@@ -27581,24 +27581,71 @@ function mergeProblematicItems(...sources) {
   return Array.from(byKey.values()).sort(compareProblematicItems);
 }
 
-function getProblematicBaseItems() {
-  return mergeProblematicItems(
-    state.utility.problematicFiles,
-    state.utility.problematicArtistItems,
-  );
+// A committed list is merged and sorted once, and its key index, problem types and filtered views are
+// derived from it once: a render or a reopen reuses them. Every writer commits a new array (an append in
+// place changes its length), so the sources' identities and lengths name the committed list.
+const committedProblematicLists = new Map();
+
+function getCommittedProblematicList(name, sources) {
+  const cached = committedProblematicLists.get(name);
+  if (cached && sources.every((source, index) => (
+    source === cached.sources[index] && (source?.length || 0) === cached.lengths[index]
+  ))) return cached;
+  const list = {
+    sources,
+    lengths: sources.map((source) => source?.length || 0),
+    items: mergeProblematicItems(...sources),
+    byKey: null,
+    reasonTypes: null,
+    filtered: null,
+  };
+  committedProblematicLists.set(name, list);
+  return list;
 }
 
-function getAllProblematicItems() {
-  return mergeProblematicItems(
+function getProblematicBaseList() {
+  return getCommittedProblematicList('base', [state.utility.problematicFiles, state.utility.problematicArtistItems]);
+}
+
+function getAllProblematicList() {
+  return getCommittedProblematicList('all', [
     state.utility.problematicFiles,
     state.utility.problematicArtistItems,
     state.utility.problematicServerSearchItems,
-  );
+  ]);
+}
+
+// The committed lists are shared: callers read them and never sort or change them in place.
+function getProblematicBaseItems() {
+  return getProblematicBaseList().items;
+}
+
+function getAllProblematicItems() {
+  return getAllProblematicList().items;
+}
+
+function getProblematicItemsByKey() {
+  const list = getAllProblematicList();
+  list.byKey ||= new Map(list.items.map((item) => [String(item.key), item]));
+  return list.byKey;
 }
 
 function findProblematicItemByKey(key) {
-  const normalized = String(key || '');
-  return getAllProblematicItems().find((item) => String(item?.key || '') === normalized) || null;
+  return getProblematicItemsByKey().get(String(key || '')) || null;
+}
+
+// Each list shown (a committed list or one of its filtered views) is indexed by key once.
+const problematicListIndexes = new WeakMap();
+
+function getProblematicListIndex(items) {
+  let indexed = problematicListIndexes.get(items);
+  if (indexed?.length !== items.length) {
+    const index = new Map();
+    for (const item of items) if (!index.has(item.key)) index.set(item.key, item);
+    indexed = { length: items.length, index };
+    problematicListIndexes.set(items, indexed);
+  }
+  return indexed.index;
 }
 
 function getAlbumProblemFilterReasons(album) {
@@ -27608,13 +27655,17 @@ function getAlbumProblemFilterReasons(album) {
 }
 
 function getProblemReasonTypes() {
-  const reasons = new Set();
-  getProblematicBaseItems().forEach((album) => {
-    getAlbumProblemFilterReasons(album).forEach((reason) => {
-      if (reason) reasons.add(reason);
+  const list = getProblematicBaseList();
+  if (!list.reasonTypes) {
+    const reasons = new Set();
+    list.items.forEach((album) => {
+      getAlbumProblemFilterReasons(album).forEach((reason) => {
+        if (reason) reasons.add(reason);
+      });
     });
-  });
-  const current = Array.from(reasons).sort((a, b) => a.localeCompare(b));
+    list.reasonTypes = Array.from(reasons).sort((a, b) => a.localeCompare(b));
+  }
+  const current = list.reasonTypes;
   if (state.utility.problematicFilesComplete === true) {
     state.utility.completeProblemReasonTypes = Array.from(new Set([
       ...(state.utility.completeProblemReasonTypes || []),
@@ -27693,10 +27744,20 @@ function getFilteredProblematicAlbums() {
   const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
   const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
   if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
-  const items = query.length >= 2 && serverQuery === query
-    ? getAllProblematicItems()
-    : getProblematicBaseItems();
+  const list = query.length >= 2 && serverQuery === query
+    ? getAllProblematicList()
+    : getProblematicBaseList();
+  const selectedFilters = state.utility.selectedProblemFilters || [];
+  if (!query && !selectedFilters.length) return list.items;
+  // A view is filtered once per committed list, query and selected problem types.
+  const viewKey = JSON.stringify([query, selectedFilters]);
+  if (list.filtered?.key !== viewKey) {
+    list.filtered = { key: viewKey, items: filterProblematicAlbums(list.items, query) };
+  }
+  return list.filtered.items;
+}
 
+function filterProblematicAlbums(items, query) {
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
     if (!query) return true;
@@ -27735,7 +27796,7 @@ function getProblematicAlbumIssueLabel(album) {
 }
 
 function getSelectedProblematicAlbumFrom(items) {
-  return (items || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return getProblematicListIndex(items || []).get(state.utility.selectedProblematicKey) || null;
 }
 
 function getSelectedUtilityRule() {
@@ -30663,7 +30724,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
-  const albumsByKey = new Map(getAllProblematicItems().map(album => [String(album.key), album]));
+  const albumsByKey = getProblematicItemsByKey();
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
@@ -30811,7 +30872,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
 
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
-    || !items.some((item) => item.key === state.utility.selectedProblematicKey);
+    || !getProblematicListIndex(items).has(state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && (activeSearchQuery || (state.utility.selectedProblemFilters || []).length)) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an entry from the list to see the details.</div>';
@@ -31572,7 +31633,9 @@ function renderUtilityLogHistory() {
   els.detail.innerHTML = buildUtilityLogHistoryConsole(value);
 }
 
-function renderUtilityModalContent(options = {}) {
+// The open tab's shell: tab strip, panel roles and the other tabs' disposals. Null after it painted only the
+// loading shell (options.shellOnly).
+function renderUtilityModalShell(options) {
   const els = getUtilityModalElements();
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
@@ -31611,10 +31674,21 @@ function renderUtilityModalContent(options = {}) {
       if (els.count) els.count.textContent = '';
       if (els.sidebarLabel) els.sidebarLabel.textContent = selectedTab?.textContent?.trim() || '';
     }
-    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
-    if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
-    return;
+    finishUtilityModalRender(els);
+    return null;
   }
+  return { els, activeTab };
+}
+
+function finishUtilityModalRender(els) {
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
+}
+
+function renderUtilityModalContent(options = {}) {
+  const shell = renderUtilityModalShell(options);
+  if (!shell) return;
+  const { activeTab } = shell;
   if (activeTab === 'rules') {
     renderUtilityRules();
   } else if (activeTab === 'loops') {
@@ -31630,8 +31704,16 @@ function renderUtilityModalContent(options = {}) {
   } else {
     renderProblematicFiles(options);
   }
-  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
-  if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
+  finishUtilityModalRender(shell.els);
+}
+
+// The Problematic Files loaders paint only while their tab is open (each checks before it calls): that tab's
+// shell and list, never another tab's renderer.
+function renderProblematicFilesTab(options = {}) {
+  const shell = renderUtilityModalShell(options);
+  if (!shell) return;
+  renderProblematicFiles(options);
+  finishUtilityModalRender(shell.els);
 }
 
 const utilityTabAlignmentObservers = new WeakMap();
@@ -32975,11 +33057,11 @@ async function loadProblematicFiles(force = false, options = {}) {
   ) {
     // Returning to the tab while the complete list loads shows the first page
     // it already has, not the tab shell's "Loading..." until the list completes.
-    if (state.utility.loaded && shouldRenderInitialPage()) renderUtilityModalContent();
+    if (state.utility.loaded && shouldRenderInitialPage()) renderProblematicFilesTab();
     return pendingCompleteLoad;
   }
   if (state.utility.loaded && !force) {
-    if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+    if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
     return;
   }
   // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
@@ -32989,11 +33071,12 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.problematicFilesComplete = false;
   state.utility.problematicArtistItems = [];
   // The complete list carries every Artist problem, so the paint before it must not page Artists.
-  state.utility.problematicArtistHasMore = options.completeOnly !== true;
+  // A refresh keeps the complete list on screen until its bounded page commits: no Artist page before then.
+  state.utility.problematicArtistHasMore = options.completeOnly !== true && !refreshesCompleteList;
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
-  if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+  if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
   let settleInitialSummary;
   const initialSummaryPromise = new Promise((resolve) => { settleInitialSummary = resolve; });
   initialSummaryPromise.problematicSummaryRequestToken = requestToken;
@@ -33126,6 +33209,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           data,
           options.preserveSelectedDetail === true || data.complete === false,
         );
+        if (refreshesCompleteList) state.utility.problematicArtistHasMore = true;
         boundedPayloadCommitted = data.complete === false;
         state.utility.problematicHasMore = data.has_more === true
           || (data.has_more === undefined && data.complete === false);
@@ -33154,7 +33238,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         if ((canRenderBoundedPage()
             && shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
             || shouldRenderInitialPage()) {
-          renderUtilityModalContent();
+          renderProblematicFilesTab();
           await waitForProblematicUtilityRenderFrame();
         }
         if (reconcile) {
@@ -33199,7 +33283,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         scheduleBrowserTimeout(() => {
           if (state.utility.problematicIndexing && isUtilityModalOpen()) void loadProblematicFiles(true);
         }, PROBLEMATIC_INDEXING_POLL_MS);
-        if (shouldRender()) renderUtilityModalContent();
+        if (shouldRender()) renderProblematicFilesTab();
         return null;
       }
       loadError = String(error?.message || error || 'Unable to load problematic files.');
@@ -33232,7 +33316,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       if (stillOwner) {
         const renderStartedAt = getProblematicUtilityNow();
         if (shouldRender() && !navigationOwnsRendering()) {
-          renderUtilityModalContent();
+          renderProblematicFilesTab();
           await waitForProblematicUtilityRenderFrame();
         }
         recordProblematicUtilityDiagnostics('summary', {
@@ -33286,7 +33370,7 @@ async function loadNextProblematicArtistPage() {
       state.utility.problematicArtistHasMore = data.has_more === true && summaryItems.length > 0;
       if ((additions.length || data.cursor_restarted === true)
           && state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) {
-        renderUtilityModalContent();
+        renderProblematicFilesTab();
       }
       return additions;
     } catch (error) {
@@ -33328,7 +33412,7 @@ async function loadNextProblematicFilesPage() {
           ...data.problem_reason_types.map((reason) => String(reason || '').trim()).filter(Boolean),
         ]));
       }
-      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
       return additions;
     } catch (error) {
       console.warn('[AlbumHaven][Utilities] Problematic Files page failed.', error);
@@ -33363,7 +33447,7 @@ async function loadProblematicPagesUntilLocalQueryMatch(query) {
       || (state.utility.problematicArtistHasMore === true) !== previousArtistHasMore;
     if (!baseProgressed && !artistProgressed) break;
   }
-  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
   return typeof getFilteredProblematicAlbums === 'function'
     ? getFilteredProblematicAlbums()
     : [];
@@ -33412,7 +33496,7 @@ function scheduleProblematicServerSearch() {
     state.utility.problematicServerSearchSettledQuery = query;
     state.utility.problematicServerSearchHasMore = cached.hasMore;
     state.utility.problematicServerSearchNextCursor = cached.nextCursor;
-    if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+    if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
     return;
   }
   state.utility.problematicServerSearchPendingQuery = query;
@@ -33453,7 +33537,7 @@ async function searchProblematicFilesOnServer(query) {
       nextCursor: state.utility.problematicServerSearchNextCursor,
     },
   };
-  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
 }
 
 async function loadNextProblematicServerSearchPage() {
@@ -33482,7 +33566,7 @@ async function loadNextProblematicServerSearchPage() {
         : [...state.utility.problematicServerSearchItems, ...additions];
       state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
       state.utility.problematicServerSearchHasMore = data?.has_more === true;
-      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
       return additions;
     } finally {
       if (state.utility.problematicServerSearchLoadPromise === request) {
@@ -33613,7 +33697,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         && String(state.utility.selectedProblematicKey || '') === normalizedKey
       ) {
         const renderStartedAt = getProblematicUtilityNow();
-        renderUtilityModalContent({ preserveProblematicTree: true });
+        renderProblematicFilesTab({ preserveProblematicTree: true });
         await waitForProblematicUtilityRenderFrame();
         renderMs = roundProblematicUtilityMs(getProblematicUtilityNow() - renderStartedAt);
       }

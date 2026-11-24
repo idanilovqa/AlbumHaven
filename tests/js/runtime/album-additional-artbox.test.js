@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
 
 const runtimeRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime');
 const read = (file) => fs.readFileSync(path.join(runtimeRoot, file), 'utf8');
@@ -293,6 +294,40 @@ test('UI-14: saving the second artbox with nothing selected empties it', async (
   await context.saveAdditionalArtworkFromLookup();
   assert.deepEqual(calls.fetches.map((call) => call.url), ['/utilities/cover-lookup/additional-artwork/remove']);
   assert.equal(calls.closed, 1);
+});
+
+test('request capture: saving then removing the second artbox posts once each, whatever the possible matches', async () => {
+  const id = 'js:runtime/album-additional-artbox.js#postAlbumAdditionalArtwork';
+  const album = () => ({ key: 'synthetic-artist::synthetic-album', name: 'Synthetic Album', cover_ref: 'cover-ref-front' });
+  await measureInteractionContract(id, {
+    setup(possibleMatches) {
+      const capture = createRequestCapture(url => jsonResponse({
+        ok: true,
+        additional_artworks: url.endsWith('/remove') ? [] : [{ slot: 1, source_kind: 'remote', remote_cover_url: 'https://img.example/back.jpg' }],
+      }));
+      const { context } = load({ context: { fetch: capture.fetch } });
+      const matches = Array.from({ length: possibleMatches }, (_, index) => ({ id: `c${index}`, url: `https://img.example/${index}.jpg` }));
+      return { capture, context, matches };
+    },
+    async act({ capture, context, matches }) {
+      const before = capture.requests.length;
+      const current = album();
+      context.state.modalReleases = [current];
+      const selected = matches[matches.length - 1];
+      context.state.coverLookup.modal = { artboxSlot: 1, album: current, selectedRemoteId: selected.id, possibleMatches: matches };
+      await context.saveAdditionalArtworkFromLookup();
+      assert.equal(context.getAlbumAdditionalArtwork(current)?.slot, 1, 'the saved second artbox shows');
+      await context.removeAlbumAdditionalArtbox();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(context.getAlbumAdditionalArtwork(current), null, 'the removed second artbox is gone');
+      const requests = capture.requests.slice(before).map(({ url, options }) => ({ url, method: options.method }));
+      assert.deepEqual(requests, [
+        { url: '/utilities/cover-lookup/additional-artwork', method: 'POST' },
+        { url: '/utilities/cover-lookup/additional-artwork/remove', method: 'POST' },
+      ]);
+      return { requests };
+    },
+  });
 });
 
 test('Remove artbox empties the second artbox at once and puts it back if the server refuses', async () => {

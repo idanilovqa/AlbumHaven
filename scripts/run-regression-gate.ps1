@@ -37,7 +37,7 @@ $gates = @{
                 'tests/py/test_problematic_file_projection_migration_postgres.py')
         )
         Node = @('tests/js/runtime/utility-problematic-load-diagnostics.test.js',
-            'tests/js/runtime/utility-problematic-tab.test.js', 'tests/js/runtime/problematic-files-virtual-list.test.js',
+            'tests/js/runtime/problematic-files-virtual-list.test.js',
             'tests/js/runtime/utility-problematic-focused-track-render.test.js',
             'tests/js/runtime/problem-exclusion-mutations.test.js', 'tests/js/problematic-payload-evidence.test.js',
             'tests/js/performance-change-impact.test.js', 'tests/js/e2e-performance-helper-guards.test.js')

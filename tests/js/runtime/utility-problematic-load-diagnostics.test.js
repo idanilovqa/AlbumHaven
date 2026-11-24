@@ -350,6 +350,8 @@ function loadHelper(overrides = {}) {
     },
   };
   Object.assign(context, overrides);
+  // The loaders draw their own tab (renderProblematicFilesTab); here every draw is the counted stub.
+  context.renderProblematicFilesTab ??= (...args) => context.renderUtilityModalContent(...args);
   vm.createContext(context);
   loadPendingProjectionFetch(context);
   vm.runInContext(helperSource, context, { filename: helperPath });

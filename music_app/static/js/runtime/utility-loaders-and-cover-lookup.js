@@ -37,11 +37,11 @@ async function loadProblematicFiles(force = false, options = {}) {
   ) {
     // Returning to the tab while the complete list loads shows the first page
     // it already has, not the tab shell's "Loading..." until the list completes.
-    if (state.utility.loaded && shouldRenderInitialPage()) renderUtilityModalContent();
+    if (state.utility.loaded && shouldRenderInitialPage()) renderProblematicFilesTab();
     return pendingCompleteLoad;
   }
   if (state.utility.loaded && !force) {
-    if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+    if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
     return;
   }
   // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
@@ -51,11 +51,12 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.problematicFilesComplete = false;
   state.utility.problematicArtistItems = [];
   // The complete list carries every Artist problem, so the paint before it must not page Artists.
-  state.utility.problematicArtistHasMore = options.completeOnly !== true;
+  // A refresh keeps the complete list on screen until its bounded page commits: no Artist page before then.
+  state.utility.problematicArtistHasMore = options.completeOnly !== true && !refreshesCompleteList;
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
-  if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+  if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
   let settleInitialSummary;
   const initialSummaryPromise = new Promise((resolve) => { settleInitialSummary = resolve; });
   initialSummaryPromise.problematicSummaryRequestToken = requestToken;
@@ -188,6 +189,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           data,
           options.preserveSelectedDetail === true || data.complete === false,
         );
+        if (refreshesCompleteList) state.utility.problematicArtistHasMore = true;
         boundedPayloadCommitted = data.complete === false;
         state.utility.problematicHasMore = data.has_more === true
           || (data.has_more === undefined && data.complete === false);
@@ -216,7 +218,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         if ((canRenderBoundedPage()
             && shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
             || shouldRenderInitialPage()) {
-          renderUtilityModalContent();
+          renderProblematicFilesTab();
           await waitForProblematicUtilityRenderFrame();
         }
         if (reconcile) {
@@ -261,7 +263,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         scheduleBrowserTimeout(() => {
           if (state.utility.problematicIndexing && isUtilityModalOpen()) void loadProblematicFiles(true);
         }, PROBLEMATIC_INDEXING_POLL_MS);
-        if (shouldRender()) renderUtilityModalContent();
+        if (shouldRender()) renderProblematicFilesTab();
         return null;
       }
       loadError = String(error?.message || error || 'Unable to load problematic files.');
@@ -294,7 +296,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       if (stillOwner) {
         const renderStartedAt = getProblematicUtilityNow();
         if (shouldRender() && !navigationOwnsRendering()) {
-          renderUtilityModalContent();
+          renderProblematicFilesTab();
           await waitForProblematicUtilityRenderFrame();
         }
         recordProblematicUtilityDiagnostics('summary', {
@@ -348,7 +350,7 @@ async function loadNextProblematicArtistPage() {
       state.utility.problematicArtistHasMore = data.has_more === true && summaryItems.length > 0;
       if ((additions.length || data.cursor_restarted === true)
           && state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) {
-        renderUtilityModalContent();
+        renderProblematicFilesTab();
       }
       return additions;
     } catch (error) {
@@ -390,7 +392,7 @@ async function loadNextProblematicFilesPage() {
           ...data.problem_reason_types.map((reason) => String(reason || '').trim()).filter(Boolean),
         ]));
       }
-      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
       return additions;
     } catch (error) {
       console.warn('[AlbumHaven][Utilities] Problematic Files page failed.', error);
@@ -425,7 +427,7 @@ async function loadProblematicPagesUntilLocalQueryMatch(query) {
       || (state.utility.problematicArtistHasMore === true) !== previousArtistHasMore;
     if (!baseProgressed && !artistProgressed) break;
   }
-  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
   return typeof getFilteredProblematicAlbums === 'function'
     ? getFilteredProblematicAlbums()
     : [];
@@ -474,7 +476,7 @@ function scheduleProblematicServerSearch() {
     state.utility.problematicServerSearchSettledQuery = query;
     state.utility.problematicServerSearchHasMore = cached.hasMore;
     state.utility.problematicServerSearchNextCursor = cached.nextCursor;
-    if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+    if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
     return;
   }
   state.utility.problematicServerSearchPendingQuery = query;
@@ -515,7 +517,7 @@ async function searchProblematicFilesOnServer(query) {
       nextCursor: state.utility.problematicServerSearchNextCursor,
     },
   };
-  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
 }
 
 async function loadNextProblematicServerSearchPage() {
@@ -544,7 +546,7 @@ async function loadNextProblematicServerSearchPage() {
         : [...state.utility.problematicServerSearchItems, ...additions];
       state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
       state.utility.problematicServerSearchHasMore = data?.has_more === true;
-      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
       return additions;
     } finally {
       if (state.utility.problematicServerSearchLoadPromise === request) {
@@ -675,7 +677,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         && String(state.utility.selectedProblematicKey || '') === normalizedKey
       ) {
         const renderStartedAt = getProblematicUtilityNow();
-        renderUtilityModalContent({ preserveProblematicTree: true });
+        renderProblematicFilesTab({ preserveProblematicTree: true });
         await waitForProblematicUtilityRenderFrame();
         renderMs = roundProblematicUtilityMs(getProblematicUtilityNow() - renderStartedAt);
       }

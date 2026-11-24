@@ -107,6 +107,62 @@ def test_a_superseded_scans_republish_checks_only_the_files_the_library_lost(tmp
     )
 
 
+_MERGE = "py:services/scan_state.py#_merge_newer_published_inventory"
+
+
+def test_a_superseded_scans_merge_rebuilds_its_albums_without_touching_the_disk(tmp_path, monkeypatch):
+    """The whole merge, album rebuild included: albums keep the covers their own folders hold, so the
+    rebuild's cover repair (a folder listing only for a cover inherited from a rejected file) reads no disk."""
+    from tests.py.bounded_interactions import _checked_in_entries
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    entry = _checked_in_entries()[_MERGE]
+
+    def run(file_count: int) -> OperationCounts:
+        folder = tmp_path / f"merge-{file_count}"
+
+        def track(index: int, mtime: float) -> dict[str, object]:
+            album_folder = folder / f"Synthetic Album {index // 10:04d}"
+            return {
+                "path": str(album_folder / f"{index:05d}.mp3"), "mtime": mtime, "size": 1,
+                "title": f"Track {index}", "album": f"Synthetic Album {index // 10:04d}",
+                "album_artist": "Synthetic Artist", "artist": "Synthetic Artist", "track_number": index % 10 + 1,
+                "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION, "release_date": None,
+                "cover_path": str(album_folder / "cover.jpg"),
+            }
+
+        scanned = {row["path"]: row for row in (track(index, 1.0) for index in range(file_count))}
+        rewritten = track(0, 2.0) | {"title": "Track 0 (rewritten)"}
+        vanished = {track(1, 1.0)["path"]}
+        publication_state = {"file_cache": dict(scanned)}
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            revision = scan_state._merge_newer_published_inventory(
+                SimpleNamespace(
+                    load_inventory_mutation_revision=lambda: 7,
+                    load_inventory_published_since=lambda _since: ({rewritten["path"]: rewritten}, set()),
+                    load_removed_unpublished_paths=lambda _paths: vanished,
+                ),
+                publication_state,
+                since=0.0,
+                separate_release_keys=set(),
+            )
+        assert revision == 7
+        assert set(publication_state["file_cache"]) == set(scanned) - vanished
+        assert publication_state["file_cache"][rewritten["path"]]["title"] == "Track 0 (rewritten)"
+        assert len(publication_state["albums"]) == (file_count + 9) // 10
+        return counts
+
+    measure_scale_pair(
+        interaction_id=_MERGE,
+        small=entry["cardinalities"]["small"],
+        large=entry["cardinalities"]["production"],
+        run=run,
+        budgets=entry["budgets"],
+        growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
+    )
+
+
 @pytest.mark.parametrize("statements", [1, 2])
 def test_the_republish_contract_rejects_a_disk_check_per_file_or_a_growing_statement_count(
     tmp_path, monkeypatch, statements,

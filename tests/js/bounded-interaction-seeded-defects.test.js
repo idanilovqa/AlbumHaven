@@ -526,13 +526,14 @@ const DEFECTS = [
   },
   {
     // An async route that runs the file-backed Home build on the event loop
-    // serves no other request until the build finishes.
+    // serves no other request until the build finishes. home_data is already
+    // async and hands its build to the thread pool; the defect calls it inline.
     id: 'BI-08 Home builder called directly inside async def home_data',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
-    anchor: '@router.get("/home-data")\ndef home_data(request: Request) -> JSONResponse:',
-    replacement: '@router.get("/home-data")\nasync def home_data(request: Request) -> JSONResponse:',
-    expected: /^rejected BI-08 event-loop-blocking:\w+:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#home_data:route:GET \/home-data via build_home_payload > /,
+    anchor: '        payload = await run_in_threadpool(_build_home_data_payload, request, request_started_at)\n',
+    replacement: '        payload = _build_home_data_payload(request, request_started_at)\n',
+    expected: /^rejected BI-08 event-loop-blocking:\w+:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#home_data:route:GET \/home-data via _build_home_data_payload > /,
   },
   {
     id: 'BI-08 async route that builds the Home payload directly on the event loop',
@@ -709,7 +710,7 @@ const DEFECTS = [
       + '                            st,\n'
       + '                            previous_file_cache,\n'
       + '                            current_file_cache,\n'
-      + '                            changed_paths,\n'
+      + '                            inherited_paths,\n'
       + '                            current_separate_release_keys,\n'
       + '                        ),\n',
     replacement: '                        candidate_paths=st.get("file_cache", {}) or {},\n',

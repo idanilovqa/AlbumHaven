@@ -970,7 +970,7 @@
     },
     {
       "id": "js:runtime/album-additional-artbox.js#postAlbumAdditionalArtwork",
-      "action": "fetch requests installed by postAlbumAdditionalArtwork",
+      "action": "Save or remove the second artbox from Cover Look Up: one POST per action, whatever the number of possible matches",
       "entrypoints": [
         "js:music_app/static/js/runtime/album-additional-artbox.js#postAlbumAdditionalArtwork:request:fetch"
       ],
@@ -982,11 +982,32 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
-        "allowed": [],
-        "forbidden": []
-      }
+        "allowed": [
+          "/utilities/cover-lookup/additional-artwork",
+          "/utilities/cover-lookup/additional-artwork/remove"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/album-additional-artbox.test.js",
+      "testIdentity": "request capture: saving then removing the second artbox posts once each, whatever the possible matches",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; the artbox save and remove are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/album-additional-artbox.js#removeAlbumAdditionalArtbox",
@@ -1312,10 +1333,8 @@
         "music_app/static/js/runtime/player-loop-playback.js",
         "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
         "music_app/static/js/selection-accent.js",
-        "music_app/static/js/utilities/shell.js",
         "music_app/static/js/runtime/alert-components.js",
         "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
-        "music_app/static/js/utilities/rules-tab.js",
         "music_app/static/js/runtime/status-ui-helpers.js",
         "music_app/static/js/runtime/gallery-main-components.js",
         "music_app/static/js/runtime/android-settings.js",
@@ -6463,7 +6482,7 @@
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView",
-      "action": "fetchAndRender requests installed by refreshMissingAlbumView",
+      "action": "Refresh after a missing album's Re-scan or removal conflict: one reload of the current or pending view, whatever the albums shown",
       "entrypoints": [
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView:request:fetchAndRender"
       ],
@@ -6475,13 +6494,30 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/"
+          "/",
+          "/home-data",
+          "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 2000
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/tag-editor-and-optimistic-updates.test.js",
+      "testIdentity": "request capture: a missing album refresh reloads its own view once, or the pending view once",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; the missing album refresh is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum",
@@ -6654,7 +6690,7 @@
     },
     {
       "id": "js:runtime/track-modal-and-gallery.js#attachUtilityModalEvents",
-      "action": "click/input/search listeners installed by attachUtilityModalEvents",
+      "action": "click/input/search listeners installed by attachUtilityModalEvents. A keystroke keeps at most two live timers (Problematic Files: scheduleSearchRender's render debounce and the 250 ms scheduleProblematicServerSearch debounce; every other tab only the first); each is constant because it clears its pending timer before arming",
       "entrypoints": [
         "js:music_app/static/js/runtime/track-modal-and-gallery.js#attachUtilityModalEvents:event:click",
         "js:music_app/static/js/runtime/track-modal-and-gallery.js#attachUtilityModalEvents:event:input",
@@ -6690,7 +6726,7 @@
       "budgets": {
         "itemsVisited": 0,
         "renderCommits": 0,
-        "timers": 1
+        "timers": 2
       },
       "growth": {
         "metric": "itemsVisited",
@@ -7437,26 +7473,53 @@
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles",
-      "action": "fetchSummary requests installed by loadProblematicFiles",
+      "action": "Open Problematic Files: one bounded page, one complete list committed once; each render of the committed list visits a bounded number of albums and mounts one window of rows",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:request:fetchSummary",
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:timer:scheduleBrowserTimeout"
       ],
       "owners": [
-        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/utility-renderers-and-actions.js",
+        "music_app/static/js/runtime/problematic-files-virtual-list.js"
       ],
       "rules": [
         "BI-03",
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/utilities/problematic-files"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/utilities/problematic-files/detail"
+        ]
+      },
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 2,
+        "itemsVisited": 100,
+        "domMutations": 74
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-problematic-render-contract.test.js",
+      "testIdentity": "request capture: Problematic Files renders a committed list visiting a bounded number of albums per render",
+      "performanceTargets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Reverting the per-commit Problematic Files list cache makes every render merge, sort and walk the whole committed list again (three passes per render), and this contract fails on itemsVisited growth."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadTagEditorFolderFiles",
@@ -8753,97 +8816,6 @@
       ],
       "workClass": "constant",
       "proof": "static"
-    },
-    {
-      "id": "js:utilities/rules-tab.js#loadUtilityRules",
-      "action": "fetch requests installed by loadUtilityRules",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/rules-tab.js#loadUtilityRules:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/rules-tab.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/utilities/rules"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:utilities/shell.js#fetchCoverForAlbum",
-      "action": "fetch requests installed by fetchCoverForAlbum",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/shell.js#fetchCoverForAlbum:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/shell.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/utilities/fetch-cover"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:utilities/shell.js#fetchUnsuccessfulAlbumCovers",
-      "action": "fetch/fetchAndRender requests installed by fetchUnsuccessfulAlbumCovers",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/shell.js#fetchUnsuccessfulAlbumCovers:request:fetch",
-        "js:music_app/static/js/utilities/shell.js#fetchUnsuccessfulAlbumCovers:request:fetchAndRender"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/shell.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/home-data",
-          "/utilities/fetch-covers-unsuccessful",
-          "/view-data"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:utilities/shell.js#loadProblematicFiles",
-      "action": "fetch requests installed by loadProblematicFiles",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/shell.js#loadProblematicFiles:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/shell.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/utilities/problematic-files"
-        ],
-        "forbidden": []
-      }
     },
     {
       "id": "py:__init__.py#_configure_asgi_app.<locals>.require_runtime_javascript_revalidation",
@@ -15296,19 +15268,37 @@
     },
     {
       "id": "py:services/scan_state.py#_merge_newer_published_inventory",
-      "action": "Run publisher _merge_newer_published_inventory",
+      "action": "A superseded full scan merges newer published rows and rebuilds its albums in memory, reading no disk for albums whose covers their own folders hold",
       "entrypoints": [
         "py:music_app/services/scan_state.py#_merge_newer_published_inventory:publisher:name"
       ],
       "owners": [
-        "music_app/services/scan_state.py"
+        "music_app/services/scan_state.py",
+        "music_app/services/library.py",
+        "music_app/services/album_local_cover_integrity.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 50,
+        "production": 2000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 0,
+        "open_calls": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_scan_republish_bounded_contracts.py::test_a_superseded_scans_merge_rebuilds_its_albums_without_touching_the_disk",
+      "testIdentity": "test_a_superseded_scans_merge_rebuilds_its_albums_without_touching_the_disk",
+      "rollback": "Test-only contract; the merge is unchanged. It runs only in a full scan's finalize, at most 5 times per scan, and its album rebuild is the scan's own in-memory work; the cover repair lists a folder only for an album whose cover was inherited from a rejected file. Reverting returns this entry to static proof, which the guard rejects for its 4 reachable filesystem hazards."
     },
     {
       "id": "py:services/scan_state.py#_published_entry_is_newer",

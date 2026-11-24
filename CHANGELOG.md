@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.51 - 2026-11-23
+## 0.11.50 - 2026-11-23
 
-- Test and CI only: the freeze guard reads an f-string as one SQL text and follows callbacks handed over inside unpacked options, a failed functional gate shard uploads its trace, and the startup hydration contract stubs its history scope lookup.
+- Test and CI only: the freeze guard reads an f-string as one SQL text and follows callbacks handed over inside unpacked options, a failed functional gate shard uploads its trace, the startup hydration contract stubs its history scope lookup, and a Cover Lookup timing failure names the longest animation frames and their scripts.
+
+## 0.11.49 - 2026-11-23
+
+- Albums the watcher finds now appear in the Artist Tree without another navigation: a gallery answered before the library change was published is fetched again after 3, 6, 12, 24, 48 and 96 seconds, six times at most.
 
 ## 0.11.48 - 2026-11-22
 

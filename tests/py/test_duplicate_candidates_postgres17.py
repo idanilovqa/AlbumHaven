@@ -116,9 +116,12 @@ def library(request, watcher_repair_inventory, monkeypatch):  # noqa: F811
 
 
 def _seed(library, *albums):
-    """Seeds (folder, album, year) albums by one artist; returns each folder's album key."""
-    library.seed(*({**library.entry(f"Owner/{folder}/01.flac", album=album), "year": year}
-                   for folder, album, year in albums))
+    """Seeds (folder, album, year) albums by one artist; returns each folder's album key. Each folder is its
+    own edition: the inventory withholds two album keys of one semantic identity (artist, title, year,
+    edition), while the duplicate identity reads the file tags without the edition."""
+    entries = [{**library.entry(f"Owner/{folder}/01.flac", album=album), "year": year, "edition": folder}
+               for folder, album, year in albums]
+    library.seed(*entries)
     with isolatedPostgres._connect(library.runtime_url) as connection:
         rows = connection.execute("""
             select distinct albums.album_key, files.private_path

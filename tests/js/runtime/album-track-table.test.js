@@ -485,12 +485,16 @@ test('AlbumTrackTable shows a later disc rating on its heading only when both ar
   }
 });
 
-test('AlbumTrackTable leaves the number empty when a track has none, instead of its row position (owner, 11-17)', () => {
+test('AlbumTrackTable shows _ when a track has no number, never its row position (owner, 11-17 and 11-24)', () => {
   const context = loadTrackTable();
   const numbered = context.buildAlbumTrackTableRow({ path: 'a.mp3', title: 'A', trackNumber: 7 }, 0);
-  const unnumbered = context.buildAlbumTrackTableRow({ path: 'b.mp3', title: 'B', trackNumber: '' }, 6);
+  for (const absent of ['', '  ', null, undefined]) {
+    const unnumbered = context.buildAlbumTrackTableRow({ path: 'b.mp3', title: 'B', trackNumber: absent }, 6);
+    assert.match(unnumbered.cells.number.content, /album-track-table__number">_</);
+  }
+  const rawUnnumbered = context.buildAlbumTrackTableRow({ path: 'c.mp3', title: 'C', track_number: '' }, 6);
+  assert.match(rawUnnumbered.cells.number.content, /album-track-table__number">_</);
   assert.match(numbered.cells.number.content, /album-track-table__number">7</);
-  assert.match(unnumbered.cells.number.content, /album-track-table__number"><\/span>/);
 });
 
 test('bounded interaction: re-rendering a track table keeps two credit observers and one motion listener at any row count', async () => {

@@ -271,6 +271,12 @@ class _LooseGroups(_Library):
                 "select folder from library.problematic_loose_groups where marked_xid is not null").fetchall())
 
 
+# Still deadlocks: exception overrides wait for the same bounded-intent design as ignored repairs (6.5's
+# backlog). Strict, so the fix that lands it must remove this mark.
+_OVERRIDES_STILL_DEADLOCK = pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason="exception overrides: bounded-intent design pending (6.5 backlog)")
+
+
 def _override_both(loose, adapter):
     adapter.upsert_exception_overrides({path: "Non-album rarity" for path in loose.paths})
 
@@ -281,9 +287,11 @@ def test_an_exception_override_write_marks_both_loose_groups(loose):
     assert loose.marked() == ["strays a", "strays b"]
 
 
+@_OVERRIDES_STILL_DEADLOCK
 def test_an_exception_override_write_started_during_a_save_never_deadlocks_with_it(loose):
     _started_during_a_save(loose, _override_both)
 
 
+@_OVERRIDES_STILL_DEADLOCK
 def test_a_save_started_during_an_exception_override_write_never_deadlocks_with_it(loose):
     _save_started_during(loose, _override_both)

@@ -28,6 +28,7 @@ from music_app.services.android_artifact_access import (
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.current_actor import ActorState, CurrentActor
 from music_app.services.private_route_boundary import _is_public, install_private_route_boundary
+from music_app.services.android_attestation_revocations import import_status_list_on_startup
 from scripts import android_attestation_revocations as revocations
 from tests.e2e.support import isolatedPostgres
 from tests.py.android_attestation_testing import NOW, SIGNER, AttestationPki
@@ -660,6 +661,26 @@ def test_a_reimported_status_list_drops_only_its_own_stale_serials(world, tmp_pa
                             clock=world.clock, stdout=io.StringIO()) == 0
     _load_status_list(world, tmp_path, {"B": {"reason": "SUSPENDED"}, "C": {"reason": "KEY_COMPROMISE"}})
     assert _revocations(world) == {"b": ("status-list", "SUSPENDED"), "c": ("operator", "")}
+
+
+def test_startup_imports_a_configured_status_list_once_then_never_reads_the_file(world, tmp_path):
+    path = tmp_path / "attestation-status.json"
+    path.write_text(json.dumps({"entries": {"01F2E": {"reason": "KEY_COMPROMISE"}}}), encoding="utf-8")
+    environ = {ATTESTATION_STATUS_ENV: str(path)}
+    world.environ[ATTESTATION_STATUS_ENV] = str(path)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": world.db.runtime_url}
+
+    def startup():
+        return import_status_list_on_startup(config, environ=environ, connect=isolatedPostgres._connect,
+                                              clock=world.clock)
+
+    assert _attest(world)[1]["code"] == "attestation_unavailable"
+    assert startup() == "imported"  # as the application role
+    assert _revocations(world) == {"1f2e": ("status-list", "KEY_COMPROMISE")}
+    assert _attest(world, intermediate_serial=0x1F2E)[1]["code"] == "attestation_refused"
+    assert _attest(world)[0] == 200
+    path.unlink()
+    assert startup() == "done"
 
 
 def test_a_configured_status_list_that_was_never_loaded_fails_closed_before_the_challenge_is_spent(world):

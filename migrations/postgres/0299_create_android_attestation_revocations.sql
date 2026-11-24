@@ -17,7 +17,8 @@ create table if not exists app.android_attestation_revocation_sources (
 
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
-    grant select on app.android_attestation_revocations, app.android_attestation_revocation_sources
+    -- Insert only: the one-time startup import of a previously configured status list.
+    grant select, insert on app.android_attestation_revocations, app.android_attestation_revocation_sources
       to album_haven_app;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_migrator') then

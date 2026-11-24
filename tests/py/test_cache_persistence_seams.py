@@ -1232,3 +1232,15 @@ def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coales
     assert small.membership_rows == production.membership_rows <= 2 * len(album)
     assert small.unrelated_writes == production.unrelated_writes == 0
     assert small.builder_calls == production.builder_calls == 0
+
+
+@pytest.mark.parametrize("total", [12, None])
+def test_file_entry_round_trip_preserves_the_track_total(tmp_path, total):
+    """The album completeness check reads the stored track total (owner, 2026-11-24)."""
+    entry = _cache_entry(tmp_path / "song.flac")
+    entry["total_tracks"] = total
+
+    serialized = cache_module.serialize_file_entry(entry)
+
+    assert serialized["total_tracks"] == total
+    assert cache_module.deserialize_file_entry(serialized)["total_tracks"] == total

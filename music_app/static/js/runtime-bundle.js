@@ -24320,7 +24320,8 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
     ? `${problemReasons.join(', ')}. Open this track in Problematic Files`
     : 'Open this track in Problematic Files';
   const problemHtml = track.isProblematic
-    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="${escapeHtml(problemTitle)}" aria-label="Open this track in Problematic Files">!</button>`
+    // A track whose problem is a copy outside the album folder leads to that copy's entry (owner, 2026-11-24).
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(String(track.problemTrackPath || '').trim() || trackPath)}" title="${escapeHtml(problemTitle)}" aria-label="Open this track in Problematic Files">!</button>`
     : '';
   const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {
@@ -45468,6 +45469,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
         problemReasons: Array.isArray(track.problem_reasons) ? track.problem_reasons : [],
+        problemTrackPath: String(track.problem_track_path || ''),
         isSearchMatch: discMatchesSearch || matchesAlbumTrackSearch(query, displayTitle, secondaryArtist),
         sectionTitle: sectionTitleByFirstTrack.get(trackPath) || '',
       };

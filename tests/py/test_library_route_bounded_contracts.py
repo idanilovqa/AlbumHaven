@@ -1409,6 +1409,28 @@ def _problematic_rows(track_count: int) -> list[dict[str, object]]:
     return rows
 
 
+class _CandidateFolderConnection:
+    """The narrowing's one read of the candidate folders' files, counted (6.5, 2026-11-24)."""
+
+    def __init__(self, counts, rows):
+        self.counts, self.rows = counts, rows
+
+    def execute(self, _sql, params):
+        from music_app.services.album_local_membership import physical_album_folder
+
+        self.counts.sql_statements += 1
+        folders = {physical_album_folder(path) for path in params["paths"]}
+        # The index answer: only the candidate folders' own files, never the library.
+        found = [{"private_path": row["file_private_path"], "album": row["file_entry"]["album"],
+                  "album_artist": row["file_entry"]["album_artist"], "artist": row["file_entry"]["artist"],
+                  "track_number": row["track_number"], "disc_number": 1, "total_tracks": None,
+                  "exception_type": None, "membership_problem": None, "album_files_elsewhere": False}
+                 for row in self.rows if physical_album_folder(row["file_private_path"]) in folders]
+        self.counts.returned_rows += len(found)
+        return SimpleNamespace(fetchall=lambda: found)
+
+
+@pytest.mark.parametrize("candidate_folders", [0, 1, 5])
 @pytest.mark.parametrize("backend", ["in-memory", "postgres"])
 @pytest.mark.parametrize("route", [
     ("py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail", "/utilities/problematic-files/broadcast::tender buttons", {}),
@@ -1416,8 +1438,12 @@ def _problematic_rows(track_count: int) -> list[dict[str, object]]:
      {"album_key": "broadcast::tender buttons"}),
 ], ids=["path", "query"])
 def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count(
-    library_app, tmp_path, monkeypatch, route, backend,
+    library_app, tmp_path, monkeypatch, route, backend, candidate_folders,
 ):
+    """D3 (6.5, 2026-11-24): with candidate folders, the mixed-folder narrowing adds exactly one statement,
+    however many folders, and reads only those folders' files."""
+    if backend == "in-memory" and candidate_folders:
+        pytest.skip("the narrowing belongs to the Postgres projection")
     from music_app.routes import api_read_asgi_routes
     from music_app.services import library_browse_postgres, problematic_albums
 
@@ -1436,7 +1462,17 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
             # The keyed Postgres read: `where album_key = %(album_key)s`.
             selected = [row for row in current["rows"] if row["album_key"] == album_key]
             current["counts"].candidate_rows += len(selected)
-            return [dict(row) for row in selected]
+            rows = [dict(row) for row in selected]
+            for index, row in enumerate(rows):
+                if candidate_folders:
+                    # The selected album's files spread over the candidate folders the SQL marked mixed.
+                    folder = f"/library/Shared {index % candidate_folders}"
+                    row["file_private_path"] = f"{folder}/{index:02d}.mp3"
+                    row["file_entry"] = {**row["file_entry"], "path": row["file_private_path"]}
+                    row["file_mixed_album_folder"] = True
+            return library_browse_postgres._narrow_mixed_album_folders(
+                _CandidateFolderConnection(current["counts"], rows), rows,
+            )
 
         def load_relation_alias_maps(_self, **_options):
             # One Postgres read of the relation alias maps per request.
@@ -1472,6 +1508,10 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
         assert payload["key"] == "broadcast::tender buttons"
         assert len(payload["tracks"]) == 12
         assert "Encoding problem" in payload["problem_reasons"]
+        if backend == "postgres":
+            # Exactly one statement without a candidate folder (the alias read), exactly two with any number.
+            assert counts.sql_statements == (2 if candidate_folders else 1)
+            assert counts.returned_rows == (12 if candidate_folders else 0)
         return counts
 
     measure_scale_pair(run=run, **_registered(interaction_id))

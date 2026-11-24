@@ -859,7 +859,13 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
     text_corrections = corrections or None
     track_title = first_tag(tags, ["title", "tit2"]) or path.stem
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
-    track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))
+    track_number_raw = first_tag(tags, ["tracknumber", "track number", "track", "trck"])
+    track_number = safe_int(track_number_raw)
+    # The album's track total, for completeness (owner, 2026-11-24): "n/m", else TRACKTOTAL / TOTALTRACKS.
+    total_tracks = safe_int(str(track_number_raw or "").partition("/")[2]) or safe_int(
+        first_tag(tags, ["tracktotal", "totaltracks", "total tracks"])
+        or first_custom_tag(tags, ["tracktotal", "totaltracks", "total tracks"])
+    )
     disc_number_raw = first_tag(tags, ["discnumber", "disc number", "tpos"]) or first_custom_tag(tags, ["discnumber", "disc number", "tpos"])
     disc_value, _, total_discs_value = str(disc_number_raw or "").partition("/")
     disc_number = safe_int(disc_value)
@@ -882,7 +888,8 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
         "album": album_name, "album_artist": album_artist, "title": track_title,
         "genre": genre,
         "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw,
-        "total_discs": total_discs, "disc_subtitle": disc_subtitle or None, "artist": track_artist,
+        "total_discs": total_discs, "total_tracks": total_tracks if total_tracks and total_tracks > 0 else None,
+        "disc_subtitle": disc_subtitle or None, "artist": track_artist,
         "artists": track_artists,
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_type": album_type, "album_rating": album_rating,
         "exception_type": exception_type or None,

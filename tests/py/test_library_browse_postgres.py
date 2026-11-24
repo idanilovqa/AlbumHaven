@@ -282,6 +282,9 @@ class _EmptyMissingAlbumConnection:
             "library.local_album_artist_identities",
         )):
             return _InventoryCursor()
+        from music_app.services.library_browse_postgres import _OUTSIDE_COPIES_SQL
+        if sql == _OUTSIDE_COPIES_SQL:  # no copies outside the album folder in these fixtures
+            return _InventoryCursor()
         assert _is_missing_album_query(sql)
         assert not params
         return _InventoryCursor()
@@ -11998,9 +12001,10 @@ def test_rejected_album_membership_duplicate_remains_a_physical_problem():
 
     reason = "Duplicate track outside album folder"
     assert reason in list(_physical_file_problem_reasons({"local_album_membership_problem": reason}))
-    assert "Mixed album metadata in one folder" in list(_physical_file_problem_reasons({
+    # Owner (2026-11-24): a copy in a folder of copied songs shows only the duplicate type.
+    assert list(_physical_file_problem_reasons({
         "local_album_membership_problem": reason, "_mixed_album_folder": True,
-    }))
+    })) == [reason]
 
 
 @pytest.mark.parametrize("changed_field,changed_value", [

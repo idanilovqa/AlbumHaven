@@ -4512,6 +4512,35 @@ test('track modal shows the existing problem link from server-owned track state 
   assert.match(elements.list.innerHTML, /data-track-path="C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem\.flac"/);
 });
 
+test('track modal links an album track with an outside copy to the Problematic Files entry of that copy', () => {
+  const trackPath = 'C:\\Music\\Artist Alpha\\Album Alpha\\01 Copied.flac';
+  const copyPath = 'C:\\Music\\Copied songs\\1-01 Copied.flac';
+  const album = {
+    key: 'alpha',
+    name: 'Album Alpha',
+    album_artist: 'Artist Alpha',
+    tracks: [{
+      path: trackPath,
+      title: 'Copied',
+      artist: 'Artist Alpha',
+      album_artist: 'Artist Alpha',
+      track_number: 1,
+      is_problematic: true,
+      problem_reasons: ['Duplicate track outside album folder'],
+      problem_track_path: copyPath,
+    }],
+  };
+  const { context, elements } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: 'blob:copy-cover', cached: true }),
+  });
+  context.state.utility = { problematicFiles: [] };
+
+  context.renderTrackModalRelease(album);
+
+  assert.match(elements.list.innerHTML, /data-track-path="C:\\Music\\Copied songs\\1-01 Copied\.flac"/);
+});
+
 test('album playback queue stores the canonical request key instead of the path identity', () => {
   const trackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
   const album = {

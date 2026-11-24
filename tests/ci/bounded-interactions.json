@@ -6614,7 +6614,7 @@
     },
     {
       "id": "js:runtime/track-modal-and-gallery.js#attachUtilityModalEvents",
-      "action": "click/input/search listeners installed by attachUtilityModalEvents",
+      "action": "click/input/search listeners installed by attachUtilityModalEvents. A keystroke keeps at most two live timers (Problematic Files: scheduleSearchRender's render debounce and the 250 ms scheduleProblematicServerSearch debounce; every other tab only the first); each is constant because it clears its pending timer before arming",
       "entrypoints": [
         "js:music_app/static/js/runtime/track-modal-and-gallery.js#attachUtilityModalEvents:event:click",
         "js:music_app/static/js/runtime/track-modal-and-gallery.js#attachUtilityModalEvents:event:input",
@@ -6650,7 +6650,7 @@
       "budgets": {
         "itemsVisited": 0,
         "renderCommits": 0,
-        "timers": 1
+        "timers": 2
       },
       "growth": {
         "metric": "itemsVisited",

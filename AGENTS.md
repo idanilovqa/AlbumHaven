@@ -64,6 +64,26 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## No file-backed app data
+
+- Runtime code never stores or caches app data in files: no JSON, pickle,
+  shelve, sqlite, CSV or other structured cache files, including derived data
+  (provider answers, enrichment, indexes, projections). App data lives in
+  indexed Postgres rows, read per key and written incrementally.
+- Allowed files: media and cover images, generated previews and loop audio
+  (with their records in Postgres), TLS and certificate material, build
+  artifacts, static assets, operator `.env`, logs, and client device storage
+  that holds preferences or offline copies.
+- Postgres shape for a cache or store: a primary key on the lookup key;
+  `expires_at` with a partial index and a bounded batched prune when entries
+  expire; one upsert per changed entry; no in-process copy acting as the
+  authority; no row or JSONB value that grows with the library.
+- Moving existing file data uses a one-time import with visible progress and a
+  completion marker row. Never delete the source file in code.
+- Do not add `*_PATH` file settings under `DATA_DIR`. A bounded-interaction
+  rule against structured file stores and config, migration and row-width
+  tests are planned to enforce this; until they land, review enforces it.
+
 ## Mandatory bounded-interaction gate
 
 - Mandatory for every agent and chat (owner rule, 2026-11-18): after any

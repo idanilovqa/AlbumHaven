@@ -73,8 +73,28 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
     });
 
     await stepLogger.step('A reload shows the new album name on the card and in Album Details', async () => {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await galleryActions.waitForGalleryReady();
+      // 6.5 (11-24): laying the finishing save over the reloaded view once overflowed the stack; the gallery
+      // never loaded.
+      const pageErrors = [];
+      const collect = (text) => { if (/Maximum call stack/u.test(text)) pageErrors.push(text); };
+      const onPageError = (error) => collect(String(error?.stack || error?.message || error));
+      const onConsole = (message) => { if (message.type() === 'error') collect(message.text()); };
+      page.on('pageerror', onPageError);
+      page.on('console', onConsole);
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await galleryActions.waitForGalleryReady();
+        // The same artist page, at the position the reload opened it: laying the save moved nothing.
+        expect(new URL(page.url()).searchParams.get('artist')).toBe(FIXTURE_ARTIST);
+        expect((await galleryActions.readGalleryScrollState()).scrollTop).toBe(0);
+        // What is on screen: the saved identity's card, exact title, unobscured under its heading.
+        await galleryActions.waitForAlbumCardShownUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM, { year: FINISHING_YEAR });
+        await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
+      } finally {
+        page.off('pageerror', onPageError);
+        page.off('console', onConsole);
+      }
+      expect(pageErrors).toEqual([]);
       await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
       await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
       await galleryActions.selectAlbumDetailsByIdentity({ artist: FIXTURE_ARTIST, album: FINISHING_RENAMED_ALBUM, year: FINISHING_YEAR });

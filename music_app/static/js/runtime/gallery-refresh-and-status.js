@@ -2351,7 +2351,7 @@ async function pollStatus() {
       try {
         // An earlier in-flight summary cannot satisfy a later status change.
         // Failed/superseded loads return null; keep the change pending for the next poll.
-        const refreshedItems = await loadProblematicFiles(true, { preserveSelectedDetail: true, reuseSameVersion: true });
+        const refreshedItems = await loadProblematicFiles(true, { preserveSelectedDetail: true });
         if (!ownsStatus()) return;
         if (state.utility === utility && Array.isArray(refreshedItems)) {
           utility.problematicStatusSyncedRevision = requestedRefreshRevision;
@@ -2488,7 +2488,7 @@ async function pollStatus() {
         if (!ownsStatus()) return;
       }
       if (state.utility.loaded) {
-        await loadProblematicFiles(true, { reuseSameVersion: true });
+        await loadProblematicFiles(true);
         if (!ownsStatus()) return;
       }
       const coverOutcome = String(normalizedStatus.covers_outcome || '').trim().toLowerCase();

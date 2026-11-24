@@ -1,25 +1,6 @@
 // How often an open Problematic Files tab asks again while its index fills.
 const PROBLEMATIC_INDEXING_POLL_MS = 2000;
 
-// The library version a load reads: the inventory revision and watcher health the status poll last reported,
-// or null before the first status report.
-function readProblematicListVersion() {
-  const status = state.status || {};
-  if (!Object.prototype.hasOwnProperty.call(status, 'inventory_mutation_revision')) return null;
-  return JSON.stringify([
-    Number(status.inventory_mutation_revision || 0),
-    typeof watcherHealthRefreshSignature === 'function' ? watcherHealthRefreshSignature(status) : '',
-  ]);
-}
-
-// Whether the committed list was read at the version the status reports now. A list loaded before the first
-// status report takes that report as its baseline, as pollStatus does with its first inventory revision.
-function committedProblematicListIsCurrent() {
-  const version = readProblematicListVersion();
-  if (state.utility.problematicListVersion === null) state.utility.problematicListVersion = version;
-  return state.utility.problematicListVersion === version;
-}
-
 async function loadProblematicFiles(force = false, options = {}) {
   if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
@@ -63,12 +44,6 @@ async function loadProblematicFiles(force = false, options = {}) {
     if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
     return;
   }
-  // A status reload (a cover job finished, the inventory or watcher health changed) keeps a complete list read
-  // at the version the status reports now: refetching it returns the same list. A changed version refetches.
-  if (options.reuseSameVersion === true && state.utility.loaded
-      && state.utility.problematicFilesComplete === true && committedProblematicListIsCurrent()) {
-    return state.utility.problematicFiles;
-  }
   // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
   const refreshesCompleteList = state.utility.loaded === true
     && state.utility.problematicFilesComplete === true;
@@ -81,7 +56,6 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
-  state.utility.problematicListVersion = readProblematicListVersion();
   if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
   let settleInitialSummary;
   const initialSummaryPromise = new Promise((resolve) => { settleInitialSummary = resolve; });

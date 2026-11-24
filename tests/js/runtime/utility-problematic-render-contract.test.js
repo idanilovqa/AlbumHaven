@@ -173,18 +173,18 @@ function windowRows({ context, els }, albums) {
   return range.end - range.start;
 }
 
-// One open of Problematic Files (a forced load of the complete list) raced by the status poll's reloads of
-// the same library version, during the load and right after it; then renders of the committed list:
-// reopening the loaded tab, and selecting a mounted row.
+// One open of Problematic Files (a forced load of the complete list) raced by a forced reload while it is in
+// flight, which joins it; then renders of the committed list: reopening the loaded tab, and selecting a
+// mounted row.
 async function openAndRender(session) {
   const { albums, capture, context, counts, els, settle } = session;
   const before = capture.requests.length;
   const mutationsBefore = counts.domMutations;
-  context.state.status = { inventory_mutation_revision: 1, watcher_health: { state: 'healthy', problems: [] } };
-  const statusReload = () => context.loadProblematicFiles(true, { preserveSelectedDetail: true, reuseSameVersion: true });
-  await Promise.all([context.loadProblematicFiles(true), statusReload()]);
-  await settle();
-  assert.equal((await statusReload()).length, albums, 'a status reload right after the load keeps its list');
+  const [, racing] = await Promise.all([
+    context.loadProblematicFiles(true),
+    context.loadProblematicFiles(true, { preserveSelectedDetail: true }),
+  ]);
+  assert.equal(racing.length, albums, 'the racing reload joins the in-flight load and answers its list');
   await settle();
   assert.equal(context.state.utility.problematicFiles.length, albums, 'the complete list is committed');
   assert.equal(els.count.textContent, String(albums), 'the count shows every album');

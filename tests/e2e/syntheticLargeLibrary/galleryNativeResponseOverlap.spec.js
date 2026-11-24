@@ -14,6 +14,7 @@ import {
 } from '../helpers/failureSafeCleanup.js';
 import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHelpers.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
+import { observeGalleryTraffic, readGalleryRuntimeState } from '../helpers/passiveGalleryDiagnostics.js';
 
 const PREFETCH_VIEWPORTS = 8;
 const FULL_REFRESH_SEARCH_QUERY = 'Neal Morse';
@@ -62,6 +63,20 @@ async function observeResponseBoundary(cdp, matchesUrl) {
       cdp.off('Network.responseReceived', onResponse);
     },
   };
+}
+
+// Failure-only evidence: what the page asked for and why it did or did not refresh or page.
+async function attachFailureDiagnostics(testInfo, page, traffic, name) {
+  let runtimeState = null;
+  try {
+    runtimeState = await readGalleryRuntimeState(page);
+  } catch (error) {
+    runtimeState = { readError: String(error?.message || error) };
+  }
+  await testInfo.attach(name, {
+    body: JSON.stringify({ runtimeState, traffic: await traffic.finish() }),
+    contentType: 'application/json',
+  });
 }
 
 async function openRootGallery(page, galleryActions, navigationPanelActions, view) {
@@ -245,6 +260,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       galleryActions, navigationPanelActions, page,
     }, testInfo) => {
       const ui = await openRootGallery(page, galleryActions, navigationPanelActions, 'cards');
+      const traffic = observeGalleryTraffic(page);
       const box = await ui.galleryScroll.boundingBox();
       if (!box) throw new Error('Gallery scroll surface is not visible.');
       const cdp = await page.context().newCDPSession(page);
@@ -275,7 +291,9 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         const diagnosticSequenceBeforeInput = await readLatestDiagnosticSequence(galleryActions);
         const anchor = await ui.captureMiddleVisibleCard();
         observation = await ui.startNativeScrollFrameObservation(anchor);
-        const responsePromise = page.waitForResponse(isRootContinuation);
+        const responsePromise = page.waitForResponse(isRootContinuation, {
+          timeout: RESPONSE_BOUNDARY_TIMEOUT_MS,
+        });
         const inputStartedAt = await ui.readBrowserEpoch();
         for (let step = 1; step <= 24; step += 1) {
         const y = Math.round(activatedY + ((touchEndY - activatedY) * step) / 24);
@@ -317,6 +335,13 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       } finally {
       await finalizeResponseOverlapCleanup(originalFailure, [
         async () => {
+          if (originalFailure) {
+            await attachFailureDiagnostics(testInfo, page, traffic, 'mobile-continuation-failure-diagnostics');
+          } else {
+            await traffic.finish();
+          }
+        },
+        async () => {
           if (touchActive) {
             await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
           }
@@ -349,6 +374,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       searchToolbarActions,
     }, testInfo) => {
       const ui = await openRootGallery(page, galleryActions, navigationPanelActions, 'cards');
+      const traffic = observeGalleryTraffic(page);
       const initialResponsePromise = page.waitForResponse(
         response => isFullSearchRefresh(response, FULL_REFRESH_SEARCH_QUERY),
       );
@@ -481,6 +507,11 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       }
         let reportingFailure = null;
         try {
+          if (originalFailure) {
+            await attachFailureDiagnostics(testInfo, page, traffic, 'desktop-full-refresh-failure-diagnostics');
+          } else {
+            await traffic.finish();
+          }
           if (observation) {
             samples = await observation.finish();
             await testInfo.attach('desktop-full-refresh-overlap', {

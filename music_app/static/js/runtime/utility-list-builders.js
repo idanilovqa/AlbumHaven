@@ -3119,24 +3119,71 @@ function mergeProblematicItems(...sources) {
   return Array.from(byKey.values()).sort(compareProblematicItems);
 }
 
-function getProblematicBaseItems() {
-  return mergeProblematicItems(
-    state.utility.problematicFiles,
-    state.utility.problematicArtistItems,
-  );
+// A committed list is merged and sorted once, and its key index, problem types and filtered views are
+// derived from it once: a render or a reopen reuses them. Every writer commits a new array (an append in
+// place changes its length), so the sources' identities and lengths name the committed list.
+const committedProblematicLists = new Map();
+
+function getCommittedProblematicList(name, sources) {
+  const cached = committedProblematicLists.get(name);
+  if (cached && sources.every((source, index) => (
+    source === cached.sources[index] && (source?.length || 0) === cached.lengths[index]
+  ))) return cached;
+  const list = {
+    sources,
+    lengths: sources.map((source) => source?.length || 0),
+    items: mergeProblematicItems(...sources),
+    byKey: null,
+    reasonTypes: null,
+    filtered: null,
+  };
+  committedProblematicLists.set(name, list);
+  return list;
 }
 
-function getAllProblematicItems() {
-  return mergeProblematicItems(
+function getProblematicBaseList() {
+  return getCommittedProblematicList('base', [state.utility.problematicFiles, state.utility.problematicArtistItems]);
+}
+
+function getAllProblematicList() {
+  return getCommittedProblematicList('all', [
     state.utility.problematicFiles,
     state.utility.problematicArtistItems,
     state.utility.problematicServerSearchItems,
-  );
+  ]);
+}
+
+// The committed lists are shared: callers read them and never sort or change them in place.
+function getProblematicBaseItems() {
+  return getProblematicBaseList().items;
+}
+
+function getAllProblematicItems() {
+  return getAllProblematicList().items;
+}
+
+function getProblematicItemsByKey() {
+  const list = getAllProblematicList();
+  list.byKey ||= new Map(list.items.map((item) => [String(item.key), item]));
+  return list.byKey;
 }
 
 function findProblematicItemByKey(key) {
-  const normalized = String(key || '');
-  return getAllProblematicItems().find((item) => String(item?.key || '') === normalized) || null;
+  return getProblematicItemsByKey().get(String(key || '')) || null;
+}
+
+// Each list shown (a committed list or one of its filtered views) is indexed by key once.
+const problematicListIndexes = new WeakMap();
+
+function getProblematicListIndex(items) {
+  let indexed = problematicListIndexes.get(items);
+  if (indexed?.length !== items.length) {
+    const index = new Map();
+    for (const item of items) if (!index.has(item.key)) index.set(item.key, item);
+    indexed = { length: items.length, index };
+    problematicListIndexes.set(items, indexed);
+  }
+  return indexed.index;
 }
 
 function getAlbumProblemFilterReasons(album) {
@@ -3146,13 +3193,17 @@ function getAlbumProblemFilterReasons(album) {
 }
 
 function getProblemReasonTypes() {
-  const reasons = new Set();
-  getProblematicBaseItems().forEach((album) => {
-    getAlbumProblemFilterReasons(album).forEach((reason) => {
-      if (reason) reasons.add(reason);
+  const list = getProblematicBaseList();
+  if (!list.reasonTypes) {
+    const reasons = new Set();
+    list.items.forEach((album) => {
+      getAlbumProblemFilterReasons(album).forEach((reason) => {
+        if (reason) reasons.add(reason);
+      });
     });
-  });
-  const current = Array.from(reasons).sort((a, b) => a.localeCompare(b));
+    list.reasonTypes = Array.from(reasons).sort((a, b) => a.localeCompare(b));
+  }
+  const current = list.reasonTypes;
   if (state.utility.problematicFilesComplete === true) {
     state.utility.completeProblemReasonTypes = Array.from(new Set([
       ...(state.utility.completeProblemReasonTypes || []),
@@ -3231,10 +3282,20 @@ function getFilteredProblematicAlbums() {
   const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
   const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
   if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
-  const items = query.length >= 2 && serverQuery === query
-    ? getAllProblematicItems()
-    : getProblematicBaseItems();
+  const list = query.length >= 2 && serverQuery === query
+    ? getAllProblematicList()
+    : getProblematicBaseList();
+  const selectedFilters = state.utility.selectedProblemFilters || [];
+  if (!query && !selectedFilters.length) return list.items;
+  // A view is filtered once per committed list, query and selected problem types.
+  const viewKey = JSON.stringify([query, selectedFilters]);
+  if (list.filtered?.key !== viewKey) {
+    list.filtered = { key: viewKey, items: filterProblematicAlbums(list.items, query) };
+  }
+  return list.filtered.items;
+}
 
+function filterProblematicAlbums(items, query) {
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
     if (!query) return true;
@@ -3273,7 +3334,7 @@ function getProblematicAlbumIssueLabel(album) {
 }
 
 function getSelectedProblematicAlbumFrom(items) {
-  return (items || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return getProblematicListIndex(items || []).get(state.utility.selectedProblematicKey) || null;
 }
 
 function getSelectedUtilityRule() {

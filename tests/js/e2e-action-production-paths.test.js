@@ -2599,7 +2599,7 @@ test('tag moves protect transient topology where observable and settle every rep
   );
   assert.match(
     caseSource,
-    /Move the second track into the same destination album[\s\S]*?Verify effective source numbering and the incomplete-order diagnosis[\s\S]*?settingsModalAppBarActions\.openSettings\(\)[\s\S]*?utilityTabBarActions\.openTab\('problematic-files'\)[\s\S]*?utilityProblematicFilesActions\.search\(SPLIT_ORIGINAL_ALBUM\)[\s\S]*?utilityProblematicFilesActions\.selectAlbumByTitle\(SPLIT_ORIGINAL_ALBUM\)[\s\S]*?readSelectedDetailSummary\(\)[\s\S]*?expect\(\[\.\.\.new Set\(detail\.problemReasons\)\]\)\.toEqual\(\[[\s\S]*?'Incomplete track order: Disc 1 missing 1, 2',[\s\S]*?\]\)[\s\S]*?settingsModalAppBarActions\.closeSettings\(\)[\s\S]*?galleryActions\.goto\(ARTIST_VIEW_URL\)[\s\S]*?Repeat the same destination move through the owner-reported fifth edit/,
+    /Move the second track into the same destination album[\s\S]*?Verify effective source numbering and the incomplete-order diagnosis[\s\S]*?settingsModalAppBarActions\.openSettings\(\)[\s\S]*?utilityTabBarActions\.openTab\('problematic-files'\)[\s\S]*?utilityProblematicFilesActions\.search\(SPLIT_ORIGINAL_ALBUM\)[\s\S]*?utilityProblematicFilesActions\.selectAlbumByTitle\(SPLIT_ORIGINAL_ALBUM\)[\s\S]*?readSelectedDetailSummary\(\)[\s\S]*?expect\(\[\.\.\.new Set\(detail\.problemReasons\)\]\)\.toEqual\(\[\s*'Incomplete track order: Disc 1 missing 1, 2',\s*\]\)[\s\S]*?settingsModalAppBarActions\.closeSettings\(\)[\s\S]*?galleryActions\.goto\(ARTIST_VIEW_URL\)[\s\S]*?Repeat the same destination move through the owner-reported fifth edit/,
     'after move 2, the production E2E must verify the exact Problematic Files diagnosis before edits 3-5 continue',
   );
   assert.match(

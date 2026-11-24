@@ -36,7 +36,7 @@ from music_app.services.library_indexing import ScanCancelled, scan_library_file
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services import ignored_repair_intents, problematic_index
 from music_app.services.gallery_projection_postgres import (
-    schedule_gallery_projection_refresh,
+    schedule_full_gallery_projection_refresh,
 )
 from music_app.services.library_browse_postgres import (
     invalidate_postgres_utility_projection_cache,
@@ -127,7 +127,7 @@ def invalidate_targeted_library_projections(
     patched for those files' albums instead of rebuilt for the whole library."""
     _mark_targeted_albums(library_state, revision=revision, affected_album_keys=affected_album_keys)
     if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
-        schedule_gallery_projection_refresh(config)
+        schedule_full_gallery_projection_refresh(config)
     if track_paths:
         invalidate_problematic_albums_payload_cache(library_state, include_postgres=False)
         invalidate_utility_rules_payload_cache(library_state, include_postgres=False)

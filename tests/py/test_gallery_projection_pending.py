@@ -28,7 +28,7 @@ def test_pending_gallery_queues_exact_scope_without_membership_work(monkeypatch,
         config, connect=lambda _: Connection(), album_ratings_service=_EmptyAlbumRatingsService())
     monkeypatch.setattr(gallery, "gallery_projection_context", lambda _: {"library_id": 1, "generation": 2})
     monkeypatch.setattr(gallery, "load_gallery_projection_page", lambda *_a, **_k: None)
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh",
                         lambda current, **kwargs: queued.append((current, kwargs)))
     monkeypatch.setattr(repository, "_load_relation_alias_maps",
                         lambda **_: pytest.fail("pending request expanded aliases"))
@@ -102,7 +102,7 @@ def test_stale_gallery_serves_immediately_and_leaves_its_refresh_to_the_owners(m
     monkeypatch.setattr(gallery, "load_gallery_projection_page", load_stale)
     monkeypatch.setattr(
         gallery,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         lambda current, **kwargs: queued.append((current, kwargs)),
     )
     monkeypatch.setattr(
@@ -179,14 +179,14 @@ def test_scope_refresh_coalesces_and_releases_failed_owner(monkeypatch, custom):
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-scoped-refresh"}
     state = browse._root_sidebar_view_state({"category": "hoard"} if custom else {})
     expected = {**state, "visible_library_categories": list(state["visible_library_categories"])}
-    first = gallery.schedule_gallery_projection_refresh(config, view_state=state)
-    assert gallery.schedule_gallery_projection_refresh(config, view_state=state) is None
+    first = gallery._schedule_gallery_projection_refresh(config, view_state=state)
+    assert gallery._schedule_gallery_projection_refresh(config, view_state=state) is None
     assert len(submitted) == 1
     first.set_exception(RuntimeError("owned recovery failure"))
     assert len(submitted) == 1
     assert not gallery._PENDING
 
-    retry = gallery.schedule_gallery_projection_refresh(config, view_state=state)
+    retry = gallery._schedule_gallery_projection_refresh(config, view_state=state)
     state["visible_library_categories"].append("changed-after-queue")
     action, future = submitted[1]
     assert retry is future
@@ -229,7 +229,7 @@ def test_requests_after_a_failed_common_refresh_schedule_and_publish_nothing(mon
     """(a) N requests after a failed common refresh schedule nothing; (b) retried requests publish nothing new."""
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-failed-common-refresh"}
     repository, _context = _pending_repository(monkeypatch, config)
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh",
                         lambda *_a, **_k: pytest.fail("a request scheduled a common scope refresh"))
     monkeypatch.setattr(gallery, "publish_gallery_projection",
                         lambda *_a, **_k: pytest.fail("a request published a common scope"))
@@ -249,7 +249,7 @@ def test_the_next_source_change_recovers_a_common_scope_once(monkeypatch):
     from music_app.services import state as state_service
 
     scheduled = []
-    monkeypatch.setattr(state_service, "schedule_gallery_projection_refresh", lambda config: scheduled.append(config))
+    monkeypatch.setattr(state_service, "schedule_full_gallery_projection_refresh", lambda config: scheduled.append(config))
     monkeypatch.setattr(state_service, "refresh_postgres_utility_projections_after_edit", lambda *_a, **_k: None)
     monkeypatch.setattr(state_service, "library_browse_postgres_is_effective", lambda _config: False)
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-recovering-common-scope"}
@@ -356,13 +356,13 @@ def test_concurrent_custom_first_builds_submit_one_action_and_no_trailing_rebuil
     monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
     monkeypatch.setattr(gallery, "_PENDING", {})
     barrier = threading.Barrier(2, timeout=5)
-    schedule = gallery.schedule_gallery_projection_refresh
+    schedule = gallery._schedule_gallery_projection_refresh
 
     def together(*args, **kwargs):
         barrier.wait()  # both requests have passed any check before either queues
         return schedule(*args, **kwargs)
 
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", together)
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh", together)
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-concurrent-first-build"}
     state = browse._root_sidebar_view_state({"category": "hoard"})
     threads = [threading.Thread(target=gallery.queue_gallery_scope_first_build,
@@ -571,7 +571,7 @@ def test_a_live_computed_page_never_publishes_or_schedules_while_relations_are_s
     )
     monkeypatch.setattr(gallery, "gallery_projection_context", lambda _: {"library_id": 1, "generation": 2})
     monkeypatch.setattr(gallery, "load_gallery_projection_page", lambda *_a, **_k: None)
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh",
                         lambda *_a, **_k: pytest.fail("a request scheduled the common-scope refresh"))
     monkeypatch.setattr(gallery, "queue_gallery_projection_snapshot",
                         lambda *_a, **_k: pytest.fail("a request published a live snapshot while stale or bounded"))
@@ -605,7 +605,7 @@ def test_a_request_with_a_published_common_scope_never_publishes_a_live_snapshot
         return [], [], 0, metadata
 
     monkeypatch.setattr(gallery, "load_gallery_projection_page", published)
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh",
                         lambda *_a, **_k: pytest.fail("a published scope scheduled a refresh"))
     monkeypatch.setattr(gallery, "queue_gallery_projection_snapshot",
                         lambda *_a, **_k: pytest.fail("a published scope took the live-compute branch"))

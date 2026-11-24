@@ -4549,7 +4549,7 @@ def _pending_family_browse(monkeypatch, artist_count: int):
     ):
         monkeypatch.setattr(module, name, builder_call)
     refreshes = []
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", lambda *_a, **_k: refreshes.append(1))
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh", lambda *_a, **_k: refreshes.append(1))
     repository = browse.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": f"postgresql://album_haven_app@localhost/pending-{artist_count}"},
         connect=lambda _url: CountingConnection(Connection(), counts),
@@ -5139,7 +5139,7 @@ def test_root_startup_bounded_preview_avoids_complete_sidebar_and_preserves_payl
 
     monkeypatch.setattr(
         gallery_projection,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         lambda config, **kwargs: refresh_calls.append((config, kwargs)),
     )
 

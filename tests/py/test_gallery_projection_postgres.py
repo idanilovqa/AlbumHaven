@@ -323,9 +323,9 @@ def test_refresh_scheduled_during_publication_runs_once_afterward(monkeypatch):
         calls.append("refresh")
         if len(calls) == 1:
             for _ in range(3):
-                projection.schedule_gallery_projection_refresh(config)
+                projection._schedule_gallery_projection_refresh(config)
     monkeypatch.setattr(projection, "ensure_gallery_projection_ready", refresh)
-    projection.schedule_gallery_projection_refresh(config)
+    projection._schedule_gallery_projection_refresh(config)
     submitted[0][1].set_result(submitted[0][0]())
     assert len(submitted) == 2
     submitted[1][1].set_result(submitted[1][0]())
@@ -373,7 +373,7 @@ def test_readonly_projection_never_connects_or_queues(monkeypatch):
     config = {"SHARED_LIBRARY_BROWSE_ONLY": True, "ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"}
     assert projection.ensure_gallery_projection_ready(config, connect=forbidden) == {"built": 0}
     assert projection.publish_gallery_projection(config, {"library_id": 1}, {}, {}, connect=forbidden) is False
-    assert projection.schedule_gallery_projection_refresh(config, connect=forbidden) is None
+    assert projection._schedule_gallery_projection_refresh(config, connect=forbidden) is None
     assert not projection._PENDING
 
 
@@ -637,7 +637,7 @@ def test_full_scan_refresh_scheduled_only_after_successful_commit(monkeypatch, f
         return {"ready": True}
     monkeypatch.setattr(adapter, "save_snapshot", save)
     monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda config: adapter)
-    monkeypatch.setattr(projection, "schedule_gallery_projection_refresh", lambda *args, **kwargs: order.append("refresh"))
+    monkeypatch.setattr(projection, "_schedule_gallery_projection_refresh", lambda *args, **kwargs: order.append("refresh"))
     if fails:
         with pytest.raises(RuntimeError):
             cache.save_cache_to_disk_for_config({}, Path("unused"), {}, "root", 1)
@@ -694,7 +694,7 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
         return page
     monkeypatch.setattr(projection, "load_gallery_projection_page", load_projection)
     refresh = Mock()
-    monkeypatch.setattr(projection, "schedule_gallery_projection_refresh", refresh)
+    monkeypatch.setattr(projection, "_schedule_gallery_projection_refresh", refresh)
     def forbidden(*args, **kwargs):
         pytest.fail("ready page recomputed whole membership or alias readiness")
     monkeypatch.setattr(repository, "_load_relation_alias_maps", forbidden)
@@ -772,7 +772,7 @@ def test_startup_projection_probe_can_defer_refresh_work(monkeypatch):
     )
     monkeypatch.setattr(
         projection,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         lambda *_args, **_kwargs: pytest.fail(
             "startup projection probe queued foreground-competing work"
         ),
@@ -960,11 +960,11 @@ def test_failed_refresh_discards_prior_trailing_demand_and_next_request_retries(
 
     monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://failed-refresh-fixture"}
-    first = gallery.schedule_gallery_projection_refresh(config)
-    assert gallery.schedule_gallery_projection_refresh(config) is None
+    first = gallery._schedule_gallery_projection_refresh(config)
+    assert gallery._schedule_gallery_projection_refresh(config) is None
     first.set_exception(RuntimeError("temporary repair failure"))
     assert len(submitted) == 1
-    retry = gallery.schedule_gallery_projection_refresh(config)
+    retry = gallery._schedule_gallery_projection_refresh(config)
     assert retry is submitted[1]
     retry.set_result({"built": 1})
     assert (config["ALBUM_HAVEN_APP_DATABASE_URL"], "refresh") not in gallery._PENDING

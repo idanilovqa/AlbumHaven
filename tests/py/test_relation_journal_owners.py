@@ -2,8 +2,8 @@
 that drains library.local_relation_dirty_albums, with no browse request (6.5, option (a)).
 
 The owner of a write outside a scan, the watcher, a tag save or startup is the keyed incremental drain,
-queued after the commit and off the response path: schedule_gallery_projection_refresh(config,
-incremental_membership=True). Each writer below gets the same check: after its commit the owner is queued
+queued after the commit and off the response path: queue_journaled_relation_drain, which queues the
+module-private generic scheduler with incremental_membership=True. Each writer below gets the same check: after its commit the owner is queued
 exactly once, and a write that changed nothing queues nothing."""
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ def owners(monkeypatch):
     def owner(config, **options):
         events.append(("owner", config, options))
 
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", owner)
-    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", owner)
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh", owner)
+    monkeypatch.setattr(state, "schedule_full_gallery_projection_refresh", owner)
     return events
 
 

@@ -58,7 +58,7 @@ def saved_album(watcher_repair_inventory, monkeypatch):
     fixture.tracks = [fixture.entry(f"Owner/{ALBUM}/{number:02}.flac", album=ALBUM) for number in (1, 2, 3)]
     fixture.seed(*fixture.tracks)
     monkeypatch.setattr(gallery_projection_postgres, "queue_journaled_relation_drain", lambda _config: None)
-    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh",
                         lambda _config, **_kwargs: None)
     return fixture
 

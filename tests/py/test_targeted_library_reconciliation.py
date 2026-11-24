@@ -845,7 +845,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     postgres_invalidations = []
     monkeypatch.setattr(
         state,
-        "schedule_gallery_projection_refresh",
+        "schedule_full_gallery_projection_refresh",
         lambda config: invalidated.append("gallery"),
         raising=False,
     )
@@ -914,7 +914,7 @@ def test_cover_only_invalidation_refreshes_no_library_projection(monkeypatch):
     from music_app.services import state
 
     for name in (
-        "schedule_gallery_projection_refresh",
+        "schedule_full_gallery_projection_refresh",
         "invalidate_problematic_albums_payload_cache",
         "invalidate_utility_rules_payload_cache",
         "invalidate_postgres_utility_projection_cache",
@@ -1640,7 +1640,7 @@ def test_targeted_projection_invalidation_patches_problematic_files_by_complete_
     from music_app.services import state
 
     events: list[object] = []
-    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", lambda config: None)
+    monkeypatch.setattr(state, "schedule_full_gallery_projection_refresh", lambda config: None)
     monkeypatch.setattr(state, "invalidate_problematic_albums_payload_cache",
                         lambda _state, include_postgres=True: events.append(("problems", include_postgres)))
     monkeypatch.setattr(state, "invalidate_utility_rules_payload_cache",

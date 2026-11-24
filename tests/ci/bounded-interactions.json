@@ -14240,10 +14240,10 @@
       "proof": "static"
     },
     {
-      "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh",
-      "action": "Run scheduler schedule_gallery_projection_refresh",
+      "id": "py:services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh",
+      "action": "Run scheduler _schedule_gallery_projection_refresh",
       "entrypoints": [
-        "py:music_app/services/gallery_projection_postgres.py#schedule_gallery_projection_refresh:scheduler:name"
+        "py:music_app/services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh:scheduler:name"
       ],
       "owners": [
         "music_app/services/gallery_projection_postgres.py"
@@ -14256,10 +14256,10 @@
       "proof": "static"
     },
     {
-      "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh",
-      "action": "Run background schedule_gallery_projection_refresh.<locals>.refresh",
+      "id": "py:services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh.<locals>.refresh",
+      "action": "Run background _schedule_gallery_projection_refresh.<locals>.refresh",
       "entrypoints": [
-        "py:music_app/services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh:background:executor"
+        "py:music_app/services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh.<locals>.refresh:background:executor"
       ],
       "owners": [
         "music_app/services/gallery_projection_postgres.py",

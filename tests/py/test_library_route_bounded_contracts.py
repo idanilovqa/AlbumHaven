@@ -863,7 +863,7 @@ def published_gallery(library_app, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
     # Background projection and display-variant work are their own registered entries.
-    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(covers, "queue_cover_display_variant_generation", lambda *_args, **_kwargs: None)
     cover = tmp_path / "page-cover.jpg"
     cover.write_bytes(b"cover")

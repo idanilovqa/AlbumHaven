@@ -690,7 +690,7 @@ def queue_gallery_scope_first_build(config, *, connect=None, view_state, generat
         if generation in (_FAILED_FIRST_BUILDS.get(key), _DEFERRED_FIRST_BUILDS.get(key)):
             return None
     # Single-flight without a trailing rebuild: _queue decides under its own lock.
-    return schedule_gallery_projection_refresh(
+    return _schedule_gallery_projection_refresh(
         config, connect=connect, view_state=view_state, incremental_membership=incremental_membership,
         first_build_generation=generation,
     )
@@ -725,17 +725,17 @@ def queue_journaled_relation_drain(config, *, connect=None):
     retry_waiting_catch_ups()
     # A writer on its own connection factory (the structural save) passes it; the others use the default.
     options = {} if connect is None else {"connect": connect}
-    return schedule_gallery_projection_refresh(config, incremental_membership=True, **options)
+    return _schedule_gallery_projection_refresh(config, incremental_membership=True, **options)
 
 
 def schedule_full_gallery_projection_refresh(config, *, connect=None):
     """The whole-library form: prepares every common scope from the published relations, after a snapshot
     save or a targeted inventory mutation. A scoped save queues `queue_journaled_relation_drain` instead;
     the freeze guard forbids this form on those saves by this name (backlog case 31)."""
-    return schedule_gallery_projection_refresh(config, connect=connect)
+    return _schedule_gallery_projection_refresh(config, connect=connect)
 
 
-def schedule_gallery_projection_refresh(
+def _schedule_gallery_projection_refresh(
     config, *, connect=None, view_state=None, incremental_membership=False, first_build_generation=None,
 ):
     """``first_build_generation``: a request's first build of a custom scope (queue_gallery_scope_first_build)."""

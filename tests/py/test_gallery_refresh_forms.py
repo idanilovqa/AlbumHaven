@@ -22,10 +22,10 @@ CONFIG = {"PERSISTENCE_BACKENDS": {"scan_cache": "postgres"}}
 def queued(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(gallery, "schedule_full_gallery_projection_refresh",
-                        lambda _config, **_kwargs: calls.append("full"), raising=False)
+                        lambda _config, **_kwargs: calls.append("full"))
     monkeypatch.setattr(gallery, "queue_journaled_relation_drain",
                         lambda _config, **_kwargs: calls.append("drain"))
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh",
                         lambda _config, **_kwargs: calls.append("unnamed"))
     return calls
 
@@ -76,3 +76,37 @@ def test_a_structural_save_queues_the_keyed_journal_drain(queued):
     )
 
     assert queued == ["drain"]
+
+
+def test_a_full_watcher_invalidation_queues_the_full_refresh(monkeypatch):
+    from music_app.services import state
+
+    calls: list[str] = []
+    monkeypatch.setattr(state, "schedule_full_gallery_projection_refresh",
+                        lambda _config, **_kwargs: calls.append("full"), raising=False)
+    monkeypatch.setattr(state, "schedule_gallery_projection_refresh",
+                        lambda _config, **_kwargs: calls.append("unnamed"), raising=False)
+    for name in ("invalidate_problematic_albums_payload_cache", "invalidate_utility_rules_payload_cache",
+                 "invalidate_postgres_utility_projection_cache"):
+        monkeypatch.setattr(state, name, lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(state, "library_browse_postgres_is_effective", lambda _config: False)
+
+    state.invalidate_targeted_library_projections(
+        {}, {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://forms"}, revision=1, affected_album_keys=("a",),
+    )
+
+    assert calls == ["full"]
+
+
+def test_the_generic_scheduler_is_private_to_its_module():
+    from pathlib import Path
+
+    assert not hasattr(gallery, "schedule_gallery_projection_refresh")
+    assert callable(gallery._schedule_gallery_projection_refresh)
+    root = Path(gallery.__file__).resolve().parents[1]
+    outside = sorted(
+        str(path.relative_to(root)) for path in root.rglob("*.py")
+        if path.name != "gallery_projection_postgres.py"
+        and "schedule_gallery_projection_refresh" in path.read_text(encoding="utf-8")
+    )
+    assert outside == []

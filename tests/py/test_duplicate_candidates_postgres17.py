@@ -298,3 +298,47 @@ def test_one_album_save_refresh_runs_no_whole_library_identity_sql(monkeypatch):
     assert statements, "the refresh ran"
     assert not [sql for sql in statements if "select distinct albums.id as album_id" in sql], statements
     browse.invalidate_postgres_utility_projection_cache()
+
+
+_INVENTORY_TABLES = {"local_albums", "local_tracks", "local_track_files", "local_artists"}
+
+
+def _rows_scanned(plan) -> int:
+    """Rows a plan read from the inventory tables: rows produced plus rows its filters discarded."""
+    own = 0
+    if plan.get("Relation Name") in _INVENTORY_TABLES:
+        loops = int(plan.get("Actual Loops", 1))
+        own = round((plan.get("Actual Rows", 0) + plan.get("Rows Removed by Filter", 0)
+                     + plan.get("Rows Removed by Index Recheck", 0)) * loops)
+    return own + sum(_rows_scanned(child) for child in plan.get("Plans", ()))
+
+
+def _source_rows_read(fixture, albums: int, candidates: int) -> int:
+    """Rows the duplicate source-rows read scans in the inventory tables, for ``candidates`` albums of a
+    library of ``albums`` (one file each)."""
+    import psycopg
+
+    import music_app.services.library_browse_postgres as browse
+
+    fixture.seed(*(fixture.entry(f"Size{albums}/Artist {index:04d}/Album/01.flac", artist=f"Artist {index:04d}",
+                                 album=f"Album {index:04d}") for index in range(albums)))
+    with psycopg.connect(fixture.runtime_url) as connection:
+        connection.execute("analyze")
+        ids = [row[0] for row in connection.execute(
+            "select id from library.local_albums order by id limit %s", (candidates,)).fetchall()]
+        document = connection.execute(
+            "explain (analyze, format json) " + browse._duplicate_source_rows_for_album_ids_sql(),
+            {"album_ids": ids}).fetchone()[0]
+    return _rows_scanned(document[0]["Plan"])
+
+
+def test_duplicate_source_rows_read_only_the_candidates_rows_at_any_library_size(watcher_repair_inventory):  # noqa: F811
+    """6.5 (11-24): a duplicate absence miss reads the candidate albums' source rows by key. The rows it reads
+    follow the candidates, not the library (it scanned every track and artist: 169,348 rows for 550)."""
+    # Sizes where the planner costs the tables as tables (a few dozen rows are cheaper to filter than to look up).
+    candidates = 5
+    small = _source_rows_read(watcher_repair_inventory, 400, candidates)
+    large = _source_rows_read(watcher_repair_inventory, 1000, candidates)
+    print(f"source-rows read: {small} rows at 400 albums, {large} at 1000")
+    # Each candidate's own album, track, file and artist rows, plus a few index-recheck rows: never the library.
+    assert max(small, large) <= 10 * candidates, (small, large)

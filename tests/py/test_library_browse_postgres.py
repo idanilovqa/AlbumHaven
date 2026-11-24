@@ -13152,7 +13152,9 @@ def test_requested_duplicate_source_rows_use_dedicated_container_projection():
     sql = " ".join(_duplicate_source_rows_for_album_ids_sql().split()).lower()
 
     assert "candidate_containers as materialized" in sql
-    assert "albums.id = any(%(album_ids)s::bigint[])" in sql
+    # Keyed from the candidate ids: each album, track and file is a per-candidate lookup.
+    assert "from unnest(%(album_ids)s::bigint[]) as wanted(album_id)" in sql
+    assert "where albums.id = wanted.album_id offset 0" in sql
     assert "albums.id as candidate_album_id" in sql
     assert "albums.id = tracks.album_id" in sql
     assert "tracks.album_id = files.candidate_album_id" not in sql

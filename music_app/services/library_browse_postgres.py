@@ -6149,19 +6149,26 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             album_artist_identity, album_identity, album_year
           )
           union
+          -- Stray-copy links in both directions, each a keyed lookup (primary key; 0269's owner index).
           select linked.id, false
           from requested_albums
-          join library.local_albums linked
-            on linked.library_id=requested_albums.library_id
-           and linked.id::text=requested_albums.metadata
-                #>> '{{stray_duplicate_of,album_id}}'
+          join lateral (
+            select linked.id from library.local_albums linked
+            where linked.library_id = requested_albums.library_id
+              and linked.id = case
+                when requested_albums.metadata #>> '{{stray_duplicate_of,album_id}}' ~ '^[0-9]{{1,18}}$'
+                then (requested_albums.metadata #>> '{{stray_duplicate_of,album_id}}')::bigint end
+            offset 0
+          ) linked on true
           union
           select stray.id, false
           from requested_albums
-          join library.local_albums stray
-            on stray.library_id=requested_albums.library_id
-           and stray.metadata #>> '{{stray_duplicate_of,album_id}}'
-                = requested_albums.album_id::text
+          join lateral (
+            select stray.id from library.local_albums stray
+            where stray.library_id = requested_albums.library_id
+              and stray.metadata #>> '{{stray_duplicate_of,album_id}}' = requested_albums.album_id::text
+            offset 0
+          ) stray on true
         )
         select album_id, bool_and(pg17_superset) as pg17_superset
         from candidate_album_ids
@@ -12962,23 +12969,30 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             limit 1
         ),
         candidate_containers as materialized (
+            -- Each step is a keyed lookup from the candidate ids (offset 0 keeps it one), so the read
+            -- follows the candidates at any library size.
             select distinct
                 albums.id as candidate_album_id,
                 {seed_container} as folder
-            from library.local_albums albums
+            from unnest(%(album_ids)s::bigint[]) as wanted(album_id)
+            join lateral (
+                select albums.id, albums.library_id from library.local_albums albums
+                where albums.id = wanted.album_id offset 0
+            ) albums on true
             join bootstrap_context
               on bootstrap_context.library_id = albums.library_id
-            join library.local_tracks seed_tracks
-              on seed_tracks.album_id = albums.id
-             and seed_tracks.library_id = albums.library_id
-            join library.local_track_files seed_files
-              on seed_files.track_id = seed_tracks.id
+            join lateral (
+                select seed_tracks.id from library.local_tracks seed_tracks
+                where seed_tracks.album_id = albums.id and seed_tracks.library_id = albums.library_id offset 0
+            ) seed_tracks on true
+            join lateral (
+                select seed_files.private_path, seed_files.library_root_id from library.local_track_files seed_files
+                where seed_files.track_id = seed_tracks.id and seed_files.scan_cache_stale is false offset 0
+            ) seed_files on true
             join library.library_roots seed_roots
               on seed_roots.id = seed_files.library_root_id
              and seed_roots.library_id = albums.library_id
              and seed_roots.is_active is true
-            where albums.id = any(%(album_ids)s::bigint[])
-              and seed_files.scan_cache_stale is false
         ),
         candidate_prefixes as (
             select
@@ -13036,19 +13050,24 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             files.metadata ->> 'library_root_category' as file_library_root_category,
             files.metadata #> '{{scan_cache,file_entry}}' as file_entry
         from scoped_files files
-        join library.local_tracks tracks
-          on tracks.id = files.track_id
+        -- Keyed reads of the candidates' own rows (offset 0 keeps each a per-row lookup): a hash join
+        -- would read every track and artist of the library (6.5, 11-24).
+        join lateral (
+            select tracks.* from library.local_tracks tracks where tracks.id = files.track_id offset 0
+        ) tracks on true
         join bootstrap_context
           on bootstrap_context.library_id = tracks.library_id
-        join library.local_albums albums
-          on albums.id = tracks.album_id
-         and albums.library_id = tracks.library_id
+        join lateral (
+            select albums.* from library.local_albums albums
+            where albums.id = tracks.album_id and albums.library_id = tracks.library_id offset 0
+        ) albums on true
         join library.library_roots roots
           on roots.id = files.library_root_id
          and roots.library_id = tracks.library_id
          and roots.is_active is true
-        left join library.local_artists artists
-          on artists.id = albums.artist_id;
+        left join lateral (
+            select artists.name from library.local_artists artists where artists.id = albums.artist_id offset 0
+        ) artists on true;
     """
 
 def _problematic_files_sql(

@@ -2,7 +2,7 @@
 
 import asyncio
 
-from music_app.services.playback_handover import PlaybackHandoverHub
+from music_app.services.playback_handover import GONE, PlaybackHandoverHub
 
 ACCOUNT = 7
 LIBRARY = 3
@@ -53,10 +53,10 @@ def test_the_asked_socket_answers_with_the_song_and_place_and_is_sent_no_song_or
     asyncio.run(scenario())
 
 
-def test_with_no_socket_of_the_holder_the_press_does_not_wait():
+def test_with_no_socket_the_holder_is_gone_and_the_press_does_not_wait():
     async def scenario():
         hub = PlaybackHandoverHub()
-        assert await asyncio.wait_for(ask(hub, timeout=30), 0.5) is None
+        assert await asyncio.wait_for(ask(hub, timeout=30), 0.5) == GONE
 
     asyncio.run(scenario())
 
@@ -65,7 +65,7 @@ def test_the_same_client_id_of_another_account_is_never_asked():
     async def scenario():
         hub, stranger = PlaybackHandoverHub(), Socket()
         hub.register(ACCOUNT + 1, HOLDER, stranger.send)
-        assert await asyncio.wait_for(ask(hub, timeout=30), 0.5) is None
+        assert await asyncio.wait_for(ask(hub, timeout=30), 0.5) == GONE
         assert stranger.sent == []
 
     asyncio.run(scenario())
@@ -80,7 +80,7 @@ def test_only_the_socket_that_was_asked_can_answer():
         request_id = await holder.request_id()
         assert not hub.answer(other.send, answer(request_id))
         assert not hub.silent(other.send, request_id)
-        assert await asking is None
+        assert await asking == GONE
         assert other.sent == []
 
     asyncio.run(scenario())
@@ -100,11 +100,11 @@ def test_an_answer_without_the_holders_token_does_not_count():
     asyncio.run(scenario())
 
 
-def test_a_silent_holder_costs_no_more_than_the_limit_and_a_late_answer_changes_nothing():
+def test_a_holder_that_says_nothing_is_gone_at_the_limit_and_a_late_answer_changes_nothing():
     async def scenario():
         hub, holder = PlaybackHandoverHub(), Socket()
         hub.register(ACCOUNT, HOLDER, holder.send)
-        assert await asyncio.wait_for(ask(hub, timeout=0.05), 1) is None
+        assert await asyncio.wait_for(ask(hub, timeout=0.05), 1) == GONE
         assert not hub.answer(holder.send, answer(await holder.request_id()))
 
     asyncio.run(scenario())
@@ -117,7 +117,7 @@ def test_a_holder_whose_socket_closes_while_asked_ends_the_wait_at_once():
         asking = asyncio.create_task(ask(hub, timeout=30))
         await holder.request_id()
         hub.unregister(holder.send)
-        assert await asyncio.wait_for(asking, 0.5) is None
+        assert await asyncio.wait_for(asking, 0.5) == GONE
 
     asyncio.run(scenario())
 
@@ -126,7 +126,7 @@ def test_a_socket_that_cannot_be_written_ends_the_wait_at_once():
     async def scenario():
         hub, holder = PlaybackHandoverHub(), Socket(fail=True)
         hub.register(ACCOUNT, HOLDER, holder.send)
-        assert await asyncio.wait_for(ask(hub, timeout=30), 0.5) is None
+        assert await asyncio.wait_for(ask(hub, timeout=30), 0.5) == GONE
 
     asyncio.run(scenario())
 
@@ -146,7 +146,7 @@ def test_a_holder_that_was_asked_and_did_not_answer_is_still_told_the_press_is_o
     async def scenario():
         hub, holder = PlaybackHandoverHub(), Socket()
         hub.register(ACCOUNT, HOLDER, holder.send)
-        assert await ask(hub, timeout=0.05) is None
+        assert await ask(hub, timeout=0.05) == GONE
         await hub.settled(ACCOUNT, LIBRARY, HOLDER)
         await asyncio.sleep(0.05)
         assert holder.sent[-1] == {"type": "handover-done", "requestId": holder.sent[0]["requestId"], "takenOver": False}
@@ -164,7 +164,7 @@ def test_an_ask_still_waiting_to_be_written_at_the_limit_leaves_the_socket_worki
 
         hub.register(ACCOUNT, HOLDER, send)
         await writing.acquire()  # busy with audio
-        assert await ask(hub, timeout=0.05) is None
+        assert await ask(hub, timeout=0.05) == GONE
         writing.release()
         await asyncio.sleep(0.05)
         assert holder.sent == [], "a press that is over stops nobody later"
@@ -295,7 +295,7 @@ def test_a_holder_that_asks_too_late_is_never_told_to_stop():
     async def scenario():
         hub, holder = PlaybackHandoverHub(), Socket()
         hub.register(ACCOUNT, HOLDER, holder.send)
-        assert await ask(hub, timeout=0.05) is None
+        assert await ask(hub, timeout=0.05) == GONE
         assert not hub.wanted(holder.send, await holder.request_id())
         await asyncio.sleep(0.05)
         assert [event["type"] for event in holder.sent] == ["handover"]
@@ -309,7 +309,7 @@ def test_only_the_asked_socket_can_ask_whether_it_is_still_wanted():
         hub.register(ACCOUNT, HOLDER, holder.send)
         asking = asyncio.create_task(ask(hub, timeout=0.1))
         assert not hub.wanted(other.send, await holder.request_id())
-        assert await asking is None
+        assert await asking == GONE
         assert other.sent == []
 
     asyncio.run(scenario())
@@ -340,7 +340,7 @@ def test_a_paused_holder_that_says_it_is_silent_yields_and_is_asked_nothing_else
         request_id = await holder.request_id()
         assert holder.sent == [{"type": "handover-yield", "requestId": request_id}]
         assert hub.silent(holder.send, request_id)
-        assert await asking is True
+        assert await asking == "silent"
         await hub.settled(ACCOUNT, LIBRARY, HOLDER, taken=True)
         await asyncio.sleep(0.05)
         assert holder.sent[-1] == {"type": "handover-done", "requestId": request_id, "takenOver": True}
@@ -354,7 +354,7 @@ def test_a_holder_that_plays_declines_and_the_press_is_refused_at_once():
         hub.register(ACCOUNT, HOLDER, holder.send, yields=True)
         asking = asyncio.create_task(yielded(hub, timeout=30))
         assert hub.declined(holder.send, await holder.request_id())
-        assert await asyncio.wait_for(asking, 0.5) is False
+        assert await asyncio.wait_for(asking, 0.5) == "declined"
 
     asyncio.run(scenario())
 
@@ -364,21 +364,21 @@ def test_a_client_that_never_said_it_yields_is_never_asked_and_never_counts_as_s
     async def scenario():
         hub, old_app = PlaybackHandoverHub(), Socket()
         hub.register(ACCOUNT, HOLDER, old_app.send)
-        assert await asyncio.wait_for(yielded(hub, timeout=30), 0.5) is False
+        assert await asyncio.wait_for(yielded(hub, timeout=30), 0.5) == "declined"
         assert old_app.sent == []
 
     asyncio.run(scenario())
 
 
-def test_no_socket_no_word_in_time_or_a_closed_socket_is_no_proof_of_silence():
+def test_no_socket_no_word_in_time_or_a_closed_socket_is_a_holder_that_is_gone():
     async def scenario():
-        assert await asyncio.wait_for(yielded(PlaybackHandoverHub(), timeout=30), 0.5) is False
+        assert await asyncio.wait_for(yielded(PlaybackHandoverHub(), timeout=30), 0.5) == GONE
         quiet_hub, quiet = PlaybackHandoverHub(), Socket()
         quiet_hub.register(ACCOUNT, HOLDER, quiet.send, yields=True)
-        assert await yielded(quiet_hub, timeout=0.05) is False
+        assert await yielded(quiet_hub, timeout=0.05) == GONE
         closed_hub, closed = PlaybackHandoverHub(), Socket(fail=True)
         closed_hub.register(ACCOUNT, HOLDER, closed.send, yields=True)
-        assert await asyncio.wait_for(yielded(closed_hub, timeout=30), 0.5) is False
+        assert await asyncio.wait_for(yielded(closed_hub, timeout=30), 0.5) == GONE
 
     asyncio.run(scenario())
 
@@ -391,7 +391,7 @@ def test_a_yield_is_never_a_handover_its_holder_cannot_be_told_to_stop_or_answer
         request_id = await holder.request_id()
         assert not hub.wanted(holder.send, request_id)
         assert not hub.answer(holder.send, answer(request_id))
-        assert await asking is False
+        assert await asking == GONE
         assert [event["type"] for event in holder.sent] == ["handover-yield"]
 
     asyncio.run(scenario())
@@ -417,7 +417,7 @@ def test_the_yield_messages_are_the_contract_the_web_and_the_phone_share():
         request_id = await holder.request_id()
         assert set(holder.sent[0]) == set(contract["ask"]) and holder.sent[0]["type"] == contract["ask"]["type"]
         assert hub.silent(holder.send, request_id)
-        assert await asking is True
+        assert await asking == "silent"
         await hub.settled(ACCOUNT, LIBRARY, HOLDER, taken=True)
         await asyncio.sleep(0.05)
         assert set(holder.sent[-1]) == set(contract["done"])

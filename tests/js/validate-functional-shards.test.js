@@ -934,7 +934,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     'FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds',
   ]);
   assert.deepEqual(waveInvocations(5).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
-    'FTC-PLAYER-030 Pressing Play within 12 seconds of Pause sounds sooner than pressing Play after those 12 seconds, on a normal and a 4x slower processor',
+    'FTC-PLAYER-030 Pressing Play after Pause asks the server and plays the paused song on from its place, on a normal and a 4x slower processor',
     'FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns',
     'FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access',
     'FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows',

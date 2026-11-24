@@ -105,14 +105,12 @@ const isPlayingClaimPut = (record) => record.method === 'PUT' && record.state !=
 
 /**
  * Play after Pause, timed from the press to the resumed song's first audible rendered frame on the page clock
- * the press was marked on. `held`: pressed inside the pause hold, it may send no claim request before that
- * frame and says it plays after it. `round-trip`: pressed after the claim was given back, its claim request is
- * answered before that frame. Missing evidence throws.
+ * the press was marked on. A pause gives the claim back, so its claim request is answered before that frame.
+ * Missing evidence throws.
  */
 export async function measureResumeToSound({
-  page, globalPlayerActions, playbackEvidence, claimRequests, kind,
+  page, globalPlayerActions, playbackEvidence, claimRequests,
 }) {
-  if (!['held', 'round-trip'].includes(kind)) throw new Error(`Unknown resume kind ${JSON.stringify(kind)}.`);
   const before = await readResumeCheckpoint(page);
   if (!before.paused || !before.path) throw new Error(`Play after Pause: nothing paused to resume (${JSON.stringify(before)}).`);
   const playbackMark = await playbackEvidence.playbackMark();
@@ -131,17 +129,17 @@ export async function measureResumeToSound({
   const frame = await waitForResumeFirstFrame(page, pressedAtMs);
   const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: playbackMark, path: before.path });
   const readAtMs = (await readResumeCheckpoint(page)).nowMs;
-  if (!(await playingClaim).ok()) throw new Error(`Play after Pause (${kind}): the playing claim request was refused.`);
+  if (!(await playingClaim).ok()) throw new Error(`Play after Pause : the playing claim request was refused.`);
 
   if (frame.path !== before.path || !(frame.resumedAtMs >= pressedAtMs)) {
-    throw new Error(`Play after Pause (${kind}): the first frame is not this resume's (${JSON.stringify({ before, frame })}).`);
+    throw new Error(`Play after Pause : the first frame is not this resume's (${JSON.stringify({ before, frame })}).`);
   }
   if (!(evidence.pcmFrames > 0 && evidence.finiteSamples >= evidence.pcmFrames * 2
       && evidence.nonZeroSamples > 0 && evidence.peakSample > 0 && evidence.renderedFrameDelta > 0)) {
-    throw new Error(`Play after Pause (${kind}): the resumed audio is silent or not stereo (${JSON.stringify(evidence)}).`);
+    throw new Error(`Play after Pause : the resumed audio is silent or not stereo (${JSON.stringify(evidence)}).`);
   }
   if (frame.currentTime < before.currentTime - 0.25 || frame.currentTime > before.currentTime + 2) {
-    throw new Error(`Play after Pause (${kind}): it did not go on from ${before.currentTime} s (heard at ${frame.currentTime} s).`);
+    throw new Error(`Play after Pause : it did not go on from ${before.currentTime} s (heard at ${frame.currentTime} s).`);
   }
 
   const pressedAtEpochMs = before.timeOrigin + pressedAtMs;
@@ -149,29 +147,17 @@ export async function measureResumeToSound({
   // A renewal the page sends once it plays again may still be in flight here; it is waited for, not skipped.
   const requests = await claimRequests.settledSince(claimMark, 10000);
   const unsettled = requests.filter((record) => !record.settled);
-  if (unsettled.length) throw new Error(`Play after Pause (${kind}): claim requests still pending (${JSON.stringify(unsettled)}).`);
+  if (unsettled.length) throw new Error(`Play after Pause : claim requests still pending (${JSON.stringify(unsettled)}).`);
   const beforeSound = requests.filter((record) => (
     record.startedAtEpochMs >= pressedAtEpochMs && record.startedAtEpochMs < soundedAtEpochMs));
-  let claimRoundTripMs = null;
-  if (kind === 'held') {
-    if (beforeSound.length) {
-      throw new Error(`Play after Pause (held): claim requests before its first frame (${JSON.stringify(beforeSound)}).`);
-    }
-    if (!requests.some((record) => isPlayingClaimPut(record) && record.startedAtEpochMs >= soundedAtEpochMs)) {
-      throw new Error('Play after Pause (held): it never said it plays after its first frame.');
-    }
-  } else {
-    const claim = beforeSound.find((record) => isPlayingClaimPut(record)
-      && record.answeredAtEpochMs !== null && record.answeredAtEpochMs <= soundedAtEpochMs);
-    if (!claim) {
-      throw new Error(`Play after Pause (round trip): no claim answered before its first frame (${JSON.stringify(requests)}).`);
-    }
-    claimRoundTripMs = claim.answeredAtEpochMs - claim.startedAtEpochMs;
+  const claim = beforeSound.find((record) => isPlayingClaimPut(record)
+    && record.answeredAtEpochMs !== null && record.answeredAtEpochMs <= soundedAtEpochMs);
+  if (!claim) {
+    throw new Error(`Play after Pause: no claim answered before its first frame (${JSON.stringify(requests)}).`);
   }
   return {
-    kind,
     pressToSoundMs: frame.resumeFirstFrameAtMs - pressedAtMs,
-    claimRoundTripMs,
+    claimRoundTripMs: claim.answeredAtEpochMs - claim.startedAtEpochMs,
     // Diagnostics only: when the player showed it playing, and when this test read the sound.
     pressToShownPlayingMs: shownPlayingAtMs - pressedAtMs,
     pressToTestReadMs: readAtMs - pressedAtMs,
@@ -196,12 +182,6 @@ const median = (values) => {
 };
 
 export function summarizeResumeSamples(samples) {
-  const times = (kind) => samples.filter((sample) => sample.kind === kind).map((sample) => sample.pressToSoundMs);
-  return {
-    heldMedianMs: median(times('held')),
-    roundTripMedianMs: median(times('round-trip')),
-    heldMs: times('held'),
-    roundTripMs: times('round-trip'),
-    samples,
-  };
+  const pressToSoundMs = samples.map((sample) => sample.pressToSoundMs);
+  return { medianMs: median(pressToSoundMs), pressToSoundMs, samples };
 }

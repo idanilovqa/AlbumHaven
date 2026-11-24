@@ -1232,7 +1232,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/playAfterPause.spec.js",
-              "case": "FTC-PLAYER-030 Pressing Play within 12 seconds of Pause sounds sooner than pressing Play after those 12 seconds, on a normal and a 4x slower processor",
+              "case": "FTC-PLAYER-030 Pressing Play after Pause asks the server and plays the paused song on from its place, on a normal and a 4x slower processor",
               "area": "playback"
             }
           ]

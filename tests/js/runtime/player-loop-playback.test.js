@@ -575,18 +575,17 @@ test('pause silences streaming before pending listen effects finish', async () =
     pauseStreamingPlayback: () => { calls.push('pause'); snapshot.paused = true; },
     maybeScrobbleListenSession: () => { calls.push('effects'); return effects; },
     releasePlaybackOwnership: async () => { calls.push('release'); },
-    holdPlaybackClaimThroughPause: () => { calls.push('hold'); },
   });
   context.attachPlayerEvents();
   playButton.dispatch('click');
   assert.equal(snapshot.paused, true);
-  assert.deepEqual(calls, ['hold', 'pause']);
+  assert.deepEqual(calls, ['pause']);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ['hold', 'pause', 'effects']);
+  assert.deepEqual(calls, ['pause', 'effects']);
   finishEffects();
   await new Promise((resolve) => setImmediate(resolve));
-  // The pause keeps the claim for its hold; the heartbeat gives it back after.
-  assert.deepEqual(calls, ['hold', 'pause', 'effects']);
+  // Its listen writes done, the pause gives the claim back: another device may start.
+  assert.deepEqual(calls, ['pause', 'effects', 'release']);
 });
 
 test('streaming position updates the facade at the bounded callback cadence', async () => {
@@ -658,7 +657,6 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   const scrobbles = [];
   const ownershipClaims = [];
   const ownershipReleases = [];
-  const ownershipHolds = [];
   const listenResumes = [];
   const nowPlaying = [];
   let uiUpdates = 0;
@@ -683,7 +681,6 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
     resumeStreamingPlayback: async () => { snapshot.paused = false; snapshot.ended = false; return true; },
     canStartPlaybackInThisTab: (activeTrack) => { ownershipClaims.push(activeTrack); return true; },
     releasePlaybackOwnership: (status, activeTrack) => ownershipReleases.push({ status, track: activeTrack }),
-    holdPlaybackClaimThroughPause: () => ownershipHolds.push('held'),
   });
   context.closeListenSegment = () => closedSegments.push('closed');
   context.markListenSessionPaused = (offset) => pausedOffsets.push(offset);
@@ -701,9 +698,7 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(closedSegments, ['closed']);
   assert.deepEqual(pausedOffsets, [12]);
   assert.deepEqual(scrobbles, [pausedSession]);
-  // The pause keeps the claim for its hold, so Play sounds at once; the heartbeat gives it back after.
-  assert.deepEqual(ownershipHolds, ['held']);
-  assert.deepEqual(ownershipReleases, []);
+  assert.deepEqual(ownershipReleases, [{ status: 'paused', track }]);
   assert.equal(uiUpdates, 2, 'once as the music stops, once its listen writes settle');
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
@@ -891,8 +886,8 @@ for (const failure of ['network', 'abort']) {
     context.state.player.listenSession = session;
     assert.equal(await context.pausePlayerPlaybackForHandoff(), false);
     assert.deepEqual(warnings, []);
-    // The pause keeps its claim for the hold; the heartbeat gives it back after.
-    assert.deepEqual(releases, []);
+    // Paused, it gives the claim back all the same: the give-back is sent again until answered.
+    assert.equal(releases.length, 1);
     assert.strictEqual(context.state.player.listenSession, session);
   });
 }
@@ -902,7 +897,6 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
     const ownership = { requestVersion: 1 };
     const warnings = [];
     const releases = [];
-    const holds = [];
     const session = { id: 'paused-session' };
     const { context } = loadHelper({
       getPlaybackOwnershipState: () => ownership,
@@ -916,7 +910,6 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
       },
       showToast: (...args) => { warnings.push(args); },
       releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },
-      holdPlaybackClaimThroughPause: () => { holds.push('held'); },
     });
     context.state.player.listenSession = session;
     const result = await context.pausePlayerPlaybackForHandoff();
@@ -926,9 +919,8 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
       assert.equal(warnings[0][1], 'error');
       assert.equal(warnings[0][2], 4200);
     }
-    // The claim is kept only for the pause hold, whatever the save did: the heartbeat gives it back after.
-    assert.equal(releases.length, 0);
-    assert.equal(holds.length, 1);
+    assert.equal(releases.length, outcome === 'superseded-failure' ? 0 : 1,
+      'a failed save must not retain the playback lease indefinitely');
     assert.strictEqual(context.state.player.listenSession, session);
   });
 }
@@ -986,7 +978,6 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
   const snapshot = { currentTime: 12, duration: 60, paused: false, ended: false, src: oldTrack.src };
   const starts = [];
   const releases = [];
-  const holds = [];
   let pauses = 0;
   const { context } = loadHelper({
     state: { player: { current: oldTrack, listenSession: { id: 'old-session' }, loopActive: false,
@@ -1006,7 +997,6 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
     releasePlaybackOwnership: async (status, track) => {
       releases.push({ status, path: track.path }); ownership.activeClaim = null; return true;
     },
-    holdPlaybackClaimThroughPause: () => { holds.push(context.state.player.current.path); },
     startStreamingTrack: async (track) => {
       starts.push(track.path); snapshot.paused = false; snapshot.src = track.src;
       if (pendingStage === 'stream') await pendingClaim;
@@ -1027,12 +1017,10 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
   assert.equal(selected, false, 'an earlier selection cannot override a later Pause');
   // The stream starts while the claim is asked for (instant start); the later Pause still wins.
   assert.deepEqual(starts, [newTrack.path]);
-  assert.equal(snapshot.paused, true, 'no audio may remain after the pause');
+  assert.equal(snapshot.paused, true, 'no audio may remain after the claim is released');
   assert.equal(context.state.player.current.path, oldTrack.path);
-  // The pause keeps the claim for its hold instead of giving it back.
-  assert.equal(ownership.activeClaim.claimToken, 'shared-token');
-  assert.deepEqual(holds, [oldTrack.path]);
-  assert.deepEqual(releases, []);
+  assert.equal(ownership.activeClaim, null);
+  assert.deepEqual(releases, [{ status: 'paused', path: oldTrack.path }]);
 });
 }
 
@@ -1560,7 +1548,7 @@ test('a refused resume is paused again', async () => {
   assert.deepEqual([resumeCalls, pauses], [1, 1]);
 });
 
-test('pause keeps the claim through its listen effects instead of releasing it', async () => {
+test('pause keeps the claim through its listen effects, then gives it back', async () => {
   let resolveEffects;
   const pendingEffects = new Promise((resolve) => { resolveEffects = resolve; });
   const order = [];
@@ -1575,19 +1563,18 @@ test('pause keeps the claim through its listen effects instead of releasing it',
       order.push('listen-effects-finished');
     },
     releasePlaybackOwnership: async () => { order.push('claim-released'); },
-    holdPlaybackClaimThroughPause: () => { order.push('claim-held'); },
   });
 
   const pause = context.pausePlayerPlaybackForHandoff();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['claim-held', 'audio-stopped', 'listen-effects-started']);
+  assert.deepEqual(order, ['audio-stopped', 'listen-effects-started']);
   resolveEffects();
   assert.equal(await pause, true);
   assert.deepEqual(order, [
-    'claim-held',
     'audio-stopped',
     'listen-effects-started',
     'listen-effects-finished',
+    'claim-released',
   ]);
 });
 

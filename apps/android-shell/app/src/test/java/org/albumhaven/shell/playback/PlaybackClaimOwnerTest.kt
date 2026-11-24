@@ -351,84 +351,63 @@ class PlaybackClaimOwnerTest {
         assertTrue(events.isEmpty())
     }
 
-    // Music stops after five minutes without the server, so a dead phone blocks no longer.
+    // No network is no reason to wait, and no reason to stop: a dead phone blocks nobody, as a press elsewhere
+    // asks it and starts when it says nothing.
     @Test
-    fun aClaimMaySoundForFiveMinutesFromWhenItsAnsweredRequestWasSent() {
+    fun aClaimMaySoundThroughAnOutageUntilTheServerSaysAnotherPlays() {
         assertFalse("nothing before the grant", owner.maySound())
         owner.acquire(track) {}
-        now = 700 // the answer was on its way this long
         drain()
         api.renewResponse = { ClaimResponse.Unreachable }
 
-        now = PlaybackClaimOwner.SILENT_WITHOUT_SERVER_MS - 1
-        assertTrue(owner.maySound())
+        now = 60L * 60 * 1000
         owner.tick()
         drain()
-        now = PlaybackClaimOwner.SILENT_WITHOUT_SERVER_MS
-        assertFalse(owner.maySound())
-        assertTrue("silent, not given up", owner.owned)
+        assertTrue("an hour without the server, it still sounds", owner.maySound())
 
-        api.renewResponse = { ClaimResponse.Granted(it) }
+        api.renewResponse = { ClaimResponse.Conflict }
         now += PlaybackClaimOwner.RETRY_MS
         owner.tick()
         drain()
-        assertTrue("an answer lets it sound again", owner.maySound())
-    }
-
-    // A phone that dies paused blocks other devices only until this short promise lapses, not five minutes.
-    @Test
-    fun aPauseMaySoundOnlyFifteenSecondsFromItsRenewalAnsweredOrNot() {
-        owner.acquire(track) {}
-        drain()
-        now = 1_000
-        owner.holdThroughPause()
-        api.renewResponse = { ClaimResponse.Unreachable }
-        owner.tick()
-        drain()
-
-        now = 1_000 + PlaybackClaimOwner.PAUSED_SILENT_WITHOUT_SERVER_MS - 1
-        assertTrue(owner.maySound())
-        now += 1
-        assertFalse("its promise holds though nobody answered it", owner.maySound())
-        assertTrue("silent, not given up", owner.owned)
+        assertFalse("another device plays now", owner.maySound())
+        assertEquals(ClaimEvent.Lost, events.last())
     }
 
     @Test
-    fun aPlayInThePauseHoldRenewsAtOnceAndMaySoundFiveMinutesAgain() {
+    fun aStartTheServerDidNotAnswerSoundsAtOnceAndHoldsTheClaimOnceAnswered() {
+        var started = 0
+        owner.onStartedWithoutServer = { started += 1 }
+        api.acquireResponse = { ClaimResponse.Unreachable }
         owner.acquire(track) {}
         drain()
-        now = 1_000
-        owner.holdThroughPause()
+        assertTrue("it plays on what it has", owner.maySound())
+        assertEquals(1, started)
+
+        now = PlaybackClaimOwner.RETRY_MS
         owner.tick()
         drain()
-        assertEquals("pause:token-1", api.calls.last())
-
-        now = 12_000
-        val outcomes = mutableListOf<ClaimOutcome>()
-        owner.acquire(track, outcomes::add)
-        assertEquals("Play waits for nothing", listOf(ClaimOutcome.GRANTED), outcomes)
-        // What the controller does once it sounds.
-        owner.publishNow()
+        assertEquals("told once", 1, started)
+        api.acquireResponse = { ClaimResponse.Granted("token-late") }
+        now = 2 * PlaybackClaimOwner.RETRY_MS
         owner.tick()
         drain()
-
-        assertEquals("acquire:token-1", api.calls.last())
-        now = 12_000 + PlaybackClaimOwner.SILENT_WITHOUT_SERVER_MS - 1
+        assertEquals("token-late", owner.heldToken)
         assertTrue(owner.maySound())
     }
 
     @Test
-    fun aPlayWhileThePausesRenewalIsOnItsWaySendsThePlayingOneOnItsAnswer() {
+    fun aStartTheServerDidNotAnswerStopsOnceAnotherDevicePlayedMeanwhile() {
+        api.acquireResponse = { ClaimResponse.Unreachable }
         owner.acquire(track) {}
         drain()
-        now = 1_000
-        owner.holdThroughPause()
-        owner.tick()
-        now = 1_200
-        owner.acquire(track) {}
-        drain()
+        assertTrue(owner.maySound())
 
-        assertEquals("then the playing one, at once", 1_200L, owner.nextDeadlineMs())
+        api.acquireResponse = { ClaimResponse.Conflict }
+        now = PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertFalse(owner.maySound())
+        assertEquals("it stops, as a lost claim does", ClaimEvent.Lost, events.last())
     }
 
     @Test

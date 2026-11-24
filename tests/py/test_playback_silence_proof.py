@@ -511,18 +511,16 @@ def test_the_promise_is_a_boolean(player, promise):
     assert refused(lambda: player.start(str(uuid4()), silences_itself=promise)) == 400
 
 
-def test_the_browser_and_the_app_silence_themselves_before_the_server_lets_another_start():
+def test_neither_the_browser_nor_the_app_promises_a_time_to_fall_silent():
+    # A device the server cannot reach is not waited for: a press elsewhere asks it and starts when it says
+    # nothing. So the clients no longer stop by themselves after a time without the server.
     root = Path(__file__).resolve().parents[2]
     web = (root / "music_app/static/js/runtime/playback-ownership-helpers.js").read_text(encoding="utf-8")
-    app = (root / "apps/android-shell/app/src/main/java/org/albumhaven/shell/playback/PlaybackClaims.kt").read_text(
+    app = (root / "apps/android-shell/app/src/main/java/org/albumhaven/shell/playback/PlaybackNetwork.kt").read_text(
         encoding="utf-8")
-    web_ms = int(re.search(r"PLAYBACK_SILENT_WITHOUT_SERVER_MS = (\d+);", web).group(1))
-    app_ms = int(re.search(r"SILENT_WITHOUT_SERVER_MS = ([\d_]+)L", app).group(1).replace("_", ""))
 
-    assert web_ms == app_ms == claims.SILENT_WITHOUT_SERVER_SECONDS * 1000 == 300_000
-    web_paused = int(re.search(r"PLAYBACK_PAUSED_SILENT_WITHOUT_SERVER_MS = (\d+);", web).group(1))
-    app_paused = int(re.search(r"PAUSED_SILENT_WITHOUT_SERVER_MS = ([\d_]+)L", app).group(1).replace("_", ""))
-    assert web_paused == app_paused == claims.PAUSED_SILENT_WITHOUT_SERVER_SECONDS * 1000 == 15_000
+    assert "silencesItself" not in web
+    assert "silencesItself" not in app
 
 
 def test_a_start_replaces_a_holder_that_yielded_only_while_the_claim_is_still_that_holders(player):
@@ -621,3 +619,14 @@ def test_a_paused_holder_that_made_no_promise_never_times_out(player):
     player.pass_time(86_400)
 
     assert refused(lambda: player.start(str(uuid4()))) == 409
+
+
+def test_a_holder_with_no_socket_shows_nothing_playing_elsewhere(player):
+    # A dead or unreachable device plays nowhere a press could reach.
+    holder, other = str(uuid4()), str(uuid4())
+    player.start(holder)
+
+    seen = player.service.get(None, other, reachable=lambda _account, _client: False)
+    assert (seen["is_playing_elsewhere"], seen["can_start_here"], seen["track"]) == (False, True, None)
+    assert player.service.get(None, other, reachable=lambda _account, _client: True)["is_playing_elsewhere"] is True
+    assert player.service.get(None, holder, reachable=lambda _account, _client: False)["is_playing_here"] is True

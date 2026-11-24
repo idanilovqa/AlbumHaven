@@ -30,14 +30,13 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
         track: ClaimTrack,
         takeover: Boolean,
         position: ClaimPosition?,
-        paused: Boolean,
     ): ClaimResponse {
         val body = JSONObject()
             .put("protocol", 1)
             .put("clientId", clientId)
             .put("clientSurface", "mobile")
             .put("claimToken", claimToken ?: JSONObject.NULL)
-            .put("state", if (paused) "paused" else "playing")
+            .put("state", "playing")
             .put(
                 "track",
                 JSONObject()
@@ -47,8 +46,6 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
                     .put("album", track.album)
                     .put("artworkUrl", track.artworkUrl ?: JSONObject.NULL),
             )
-        // The render loop keeps this promise: see PlaybackClaimOwner.maySound.
-        body.put("silencesItself", true)
         if (takeover) body.put("takeover", true)
         position?.let { body.put("position", JSONObject().put("ms", it.ms).put("durationMs", it.durationMs)) }
         return try {

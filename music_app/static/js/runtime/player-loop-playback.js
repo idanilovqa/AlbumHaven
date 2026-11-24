@@ -1205,9 +1205,6 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   const isCurrentPause = () => selectionToken === playerTrackSelectionToken
     && session === state.player.listenSession && track === state.player.current
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
-  // The claim stays a while instead of being given back, so Play sounds at once even before this pause's
-  // listen writes finish. Another device's press meanwhile asks this tab, which yields once it is silent.
-  if (typeof holdPlaybackClaimThroughPause === 'function') holdPlaybackClaimThroughPause();
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
     // The button shows Play at once; what follows may wait on a network that is gone.
@@ -1230,6 +1227,8 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
       }
     }
     if (!isCurrentPause()) return saved;
+    // Paused, it gives its claim back: another device may start, and its own next Play asks the server.
+    if (typeof releasePlaybackOwnership === 'function') await releasePlaybackOwnership('paused', track);
     updatePlayerUi();
     return saved;
   });

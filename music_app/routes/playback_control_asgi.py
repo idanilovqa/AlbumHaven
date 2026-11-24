@@ -29,6 +29,7 @@ from music_app.services.listen_history import (
 from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.playback_claims_postgres import PostgresPlaybackClaims, validate_taker
+from music_app.services.playback_handover import GONE
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
@@ -161,8 +162,9 @@ async def playback_artwork(request: Request, resume_token: str) -> Response:
 
 @router.get("/playback/state")
 async def playback_state(request: Request, client_id: str = "", include_path: bool = False):
+    hub = request.app.state.playback_pcm_registry.handover
     result = await playback_call(PostgresPlaybackClaims(playback_config(request)).get,
-        request.state.current_actor, client_id, include_path=include_path)
+        request.state.current_actor, client_id, include_path=include_path, reachable=hub.connected)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -197,10 +199,10 @@ async def acquire_playback(request: Request):
         try:
             result = await acquire()
         except HTTPException as refused:
-            # A start refused for a holder (no draining page to wait for) asks it once whether it is paused.
+            # A start refused for a holder (no draining page to wait for) asks it once whether it plays.
             if refused.status_code != 409 or refused.headers or renews or payload.get("handoff") is not None:
                 raise
-            result = await _start_over_paused_holder(request, claims, payload.get("clientId"), acquire, refused)
+            result = await _start_over_quiet_holder(request, claims, payload.get("clientId"), acquire, refused)
         scrobbling = {}
         if renews:
             claimed_at = time.perf_counter()
@@ -209,11 +211,11 @@ async def acquire_playback(request: Request):
     return JSONResponse({**result, **reference, **scrobbling}, headers={"Cache-Control": "no-store"})
 
 
-async def _start_over_paused_holder(request, claims, client_id, acquire, refused):
-    """A holder that paused keeps its claim a few seconds, so its own Play sounds at once with no request. A
-    plain press elsewhere meanwhile asks it over its socket: it starts only on that holder's word that
-    nothing of it sounds (given from its output's real state, its claim dropped as it says so), and over that
-    holder's claim only. A holder that plays declines; one that cannot answer is no proof: refused as before.
+async def _start_over_quiet_holder(request, claims, client_id, acquire, refused):
+    """A plain press while another client holds the claim asks that holder over its socket. It starts, over
+    that holder's claim only, on the holder's word that nothing of it sounds (given from its output's real
+    state, its claim dropped as it says so), or when the holder is gone: no socket, or no word at all in
+    time. A holder that plays declines, and the press is refused: Play here takes it over.
     """
     hub = request.app.state.playback_pcm_registry.handover
     observed = await playback_call(claims.holder, request.state.current_actor)
@@ -222,7 +224,7 @@ async def _start_over_paused_holder(request, claims, client_id, acquire, refused
     holder = (observed["account_id"], observed["library_id"], observed["client_id"])
     taken = False
     try:
-        if not await hub.yielded(*holder, timeout=YIELD_ANSWER_SECONDS):
+        if await hub.yielded(*holder, timeout=YIELD_ANSWER_SECONDS) == "declined":
             raise refused
         result = await acquire(yielded_digest=observed["digest"])
         taken = True
@@ -274,16 +276,21 @@ async def _confirmed_takeover(request, payload):
         if observed["client_id"] != client_id and not observed.get("silent"):
             answer = await hub.ask(*holder, accepts=lambda token: claims.holds(observed, token),
                 timeout=HANDOVER_ANSWER_SECONDS)
+        # A holder that is gone (no socket, no word at all) plays nowhere that can be reached: its song goes on
+        # here from its last known place, and it stops once it reaches the server again.
+        gone = answer == GONE
+        if gone:
+            answer = None
         timing["ask_ms"] = round((time.perf_counter() - asked_at) * 1000)
         try:
             if paused and not (answer and answer["track"]):
                 return JSONResponse(await playback_call(claims.get, actor, client_id),
                     headers={"Cache-Control": "no-store"})
-            if answer is None and not observed.get("silent"):
+            if answer is None and not gone and not observed.get("silent"):
                 raise HTTPException(409, "Playback is active on another client.")
             result = await playback_call(claims.hand_over, actor, client_id=client_id,
                 client_surface=payload.get("clientSurface"), observed=observed, answer=answer,
-                silences_itself=payload.get("silencesItself", False))
+                silences_itself=payload.get("silencesItself", False), gone=gone)
             taken = True
         finally:
             await hub.settled(*holder, taken=taken)

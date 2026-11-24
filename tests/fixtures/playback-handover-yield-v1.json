@@ -1,6 +1,5 @@
 {
-  "comment": "A paused holder keeps its claim for its hold; a plain press on another device asks it to yield. Web, phone and server read this one contract.",
-  "holdMs": 12000,
+  "comment": "A plain press on another device asks the holder whether it plays; one that is quiet yields, one that says nothing is gone. pausedRenewalState is what older apps still send. Web, phone and server read this one contract.",
   "socketQuery": "yields=1",
   "pausedRenewalState": "paused",
   "ask": {"type": "handover-yield", "requestId": "4f6b1c2e-8a0d-4e3b-9c57-1d2e3f4a5b6c"},

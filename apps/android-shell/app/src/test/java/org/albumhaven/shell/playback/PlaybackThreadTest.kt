@@ -225,11 +225,6 @@ class PlaybackThreadTest {
 
         harness.controller.pause()
         repeat(3) { harness.step() }
-        // A pause keeps the claim for its hold: the thread wakes for the hold's end, not sooner than needed.
-        assertEquals(listOf("owned"), harness.ownership())
-        assertTrue(harness.controller.runOnce() <= NativePlaybackController.PAUSE_HOLD_MS)
-        harness.now += NativePlaybackController.PAUSE_HOLD_MS
-        repeat(3) { harness.step() }
         assertEquals(listOf("owned", "released"), harness.ownership())
         // Paused and released: only the next keep-warm read is due, counted from when this client last owned playback.
         val wait = harness.controller.runOnce()

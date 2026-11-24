@@ -1,21 +1,16 @@
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
-// A playing tab renews this often: its listen writes need a live lease. A missed renewal frees nothing
-// (plays never overlap): only the holder's word that it is silent does.
+// A playing tab renews this often: its listen writes need a live lease. A missed renewal frees nothing by
+// itself: a press elsewhere asks this tab, and only its word that it plays keeps the claim.
 const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
 // Renewal ticks after which a tab that is not playing gives back a claim it holds (a start that failed,
 // autoplay the browser held back: no lease frees it), and an asked tab that never heard the press was over
 // looks for itself. A pause drains its listen writes, and a press is over, well before.
 const PLAYBACK_OWNERSHIP_SILENT_TICKS = 3;
-// A pause keeps the claim this long, so Play sounds at once with no request, as before Play here. Another
-// device's press meanwhile asks this tab, which yields once nothing of it sounds (yieldPausedPlaybackClaim).
-const PLAYBACK_PAUSE_HOLD_MS = 12000;
-// Music stops this long after the last answered request was sent, so that a device that
-// died blocks nobody for longer: the server lets another start 5 s after this, never earlier.
-const PLAYBACK_SILENT_WITHOUT_SERVER_MS = 300000;
-// A pause promises this from its renewal instead: the pause hold and the renewal a Play in it sends at once.
-// The server then lets another start 5 s after it, so a device that dies paused blocks nobody for longer.
-const PLAYBACK_PAUSED_SILENT_WITHOUT_SERVER_MS = 15000;
+// How long this tab may sound on its claim or, with no network, on its own: until the server says another
+// device plays. A device the server cannot reach is not waited for: a press elsewhere asks it and starts
+// when it says nothing, and this tab stops once the server answers that another device took over.
+const PLAYBACK_SOUND_WITHOUT_SERVER_MS = 24 * 60 * 60 * 1000;
 // A start nobody answered is asked again this often, with no second press.
 const PLAYBACK_OWNERSHIP_RETRY_MS = 2000;
 // A burst of seeks (a held arrow key) tells the claim its first place at once and its last when it settles.
@@ -225,7 +220,7 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   endClaimWait();
   ownership.activeClaim = null;
-  ownership.pausedAtMs = 0;
+  ownership.withoutServer = null;
   updatePlaybackSoundPermission();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.lockStatus = 'locked';
@@ -260,14 +255,15 @@ function giveBackLostClaim(claim, stopped) {
 }
 
 /**
- * How long this page may sound: not before its grant, and for five minutes from before the last answered
- * request was sent. Both clocks, as the audio thread checks both.
+ * How long this page may sound: not before its grant, or before a start the server could not be asked about.
+ * Both clocks, as the audio thread checks both.
  */
 function playbackSoundPermission() {
-  const claim = getPlaybackOwnershipState().activeClaim;
-  if (playingEngine()?.holdsOwnClaim || !holdsPlaybackClaim() || !claim.soundUntilWallMs) {
-    return { untilMs: 0, forMs: 0 };
-  }
+  const ownership = getPlaybackOwnershipState();
+  const claim = ownership.activeClaim;
+  if (playingEngine()?.holdsOwnClaim) return { untilMs: 0, forMs: 0 };
+  if (ownership.withoutServer) return ownership.withoutServer.permission;
+  if (!holdsPlaybackClaim() || !claim.soundUntilWallMs) return { untilMs: 0, forMs: 0 };
   return { untilMs: claim.soundUntilWallMs, forMs: Math.max(0, claim.soundDeadline - performance.now()) };
 }
 
@@ -341,6 +337,8 @@ async function giveBackSilentClaim() {
 function syncMirroredPlaybackState(snapshot) {
   const ownership = getPlaybackOwnershipState();
   const previousPresentation = playbackOwnershipPresentation();
+  // Playing without the server, its own claim request decides: it asks the holder, which may be gone.
+  if (snapshot?.is_playing_elsewhere && ownership.withoutServer) return;
   if (snapshot?.is_playing_elsewhere) {
     if (ownership.blockedReason !== 'playing_in_another_tab') losePlaybackOwnership('ownership-takeover', false);
     ownership.lockStatus = 'locked';
@@ -386,6 +384,12 @@ function receivePlaybackOwnershipMessage(event) {
     losePlaybackOwnership('ownership-takeover', false);
     ownership.blockedReason = 'playing_in_another_tab';
   }
+  // Another tab of this browser plays without the server: this one stops, as it can hear that much.
+  if (event?.data?.type === 'playing-without-server' && event.data.clientId !== getPlaybackOwnershipTabId()
+      && (ownership.activeClaim || ownership.withoutServer)) {
+    losePlaybackOwnership('ownership-takeover', false);
+    ownership.blockedReason = 'playing_in_another_tab';
+  }
   return handlePlaybackOwnershipEvent();
 }
 
@@ -394,11 +398,10 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
   const claim = ownership.activeClaim;
   const playback = playbackSnapshot
     || (typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null);
-  // Paused on the claim its pause keeps, a leaving page hands nothing on and nothing of it sounds: it gives
-  // the claim back as it goes (one release, kept alive past the page), so no other device waits for it.
-  if (playback?.paused && ownership.pausedAtMs && claim?.claimToken && !ownership.handoffAttempted) {
+  // Paused on a claim its pause has not given back yet, a leaving page hands nothing on and nothing of it
+  // sounds: it gives the claim back as it goes (one release, kept alive past the page).
+  if (playback?.paused && claim?.claimToken && !ownership.handoffAttempted) {
     ownership.handoffAttempted = true;
-    ownership.pausedAtMs = 0;
     ownership.activeClaim = null;
     ownership.releasedClaim = claim;
     updatePlaybackSoundPermission();
@@ -471,9 +474,7 @@ function startPlaybackOwnershipHeartbeat() {
     }
     const waits = ownership.activeClaim ? !state.player.selectedTrack : Boolean(ownership.handedOver);
     silentTicks = waits ? silentTicks + 1 : 0;
-    const held = ownership.activeClaim && ownership.pausedAtMs
-      && performance.now() - ownership.pausedAtMs < PLAYBACK_PAUSE_HOLD_MS;
-    if (silentTicks >= PLAYBACK_OWNERSHIP_SILENT_TICKS && !held) {
+    if (silentTicks >= PLAYBACK_OWNERSHIP_SILENT_TICKS) {
       silentTicks = 0;
       void Promise.resolve(ownership.activeClaim ? giveBackSilentClaim() : settlePlaybackHandover()).catch(() => {});
     }
@@ -539,10 +540,7 @@ async function requestPlaybackClaim(payload, timeoutMs) {
   // monotonic clock, from before the request: the server starts the lease before it answers.
   const sentAt = performance.now();
   const sentWallMs = Date.now();
-  const silentAfterMs = payload.state === 'paused'
-    ? PLAYBACK_PAUSED_SILENT_WITHOUT_SERVER_MS : PLAYBACK_SILENT_WITHOUT_SERVER_MS;
-  return { ...await playbackOwnershipRequest('PUT', '/playback/state', { ...payload, silencesItself: true }, timeoutMs),
-    sentAt, sentWallMs, silentAfterMs };
+  return { ...await playbackOwnershipRequest('PUT', '/playback/state', payload, timeoutMs), sentAt, sentWallMs };
 }
 
 // One retry of an unanswered claim waits at a time; a newer one replaces it.
@@ -589,8 +587,8 @@ function acceptPlaybackClaim(result, prepared) {
       track: { ...track, playbackRef: result.playbackRef } };
   }
   const claim = { ...claimed, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable,
-    soundDeadline: result.sentAt + result.silentAfterMs,
-    soundUntilWallMs: result.sentWallMs + result.silentAfterMs };
+    soundDeadline: result.sentAt + PLAYBACK_SOUND_WITHOUT_SERVER_MS,
+    soundUntilWallMs: result.sentWallMs + PLAYBACK_SOUND_WITHOUT_SERVER_MS };
   // A switch claims the pressed song while the one before still sounds: a handover names that one.
   if (ownership.activeClaim?.path && ownership.activeClaim.path !== claim.path) {
     ownership.previousClaim = ownership.activeClaim;
@@ -598,6 +596,7 @@ function acceptPlaybackClaim(result, prepared) {
   ownership.releasedClaim = null;
   ownership.handedOver = null;
   ownership.unreleasedClaim = null;
+  ownership.withoutServer = null;
   ownership.claimInDoubt = false;
   // This tab's own claim now: the one its previous page left is void.
   sameTabPlaybackClaim = null;
@@ -628,8 +627,8 @@ async function expirePlaybackClaim(claim) {
   else giveBackLostClaim(claim, losePlaybackOwnership());
 }
 
-// A renewal the server did not answer keeps the claim, which plays on inside its five minutes, and is
-// asked again in 2 s rather than at the next heartbeat; only an answer drops it.
+// A renewal the server did not answer keeps the claim, which plays on, and is asked again in 2 s rather
+// than at the next heartbeat; only an answer drops it.
 function keepUnansweredPlaybackClaim(claim, error) {
   if (!error?.unanswered) return false;
   const ownership = getPlaybackOwnershipState();
@@ -639,7 +638,7 @@ function keepUnansweredPlaybackClaim(claim, error) {
   return true;
 }
 
-async function refreshPlaybackOwnershipClaim(track = null, { paused = false } = {}) {
+async function refreshPlaybackOwnershipClaim(track = null) {
   const ownership = getPlaybackOwnershipState();
   if (!ownership.activeClaim || ownership.renewing) return false;
   const version = ownership.requestVersion || 0;
@@ -655,16 +654,14 @@ async function refreshPlaybackOwnershipClaim(track = null, { paused = false } = 
       const claimed = track || state.player.selectedTrack || state.player.current;
       const prepared = claimedPlaybackTrack(claimed, claim);
       if (version !== (ownership.requestVersion || 0)) return false;
-      // The pause's promise holds from when it is sent, answered or not: the server may have it.
-      if (paused) promisePausedSilence(claim);
       const result = await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: paused ? 'paused' : 'playing', track: prepared.track, ...positionField(claimed) });
+        state: 'playing', track: prepared.track, ...positionField(claimed) });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
     } catch (error) {
-      // No answer is not a refusal: it plays on, at most its five minutes, and is asked again in 2 s.
+      // No answer is not a refusal: it plays on, and is asked again in 2 s.
       if (error?.unanswered) {
         if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) {
           keepUnansweredPlaybackClaim(claim, error);
@@ -709,7 +706,6 @@ async function claimPlaybackOwnership(track, options = {}) {
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   endClaimWait();
-  ownership.pausedAtMs = 0;
   updatePlaybackSoundPermission();
   const previousOperation = ownership.pendingOperation;
   const handoff = options.handoff || null;
@@ -744,11 +740,10 @@ async function claimPlaybackOwnership(track, options = {}) {
       } catch (error) {
         if (version !== ownership.requestVersion) return false;
         if (error?.unanswered && !handoff) {
-          // A held claim plays on inside its five minutes. Without one the audio thread holds the stream.
+          // A held claim plays on. Without one, no network is no reason to wait: it plays on what it has.
           if (claim && holdsPlaybackClaim()) return keepUnansweredPlaybackClaim(claim, error);
-          await waitToAskAgain();
-          if (version !== ownership.requestVersion) return false;
-          continue;
+          playWithoutServer(version);
+          return true;
         }
         // The page that played said it is leaving: it is silent once its output drains, and the one
         // press starts then. The server names the wait only while it drains.
@@ -792,11 +787,10 @@ async function mayEngineStart(options, version) {
       syncMirroredPlaybackState(snapshot);
       break;
     } catch (error) {
-      // No answer is no proof that nobody plays: it waits for one.
       if (version !== ownership.requestVersion) return false;
-      if (!error?.unanswered) break;
-      await waitToAskAgain();
-      if (version !== ownership.requestVersion) return false;
+      // No network is no reason to wait: it plays on what it has, and its own claim asks until answered.
+      if (error?.unanswered) return true;
+      break;
     }
   }
   if (options.showBlockedToast !== false) notifyBlockedPlaybackStart();
@@ -823,7 +817,10 @@ async function releasePlaybackOwnership() {
   const claim = ownership.activeClaim;
   // From here a Play asks the server: the claim may be gone before it could sound on it.
   if (claim) claim.givingBack = true;
-  ownership.pausedAtMs = 0;
+  if (ownership.withoutServer) {
+    ownership.withoutServer = null;
+    updatePlaybackSoundPermission();
+  }
   if (claim && typeof drainPlaybackSessionRequests === 'function') {
     await drainPlaybackSessionRequests(claim.claimToken);
   }
@@ -902,53 +899,50 @@ function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
 }
 
 function canStartPlaybackInThisTab(track, options = {}) {
-  if (!options.takeover && resumesOnHeldClaim(track)) return true;
   return claimPlaybackOwnership(track, { takeover: options.takeover === true });
 }
 
 /**
- * The pause keeps the claim a while instead of giving it back, and says so: other devices then see nothing
- * playing, as when a pause gave it back, and a press there asks this tab to yield. Play here asks nothing.
+ * A start the server did not answer plays at once on what this device has, as no network is no reason to
+ * wait. The tabs of this browser that play stop, as they hear without a network. It asks again until the
+ * server answers: then it holds the claim, or, as another device played meanwhile, it stops and says so.
  */
-function holdPlaybackClaimThroughPause() {
+function playWithoutServer(version) {
   const ownership = getPlaybackOwnershipState();
-  if (!ownership.activeClaim) return;
-  const pausedAtMs = performance.now();
-  ownership.pausedAtMs = pausedAtMs;
-  void (async () => {
-    // A renewal already on its way carries the playing state: this follows it.
-    while (ownership.renewing) await ownership.pendingOperation;
-    if (ownership.pausedAtMs === pausedAtMs) await refreshPlaybackOwnershipClaim(null, { paused: true });
-  })().catch(() => {});
-}
-
-function promisePausedSilence(claim) {
-  claim.soundDeadline = Math.min(claim.soundDeadline, performance.now() + PLAYBACK_PAUSED_SILENT_WITHOUT_SERVER_MS);
-  claim.soundUntilWallMs = Math.min(claim.soundUntilWallMs, Date.now() + PLAYBACK_PAUSED_SILENT_WITHOUT_SERVER_MS);
+  const marker = { version, permission: { untilMs: Date.now() + PLAYBACK_SOUND_WITHOUT_SERVER_MS,
+    forMs: PLAYBACK_SOUND_WITHOUT_SERVER_MS } };
+  ownership.withoutServer = marker;
   updatePlaybackSoundPermission();
-}
-
-/**
- * Play of the song this tab paused while it still holds the claim: it sounds at once, as before Play here,
- * and renews at once, as its pause promised silence soon. Nobody else can have started, as the claim is given
- * away only on this tab's own word.
- */
-function resumesOnHeldClaim(track) {
-  const ownership = getPlaybackOwnershipState();
-  const claim = ownership.activeClaim;
-  if (!ownership.pausedAtMs || performance.now() - ownership.pausedAtMs >= PLAYBACK_PAUSE_HOLD_MS
-      || !claim || claim.givingBack || claim.path !== track?.path
-      || !holdsPlaybackClaim() || !isActivePlaybackOwner()) return false;
-  ownership.pausedAtMs = 0;
-  void (async () => {
-    // The pause's own renewal may still be on its way: this follows it.
-    while (ownership.renewing) await ownership.pendingOperation;
-    // Its answer replaces the claim object; the token stays while the claim is this tab's.
-    if (ownership.activeClaim?.claimToken === claim.claimToken && !ownership.pausedAtMs) {
-      await refreshPlaybackOwnershipClaim();
+  announcePlaybackOwnership('playing-without-server', getPlaybackOwnershipTabId());
+  const current = () => ownership.withoutServer === marker && version === ownership.requestVersion;
+  const askAgain = () => scheduleUnansweredPlaybackClaimRetry(async () => {
+    if (!current()) return;
+    const playing = state.player.selectedTrack || state.player.current;
+    let prepared;
+    let result;
+    try {
+      prepared = claimedPlaybackTrack(playing, null);
+      result = await requestPlaybackClaim({ protocol: 1, clientId: getPlaybackOwnershipTabId(),
+        clientSurface: 'private_web', claimToken: null, state: 'playing', track: prepared.track,
+        ...positionField(playing) });
+    } catch (error) {
+      if (!current()) return;
+      if (error?.unanswered) {
+        askAgain();
+        return;
+      }
+      // Another device played meanwhile: this one stops, and shows what plays there.
+      losePlaybackOwnership('ownership-takeover', false);
+      await handlePlaybackOwnershipEvent();
+      return;
     }
-  })().catch(() => {});
-  return true;
+    if (!current()) {
+      await discardPlaybackClaim(result);
+      return;
+    }
+    acceptPlaybackClaim(result, prepared);
+  });
+  askAgain();
 }
 
 /**
@@ -959,7 +953,7 @@ function resumesOnHeldClaim(track) {
  */
 async function yieldPausedPlaybackClaim(requestId) {
   const ownership = getPlaybackOwnershipState();
-  const paused = () => Boolean(ownership.pausedAtMs && ownership.activeClaim)
+  const paused = () => Boolean(ownership.activeClaim)
     && !state.player.selectedTrack && !isPlaybackClaimRenewable();
   const decline = () => sendStreamingHandoverAnswer({ type: 'handover-declined', requestId });
   if (!paused()) return decline();
@@ -971,7 +965,6 @@ async function yieldPausedPlaybackClaim(requestId) {
   ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   endClaimWait();
   ownership.activeClaim = null;
-  ownership.pausedAtMs = 0;
   // Play here elsewhere can still ask it what it paused at.
   ownership.releasedClaim = claim;
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);

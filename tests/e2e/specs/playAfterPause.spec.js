@@ -11,19 +11,16 @@ const CASE_ID = 'FTC-PLAYER-030';
 const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
 const TITLE = 'Long Cold Signal';
-const HELD_SAMPLES = 5;
-const ROUND_TRIP_SAMPLES = 3;
-// Well inside the 12 s pause hold.
-const HELD_PAUSE_MS = 5000;
+const SAMPLES = 5;
 const CONDITIONS = [
   { label: 'normal CPU', cpuSlowdown: 1 },
   // The browser runs four times slower than the runner, as on a busy laptop.
   { label: '4x CPU slowdown', cpuSlowdown: 4 },
 ];
 
-// Report-only for now: no budget. Each sample must carry its evidence, a held Play may ask nothing before it
-// sounds, and held must sound sooner than a Play that pays the claim round trip.
-test(`${CASE_ID} Pressing Play within 12 seconds of Pause sounds sooner than pressing Play after those 12 seconds, on a normal and a 4x slower processor`, { tag: '@area:playback' }, async ({
+// Report-only for now: no budget. Each sample must carry its evidence, and its claim request is answered
+// before it sounds: a pause gives the claim back, so Play asks the server first.
+test(`${CASE_ID} Pressing Play after Pause asks the server and plays the paused song on from its place, on a normal and a 4x slower processor`, { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
   page,
@@ -61,24 +58,16 @@ test(`${CASE_ID} Pressing Play within 12 seconds of Pause sounds sooner than pre
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: condition.cpuSlowdown });
       const context = { page, globalPlayerActions, playbackEvidence, claimRequests };
       const samples = [];
-      for (let index = 1; index <= HELD_SAMPLES; index += 1) {
-        samples.push(await stepLogger.step(`${condition.label}: Play ${HELD_PAUSE_MS / 1000} s into the pause hold (${index})`, async () => {
-          await playOnForASecond(page, globalPlayerActions);
-          await globalPlayerActions.pauseHoldingPlaybackClaim();
-          await page.waitForTimeout(HELD_PAUSE_MS);
-          return measureResumeToSound({ ...context, kind: 'held' });
-        }));
-      }
-      for (let index = 1; index <= ROUND_TRIP_SAMPLES; index += 1) {
-        samples.push(await stepLogger.step(`${condition.label}: Play after the claim was given back (${index})`, async () => {
+      for (let index = 1; index <= SAMPLES; index += 1) {
+        samples.push(await stepLogger.step(`${condition.label}: Play after Pause (${index})`, async () => {
           await playOnForASecond(page, globalPlayerActions);
           await globalPlayerActions.pauseToReleasePlaybackClaim();
-          return measureResumeToSound({ ...context, kind: 'round-trip' });
+          return measureResumeToSound(context);
         }));
       }
       for (const sample of samples) {
         // Each resume rendered the paused song's own non-silent audio (waitForTrackPlaybackEvidence in the helper).
-        expect(sample.evidence.nonZeroSamples, `${condition.label}: ${sample.kind} resume sounds`).toBeGreaterThan(0);
+        expect(sample.evidence.nonZeroSamples, `${condition.label}: the resume sounds`).toBeGreaterThan(0);
         expect(sample.evidence.renderedFrameDelta).toBeGreaterThan(0);
       }
       results[condition.label] = summarizeResumeSamples(samples);
@@ -98,17 +87,9 @@ test(`${CASE_ID} Pressing Play within 12 seconds of Pause sounds sooner than pre
     const ms = (values) => values.map((value) => Math.round(value)).join(', ');
     testInfo.annotations.push({
       type: `Play after Pause, ${label} (ms)`,
-      description: `held median ${Math.round(result.heldMedianMs)} [${ms(result.heldMs)}]; `
-        + `round trip median ${Math.round(result.roundTripMedianMs)} [${ms(result.roundTripMs)}]`,
+      description: `median ${Math.round(result.medianMs)} [${ms(result.pressToSoundMs)}]`,
     });
-    const claimRoundTrips = result.samples.filter((sample) => sample.kind === 'round-trip')
-      .map((sample) => sample.claimRoundTripMs);
-    stepLogger.note(`${label}: held median ${Math.round(result.heldMedianMs)} ms [${ms(result.heldMs)}]; `
-      + `round trip median ${Math.round(result.roundTripMedianMs)} ms [${ms(result.roundTripMs)}], `
-      + `claim request ${ms(claimRoundTrips)} ms`, 1);
-  }
-  for (const [label, result] of Object.entries(results)) {
-    expect(result.heldMedianMs, `${label}: held Play sounds sooner than one that asks for the claim`)
-      .toBeLessThan(result.roundTripMedianMs);
+    stepLogger.note(`${label}: median ${Math.round(result.medianMs)} ms [${ms(result.pressToSoundMs)}], `
+      + `claim request ${ms(result.samples.map((sample) => sample.claimRoundTripMs))} ms`, 1);
   }
 });

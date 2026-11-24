@@ -79,7 +79,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     await globalPlayerActions.moveAwayFromLoopAction();
     expect((await globalPlayerActions.pauseLoopEditExpiryClockBeforeRenewal()).paused).toBe(false);
     await globalPlayerActions.dragLoopBoundary('end', 0.8);
-    await globalPlayerActions.pauseHoldingPlaybackClaim();
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
     await globalPlayerActions.advanceLoopEditExpiryClock(299000);
     await globalPlayerActions.expectLoopEditorActive();
     await globalPlayerActions.dragLoopBoundary('end', 0.75);

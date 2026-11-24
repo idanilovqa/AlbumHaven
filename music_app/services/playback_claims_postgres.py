@@ -1,13 +1,13 @@
-"""One transactional playback holder per account and library, replaced only on proof that it is silent.
+"""One transactional playback holder per account and library, replaced on proof that it is silent or gone.
 
-Nothing starts without an answer, and plays never overlap. An
-expired lease is no proof, as a client plays on through an outage (B-D4): it only ends listen writes. Proof
-is the holder's own word: its release, its answer to Play here, or its page saying it is leaving once its
-output has drained. The one timeout is a promise kept by the holder's own audio thread:
-it falls silent 5 minutes after it last sent a renewal that was answered, and only a claim that made that
-promise gives way, 5 s later by this server's clock from when that renewal arrived. A holder that paused
-promises 15 s from its pause's renewal instead: a Play in its hold renews at once, so a device that dies
-paused blocks nobody for longer.
+An expired lease is no proof, as a client plays on through an outage (B-D4): it only ends listen writes. Proof
+is the holder's own word (its release, its answer to Play here, or its page saying it is leaving once its
+output has drained), or the holder being gone: a press elsewhere asks it over its socket, and one with no
+socket or no word at all in time is a dead or unreachable device (`hand_over(gone=True)`, the routes'
+`yielded_digest`). A device that played on without the server stops once it reaches it again.
+
+Older installed apps still promise to fall silent by a time (`silencesItself`): 5 minutes after their last
+answered renewal, or 15 s after a pause's renewal; such a claim also gives way 5 s after that promise.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -182,8 +182,10 @@ class PostgresPlaybackClaims:
                 state["path"] = None
         return state
 
-    def get(self, actor, client_id, *, include_path=False):
-        """The claim as `client_id` sees it; `include_path` (browsers only) adds another client's song path."""
+    def get(self, actor, client_id, *, include_path=False, reachable=None):
+        """The claim as `client_id` sees it; `include_path` (browsers only) adds another client's song path.
+        [reachable](account_id, client_id): whether another holder has a socket; one with none is a dead or
+        unreachable device, which plays nowhere a press could reach, so nothing shows as playing there."""
         client_id = _client(client_id) if client_id else ""
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
@@ -195,7 +197,10 @@ class PostgresPlaybackClaims:
             if row is not None and row["gone"]:
                 self._keep_last_played(connection, account_id, library_id, row, now)
         # A holder that proved it is silent plays nowhere, whether or not its claim can still be taken up.
-        return self._state(None if row is None or row["silent"] else row, client_id, actor if include_path else None)
+        if row is not None and (row["silent"] or (reachable is not None and str(row["client_id"]) != client_id
+                                                  and not reachable(account_id, str(row["client_id"])))):
+            row = None
+        return self._state(row, client_id, actor if include_path else None)
 
     def _keep_last_played(self, connection, account_id, library_id, row, now):
         """A claim no client can take up any more (its page left and its handoff to the next page expired, or its
@@ -396,10 +401,10 @@ class PostgresPlaybackClaims:
         except PlaybackContractError:
             return False
 
-    def hand_over(self, actor, *, client_id, client_surface, observed, answer, silences_itself=False):
-        """Replaces the holder's claim with the taker's, only on proof that it is silent: its [answer], at
-        the place that names or else its saved one, or, with no answer, its page having left or its promised
-        time to fall silent having passed. It is one
+    def hand_over(self, actor, *, client_id, client_surface, observed, answer, silences_itself=False, gone=False):
+        """Replaces the holder's claim with the taker's, on proof that it is silent or gone: its [answer], at
+        the place that names or else its saved one, or, with no answer, its page having left, its promised
+        time to fall silent having passed, or it being [gone] (no socket, no word at all). It is one
         statement, only over the token that was observed, so no later save of the holder lands after it,
         a holder that sounds again (always as a new claim) or came back keeps playback, and so does a
         third client that claimed meanwhile.
@@ -408,9 +413,9 @@ class PostgresPlaybackClaims:
         client_id = _client(client_id)
         if client_id == observed["client_id"]:
             raise PlaybackContractError(409)
-        if answer is None and not observed.get("silent"):
+        if answer is None and not gone and not observed.get("silent"):
             raise PlaybackContractError(409)
-        answered = answer is not None
+        answered = answer is not None or gone
         promise = _promise(silences_itself)
         track = position = None
         if answer is not None:

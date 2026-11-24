@@ -2305,7 +2305,8 @@ test('a start is one request: it names its song and is issued the reference', as
   assert.equal(tab.requests[0].url, '/playback/state');
   assert.equal(tab.requests[0].body.track.path, localTrack.path);
   assert.equal('playbackRef' in tab.requests[0].body.track, false);
-  assert.equal(tab.requests[0].body.silencesItself, true);
+  // No promise to fall silent by a time: a press elsewhere asks this tab instead.
+  assert.equal('silencesItself' in tab.requests[0].body, false);
   const claim = tab.context.state.player.ownership.activeClaim;
   assert.equal(claim.track.playbackRef, 'issued');
   assert.equal('path' in claim.track, false);
@@ -2323,15 +2324,15 @@ test('a resume after Pause claims with the reference it had', async () => {
   assert.equal(tab.requests[0].body.track.playbackRef, 'issued');
 });
 
-test('it may sound only for five minutes from before the answered request was sent', async () => {
+test('it may sound from its grant on, with no five-minute limit without the server', async () => {
   const tab = claimingTab(({ clock }) => { clock.monotonic += 700; return null; });
   assert.equal(tab.context.playbackSoundPermission().forMs, 0, 'no grant, no sound');
 
   await tab.context.claimPlaybackOwnership(localTrack);
 
   const granted = tab.permissions.at(-1);
-  assert.equal(granted.forMs, 300_000 - 700);
-  assert.equal(granted.untilMs, 50_000_000 + 1_000 + 300_000);
+  assert.equal(granted.forMs, 24 * 60 * 60 * 1000 - 700);
+  assert.equal(granted.untilMs, 50_000_000 + 1_000 + 24 * 60 * 60 * 1000);
 });
 
 for (const [how, loses] of [
@@ -2375,33 +2376,66 @@ test('an unanswered renewal keeps the claim and its first deadline, and an answe
   assert.equal(tab.context.playbackSoundPermission().untilMs, until + 60_000);
 });
 
-test('Play during an outage waits silently and starts by itself once the server answers', async () => {
+test('Play with no network plays at once, and holds the claim once the server answers', async () => {
   let offline = true;
   const tab = claimingTab(() => { if (offline) throw new TypeError('Failed to fetch'); return null; });
-  let answered = null;
-  const pressed = tab.context.claimPlaybackOwnership(localTrack).then((value) => { answered = value; });
-  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(answered, null);
-  assert.equal(tab.context.playbackSoundPermission().forMs, 0);
-  assert.deepEqual(tab.stopStreamingPlaybackCalls, [], 'the stream it loads is left to load');
+  assert.equal(await tab.context.claimPlaybackOwnership(localTrack), true, 'it waits for nothing');
+  assert.ok(tab.context.playbackSoundPermission().forMs > 0, 'it may sound now');
 
   offline = false;
   tab.askAgain();
-  await pressed;
-
-  assert.equal(answered, true);
-  assert.ok(tab.permissions.at(-1).forMs > 0);
-});
-
-test('a Pause during that wait ends it', async () => {
-  const tab = claimingTab(() => { throw new TypeError('Failed to fetch'); });
-  const waiting = tab.context.claimPlaybackOwnership(localTrack);
   await new Promise((resolve) => setImmediate(resolve));
 
-  await tab.context.releasePlaybackOwnership();
+  assert.equal(tab.context.state.player.ownership.activeClaim.claimToken, 'granted');
+  assert.ok(tab.context.playbackSoundPermission().forMs > 0);
+});
 
-  assert.equal(await waiting, false);
+test('Play with no network stops once the server answers that another device plays', async () => {
+  let offline = true;
+  const tab = claimingTab(() => {
+    if (offline) throw new TypeError('Failed to fetch');
+    return jsonResponse({ detail: 'Playback is active on another client.' }, { ok: false, status: 409 });
+  });
+  const stopped = [];
+  tab.context.stopStreamingPlayback = async (reason) => { stopped.push(reason); };
+  assert.equal(await tab.context.claimPlaybackOwnership(localTrack), true);
+
+  offline = false;
+  tab.askAgain();
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(stopped, ['ownership-takeover']);
+  assert.equal(tab.context.playbackSoundPermission().forMs, 0);
+  assert.equal(tab.context.state.player.ownership.activeClaim, null);
+});
+
+test('a Pause while it plays with no network ends it, and a late answer is given back', async () => {
+  let offline = true;
+  const tab = claimingTab(() => { if (offline) throw new TypeError('Failed to fetch'); return null; });
+  await tab.context.claimPlaybackOwnership(localTrack);
+
+  await tab.context.releasePlaybackOwnership();
+  assert.equal(tab.context.playbackSoundPermission().forMs, 0);
+  const asked = tab.requests.length;
+  offline = false;
+  tab.askAgain();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(tab.context.state.player.ownership.activeClaim, null);
+  assert.equal(tab.requests.length, asked, 'nothing is asked for it any more');
+});
+
+test('another tab of this browser playing with no network stops this one, which can hear that much', async () => {
+  const tab = claimingTab(() => null);
+  await tab.context.claimPlaybackOwnership(localTrack);
+  const stopped = [];
+  tab.context.stopStreamingPlayback = async (reason) => { stopped.push(reason); };
+
+  await tab.context.receivePlaybackOwnershipMessage({ data: { type: 'playing-without-server', clientId: 'other-tab' } });
+
+  assert.deepEqual(stopped, ['ownership-takeover']);
+  assert.equal(tab.context.state.player.ownership.activeClaim, null);
 });
 
 test('a held claim switches songs during an outage, inside its five minutes', async () => {
@@ -2414,7 +2448,7 @@ test('a held claim switches songs during an outage, inside its five minutes', as
   assert.ok(tab.context.playbackSoundPermission().forMs > 0);
 });
 
-test('an app start during an outage waits and starts once the server says nobody plays', async () => {
+test('an app start with no network plays at once', async () => {
   let offline = true;
   const timers = [];
   const { context } = loadHelper({
@@ -2425,25 +2459,8 @@ test('an app start during an outage waits and starts once the server says nobody
       return jsonResponse({ protocol: 1, is_playing_elsewhere: false });
     },
   });
-  let answered = null;
-  const pressed = context.claimPlaybackOwnership(localTrack).then((value) => { answered = value; });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(answered, null);
-
-  offline = false;
-  timers.filter(({ delay }) => delay === 2_000).at(-1).callback();
-  await pressed;
-
-  assert.equal(answered, true);
-});
-
-test('Play here promises that this tab silences itself', async () => {
-  const tab = claimingTab(({ body }) => (body.confirm ? jsonResponse({ protocol: 1 }) : null),
-    { state: playingElsewhereState() });
-
-  await tab.context.takeOverPlaybackHere();
-
-  assert.equal(tab.requests.find(({ method }) => method === 'PUT').body.silencesItself, true);
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(offline, true);
 });
 
 for (const [name, envelope, resumes] of [
@@ -2733,88 +2750,8 @@ function pausedHolder({ playing = false } = {}) {
   return { context, state, clock, requests, states, answers, intervals, playback, drains, settle };
 }
 
-test('a Play within the pause hold sounds on the held claim at once, then renews it as playing', async () => {
-  const { context, clock, requests, states, settle } = pausedHolder();
-  context.holdPlaybackClaimThroughPause();
-  await settle();
-  // The pause says so, so other devices see nothing playing; Play then waits for no answer.
-  assert.deepEqual([requests, states], [['PUT /playback/state'], [yieldContract.pausedRenewalState]]);
-  clock.now += yieldContract.holdMs - 1;
-
-  assert.equal(context.canStartPlaybackInThisTab(localTrack), true, 'answered at once, with no request');
-  assert.ok(context.playbackSoundPermission().untilMs > Date.now(), 'its audio may sound now');
-  await settle();
-  // Its pause promised silence soon: the Play renews at once, so it plays on past that.
-  assert.deepEqual(states, [yieldContract.pausedRenewalState, 'playing']);
-  assert.ok(context.playbackSoundPermission().forMs > 15_000);
-});
-
-test('a Play while the pause renewal is on its way renews as playing once that answer lands', async () => {
-  const { context, states, settle } = pausedHolder();
-  const answerFetch = context.fetch;
-  const held = [];
-  context.fetch = (url, init) => new Promise((resolve) => { held.push(() => resolve(answerFetch(url, init))); });
-  context.holdPlaybackClaimThroughPause();
-  await settle();
-  assert.equal(held.length, 1, 'the pause renewal is on its way');
-
-  assert.equal(context.canStartPlaybackInThisTab(localTrack), true);
-  context.fetch = answerFetch;
-  held[0]();
-  await settle();
-
-  assert.deepEqual(states, [yieldContract.pausedRenewalState, 'playing']);
-  assert.ok(context.playbackSoundPermission().forMs > 15_000, 'it plays on past the pause promise');
-});
-
-test('a Play after the hold, before its claim went back, asks the server', async () => {
-  const { context, clock, states, settle } = pausedHolder();
-  context.holdPlaybackClaimThroughPause();
-  await settle();
-  clock.now += yieldContract.holdMs;
-
-  assert.notEqual(context.canStartPlaybackInThisTab(localTrack), true, 'not on the held claim');
-  await settle();
-  assert.deepEqual(states, [yieldContract.pausedRenewalState, 'playing']);
-});
-
-test('a pause promises silence 15 s from its renewal, so a device that dies paused blocks others only that long', async () => {
-  const { context, state, settle } = pausedHolder();
-  let answer;
-  context.fetch = () => new Promise((resolve) => { answer = resolve; });
-  context.holdPlaybackClaimThroughPause();
-  await settle();
-
-  // Promised as it is sent: the server may have the pause even if its answer never comes.
-  assert.equal(typeof answer, 'function', 'the pause renewal is on its way');
-  const permission = context.playbackSoundPermission();
-  assert.ok(permission.forMs <= 15_000 && permission.forMs > 14_000, `forMs ${permission.forMs}`);
-  assert.ok(permission.untilMs <= Date.now() + 15_000);
-  assert.ok(state.player.ownership.activeClaim.soundUntilWallMs <= Date.now() + 15_000);
-});
-
-test('once the hold is over the heartbeat gives the claim back and Play asks the server again', async () => {
-  const { context, clock, requests, intervals, settle } = pausedHolder();
-  context.holdPlaybackClaimThroughPause();
-  context.startPlaybackOwnershipHeartbeat();
-  const tick = async (atMs) => {
-    clock.now = 1_000 + atMs;
-    intervals.at(-1).callback();
-    await settle();
-  };
-  for (const atMs of [4_000, 8_000, yieldContract.holdMs - 100]) await tick(atMs);
-  assert.deepEqual(requests.filter((request) => request.startsWith('DELETE')), [], 'kept for its hold');
-
-  await tick(yieldContract.holdMs + 3_900);
-  assert.deepEqual(requests.filter((request) => request.startsWith('DELETE')), ['DELETE /playback/state']);
-  assert.notEqual(context.canStartPlaybackInThisTab(localTrack), true);
-  await settle();
-  assert.equal(requests.at(-1), 'PUT /playback/state');
-});
-
-test('asked to yield while paused, it says so only once its output drained, then its next Play asks', async () => {
+test('asked to yield while paused on a claim not yet given back, it says so only once its output drained', async () => {
   const { context, state, answers, drains, requests, settle } = pausedHolder();
-  context.holdPlaybackClaimThroughPause();
 
   const answering = context.yieldPausedPlaybackClaim(yieldContract.ask.requestId);
   await settle();
@@ -2841,18 +2778,18 @@ test('a playing tab declines a yield at once and keeps its claim', async () => {
   assert.equal(state.player.ownership.activeClaim.claimToken, 'held-claim');
 });
 
-test('a Play while its yield drains sounds on the held claim, and the yield declines', async () => {
+test('a Play while its yield drains renews its claim, and the yield declines', async () => {
   const { context, state, answers, drains, playback, states, settle } = pausedHolder();
-  context.holdPlaybackClaimThroughPause();
   const answering = context.yieldPausedPlaybackClaim(yieldContract.ask.requestId);
   await settle();
 
-  assert.equal(context.canStartPlaybackInThisTab(localTrack), true);
+  const playing = context.canStartPlaybackInThisTab(localTrack);
   playback.paused = false;
   drains.forEach((drained) => drained());
   await answering;
 
+  assert.equal(await playing, true);
   assert.equal(JSON.stringify(answers), JSON.stringify([yieldContract.declined]));
   assert.equal(state.player.ownership.activeClaim.claimToken, 'held-claim');
-  assert.deepEqual(states, [yieldContract.pausedRenewalState, 'playing'], 'the pause, then the Play renewing');
+  assert.deepEqual(states, ['playing'], 'the Play asks the server, with the claim it still holds');
 });

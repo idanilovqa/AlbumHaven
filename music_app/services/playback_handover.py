@@ -1,7 +1,9 @@
 """Play here asks the playing client, over its playback socket, to fall silent and say what sounded where.
 
-Only its word is proof of silence, so plays never overlap: no socket, a closed
-one or no answer in time means the press does not start. The holder first asks whether the press is still
+A client that is there answers at once, so its word decides: a holder that plays is not stopped by a plain
+press, and Play here waits for it to fall silent. A holder with no socket, or that says nothing at all in
+time, is gone (a dead or unreachable device): the press starts without it, and if it was still playing
+somewhere it stops once it reaches the server again. The holder first asks whether the press is still
 wanted, so a press that is over stops nobody.
 """
 
@@ -19,6 +21,9 @@ RELEASED_HOLDER_SECONDS = 15
 
 Send = Callable[[dict], Awaitable[None]]
 
+# A holder that has no socket, or answered nothing in time: no device is there to play.
+GONE = "gone"
+
 
 @dataclass(eq=False)
 class _Ask:
@@ -28,6 +33,8 @@ class _Ask:
     answered: asyncio.Future
     wanted: asyncio.Future
     request_id: str = field(default_factory=lambda: str(uuid4()))
+    # The holder said something about this ask, valid or not: it is there.
+    heard: bool = False
     waiting: int = 0
     stop: asyncio.Task | None = None
     # "handover" for Play here; "handover-yield" asks a paused holder only whether nothing of it sounds.
@@ -52,6 +59,10 @@ class PlaybackHandoverHub:
         if yields:
             self._yielding.add(send)
 
+    def connected(self, account_id: int, client_id: str) -> bool:
+        """Whether this client has a socket here: one with none plays nowhere a press could reach."""
+        return bool(self._sockets.get((account_id, client_id)))
+
     def unregister(self, send: Send) -> None:
         self._yielding.discard(send)
         for key, sockets in list(self._sockets.items()):
@@ -64,7 +75,7 @@ class PlaybackHandoverHub:
                 del self._asked[key]
         for ask in self._asks.values():
             if ask.send == send and not ask.answered.done():
-                ask.answered.set_result(None)
+                ask.answered.set_result(GONE)
 
     async def ask(
         self,
@@ -75,9 +86,10 @@ class PlaybackHandoverHub:
         accepts: Callable[[object], bool],
         timeout: float,
         stopping: float = STOPPING_SECONDS,
-    ) -> dict | None:
+    ) -> dict | str | None:
         """The holder's word that it is silent: its track and position, both None when it has none to hand
-        on. None is no proof: no socket, no valid word within [timeout], or within [stopping] once told to stop.
+        on. [GONE] when it has no socket or says nothing at all within [timeout]. None when it is there but
+        gives no valid word: within [timeout], or within [stopping] once told to stop.
         """
         key = (account_id, library_id, client_id)
         ask = self._asks.get(key)
@@ -85,7 +97,7 @@ class PlaybackHandoverHub:
         if ask is None:
             sockets = self._sockets.get((account_id, client_id))
             if not sockets:
-                return None
+                return GONE
             loop = asyncio.get_running_loop()
             ask = _Ask(key, sockets[-1], accepts, loop.create_future(), loop.create_future())
             self._asks[key] = ask
@@ -96,7 +108,9 @@ class PlaybackHandoverHub:
             await asyncio.wait({ask.answered, ask.wanted}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
             if ask.wanted.done() and not ask.answered.done():
                 await asyncio.wait({ask.answered}, timeout=stopping)
-            return ask.answered.result() if ask.answered.done() else None
+            if ask.answered.done():
+                return GONE if ask.answered.result() is GONE else ask.answered.result()
+            return None if ask.wanted.done() or ask.heard else GONE
         finally:
             ask.waiting -= 1
             if not ask.waiting:
@@ -108,16 +122,19 @@ class PlaybackHandoverHub:
                 # handed to the transport in one piece, and only the waits around that can be interrupted.
                 sending.cancel()
 
-    async def yielded(self, account_id: int, library_id: int, client_id: str, *, timeout: float) -> bool:
-        """A paused holder's word that nothing of it sounds, so a plain press elsewhere may start: True only on
-        its `handover-silent`. It says so only from its output's real state, dropping its claim as it does,
-        and declines while it plays. A client that never said it yields (an older installed app), no socket,
-        a closed one or no word within [timeout] is no proof, and nothing starts.
+    async def yielded(self, account_id: int, library_id: int, client_id: str, *, timeout: float) -> str:
+        """Whether a plain press elsewhere may start over this holder. "silent": its word that nothing of it
+        sounds, given from its output's real state as it drops its claim. "declined": it plays, is about to,
+        or is being asked already; also a client that never said it answers this (an older installed app).
+        [GONE]: no socket, or no word at all within [timeout].
         """
         key = (account_id, library_id, client_id)
-        sockets = [send for send in self._sockets.get((account_id, client_id), ()) if send in self._yielding]
+        sockets = self._sockets.get((account_id, client_id), ())
+        if not sockets:
+            return GONE
+        sockets = [send for send in sockets if send in self._yielding]
         if not sockets or key in self._asks:
-            return False
+            return "declined"
         loop = asyncio.get_running_loop()
         ask = _Ask(key, sockets[-1], lambda _token: False, loop.create_future(), loop.create_future(),
                    kind="handover-yield")
@@ -126,7 +143,10 @@ class PlaybackHandoverHub:
         sending = asyncio.create_task(self._send(ask))
         try:
             await asyncio.wait({ask.answered}, timeout=timeout)
-            return ask.answered.done() and ask.answered.result() is not None
+            if not ask.answered.done():
+                return GONE
+            result = ask.answered.result()
+            return GONE if result is GONE else "declined" if result is None else "silent"
         finally:
             # A Play here pressed meanwhile waits on the same word.
             ask.waiting -= 1
@@ -139,9 +159,9 @@ class PlaybackHandoverHub:
         self._asked[ask.key] = (ask.send, ask.request_id)
         try:
             await ask.send({"type": ask.kind, "requestId": ask.request_id})
-        except Exception:  # A socket that cannot be written is a holder that cannot answer.
+        except Exception:  # A socket that cannot be written is a holder that is gone.
             if not ask.answered.done():
-                ask.answered.set_result(None)
+                ask.answered.set_result(GONE)
 
     def declined(self, send: Send, request_id: object) -> bool:
         """The asked holder plays, or is about to: the press that asked it to yield is refused."""
@@ -168,12 +188,13 @@ class PlaybackHandoverHub:
             await ask.send({"type": "handover-stop", "requestId": ask.request_id})
         except Exception:
             if not ask.answered.done():
-                ask.answered.set_result(None)
+                ask.answered.set_result(GONE)
 
     def answer(self, send: Send, message: dict) -> bool:
         for ask in self._asks.values():
             if ask.send != send or ask.request_id != message.get("requestId"):
                 continue
+            ask.heard = True
             if ask.answered.done() or not ask.accepts(message.get("claimToken")):
                 return False
             ask.answered.set_result({"track": message.get("track"), "position": message.get("position")})

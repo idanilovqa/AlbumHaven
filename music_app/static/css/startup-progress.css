@@ -14,6 +14,8 @@
   color: var(--startup-progress-ink);
 }
 .startup-progress[hidden], .startup-progress [hidden] { display: none; }
+/* A finishing overlay only shows the bar reaching 100%; the ready page underneath takes input. */
+.startup-progress[data-startup-finishing] { pointer-events: none; }
 .startup-progress h1 { margin: 0; font-size: 1.5rem; font-weight: 500; }
 .startup-progress-meter {
   display: grid; grid-template-columns: minmax(0, 1fr); align-items: center;

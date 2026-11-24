@@ -31,10 +31,14 @@
     });
     window.__ALBUM_HAVEN_STARTUP_MARKS__ = queue;
   };
-  const hide = () => {
-    root.hidden = true;
+  const releasePage = () => {
     previousInert.forEach((value, element) => { element.inert = value; });
     previousInert.clear();
+  };
+  const hide = () => {
+    root.hidden = true;
+    delete root.dataset.startupFinishing;
+    releasePage();
   };
   const render = value => {
     percent = value;
@@ -106,6 +110,9 @@
       driftStartedAt = null;
       completionRenderedAt = null;
       lastFrameTime = 0;
+      // The app is ready: the page takes input now; the bar finishes on top without blocking it.
+      root.dataset.startupFinishing = '';
+      releasePage();
       if (reducedMotion) {
         render(100);
         finishHide();

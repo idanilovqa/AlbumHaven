@@ -10,11 +10,28 @@ function isMobileClient() {
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
-  const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
+  const albumKey = album ? mobileHistoryAlbumKey(album) : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
+// An entry an earlier build wrote may name an album by its track paths: the one being loaded is rewritten
+// without them, in its address and its state. Other entries already in the browser's history cannot be.
+function forgetPathLikeAlbumKeys(url) {
+  if (!window.history?.replaceState) return;
+  const kept = window.history.state || {};
+  const pages = Array.isArray(kept.mobilePages) ? kept.mobilePages : [];
+  const pathLike = (page) => pathLikeAlbumKey(page?.albumKey) || pathLikeAlbumKey(page?.parentScrollAnchor?.albumKey);
+  const inAddress = pathLikeAlbumKey(url.searchParams.get('mobile_album'));
+  if (!inAddress && !pages.some(pathLike)) return;
+  if (inAddress) {
+    ['mobile_page', 'mobile_album'].forEach(key => url.searchParams.delete(key));
+  }
+  const cleaned = pages.filter(page => !pathLikeAlbumKey(page?.albumKey)).map((page) => (
+    pathLikeAlbumKey(page?.parentScrollAnchor?.albumKey) ? { ...page, parentScrollAnchor: null } : page));
+  window.history.replaceState({ ...kept, mobilePages: cleaned }, '', url.toString());
+}
+
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
   const active = mobile ? mobilePageState.pages.at(-1) : null;
@@ -275,14 +292,14 @@ function presentMobilePage(descriptor) {
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
     mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
-  descriptor.parentScrollAnchor = resolveMobileParentScrollAnchor(
+  descriptor.parentScrollAnchor = historySafeScrollAnchor(resolveMobileParentScrollAnchor(
     descriptor,
     previous,
     window.history.state || {},
     mobilePageState.pages.length || typeof virtualGrid === 'undefined'
       ? null
       : virtualGrid?.captureScrollAnchor?.(),
-  );
+  ));
   descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
     mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
   descriptor.parentGalleryAnchorArtist = resolveMobileParentGalleryAnchorArtist(
@@ -400,9 +417,27 @@ function navigateMobileBack() {
   else if (active.kind === 'non-album') closeNonAlbumModal();
   else closeCoverLookupModal();
 }
+function mobileHistoryAlbumKey(album) {
+  return typeof getAlbumHistoryKey === 'function' ? getAlbumHistoryKey(album) : String(getAlbumRequestKey(album) || '');
+}
+
+function pathLikeAlbumKey(value) {
+  return typeof isPathLikeAlbumKey === 'function' && isPathLikeAlbumKey(value);
+}
+
+// The anchor goes into history: the album at the top names itself as history may keep it, never by its paths.
+function historySafeScrollAnchor(anchor) {
+  if (!anchor?.albumKey || !pathLikeAlbumKey(anchor.albumKey)) return anchor;
+  const album = getIndexedAlbum(anchor.albumKey);
+  return { ...anchor, albumKey: album ? mobileHistoryAlbumKey(album) : '' };
+}
+
 function restoreMobilePage(descriptor) {
   if (!descriptor || !Object.hasOwn(MOBILE_PAGE_KINDS, descriptor.kind)) return;
-  const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey) || { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true }) : null;
+  // An album kept by its id opens only once it is loaded: there is no key to ask for it by.
+  const byId = String(descriptor.albumKey || '').startsWith('id:');
+  const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey)
+    || (byId ? null : { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true })) : null;
   if (descriptor.kind === 'non-album') openNonAlbumModal();
   else if (descriptor.kind === 'album' && album) openTrackModal(album);
   else if (descriptor.kind === 'utilities') {
@@ -745,6 +780,7 @@ function initMobileNavigation() {
     status.textContent = 'Settings have not synced. They will retry when you reconnect.';
   });
   const url = new URL(window.location.href);
+  forgetPathLikeAlbumKeys(url);
   if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
     mobilePageState.restoring = true;
     try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }

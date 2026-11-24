@@ -278,8 +278,8 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
         repository=repository, note_foreground_activity=lambda: None,
         request=lambda selected_root: events.append("queue_root"), request_context=request_context,
         recheck_context=lambda paths: events.append("queue_recheck"),
-        wait_for_context=lambda paths, timeout: events.append("wait_context"),
-        queue_depth=lambda: {},
+        wait_for_context=lambda paths, since, timeout: events.append("wait_context"),
+        queue_depth=lambda: {}, finished_ticket=lambda: 0,
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context", validated_context, raising=False)
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths", validate_tracks)
@@ -342,7 +342,7 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
         reads.append(_root)
         return {"available": True, "complete": True, "candidates": listing} if waits else None
 
-    def wait_for_listing(folder, timeout):
+    def wait_for_listing(folder, since, timeout):
         # The worker publishes while the request waits, then wakes it.
         assert 0 < timeout <= routes._UNLISTED_INVENTORY_WAIT_SECONDS
         waits.append(folder)
@@ -355,7 +355,7 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
         request_context=lambda paths: pytest.fail("a known folder needs no context request"),
         recheck_context=lambda paths: None,
         wait_for_listing=wait_for_listing,
-        queue_depth=lambda: {"listings_opened": 0},
+        queue_depth=lambda: {"listings_opened": 0}, finished_ticket=lambda: 0,
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context",
                         lambda _self, **_kwargs: {"album_id": 42, "album_key": "artist::unlisted album", "track_paths": [str(track)]},
@@ -367,16 +367,17 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.local_cover_inventory = worker
 
-    with caplog.at_level(logging.INFO, logger=routes.LOGGER.name):
+    with caplog.at_level(logging.DEBUG, logger=routes.LOGGER.name):
         status, _, body = _run_asgi_request(
             asgi_app, "POST", "/utilities/cover-lookup/gallery",
             json_body={"album": {"album_id": 42, "name": "Unlisted Album", "tracks": []}},
         )
 
     assert status == 200
-    # 6.5 (FTC-COVERS-019P): one passive INFO line per open says how each wait ended, without paths.
-    [logged] = [json.loads(record.getMessage()) for record in caplog.records
-                if '"cover_lookup_local_inventory_wait"' in record.getMessage()]
+    # 6.5 (FTC-COVERS-019P): one passive DEBUG line per open says how each wait ended, without paths.
+    [record] = [record for record in caplog.records if '"cover_lookup_local_inventory_wait"' in record.getMessage()]
+    assert record.levelno == logging.DEBUG
+    logged = json.loads(record.getMessage())
     assert logged["folder_known"] is True
     assert logged["queue_at_request"] == {"listings_opened": 0}
     assert logged["context_wait"] == "not_needed"
@@ -389,6 +390,37 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
     # Freeze guard (BI-05): the worker wakes the request; one read before the wait and one after, no polling.
     assert waits == [root]
     assert len(reads) == 2
+
+
+def test_a_wake_that_leaves_the_folder_unlisted_waits_again_until_the_original_deadline():
+    """6.5: a wake ends one wait only. If the folder's own state still shows no listing (a newer change
+    raced it), the request waits again for the worker's next finish, from a fresh count, within the
+    original 1.5 s, instead of returning early with an empty listing."""
+    import asyncio
+    from music_app.routes import api_wave_d_asgi_routes as routes
+
+    root = Path("C:/Music/Artist/Raced Album")
+    listing = {"available": True, "complete": True, "candidates": [{"filename": "front.jpg"}]}
+    reads, waits, tickets = [], [], iter(range(10, 20))
+
+    def get(_root):
+        reads.append(_root)
+        return listing if len(waits) == 2 else None
+
+    def wait_for_listing(folder, since, timeout):
+        waits.append((since, timeout))
+        return {"outcome": "woken"}
+
+    worker = SimpleNamespace(
+        repository=SimpleNamespace(get=get), queue_depth=lambda: {}, finished_ticket=lambda: next(tickets),
+        recheck_context=lambda paths: None, request=lambda folder: None, wait_for_listing=wait_for_listing,
+    )
+    album_root, inventory = asyncio.run(routes._gallery_local_inventory(worker, root, {"C:/Music/Artist/Raced Album/01.mp3"}))
+
+    assert inventory is listing
+    assert [since for since, _timeout in waits] == [10, 11], "the second wait counts from a fresh ticket"
+    assert waits[1][1] <= waits[0][1] <= routes._UNLISTED_INVENTORY_WAIT_SECONDS, "one deadline for both waits"
+    assert len(reads) == 3, "one read before the first wait and one after each wake, no polling (BI-05)"
 
 
 class _FatalFlaskBridge:
@@ -3637,7 +3669,7 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
         remove_path=remove_inventory_path,
         request_context=lambda paths: None,
         recheck_context=lambda paths: None,
-        queue_depth=lambda: {},
+        queue_depth=lambda: {}, finished_ticket=lambda: 0,
         repository=SimpleNamespace(
             get=lambda root: {"available": True, "complete": True, "candidates": candidates},
         ),

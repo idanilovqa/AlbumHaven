@@ -671,40 +671,52 @@ class LocalCoverInventoryWorker:
         self._unresolved = _UnresolvedContexts()
         self._foreground_at = time.monotonic()
         # What the worker has finished since start, so a request waiting for one folder is woken by
-        # the worker instead of polling Postgres (freeze guard BI-05).
+        # the worker instead of polling Postgres (freeze guard BI-05). Each finish takes the next ticket.
         self._finished = threading.Condition()
-        self._finished_marks = {}  # key -> (times finished, monotonic time of the last)
+        self._finished_ticket = 0
+        self._finished_marks = {}  # key -> (ticket of its last finish, monotonic time of it)
         self._working = None  # what the worker is reading now, for a request's diagnostics
 
     def _mark_finished(self, key):
         with self._finished:
-            self._finished_marks[key] = (self._finished_marks.get(key, (0, None))[0] + 1, time.monotonic())
+            self._finished_ticket += 1
+            self._finished_marks.pop(key, None)  # the oldest finish is dropped first
+            self._finished_marks[key] = (self._finished_ticket, time.monotonic())
             if len(self._finished_marks) > 512:
                 self._finished_marks.pop(next(iter(self._finished_marks)))
             self._finished.notify_all()
 
-    def _wait_for_mark(self, key, timeout):
-        """How the wait ended: woken by the worker or at the deadline, and when the worker last finished the key."""
+    def finished_ticket(self):
+        """Taken before a request's first read: its waits then count every finish after it.
+
+        FTC-COVERS-019P: a request that began counting only when it began waiting missed a folder the
+        worker listed while the request was still reading Postgres, and slept to its deadline."""
+        with self._finished:
+            return self._finished_ticket
+
+    def _wait_for_mark(self, key, since, timeout):
+        """How the wait ended: already finished, woken by the worker, or at the deadline; and when the
+        worker last finished the key."""
         started = time.monotonic()
         with self._finished:
-            seen, finished_at = self._finished_marks.get(key, (0, None))
-            woken = self._finished.wait_for(
-                lambda: self._finished_marks.get(key, (0, None))[0] != seen, timeout=max(0.0, timeout)
-            )
+            finished_at = self._finished_marks.get(key, (0, None))[1]
+            finished = lambda: self._finished_marks.get(key, (0, None))[0] > since
+            already = finished()
+            woken = already or self._finished.wait_for(finished, timeout=max(0.0, timeout))
         return {
-            "outcome": "woken" if woken else "deadline",
+            "outcome": "finished_before_wait" if already else "woken" if woken else "deadline",
             "waited_ms": round((time.monotonic() - started) * 1000),
             "timeout_ms": round(max(0.0, timeout) * 1000),
             "last_finished_before_wait_ms": None if finished_at is None else round((started - finished_at) * 1000),
         }
 
-    def wait_for_context(self, paths, timeout):
-        """Wait until the worker has resolved the folder of these tracks, or until `timeout`."""
-        return self._wait_for_mark(("context", context_key(paths)), timeout)
+    def wait_for_context(self, paths, since, timeout):
+        """Wait until the worker has resolved the folder of these tracks after ticket `since`, or until `timeout`."""
+        return self._wait_for_mark(("context", context_key(paths)), since, timeout)
 
-    def wait_for_listing(self, root, timeout):
-        """Wait until the worker has listed this folder, or until `timeout`."""
-        return self._wait_for_mark(("root", root_key(root)), timeout)
+    def wait_for_listing(self, root, since, timeout):
+        """Wait until the worker has listed this folder after ticket `since`, or until `timeout`."""
+        return self._wait_for_mark(("root", root_key(root)), since, timeout)
 
     def queue_depth(self):
         """What this process's worker has queued and is reading at a request's start; no paths."""

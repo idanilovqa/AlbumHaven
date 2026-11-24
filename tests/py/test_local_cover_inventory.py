@@ -625,9 +625,9 @@ def test_a_request_waiting_for_a_folder_is_woken_when_the_worker_lists_it():
 
     worker = LocalCoverInventoryWorker({}, repository=object())
     started = time.monotonic()
-    waiter = threading.Thread(target=worker.wait_for_listing, args=("C:/Music/Album", 5.0))
+    waiter = threading.Thread(target=worker.wait_for_listing, args=("C:/Music/Album", worker.finished_ticket(), 5.0))
     waiter.start()
-    # The worker may finish before or after the request starts waiting; it keeps publishing until woken.
+    # A slow listing: the worker finishes only once the request is already waiting, so it keeps publishing until woken.
     while waiter.is_alive() and time.monotonic() - started < 2.0:
         worker._mark_finished(("root", root_key("C:/Music/Other")))
         worker._mark_finished(("root", root_key("C:/Music/Album")))
@@ -635,6 +635,36 @@ def test_a_request_waiting_for_a_folder_is_woken_when_the_worker_lists_it():
     waiter.join(0.5)
     assert not waiter.is_alive()
     assert time.monotonic() - started < 2.0
+
+
+def test_a_wait_counts_only_its_folder_finished_after_its_ticket_however_late_it_starts_waiting():
+    """One finish each, never re-marked in a loop: a finish after the ticket counts whether it lands before or during
+    the wait; a finish before the ticket, or of another folder, does not."""
+    import threading
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker, root_key
+
+    worker = LocalCoverInventoryWorker({}, repository=object())
+    album, other = ("root", root_key("C:/Music/Album")), ("root", root_key("C:/Music/Other"))
+    worker._mark_finished(album)  # an earlier open's listing
+    since = worker.finished_ticket()
+    worker._mark_finished(other)
+    assert worker.wait_for_listing("C:/Music/Album", since, 0.05)["outcome"] == "deadline"
+
+    worker._mark_finished(album)  # listed while the request was still reading, before it waits
+    assert worker.wait_for_listing("C:/Music/Album", since, 5.0)["outcome"] == "finished_before_wait"
+
+    since = worker.finished_ticket()
+    threading.Timer(0.05, worker._mark_finished, args=[album]).start()
+    woken = worker.wait_for_listing("C:/Music/Album", since, 5.0)
+    assert woken["outcome"] == "woken" and woken["waited_ms"] < 1000
+
+    # Another folder finishing first wakes the worker's condition but never ends this wait early;
+    # the wait ends on this folder's own finish, well before the deadline.
+    since = worker.finished_ticket()
+    threading.Timer(0.05, worker._mark_finished, args=[other]).start()
+    threading.Timer(0.25, worker._mark_finished, args=[album]).start()
+    own = worker.wait_for_listing("C:/Music/Album", since, 1.5)
+    assert own["outcome"] == "woken" and 200 <= own["waited_ms"] < 1000
 
 
 def test_a_first_open_is_not_held_to_the_cap_when_the_worker_lists_the_folder_before_the_request_waits(monkeypatch):
@@ -711,16 +741,16 @@ def test_a_wait_reports_how_it_ended_and_what_was_queued_for_the_request_diagnos
         "listings_opened": 1, "listings_changed": 2, "rechecks_opened": 0, "rechecks_changed": 0,
     }
 
-    timed_out = worker.wait_for_listing("C:/Music/Album", 0.05)
+    timed_out = worker.wait_for_listing("C:/Music/Album", worker.finished_ticket(), 0.05)
     assert timed_out["outcome"] == "deadline"
     assert timed_out["waited_ms"] >= 40 and timed_out["last_finished_before_wait_ms"] is None
 
     threading.Timer(0.05, worker._mark_finished, args=[("root", root_key("C:/Music/Album"))]).start()
-    woken = worker.wait_for_listing("C:/Music/Album", 5.0)
+    woken = worker.wait_for_listing("C:/Music/Album", worker.finished_ticket(), 5.0)
     assert woken["outcome"] == "woken" and woken["waited_ms"] < 1000
 
     time.sleep(0.02)
-    again = worker.wait_for_listing("C:/Music/Album", 0.01)
+    again = worker.wait_for_listing("C:/Music/Album", worker.finished_ticket(), 0.01)
     assert again["outcome"] == "deadline" and again["last_finished_before_wait_ms"] >= 15
 
 

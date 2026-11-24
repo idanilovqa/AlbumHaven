@@ -513,13 +513,13 @@ def _is_squareish_cover(width: int, height: int) -> bool:
 # Owner (2026-11-18): a folder the index had never listed answered "not listed yet", and the page asked again a
 # second later. The request waits briefly for the worker's foreground listing instead; it never reads the folder.
 # A folder being re-indexed still answers at once with its previous listing. The worker wakes the request when it
-# finishes, so the wait costs one read before and one after, not a database poll (freeze guard BI-05).
+# finishes, so the wait costs one read before and one after each wake, not a database poll (freeze guard BI-05).
 _UNLISTED_INVENTORY_WAIT_SECONDS = 1.5
 
 
 async def _gallery_local_inventory(inventory_worker, album_root, track_paths: set[str]):
     started = perf_counter()
-    # 6.5 (FTC-COVERS-019P): passive per-request diagnostics of the waits below, with no paths.
+    # 6.5 (FTC-COVERS-019P): passive per-request diagnostics of the waits below, with no paths, at DEBUG.
     waits = {
         "folder_known": album_root is not None, "queue_at_request": inventory_worker.queue_depth(),
         "context_wait": "not_needed", "listing_wait": "not_needed",
@@ -528,20 +528,22 @@ async def _gallery_local_inventory(inventory_worker, album_root, track_paths: se
         return await _wait_for_gallery_local_inventory(inventory_worker, album_root, track_paths, started, waits)
     finally:
         log_app_message(
-            LOGGER, "cover_lookup_local_inventory_wait",
+            LOGGER, "cover_lookup_local_inventory_wait", level="debug",
             total_ms=round((perf_counter() - started) * 1000), **waits,
         )
 
 
 async def _wait_for_gallery_local_inventory(inventory_worker, album_root, track_paths, started, waits):
     deadline = started + _UNLISTED_INVENTORY_WAIT_SECONDS
+    # Taken before the first read, so a folder the worker finishes while this request reads still wakes it.
+    since = inventory_worker.finished_ticket()
     repository = inventory_worker.repository
     if album_root is None:
         context = await run_in_threadpool(inventory_worker.request_context, track_paths) or {}
         album_root = Path(context["root_path"]) if context.get("root_path") else None
         if album_root is None and not context.get("error"):
             waits["context_wait"] = await run_in_threadpool(
-                inventory_worker.wait_for_context, track_paths, deadline - perf_counter()
+                inventory_worker.wait_for_context, track_paths, since, deadline - perf_counter()
             )
             album_root = await run_in_threadpool(repository.root_for_tracks, track_paths)
         if album_root is None:
@@ -552,11 +554,17 @@ async def _wait_for_gallery_local_inventory(inventory_worker, album_root, track_
     inventory = await run_in_threadpool(repository.get, album_root)
     if not inventory or not inventory.get("complete"):
         await run_in_threadpool(inventory_worker.request, album_root)
-    if not (inventory or {}).get("available") and not (inventory or {}).get("error"):
-        waits["listing_wait"] = await run_in_threadpool(
-            inventory_worker.wait_for_listing, album_root, deadline - perf_counter()
-        )
+    # Only this folder's own finish ends a wait. One that still left it unlisted (a newer change raced the
+    # listing) waits again from a fresh count, until the same deadline: one read after each wake, no poll.
+    while not (inventory or {}).get("available") and not (inventory or {}).get("error"):
+        remaining = deadline - perf_counter()
+        if remaining <= 0:
+            break
+        waits["listing_wait"] = await run_in_threadpool(inventory_worker.wait_for_listing, album_root, since, remaining)
+        since = inventory_worker.finished_ticket()
         inventory = await run_in_threadpool(repository.get, album_root)
+        if (waits["listing_wait"] or {}).get("outcome") == "deadline":
+            break
     return album_root, inventory or {"available": False, "complete": False}
 
 

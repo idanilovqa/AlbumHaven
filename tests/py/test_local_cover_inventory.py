@@ -637,6 +637,65 @@ def test_a_request_waiting_for_a_folder_is_woken_when_the_worker_lists_it():
     assert time.monotonic() - started < 2.0
 
 
+def test_a_first_open_is_not_held_to_the_cap_when_the_worker_lists_the_folder_before_the_request_waits(monkeypatch):
+    """FTC-COVERS-019P: the worker resolved the folder, then listed it while the request was still reading
+    Postgres. The request began waiting after that listing finished and slept to the 1.5 s cap (a missed
+    wake-up). A finish after the request began counts, so the open returns as soon as the folder is listed."""
+    import asyncio
+    import time
+    from music_app.routes import api_wave_d_asgi_routes as routes
+    from music_app.services import cover_workflow
+
+    folder, track = "C:/Music/Artist/Album", "C:/Music/Artist/Album/01.mp3"
+    listing = [{"path": folder + "/front.jpg", "filename": "front.jpg"}]
+    read_before_listing, published, state, reads = Event(), Event(), {}, []
+
+    def get(root):
+        reads.append(root)
+        stored = state.get("listing")
+        if len(reads) == 1:
+            # This read finds no listing; the worker publishes it before the request starts waiting.
+            read_before_listing.set()
+            assert published.wait(5.0)
+        return stored
+
+    def discover(*_args, **_kwargs):
+        assert read_before_listing.wait(5.0)
+        return listing
+
+    def publish(root, revision, candidates):
+        state["listing"] = {"available": True, "complete": True, "candidates": candidates}
+        published.set()
+        return True
+
+    repository = SimpleNamespace(
+        work_slot=lambda: nullcontext(True),
+        request_context=lambda paths: {},
+        next_context=lambda key: {"context_key": key, "track_paths": [track], "revision": 1, "retry_in": None},
+        publish_context=lambda key, revision, root, *, foreground: state.setdefault("root", Path(root)),
+        root_for_tracks=lambda paths: state.get("root"),
+        get=get,
+        request=lambda root: None,
+        next_pending=lambda root: None if published.is_set() else {"root_path": root, "revision": 1, "retry_in": None},
+        publish=publish,
+    )
+    monkeypatch.setattr(cover_workflow, "resolve_album_root_from_track_paths", lambda *_args, **_kwargs: Path(folder))
+    monkeypatch.setattr(inventory, "discover_local_cover_inventory", discover)
+    worker = inventory.LocalCoverInventoryWorker({}, repository=repository)
+    worker.start()
+    try:
+        started = time.monotonic()
+        album_root, listed = asyncio.run(routes._gallery_local_inventory(worker, None, {track}))
+        elapsed = time.monotonic() - started
+    finally:
+        asyncio.run(worker.stop())
+
+    assert album_root == Path(folder)
+    assert listed["candidates"] == listing
+    assert len(reads) == 2, "one read before the wait and one after, no polling (BI-05)"
+    assert elapsed < routes._UNLISTED_INVENTORY_WAIT_SECONDS / 3, f"held {elapsed:.2f} s for a listed folder"
+
+
 def test_a_wait_reports_how_it_ended_and_what_was_queued_for_the_request_diagnostics():
     """6.5 (FTC-COVERS-019P): passive diagnostics say whether the worker woke the request or the deadline did."""
     import threading

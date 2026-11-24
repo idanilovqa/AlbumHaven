@@ -446,7 +446,7 @@ def _non_album_candidates_sql(
           ))) = ''
         )"""
         if membership_problems_only
-        # Case 64: the one predicate the Loose Tracks store's triggers also call (migration NNNN+1).
+        # Case 64: the one predicate the Loose Tracks store's triggers also call (migration 0295).
         else """library.loose_track_qualifies(
           library.local_track_files.scan_file_album,
           library.local_tracks.metadata ->> 'album',

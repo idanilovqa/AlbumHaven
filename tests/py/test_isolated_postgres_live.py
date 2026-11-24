@@ -467,7 +467,6 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
     )
 
 
-_CASE64_DRAFT_ENV = "ALBUM_HAVEN_CASE64_DRAFT_SQL"
 # Rows a Loose Tracks read returns beside its stored list: state, mark count, the marks it drains, their
 # candidate rows, alias maps and roots (about 155 measured at both sizes in helper 1's run at fdecfdb59).
 _LOOSE_READ_FIXED_ROWS = 200
@@ -483,17 +482,6 @@ _DRAIN_ROWS_READ_SQL = """
     select relname, coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) as rows_read
     from pg_stat_xact_user_tables
 """
-
-
-def _apply_case64_draft(fixture):
-    """Case 64's migration is a draft until the owner approves it: the phase 2 run names its SQL file here
-    (after case 55's NNNN). Without it these cases cannot run, and the run must not count them."""
-    draft = os.environ.get(_CASE64_DRAFT_ENV)
-    if not draft:
-        _skip_or_fail_ci(f"{_CASE64_DRAFT_ENV} names case 64's draft migration for the phase 2 run.")
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        if connection.execute("select to_regclass('library.non_album_track_rows') as present").fetchone()["present"] is None:
-            connection.execute(Path(draft).read_text(encoding="utf-8"))
 
 
 def _loose_library(fixture, albums, loose=3):
@@ -542,7 +530,6 @@ def test_live_loose_track_reads_without_a_store_never_queue_a_build(watcher_repa
     from music_app.services import library_browse_postgres as browse
 
     fixture = watcher_repair_inventory
-    _apply_case64_draft(fixture)
     _loose_library(fixture, albums)
     queued = []
     monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
@@ -562,7 +549,6 @@ def test_live_loose_track_reads_without_a_store_never_queue_a_build(watcher_repa
 def test_live_one_changed_loose_track_rewrites_one_stored_row(watcher_repair_inventory, albums):
     """Case 64: once the store is ready, one changed loose file marks its track and the drain rewrites one row."""
     fixture = watcher_repair_inventory
-    _apply_case64_draft(fixture)
     _entries, loose_entries = _loose_library(fixture, albums)
     repository = _prepare_store(fixture)
     before = _store_rows(fixture)
@@ -595,7 +581,6 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
     from music_app.services.library_inventory_postgres import MAX_NON_ALBUM_CANDIDATE_LIMIT
 
     fixture = watcher_repair_inventory
-    _apply_case64_draft(fixture)
     waiting = loose_track_store.INLINE_DRAIN_LIMIT
     synthetic_base = 9_000_000_000
     started = monotonic()
@@ -749,7 +734,6 @@ def test_live_real_changes_run_every_loose_track_trigger_function_with_overrides
     from music_app.services import loose_track_store
 
     fixture = watcher_repair_inventory
-    _apply_case64_draft(fixture)
     _entries, loose_entries = _loose_library(fixture, 5)
     repository = _prepare_store(fixture)
 
@@ -808,7 +792,6 @@ def test_live_loose_tracks_show_the_rows_stored_so_far_while_the_store_builds(wa
     from music_app.services import library_browse_postgres as browse, loose_track_store
 
     fixture = watcher_repair_inventory
-    _apply_case64_draft(fixture)
     _entries, loose_entries = _loose_library(fixture, 5, loose=5)
     monkeypatch.setattr(loose_track_store, "BUILD_BATCH", 2)
     queued = []
@@ -862,7 +845,6 @@ def test_live_a_rebuild_over_an_existing_store_never_shows_an_empty_list(watcher
     from music_app.services import library_browse_postgres as browse, loose_track_store
 
     fixture = watcher_repair_inventory
-    _apply_case64_draft(fixture)
     _entries, loose_entries = _loose_library(fixture, 5, loose=5)
     repository = _prepare_store(fixture)
     before = _loose_payload(repository)
@@ -892,7 +874,6 @@ def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_
     from music_app.services import loose_track_store
 
     fixture = watcher_repair_inventory
-    _apply_case64_draft(fixture)
     entries, loose_entries = _loose_library(fixture, 8)
     repository = _prepare_store(fixture)
 
@@ -1837,7 +1818,6 @@ def test_live_library_loose_tracks_come_without_the_gallery(
         "album_artist": "Other",
         "title": "Other Loose",
     }
-    _apply_case64_draft(fixture)
     fixture.seed(album_track, family_loose, other_loose)
 
     repository = _prepare_store(fixture)  # case 64: the store's own owner builds it once

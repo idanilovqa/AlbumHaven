@@ -1,4 +1,4 @@
-"""Loose Tracks kept one row per track (freeze guard case 64; migration NNNN+1, a draft until approved).
+"""Loose Tracks kept one row per track (freeze guard case 64; migration 0295).
 
 Triggers mark the tracks a write may have changed. A drain rebuilds only those tracks' rows and deletes the
 rows of tracks that are no longer loose. A read returns the stored rows and never builds the store. Only the

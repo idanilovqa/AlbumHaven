@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 from tests.py.bounded_interactions import CountingConnection, OperationCounts, _checked_in_entries, measure_scale_pair
 from tests.py.test_isolated_postgres_live import (  # noqa: F401 (live fixture)
-    _apply_case64_draft,
     _loose_library,
     isolatedPostgres,
     watcher_repair_inventory,
@@ -81,8 +80,6 @@ def _counted_store(fixture, monkeypatch):
 def _measure_store(fixture, monkeypatch, interaction_id, prepare_once):
     """Runs the entrypoint twice per library size: the start-up build, then a drain of a mark on every track."""
     from music_app.services import loose_track_store
-
-    _apply_case64_draft(fixture)
 
     def run(tracks):
         loose = tracks // 2

@@ -233,12 +233,21 @@ async function dispatchTouchSwipe(ui, cdp, point, startY, endY) {
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
 
+// The window is measured with the gallery bar in the artist layout it keeps during the drag: at the
+// gallery top the bar is one row shorter, so a window measured there sits 8 x 42 px too far from the
+// app's own continuation threshold once the bar takes its artist row.
 async function positionWithTouchBeforeContinuation(ui, page, cdp, point, lowerY) {
   for (let step = 0; step < 100; step += 1) {
+    const bar = await ui.waitForGalleryBarSettled();
     const geometry = await ui.readContinuationGeometry();
     const lower = geometry.viewport * (PREFETCH_VIEWPORTS + 0.1);
     const upper = geometry.viewport * (PREFETCH_VIEWPORTS + 0.3);
-    if (geometry.remaining >= lower && geometry.remaining <= upper) return;
+    if (geometry.remaining >= lower && geometry.remaining <= upper) {
+      if (bar.kind !== 'artist') {
+        throw new Error(`Mobile preposition reached the window outside an artist: ${JSON.stringify(bar)}`);
+      }
+      return bar;
+    }
     if (geometry.remaining < lower) {
       throw new Error('Mobile preposition crossed the continuation boundary.');
     }
@@ -264,22 +273,30 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
     }, testInfo) => {
       const ui = await openRootGallery(page, galleryActions, navigationPanelActions, 'cards');
       const traffic = observeGalleryTraffic(page);
-      const box = await ui.galleryScroll.boundingBox();
-      if (!box) throw new Error('Gallery scroll surface is not visible.');
+      const initialBox = await ui.galleryScroll.boundingBox();
+      if (!initialBox) throw new Error('Gallery scroll surface is not visible.');
       const cdp = await page.context().newCDPSession(page);
-      const x = Math.round(box.x + box.width / 2);
+      const x = Math.round(initialBox.x + initialBox.width / 2);
       const point = y => ({ x, y, radiusX: 1, radiusY: 1, force: 1, id: 1 });
-      const lowerY = Math.round(box.y + box.height * 0.72);
-      const upperY = Math.round(box.y + box.height * 0.34);
-    const activatedY = lowerY - TOUCH_ACTIVATION_DISTANCE;
-    const touchEndY = upperY - TOUCH_ACTIVATION_DISTANCE;
+      // Drag points come from the gallery as the drag will see it, after the bar settles.
+      let lowerY = Math.round(initialBox.y + initialBox.height * 0.72);
+      let upperY;
+      let activatedY;
+      let touchEndY;
+      let barDuringDrag = null;
     let responseBoundary;
       let touchActive = false;
       let observation;
     let originalFailure = null;
       let samples;
       try {
-        await positionWithTouchBeforeContinuation(ui, page, cdp, point, lowerY);
+        barDuringDrag = await positionWithTouchBeforeContinuation(ui, page, cdp, point, lowerY);
+        const box = await ui.galleryScroll.boundingBox();
+        if (!box) throw new Error('Gallery scroll surface is not visible.');
+        lowerY = Math.round(box.y + box.height * 0.72);
+        upperY = Math.round(box.y + box.height * 0.34);
+        activatedY = lowerY - TOUCH_ACTIVATION_DISTANCE;
+        touchEndY = upperY - TOUCH_ACTIVATION_DISTANCE;
         const loadedBefore = await readLoadedAlbumCount(page);
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchStart', touchPoints: [point(lowerY)],
@@ -326,6 +343,8 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         touchActive = false;
         const inputEndedAt = await ui.readBrowserEpoch();
+        // The drag was sized for this bar; a bar that changed height under the drag moved the gallery.
+        expect(await ui.waitForGalleryBarSettled()).toEqual(barDuringDrag);
         expect(responseAt).toBeGreaterThanOrEqual(inputStartedAt);
         expect(responseAt).toBeLessThanOrEqual(inputEndedAt);
       expect(Number(deferredEvent.epoch)).toBeGreaterThanOrEqual(responseAt);

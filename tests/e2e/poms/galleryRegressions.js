@@ -227,6 +227,25 @@ export class GalleryRegressions {
     // parity-check: allow-read-only-measurement-evaluate -- synchronize one native input per observed frame
     return this.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve())));
   }
+  // The gallery bar's context and height once they stop changing: an artist whose name does not fit
+  // beside the controls takes a second row, which shortens the gallery under it.
+  async waitForGalleryBarSettled({ stableFrames = 2, maximumFrames = 60 } = {}) {
+    // parity-check: allow-read-only-measurement-evaluate -- read the gallery bar's settled layout
+    const read = () => this.galleryBar.evaluate(bar => ({
+      kind: String(bar.dataset.galleryContextKind || ''),
+      height: Math.round(bar.getBoundingClientRect().height),
+    }));
+    let previous = await read();
+    let stable = 0;
+    for (let frame = 0; frame < maximumFrames; frame += 1) {
+      await this.waitForAnimationFrame();
+      const current = await read();
+      stable = current.kind === previous.kind && current.height === previous.height ? stable + 1 : 0;
+      previous = current;
+      if (stable >= stableFrames) return current;
+    }
+    throw new Error(`Gallery bar did not settle: ${JSON.stringify(previous)}`);
+  }
   async waitForNativeScrollSettled({ stableFrames = 2, maximumFrames = 60 } = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- read native scroll position until it stabilizes
     let previous = await this.galleryScroll.evaluate(scroll => Number(scroll.scrollTop || 0));

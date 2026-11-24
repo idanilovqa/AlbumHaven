@@ -22,10 +22,10 @@ CONFIG = {"PERSISTENCE_BACKENDS": {"scan_cache": "postgres"}}
 def queued(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(gallery, "schedule_full_gallery_projection_refresh",
-                        lambda _config, **_kwargs: calls.append("full"), raising=False)
+                        lambda _config, **_kwargs: calls.append("full"))
     monkeypatch.setattr(gallery, "queue_journaled_relation_drain",
                         lambda _config, **_kwargs: calls.append("drain"))
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh",
                         lambda _config, **_kwargs: calls.append("unnamed"))
     return calls
 

@@ -1044,7 +1044,7 @@ def test_live_postgres_structural_recovery_subset_already_in_destination_is_idem
 
     monkeypatch.setattr(
         gallery_projection_postgres,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         lambda *_args, **_kwargs: None,
     )
 
@@ -1168,7 +1168,7 @@ def test_live_postgres_explicit_separate_release_consolidates_same_year_identity
     scheduled_refreshes = []
     monkeypatch.setattr(
         gallery,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         lambda config, **_options: scheduled_refreshes.append(config),
     )
     isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
@@ -1288,7 +1288,7 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
 
     monkeypatch.setattr(
         gallery_projection_postgres,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         lambda *_args, **_kwargs: None,
     )
 
@@ -1831,7 +1831,7 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
 def test_live_postgres_blank_album_restore_preserves_mixed_track_identity_and_atomicity(monkeypatch):
     # This test owns an uncommitted outer fixture transaction; no background
     # worker may reuse its borrowed connection after the assertion scope exits.
-    monkeypatch.setattr("music_app.services.gallery_projection_postgres.schedule_gallery_projection_refresh",
+    monkeypatch.setattr("music_app.services.gallery_projection_postgres._schedule_gallery_projection_refresh",
                         lambda *_args, **_kwargs: None)
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:
@@ -2263,7 +2263,7 @@ def test_tag_edit_prevalidation_never_waits_for_publishes_or_prepares_an_unready
                         lambda *a, **k: library_wide.append("inline publication"))
     monkeypatch.setattr(gallery_projection_postgres, "ensure_gallery_projection_ready",
                         lambda *a, **k: library_wide.append("full gallery preparation"))
-    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh",
                         lambda *a, **k: library_wide.append("scheduled replay"))
     monkeypatch.setattr(scan_cache_persistence, "sleep", lambda _seconds: library_wide.append("wait"),
                         raising=False)
@@ -3130,7 +3130,7 @@ def test_structural_album_edit_schedules_gallery_refresh_after_domain_transactio
 
     monkeypatch.setattr(
         gallery,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         schedule_refresh,
     )
 
@@ -3180,7 +3180,7 @@ def test_structural_album_edit_preserves_commit_after_gallery_refresh_schedule_f
 
     monkeypatch.setattr(
         gallery,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         fail_schedule,
     )
 
@@ -3669,7 +3669,7 @@ def _seed_split_merge_album(fixture, monkeypatch):
     from music_app.services import gallery_projection_postgres
     scheduled = []
     # The background refresh each save schedules runs explicitly, so every step is observable.
-    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh",
                         lambda *args, **kwargs: scheduled.append(kwargs))
     entries = {}
     for number, title in enumerate(("Храм", "Российское танго", "В последнюю осень", "Революция"), start=1):
@@ -3921,7 +3921,7 @@ def test_live_restored_track_keeps_its_album_folder_cover_across_the_next_folder
 
     fixture = watcher_repair_inventory
     # Each save's background refresh runs explicitly, as in the split/merge cases above.
-    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", lambda *a, **k: None)
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh", lambda *a, **k: None)
     folder = Path(fixture.roots[0]["path"]) / "Owner" / "Split Album"
     folder.mkdir(parents=True, exist_ok=True)
     cover = folder / "cover.jpg"

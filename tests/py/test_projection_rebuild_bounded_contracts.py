@@ -164,7 +164,7 @@ class _GalleryConnection:
 
 
 @pytest.mark.parametrize("interaction_id", [
-    # The executor entrypoint ensure_gallery_projection_ready once had is now schedule_gallery_projection_refresh's
+    # The executor entrypoint ensure_gallery_projection_ready once had is now _schedule_gallery_projection_refresh's
     # refresh (case 60's contract); a5f110ace's sync dropped that stale entry, so this one id carries it.
     "py:services/gallery_projection_postgres.py#publish_gallery_projection",
 ])
@@ -209,7 +209,7 @@ def test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at
         publications_after_wave = []
         for _wave in range(3):
             for _ in range(trigger_count):
-                projection.schedule_gallery_projection_refresh(config)
+                projection._schedule_gallery_projection_refresh(config)
             # One queued refresh; the rest wait as a single trailing refresh.
             assert len(executor.submitted) == 1
             executor.run_all()
@@ -220,7 +220,7 @@ def test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at
         assert_plateau(publications_after_wave, warmup_samples=1, label="gallery publications")
         # A new source generation publishes each scope once more.
         store.generation += 1
-        projection.schedule_gallery_projection_refresh(config)
+        projection._schedule_gallery_projection_refresh(config)
         executor.run_all()
         assert store.publications == 4
         # Two rebuilds load the library's alias maps, once before and once for

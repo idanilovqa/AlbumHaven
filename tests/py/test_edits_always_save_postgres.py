@@ -49,7 +49,7 @@ def _hold_background_owners(monkeypatch):
     class Queued(list):
         pass
 
-    schedule_refresh = gallery_projection_postgres.schedule_gallery_projection_refresh
+    schedule_refresh = gallery_projection_postgres._schedule_gallery_projection_refresh
     queued = Queued()
 
     def run_owners():
@@ -61,7 +61,7 @@ def _hold_background_owners(monkeypatch):
 
     monkeypatch.setattr(gallery_projection_postgres, "queue_journaled_relation_drain",
                         lambda config: queued.append({"config": config, "incremental_membership": True}))
-    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh",
                         lambda config, **kwargs: queued.append({"config": config, **kwargs}))
     queued.run_owners = run_owners
     return queued

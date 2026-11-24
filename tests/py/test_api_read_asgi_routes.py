@@ -2713,7 +2713,7 @@ def test_asgi_search_pending_projection_schedules_recovery_and_returns_retryable
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", PendingRepository)
-    monkeypatch.setattr(projection, "schedule_gallery_projection_refresh", lambda config: scheduled.append(config))
+    monkeypatch.setattr(projection, "_schedule_gallery_projection_refresh", lambda config: scheduled.append(config))
     status, headers, body = _run_asgi_request(
         asgi_app, "GET", "/view-data", query={"q": "Broadcast", "surface": "albums"},
     )

@@ -87,7 +87,7 @@ def multi_destination_library(monkeypatch):
         connection.commit()
         gallery.initialize_gallery_membership(config)
         scheduler_calls = []
-        monkeypatch.setattr(gallery, 'schedule_gallery_projection_refresh', lambda *_args, **kwargs: scheduler_calls.append(kwargs))
+        monkeypatch.setattr(gallery, '_schedule_gallery_projection_refresh', lambda *_args, **kwargs: scheduler_calls.append(kwargs))
         yield {'connection': connection, 'config': config, 'adapter': adapter, 'library_id': library_id,
                'albums': albums, 'paths': paths, 'track_ids': track_ids, 'previous': previous,
                'updated': updated, 'projections': projections, 'source_cover': source_cover,

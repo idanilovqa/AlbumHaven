@@ -50,7 +50,7 @@ def publish_relations_with_each_save(monkeypatch) -> None:
     from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
 
     monkeypatch.setattr(
-        gallery_projection_postgres, "schedule_gallery_projection_refresh",
+        gallery_projection_postgres, "_schedule_gallery_projection_refresh",
         lambda config, *, connect=None, **_options: ensure_pending_relation_projection_ready(config, connect=connect),
     )
 

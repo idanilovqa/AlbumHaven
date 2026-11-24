@@ -844,7 +844,7 @@ def test_move_album_contract_publishes_only_the_moved_album_at_production_track_
     # The background owner that rebuilds the stale relation projection.
     monkeypatch.setattr(
         state_module,
-        "schedule_gallery_projection_refresh",
+        "schedule_full_gallery_projection_refresh",
         lambda _config, **_kwargs: current["counts"].count("invalidations"),
     )
     # Edits always save (R1): a publication the relation index refuses rolls back its savepoint only, and the

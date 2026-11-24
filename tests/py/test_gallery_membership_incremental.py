@@ -307,7 +307,7 @@ def test_shared_gallery_refresh_replays_dirty_keys_without_a_full_build(monkeypa
         return action()
 
     monkeypatch.setattr(gallery, "_queue", queue)
-    assert gallery.schedule_gallery_projection_refresh({
+    assert gallery._schedule_gallery_projection_refresh({
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated", "SHARED_LIBRARY_BROWSE_ONLY": shared,
     }, incremental_membership=True) == {"initialized": True, "updated": True}
     assert calls == ["dirty-replay"]
@@ -337,7 +337,7 @@ def test_shared_custom_scope_is_seeded_once_not_rebuilt_when_stale(monkeypatch, 
     monkeypatch.setattr(gallery, "_queue", lambda _config, _key, action, **_options: action())
     monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
                         lambda *_args, **options: calls.append(options) or {"built": 1})
-    gallery.schedule_gallery_projection_refresh({
+    gallery._schedule_gallery_projection_refresh({
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated", "SHARED_LIBRARY_BROWSE_ONLY": True,
     }, connect=lambda _: Connection(), view_state=state, incremental_membership=True)
     assert len(calls) == (0 if present else 1)

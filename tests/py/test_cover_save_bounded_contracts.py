@@ -186,8 +186,9 @@ def test_cover_save_contract_next_cover_lookup_and_rules_grow_with_the_saved_alb
             return build(rows)
 
         monkeypatch.setattr(browse, "_utility_rules_projection_payload", counted_rules_build)
-        for owner in (gallery, state_service):
-            monkeypatch.setattr(owner, "schedule_gallery_projection_refresh", lambda *_a, **_k: counts.count("worker_wakes"))
+        for owner, scheduler in ((gallery, "_schedule_gallery_projection_refresh"),
+                                 (state_service, "schedule_full_gallery_projection_refresh")):
+            monkeypatch.setattr(owner, scheduler, lambda *_a, **_k: counts.count("worker_wakes"))
         monkeypatch.setattr(
             browse.PostgresLibraryBrowseRepository, "queue_settings_projection_prewarm",
             lambda _self: counts.count("worker_wakes"),

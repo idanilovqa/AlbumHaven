@@ -517,21 +517,21 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
 
     monkeypatch.setattr(relations, "ensure_relation_projection_ready", repair)
     refreshes = []
-    schedule_refresh = gallery.schedule_gallery_projection_refresh
+    schedule_refresh = gallery._schedule_gallery_projection_refresh
 
     def record_refresh(*args, **kwargs):
         future = schedule_refresh(*args, **kwargs)
         refreshes.append(future)
         return future
 
-    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", record_refresh)
+    monkeypatch.setattr(gallery, "_schedule_gallery_projection_refresh", record_refresh)
     # 6.5 (option 1): browsing the stale gallery schedules nothing; the scan's own publication owns recovery.
     repository.build_root_startup_preview_payload()
     assert refreshes == [], "a browse request never schedules the gallery refresh"
 
     def scan_publication_owner():
         # As cache.py does after a scan's snapshot is saved.
-        gallery.schedule_gallery_projection_refresh(fixture.config, connect=isolatedPostgres._connect)
+        gallery._schedule_gallery_projection_refresh(fixture.config, connect=isolatedPostgres._connect)
 
     scan_publication_owner()
     assert len(refreshes) == 1

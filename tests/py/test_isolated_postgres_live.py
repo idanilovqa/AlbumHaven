@@ -380,10 +380,10 @@ def test_live_targeted_invalidation_publishes_new_album_to_gallery(
     )
 
     scheduled = []
-    original_schedule = state.schedule_gallery_projection_refresh
+    original_schedule = state.schedule_full_gallery_projection_refresh
     monkeypatch.setattr(
         state,
-        "schedule_gallery_projection_refresh",
+        "schedule_full_gallery_projection_refresh",
         lambda config: scheduled.append(
             original_schedule(config, connect=isolatedPostgres._connect)
         ),
@@ -476,7 +476,7 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
     publish = gallery_projection_postgres.publish_gallery_projection
     monkeypatch.setattr(gallery_projection_postgres, "publish_gallery_projection",
                         lambda *args, **kwargs: built.append(args[2]) or publish(*args, **kwargs))
-    schedule = gallery_projection_postgres.schedule_gallery_projection_refresh
+    schedule = gallery_projection_postgres._schedule_gallery_projection_refresh
     scheduled = []
 
     def schedule_with_test_connection(config, **options):
@@ -484,8 +484,8 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
         scheduled.append(schedule(config, **options))
         return scheduled[-1]
 
-    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", schedule_with_test_connection)
-    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", schedule_with_test_connection)
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh", schedule_with_test_connection)
+    monkeypatch.setattr(state, "schedule_full_gallery_projection_refresh", schedule_with_test_connection)
 
     def scopes_built_by(action):
         built.clear()
@@ -511,7 +511,7 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
         )
         return counts
 
-    interaction = "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh"
+    interaction = "py:services/gallery_projection_postgres.py#_schedule_gallery_projection_refresh.<locals>.refresh"
     entry = _checked_in_entries()[interaction]
     measure_scale_pair(
         interaction_id=interaction,
@@ -4776,7 +4776,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
     scheduled_gallery_refreshes = []
     monkeypatch.setattr(
         gallery_projection_postgres,
-        "schedule_gallery_projection_refresh",
+        "_schedule_gallery_projection_refresh",
         lambda *args, **kwargs: scheduled_gallery_refreshes.append(kwargs),
     )
     music_dir = (tmp_path / "Music").resolve()

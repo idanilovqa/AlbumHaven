@@ -339,7 +339,7 @@ def targeted_adapter(monkeypatch):
 
     monkeypatch.setattr(cache_module, "_select_runtime_scan_cache_adapter", lambda _config: installed["adapter"])
     monkeypatch.setattr(
-        gallery_projection_postgres, "schedule_gallery_projection_refresh",
+        gallery_projection_postgres, "_schedule_gallery_projection_refresh",
         lambda _config, **_kwargs: installed.__setitem__("refreshes", installed["refreshes"] + 1),
     )
     install.installed = installed
@@ -1154,7 +1154,7 @@ def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coales
             current["counts"].count("builder_calls"), original(*args, **kwargs))[1])
     # The background owner that refreshes the gallery after the publication.
     monkeypatch.setattr(
-        gallery_projection_postgres, "schedule_gallery_projection_refresh",
+        gallery_projection_postgres, "_schedule_gallery_projection_refresh",
         lambda _config, **_kwargs: current["counts"].count("invalidations"),
     )
     # The in-transaction relation patch: it is handed only the albums the save touched.

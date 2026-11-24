@@ -339,6 +339,16 @@ def test_a_loaded_detail_keeps_its_label_and_correction():
     assert corrections.calls == [("get_correction", {"album_key": "lumor"})]
 
 
+def test_a_loaded_detail_with_only_automatic_changes_gets_no_label():
+    automatic = {**CORRECTION, "field": "title", "kind": "case", "mode": "auto", "state": "applied"}
+    corrections = Corrections([{**ALBUM, "corrections": [automatic]}])
+    detail = {"key": "lumor", "problem_reasons": ["Missing year"]}
+
+    project_correction_into_problematic_detail(_pf_request(corrections), detail)
+
+    assert detail == {"key": "lumor", "problem_reasons": ["Missing year"]}
+
+
 def test_non_owners_and_failures_leave_problematic_files_unchanged():
     payload = {"items": [{"key": "a", "name": "A"}], "count": 1}
 

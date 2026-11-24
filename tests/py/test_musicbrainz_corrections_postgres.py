@@ -180,6 +180,25 @@ def test_stored_counts_follow_tag_changes_and_an_album_that_loses_its_match(monk
     assert _rows(repository, "rel-harbor") == []
 
 
+def test_only_albums_with_a_change_waiting_for_approval_need_a_correction(monkeypatch):
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        # The artist credit is already in the tags: only the automatic case change is left.
+        connection.execute("update library.local_tracks set artist = 'Amberline & Guest Singer'"
+                           " where track_key = 'rel-cedar-2'")
+    service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
+    repository.refresh(observed_at=NOW)
+
+    assert _rows(repository, "rel-cedar") == [("title", "don't wander", "Don’t Wander", "case", "auto", "applied")]
+    summaries = repository.list_summaries()
+    assert [row["album_key"] for row in summaries["items"]] == ["rel-harbor"]
+    assert summaries["total"] == 1
+    assert repository.list_summaries(album_keys=["rel-cedar", "rel-harbor"])["items"][0]["album_key"] == "rel-harbor"
+    assert len(repository.list_summaries(album_keys=["rel-cedar", "rel-harbor"])["items"]) == 1
+    # Still listed as applied automatically, with Undo.
+    assert "case" in {group["kind"] for group in service.edits_queue(section="applied")["kinds"]}
+
+
 def test_opening_the_problematic_files_list_never_runs_the_comparison(monkeypatch):
     from types import SimpleNamespace
 

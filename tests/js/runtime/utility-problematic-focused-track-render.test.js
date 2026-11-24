@@ -42,14 +42,20 @@ const listBuildersPath = path.join(
 );
 const listBuildersSource = fs.readFileSync(listBuildersPath, 'utf8');
 
-// The renderer resolves rows through getAllProblematicItems() (utility-list-builders.js).
-// Contexts that do not load that file get the same album + Artist owner union.
+// The renderer resolves rows through getAllProblematicItems() and its key indexes (utility-list-builders.js).
+// Contexts that do not load that file get the same album + Artist owner union, indexed on each call.
 function runProblematicRenderer(context) {
   if (typeof context.getAllProblematicItems !== 'function') {
     context.getAllProblematicItems = () => [
       ...(context.state?.utility?.problematicFiles || []),
       ...(context.state?.utility?.problematicArtistItems || []),
     ];
+  }
+  if (typeof context.getProblematicItemsByKey !== 'function') {
+    context.getProblematicItemsByKey = () => new Map(context.getAllProblematicItems().map(album => [String(album.key), album]));
+  }
+  if (typeof context.getProblematicListIndex !== 'function') {
+    context.getProblematicListIndex = items => new Map(items.map(item => [item.key, item]));
   }
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 }

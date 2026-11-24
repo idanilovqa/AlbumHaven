@@ -255,6 +255,8 @@ async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY, p
     const rejected = [];
     let candidates = [];
     let geometry;
+    let previousGap = Infinity;
+    let stalledSwipes = 0;
     for (let swipes = 0; ;) {
       const bar = await ui.waitForGalleryBarSettled();
       geometry = await ui.readGalleryContextGeometry();
@@ -280,8 +282,15 @@ async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY, p
         rejected.push({ clientHeight: next.clientHeight, settledClientHeight: geometry.clientHeight, bar, plan: next.plan });
         continue;
       }
-      if (swipes >= 80) {
-        throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify({ candidates, rejected, sections })}`);
+      // A loaded root page can put the start tens of thousands of pixels ahead, so the limit is on
+      // swipes that stop closing the gap, not on how many 280 px swipes the travel needs.
+      const gap = Math.abs(next.plan.target - geometry.scrollTop);
+      stalledSwipes = gap < previousGap - 1 ? 0 : stalledSwipes + 1;
+      previousGap = gap;
+      if (stalledSwipes >= 8 || swipes >= 400) {
+        throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify({
+          swipes, stalledSwipes, candidates, rejected, sections,
+        })}`);
       }
       const distance = prepositionSwipeDistance(next.plan, geometry.scrollTop);
       if (distance > 0) {

@@ -325,38 +325,82 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
-test('mirrored playback keeps metadata unobscured while showing its locked status', () => {
+// Mockup playback-elsewhere-status v003: "Playing in another tab" sits over the
+// dimmed player, and Play stays pressable above the dimming: it takes playback over here.
+// Without takeover Play stays locked, and the overlay still says where it plays: only Play here
+// depends on takeover.
+test('where playback cannot be taken over, the overlay shows and Play stays locked', () => {
+  const player = new FakeElement();
+  const elsewhere = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: new FakeElement() });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ player, elsewhere, timeline, time, play, title: new FakeElement(), albumLink: new FakeElement() }),
+    isPlaybackLockedByAnotherTab: () => true,
+    canTakePlaybackOverHere: () => false,
+    getPlaybackOwnershipState: () => ({ blockedReason: 'playing_in_another_tab' }),
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+  });
+
+  context.updatePlayerUi();
+
+  assert.equal(elsewhere.hidden, false);
+  assert.equal(player.classList.contains('is-playing-elsewhere'), true);
+  assert.equal(play.disabled, true);
+  assert.equal(play.getAttribute('aria-label'), 'Playback locked in another tab');
+  assert.equal(play.title, '');
+  assert.equal(time.hidden, true, 'the small text never stands in for the overlay');
+});
+
+test('playback on another device shows the elsewhere overlay over the player and keeps Play pressable', () => {
+  const player = new FakeElement();
+  const elsewhere = new FakeElement();
   const timelineWrap = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
   const time = new FakeElement();
   const play = new FakeElement({ tagName: 'BUTTON' });
   const title = new FakeElement();
   const albumLink = new FakeElement();
+  let blockedReason = 'playing_in_another_tab';
   const { context } = loadHelper({
-    getPlayerElements: () => ({ timeline, time, play, title, albumLink }),
+    getPlayerElements: () => ({ player, elsewhere, timeline, time, play, title, albumLink }),
     isPlaybackLockedByAnotherTab: () => true,
+    getPlaybackOwnershipState: () => ({ blockedReason }),
     getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
   });
 
   context.updatePlayerUi();
 
+  assert.equal(elsewhere.hidden, false);
+  assert.equal(player.classList.contains('is-playing-elsewhere'), true);
   assert.equal(timelineWrap.classList.contains('is-idle'), false,
-    'the empty-player overlay must not cover mirrored metadata');
-  assert.equal(title.textContent, 'Artist - Song /');
+    'the empty-player label must not cover the other device\'s song');
+  assert.equal(title.textContent, 'Artist - Song /', 'the other device\'s song stays under the dimming');
   assert.equal(albumLink.textContent, 'Album');
-  assert.equal(time.textContent, 'Playing in another tab');
-  assert.equal(time.hidden, false);
-  assert.equal(play.disabled, true);
+  assert.equal(time.hidden, true, 'the overlay carries the status');
+  assert.equal(play.disabled, false);
+  assert.equal(play.getAttribute('aria-label'), 'Play here');
+  assert.equal(play.title, 'Play in this tab instead', 'hovering Play says what it does');
   assert.equal(timeline.disabled, true);
 
   context.state.player.loopActive = true;
+  context.updatePlayerUi();
+  assert.equal(elsewhere.hidden, false, 'the overlay takes precedence over the local loop range');
+
+  blockedReason = 'playback_unavailable';
+  context.updatePlayerUi();
+  assert.equal(elsewhere.hidden, true, 'unavailable playback is not playback elsewhere');
+  assert.equal(player.classList.contains('is-playing-elsewhere'), false);
+  assert.equal(play.title, '', 'only playback elsewhere offers to play here instead');
+  assert.equal(time.textContent, 'Playback unavailable');
+  assert.equal(play.disabled, true);
+
+  context.isPlaybackLockedByAnotherTab = () => false;
   context.state.player.loopStart = 10;
   context.state.player.loopEnd = 20;
   context.updatePlayerUi();
-  assert.equal(time.textContent, 'Playing in another tab',
-    'mirrored ownership status takes precedence over the local loop range');
-  context.isPlaybackLockedByAnotherTab = () => false;
-  context.updatePlayerUi();
+  assert.equal(elsewhere.hidden, true);
   assert.equal(time.textContent, '10 - 20');
 });
 
@@ -531,16 +575,18 @@ test('pause silences streaming before pending listen effects finish', async () =
     pauseStreamingPlayback: () => { calls.push('pause'); snapshot.paused = true; },
     maybeScrobbleListenSession: () => { calls.push('effects'); return effects; },
     releasePlaybackOwnership: async () => { calls.push('release'); },
+    holdPlaybackClaimThroughPause: () => { calls.push('hold'); },
   });
   context.attachPlayerEvents();
   playButton.dispatch('click');
   assert.equal(snapshot.paused, true);
-  assert.deepEqual(calls, ['pause']);
+  assert.deepEqual(calls, ['hold', 'pause']);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ['pause', 'effects']);
+  assert.deepEqual(calls, ['hold', 'pause', 'effects']);
   finishEffects();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ['pause', 'effects', 'release']);
+  // The pause keeps the claim for its hold; the heartbeat gives it back after.
+  assert.deepEqual(calls, ['hold', 'pause', 'effects']);
 });
 
 test('streaming position updates the facade at the bounded callback cadence', async () => {
@@ -612,6 +658,7 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   const scrobbles = [];
   const ownershipClaims = [];
   const ownershipReleases = [];
+  const ownershipHolds = [];
   const listenResumes = [];
   const nowPlaying = [];
   let uiUpdates = 0;
@@ -636,6 +683,7 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
     resumeStreamingPlayback: async () => { snapshot.paused = false; snapshot.ended = false; return true; },
     canStartPlaybackInThisTab: (activeTrack) => { ownershipClaims.push(activeTrack); return true; },
     releasePlaybackOwnership: (status, activeTrack) => ownershipReleases.push({ status, track: activeTrack }),
+    holdPlaybackClaimThroughPause: () => ownershipHolds.push('held'),
   });
   context.closeListenSegment = () => closedSegments.push('closed');
   context.markListenSessionPaused = (offset) => pausedOffsets.push(offset);
@@ -653,8 +701,10 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(closedSegments, ['closed']);
   assert.deepEqual(pausedOffsets, [12]);
   assert.deepEqual(scrobbles, [pausedSession]);
-  assert.deepEqual(ownershipReleases, [{ status: 'paused', track }]);
-  assert.equal(uiUpdates, 2, 'once as the music stops, once the claim is given back');
+  // The pause keeps the claim for its hold, so Play sounds at once; the heartbeat gives it back after.
+  assert.deepEqual(ownershipHolds, ['held']);
+  assert.deepEqual(ownershipReleases, []);
+  assert.equal(uiUpdates, 2, 'once as the music stops, once its listen writes settle');
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
   await new Promise((resolve) => setImmediate(resolve));
@@ -851,6 +901,7 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
     const ownership = { requestVersion: 1 };
     const warnings = [];
     const releases = [];
+    const holds = [];
     const session = { id: 'paused-session' };
     const { context } = loadHelper({
       getPlaybackOwnershipState: () => ownership,
@@ -864,6 +915,7 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
       },
       showToast: (...args) => { warnings.push(args); },
       releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },
+      holdPlaybackClaimThroughPause: () => { holds.push('held'); },
     });
     context.state.player.listenSession = session;
     const result = await context.pausePlayerPlaybackForHandoff();
@@ -873,8 +925,9 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
       assert.equal(warnings[0][1], 'error');
       assert.equal(warnings[0][2], 4200);
     }
-    assert.equal(releases.length, outcome === 'superseded-failure' ? 0 : 1,
-      'a failed save must not retain the playback lease indefinitely');
+    // The claim is kept only for the pause hold, whatever the save did: the heartbeat gives it back after.
+    assert.equal(releases.length, 0);
+    assert.equal(holds.length, 1);
     assert.strictEqual(context.state.player.listenSession, session);
   });
 }
@@ -932,6 +985,7 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
   const snapshot = { currentTime: 12, duration: 60, paused: false, ended: false, src: oldTrack.src };
   const starts = [];
   const releases = [];
+  const holds = [];
   let pauses = 0;
   const { context } = loadHelper({
     state: { player: { current: oldTrack, listenSession: { id: 'old-session' }, loopActive: false,
@@ -940,6 +994,7 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
       selectedLoopDetailMode: '', activeTab: '' } },
     getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
     getPlaybackOwnershipState: () => ownership,
+    holdsPlaybackClaim: () => Boolean(ownership.activeClaim),
     canStartPlaybackInThisTab: async () => {
       ownership.requestVersion += 1;
       return pendingStage === 'claim' ? pendingClaim : true;
@@ -950,6 +1005,7 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
     releasePlaybackOwnership: async (status, track) => {
       releases.push({ status, path: track.path }); ownership.activeClaim = null; return true;
     },
+    holdPlaybackClaimThroughPause: () => { holds.push(context.state.player.current.path); },
     startStreamingTrack: async (track) => {
       starts.push(track.path); snapshot.paused = false; snapshot.src = track.src;
       if (pendingStage === 'stream') await pendingClaim;
@@ -970,10 +1026,12 @@ test(`pause supersedes an earlier pending selection before its ${pendingStage} c
   assert.equal(selected, false, 'an earlier selection cannot override a later Pause');
   // The stream starts while the claim is asked for (instant start); the later Pause still wins.
   assert.deepEqual(starts, [newTrack.path]);
-  assert.equal(snapshot.paused, true, 'no audio may remain after the claim is released');
+  assert.equal(snapshot.paused, true, 'no audio may remain after the pause');
   assert.equal(context.state.player.current.path, oldTrack.path);
-  assert.equal(ownership.activeClaim, null);
-  assert.deepEqual(releases, [{ status: 'paused', path: oldTrack.path }]);
+  // The pause keeps the claim for its hold instead of giving it back.
+  assert.equal(ownership.activeClaim.claimToken, 'shared-token');
+  assert.deepEqual(holds, [oldTrack.path]);
+  assert.deepEqual(releases, []);
 });
 }
 
@@ -1239,6 +1297,30 @@ test('playTrackFromPayload claims ownership and dispatches streaming start witho
   assert.deepEqual(nativeSrcAssignments, []);
 });
 
+// A first press while another client's claim was held started the song and
+// stopped it 6 ms later on the refusal. With another client known to play, the press waits for the
+// answer: refused, nothing starts (the overlay shows Play here); granted (the holder went silent), it plays.
+for (const granted of [false, true]) {
+  test(`with another client known to play, a press ${granted ? 'that the server grants plays after the answer' : 'that the server refuses starts nothing'}`, async () => {
+    const order = [];
+    let answer;
+    const { context } = loadHelper({
+      isPlaybackLockedByAnotherTab: () => true,
+      canStartPlaybackInThisTab: () => new Promise((resolve) => { answer = resolve; }),
+      async startStreamingTrack(track) { order.push('start'); return { track }; },
+    });
+    const track = { path: 'C:\Music\Pressed.flac', src: '/track?path=Pressed.flac', title: 'Pressed', durationSeconds: 42 };
+
+    const press = context.playTrackFromPayload(track, { autoplay: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(order, [], 'nothing starts before the server answers');
+    order.push('answer');
+    answer(granted);
+    await press;
+    assert.deepEqual(order, granted ? ['answer', 'start'] : ['answer']);
+  });
+}
+
 test('BFCache resume uses consumed ownership once and opens one listen at the saved offset', async () => {
   const streamingStarts = [];
   const listenStarts = [];
@@ -1278,7 +1360,7 @@ test('BFCache resume uses consumed ownership once and opens one listen at the sa
   assert.equal(listenStarts.length, 1);
 });
 
-test('playTrackFromPayload starts streaming while server ownership is asked for', async () => {
+test('without a claim a press loads its stream silently while the server is asked', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });
   const streamingStarts = [];
@@ -1293,7 +1375,7 @@ test('playTrackFromPayload starts streaming while server ownership is asked for'
     path: 'C:/Music/awaited.flac', src: '/track?path=awaited.flac', title: 'Awaited',
   }, { autoplay: true });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(streamingStarts.length, 1, 'the stream opens without waiting for the claim (instant start)');
+  assert.equal(streamingStarts.length, 1, 'loading; the audio thread holds it until the grant');
 
   resolveClaim(true);
   assert.equal(await pendingStart, true);
@@ -1301,7 +1383,28 @@ test('playTrackFromPayload starts streaming while server ownership is asked for'
   assert.equal(pauses, 0);
 });
 
-test('a refused claim pauses the instantly started track', async () => {
+test('an app with its own claim starts nothing before the server answers, as its sound cannot be held', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const streamingStarts = [];
+  const { context } = loadHelper({
+    loadsSilentlyWhileAsking: () => false,
+    canStartPlaybackInThisTab: () => claim,
+    startStreamingTrack: async (track) => { streamingStarts.push(track); },
+  });
+
+  const pendingStart = context.playTrackFromPayload({
+    path: 'C:/Music/native.flac', src: '/track?path=native.flac', title: 'Native',
+  }, { autoplay: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(streamingStarts.length, 0);
+
+  resolveClaim(false);
+  assert.equal(await pendingStart, false);
+  assert.equal(streamingStarts.length, 0);
+});
+
+test('a refused claim stops the stream it loaded silently and no longer shows it as pressed', async () => {
   const streamingStarts = [];
   let pauses = 0;
   const { context } = loadHelper({
@@ -1313,8 +1416,27 @@ test('a refused claim pauses the instantly started track', async () => {
   assert.equal(await context.playTrackFromPayload({
     path: 'C:/Music/refused.flac', src: '/track?path=refused.flac', title: 'Refused',
   }, { autoplay: true }), false);
-  assert.equal(streamingStarts.length, 1);
-  assert.equal(pauses, 1);
+  assert.deepEqual([streamingStarts.length, pauses], [1, 1]);
+  assert.equal(context.state.player.selectedTrack ?? null, null);
+});
+
+test('a tab that holds the claim switches songs without waiting for the renewal', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const streamingStarts = [];
+  const { context } = loadHelper({
+    holdsPlaybackClaim: () => true,
+    canStartPlaybackInThisTab: () => claim,
+    startStreamingTrack: async (track) => { streamingStarts.push(track); },
+  });
+
+  const pendingStart = context.playTrackFromPayload({
+    path: 'C:/Music/switched.flac', src: '/track?path=switched.flac', title: 'Switched',
+  }, { autoplay: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(streamingStarts.length, 1, 'nobody else can have started: instant');
+  resolveClaim(true);
+  assert.equal(await pendingStart, true);
 });
 
 test('different-track selection cancels optional waveform work before awaiting ownership', async () => {
@@ -1350,7 +1472,7 @@ test('different-track selection cancels optional waveform work before awaiting o
   assert.deepEqual(events.slice(0, 2), ['cancel:7', 'claim']);
   resolveClaim(false);
   assert.equal(await pendingStart, false);
-  assert.deepEqual(events, ['cancel:7', 'claim', 'stream', 'pause']);
+  assert.deepEqual(events, ['cancel:7', 'claim', 'stream', 'pause'], 'loaded silently, refused, paused');
 });
 
 test('same-track and malformed selections do not cancel current waveform work', async () => {
@@ -1383,7 +1505,7 @@ test('same-track and malformed selections do not cancel current waveform work', 
   assert.deepEqual(starts, [current]);
 });
 
-test('resume sounds at once while server ownership is asked for, and resumes only once', async () => {
+test('resume prepares its sound inside the press while the server is asked, and resumes only once', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });
   let resumeCalls = 0;
@@ -1397,14 +1519,30 @@ test('resume sounds at once while server ownership is asked for, and resumes onl
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(resumeCalls, 1, 'instant resume: the paused stream sounds while the claim is pending');
+  assert.equal(resumeCalls, 1, 'the audio thread holds it until the grant');
 
   resolveClaim(true);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(resumeCalls, 1);
 });
 
-test('a refused claim pauses an instant resume again', async () => {
+test('an app with its own claim resumes only once the server answers', async () => {
+  let resumeCalls = 0;
+  const { context } = loadHelper({
+    loadsSilentlyWhileAsking: () => false,
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
+    }),
+    canStartPlaybackInThisTab: async () => false,
+    resumeStreamingPlayback: async () => { resumeCalls += 1; return true; },
+  });
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resumeCalls, 0);
+});
+
+test('a refused resume is paused again', async () => {
   let resumeCalls = 0;
   let pauses = 0;
   const { context } = loadHelper({
@@ -1421,7 +1559,7 @@ test('a refused claim pauses an instant resume again', async () => {
   assert.deepEqual([resumeCalls, pauses], [1, 1]);
 });
 
-test('pause waits for authorized listen effects before releasing ownership', async () => {
+test('pause keeps the claim through its listen effects instead of releasing it', async () => {
   let resolveEffects;
   const pendingEffects = new Promise((resolve) => { resolveEffects = resolve; });
   const order = [];
@@ -1436,18 +1574,19 @@ test('pause waits for authorized listen effects before releasing ownership', asy
       order.push('listen-effects-finished');
     },
     releasePlaybackOwnership: async () => { order.push('claim-released'); },
+    holdPlaybackClaimThroughPause: () => { order.push('claim-held'); },
   });
 
   const pause = context.pausePlayerPlaybackForHandoff();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['audio-stopped', 'listen-effects-started']);
+  assert.deepEqual(order, ['claim-held', 'audio-stopped', 'listen-effects-started']);
   resolveEffects();
   assert.equal(await pause, true);
   assert.deepEqual(order, [
+    'claim-held',
     'audio-stopped',
     'listen-effects-started',
     'listen-effects-finished',
-    'claim-released',
   ]);
 });
 
@@ -1572,7 +1711,8 @@ test('a stale rapid-selection start completion cannot replace the newer streamin
     },
   });
   context.updatePlayerUi = () => {
-    uiCurrentPaths.push(String(context.state.player.current?.path || ''));
+    // A redraw while a press waits draws the pressed song; these count the playing song's.
+    if (!context.state.player.selectedTrack) uiCurrentPaths.push(String(context.state.player.current?.path || ''));
   };
   const olderTrack = {
     path: 'C:\\Music\\Older.flac', src: '/track?path=Older.flac', title: 'Older',
@@ -1642,7 +1782,8 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
     },
   });
   context.updatePlayerUi = () => {
-    uiCurrentPaths.push(String(context.state.player.current?.path || ''));
+    // A redraw while a press waits draws the pressed song; these count the playing song's.
+    if (!context.state.player.selectedTrack) uiCurrentPaths.push(String(context.state.player.current?.path || ''));
   };
   const repeatedFirstFrame = {
     generation: promotedCurrent.generation,
@@ -2243,19 +2384,10 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   assert.equal(audio.currentTime, 12);
 }
 
-test('server ownership denial pauses the instant resume and reports the block', async () => {
-  const calls = {
-    showToast: [],
-    updatePlayerUi: 0,
-  };
-  const audio = new FakeAudioElement({
-    paused: true,
-    src: '/track?path=song.flac',
-    duration: 60,
-  });
-  const playButton = new FakeElement({
-    tagName: 'BUTTON',
-  });
+test('server ownership denial pauses the held resume and reports the block', async () => {
+  const calls = { showToast: [] };
+  const audio = new FakeAudioElement({ paused: true, src: '/track?path=song.flac', duration: 60 });
+  const playButton = new FakeElement({ tagName: 'BUTTON' });
   const { context } = loadHelper({
     audio,
     playButton,
@@ -2263,24 +2395,15 @@ test('server ownership denial pauses the instant resume and reports the block', 
       calls.showToast.push(['Playback is active in another tab.', 'error', 2800]);
       return false;
     },
-    showToast: (message, tone, duration) => {
-      calls.showToast.push([message, tone, duration]);
-    },
-    updatePlayerUi: () => {
-      calls.updatePlayerUi += 1;
-    },
   });
 
   context.attachPlayerEvents();
   playButton.dispatch('click');
   await new Promise((resolve) => setImmediate(resolve));
 
-  // Instant resume sounded while the claim was asked for; the refusal paused it again.
-  assert.equal(audio.playCalls, 1);
   assert.equal(audio.pauseCalls, 1);
   assert.equal(audio.paused, true);
   assert.deepEqual(calls.showToast, [['Playback is active in another tab.', 'error', 2800]]);
-  assert.equal(calls.updatePlayerUi, 0);
 });
 
 {
@@ -4120,6 +4243,186 @@ test('thin mobile Play hit area yields horizontal playhead drag but preserves ta
   assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
 });
 
+// At 4x CPU the stream's start ran in the press's own task, ahead of the
+// frame that shows the pressed song. The press paints first; the stream starts after that frame, and
+// at once in a hidden tab, where no frame comes.
+test('a pressed song paints before its stream starts, and a hidden tab starts at once', async () => {
+  for (const hidden of [false, true]) {
+    const frames = [];
+    const starts = [];
+    const title = new FakeElement();
+    const { context } = loadHelper({
+      document: { hidden, querySelectorAll: () => [], addEventListener: () => {} },
+      requestAnimationFrame: (callback) => frames.push(callback),
+      setTimeout: (callback, delay) => (delay ? 0 : setImmediate(callback)),
+      clearTimeout: () => {},
+      getPlayerElements: () => ({ title }),
+      canStartPlaybackInThisTab: () => true,
+      startStreamingTrack: (track) => { starts.push(track.path); return new Promise(() => {}); },
+    });
+    context.state.player.current = { src: 'old', path: 'old.flac', title: 'Old', artist: 'A' };
+    context.state.player.streaming = { context: { state: 'running' } };
+    void context.playTrackFromPayload({ src: 'new', path: 'new.flac', title: 'New', artist: 'A' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.state.player.selectedTrack?.path, 'new.flac', 'the press shows on its row');
+    if (hidden) {
+      assert.deepEqual(frames, [], 'no frame is waited for in a hidden tab');
+      assert.deepEqual(starts, ['new.flac']);
+      continue;
+    }
+    assert.deepEqual(starts, [], 'nothing starts before the frame that shows the press');
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(starts, ['new.flac'], 'the stream starts right after that frame');
+  }
+});
+
+test('a press whose audio is not yet running starts in the press itself, where the browser allows sound', async () => {
+  const starts = [];
+  const frames = [];
+  const { context } = loadHelper({
+    document: { hidden: false, querySelectorAll: () => [], addEventListener: () => {} },
+    requestAnimationFrame: (callback) => frames.push(callback),
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: (track) => { starts.push(track.path); return new Promise(() => {}); },
+  });
+  context.state.player.current = null;
+  context.state.player.streaming = { context: null };
+  void context.playTrackFromPayload({ src: 'first', path: 'first.flac', title: 'First', artist: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(frames, [], 'no frame is waited for');
+  assert.deepEqual(starts, ['first.flac']);
+});
+
+test('a seek, a loop seek and a first frame each tell the claim where the song is now', async () => {
+  let published = 0;
+  const track = { src: '/track?path=song.flac', path: 'song.flac', title: 'Song', artist: 'A' };
+  const { context } = loadHelper({
+    publishPlaybackPositionSoon: () => { published += 1; },
+    seekStreamingPlayback: () => null,
+    closeListenSegment: () => {},
+    resumeListenSessionPlayback: async () => null,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 5, duration: 200, paused: false, ended: false, src: track.src }),
+  });
+  context.state.player.current = track;
+  context.setPlayerPlaybackHead(90);
+  assert.equal(published, 1, 'seek');
+  context.state.player.loopActive = true;
+  context.setPlayerPlaybackHead(20);
+  assert.equal(published, 2, 'a loop seek, once');
+  context.state.player.loopActive = false;
+  await context.handleStreamingPlaybackFirstFrame({ generation: 7, streamId: 3, trackPath: track.path });
+  assert.equal(published, 3, 'first frame');
+});
+
+test('a gapless move to the next song tells the claim at once, not at the next renewal', async () => {
+  let published = 0;
+  const next = { src: '/track?path=2.flac', path: '2.flac', title: 'Two', artist: 'A' };
+  const { context } = loadHelper({
+    publishPlaybackPositionSoon: () => { published += 1; },
+    peekNextQueuedTrack: () => (published ? null : next),
+    getNextQueuedTrack: () => next,
+    scheduleStreamingContinuity: async () => null,
+    finalizeListenSession: async () => null,
+    resumeListenSessionPlayback: async () => null,
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 0, duration: 100, paused: false, ended: false, src: next.src }),
+  });
+  context.state.player.current = { src: '/track?path=1.flac', path: '1.flac', title: 'One', artist: 'A' };
+  await context.handleStreamingPlaybackBoundary({ generation: 1, outgoingStreamId: 1, incomingStreamId: 2,
+    outgoingTrackPath: '1.flac', incomingTrackPath: '2.flac', continuityKind: 'queued-next' });
+  assert.equal(published, 1);
+});
+
+// A renewal names the selected song while a switch is pending, so a switch that Pause ends must end
+// the selection too: after Resume every renewal would claim a song that never played.
+test('a Pause during a switch ends the pending selection', async () => {
+  const old = { src: '/track?path=old.flac', path: 'old.flac', title: 'Old', artist: 'A' };
+  const next = { src: '/track?path=next.flac', path: 'next.flac', title: 'Next', artist: 'A' };
+  let finishStart;
+  let paused = false;
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 200, paused, ended: false, src: old.src }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    pauseStreamingPlayback: () => { paused = true; },
+    closeListenSegment: () => {},
+    markListenSessionPaused: () => {},
+    maybeScrobbleListenSession: async () => false,
+    persistPausedListenSession: async () => {},
+    releasePlaybackOwnership: async () => true,
+  });
+  context.state.player.current = old;
+  const switching = context.playTrackFromPayload(next);
+  await new Promise((resolve) => setImmediate(resolve));
+  const pause = context.pausePlayerPlaybackForHandoff();
+  finishStart({ generation: 2, streamId: 2, track: next });
+  await switching;
+  await pause;
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
+test('a Resume during a switch from a paused song ends the pending selection', async () => {
+  const old = { src: '/track?path=old.flac', path: 'old.flac', title: 'Old', artist: 'A' };
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 200, paused: true, ended: false, mode: 'paused', src: old.src }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise(() => {}),
+    pauseStreamingPlayback: () => {},
+    resumeStreamingPlayback: async () => false,
+  });
+  context.state.player.current = old;
+  void context.playTrackFromPayload({ src: '/track?path=next.flac', path: 'next.flac', title: 'Next', artist: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
+test('cancelling a pending selection keeps its stream from starting after a handover stopped the tab', async () => {
+  const frames = [];
+  const starts = [];
+  const { context } = loadHelper({
+    document: { hidden: false, querySelectorAll: () => [], addEventListener: () => {} },
+    requestAnimationFrame: (callback) => frames.push(callback),
+    setTimeout: (callback, delay) => (delay ? 0 : setImmediate(callback)),
+    clearTimeout: () => {},
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: async (track) => { starts.push(track.path); return { generation: 2, streamId: 2, track }; },
+  });
+  context.state.player.current = { src: 'old', path: 'old.flac', title: 'Old', artist: 'A' };
+  context.state.player.streaming = { context: { state: 'running' } };
+  const switching = context.playTrackFromPayload({ src: 'new', path: 'new.flac', title: 'New', artist: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.cancelPendingPlayerSelection();
+  frames.shift()();
+  assert.equal(await switching, false);
+  assert.deepEqual(starts, []);
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
+test('a refused press that superseded a pending switch leaves no pending selection behind', async () => {
+  let refuse = false;
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 12, duration: 200, paused: false, ended: false, src: 'old' }),
+    canStartPlaybackInThisTab: () => !refuse,
+    startStreamingTrack: () => new Promise(() => {}),
+  });
+  context.state.player.current = { src: 'old', path: 'old.flac', title: 'Old', artist: 'A' };
+  void context.playTrackFromPayload({ src: 'b', path: 'b.flac', title: 'B', artist: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  refuse = true;
+  assert.equal(await context.playTrackFromPayload({ src: 'c', path: 'c.flac', title: 'C', artist: 'A' }), false);
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
 test('a clicked track shows as playing before streaming starts', async () => {
   let finishStart;
   const shown = [];
@@ -4138,6 +4441,102 @@ test('a clicked track shows as playing before streaming starts', async () => {
   finishStart(null);
   await assert.rejects(playing, /did not start/);
   assert.equal(context.state.player.selectedTrack, null, 'a failed switch shows the real track again');
+});
+
+test('an ended song frees playback only after its last audio has left the output', async () => {
+  const order = [];
+  const track = { path: 'C:/Music/last.flac', src: '/track?path=last.flac' };
+  const { context } = loadHelper({
+    drainStreamingOutput: async () => { order.push('drained'); },
+    releasePlaybackOwnership: async () => { order.push('claim-released'); },
+  });
+  context.state.player.current = track;
+
+  await context.handleStreamingPlaybackEnded({ generation: 1, streamId: 9, trackPath: track.path, currentTime: 60 });
+
+  assert.deepEqual(order, ['drained', 'claim-released']);
+});
+
+test('Play during a press that still waits shows the song it resumes, not the waiting one', async () => {
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
+    }),
+    canStartPlaybackInThisTab: () => new Promise(() => {}),
+    startStreamingTrack: () => new Promise(() => {}),
+  });
+  void context.playTrackFromPayload({ path: 'C:/Music/waiting.flac', src: '/track?path=waiting.flac', title: 'Waiting' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.state.player.selectedTrack?.title, 'Waiting');
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+
+  assert.equal(context.state.player.selectedTrack ?? null, null);
+});
+
+for (const how of ['could not open', 'lost its socket']) {
+  test(`an outage start whose silent stream ${how} starts by itself once the server answers`, async () => {
+    let resolveClaim;
+    const claim = new Promise((resolve) => { resolveClaim = resolve; });
+    let mode = 'paused';
+    const starts = [];
+    const { context } = loadHelper({
+      getPlayerPlaybackSnapshot: () => ({ mode, currentTime: 0, duration: 60, paused: true, ended: false, src: '' }),
+      canStartPlaybackInThisTab: () => claim,
+      startStreamingTrack: async (track, options) => {
+        starts.push(options.startSeconds);
+        if (starts.length > 1) { mode = 'playing'; return { track }; }
+        mode = 'error';
+        if (how === 'could not open') throw new Error('no network');
+        return { track };
+      },
+    });
+
+    const pressed = context.playTrackFromPayload({ path: 'C:/Music/outage.flac', src: '/track?path=outage.flac',
+      title: 'Outage' }, { autoplay: true, startSeconds: 42 });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(starts, [42]);
+
+    resolveClaim(true);
+
+    assert.equal(await pressed, true);
+    assert.deepEqual(starts, [42, 42]);
+  });
+}
+
+test('an outage resume whose stream died starts at its place once the server answers', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  let mode = 'paused';
+  const starts = [];
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ mode, currentTime: 12, duration: 60, paused: true, ended: false,
+      src: '/track?path=song.flac' }),
+    canStartPlaybackInThisTab: () => claim,
+    resumeStreamingPlayback: async () => { mode = 'error'; return false; },
+    startStreamingTrack: async (track, options) => { starts.push(options.startSeconds); return { track }; },
+  });
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  resolveClaim(true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(starts, [12]);
+});
+
+test('an app start that failed after its answer is not started a second time', async () => {
+  let starts = 0;
+  const { context } = loadHelper({
+    loadsSilentlyWhileAsking: () => false,
+    getPlayerPlaybackSnapshot: () => ({ mode: 'error', currentTime: 0, duration: 60, paused: true, ended: false, src: '' }),
+    canStartPlaybackInThisTab: async () => true,
+    startStreamingTrack: async (track) => { starts += 1; return { track }; },
+  });
+
+  await context.playTrackFromPayload({ path: 'C:/Music/app.flac', src: '/track?path=app.flac', title: 'App' });
+
+  assert.equal(starts, 1);
 });
 
 // Global player with an album queue playing, `loopCount` saved loops loaded,
@@ -4313,4 +4712,54 @@ test('bounded interaction: mobile player metadata motion measures its three rows
     budgets: { itemsVisited: 60, domMutations: 180, animationFrames: 20, observers: 0, listeners: 0 },
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
+});
+
+// A Play on the claim its pause kept sounds at once; only then does it tell the server it plays again, so
+// other devices see it within one round trip and the request never delays the sound. "Sounds" is the
+// resumed song's first audible rendered frame, which the engine reports, not the resume call returning.
+test('a resume on the held claim sounds first, then sends its playing renewal without waiting for it', async () => {
+  const order = [];
+  let onFirstSound = null;
+  const snapshot = { currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' };
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: async () => { snapshot.paused = true; },
+    resumeStreamingPlayback: async (_startRequestId, _onStarted, _currentRole, firstSound) => {
+      onFirstSound = firstSound;
+      snapshot.paused = false;
+      return true;
+    },
+    canStartPlaybackInThisTab: () => true,
+    publishPlaybackPositionSoon: () => { order.push('playing renewal'); return new Promise(() => {}); },
+  });
+  context.state.player.current = { src: snapshot.src, path: 'C:/Music/song.flac', title: 'Song' };
+
+  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, [], 'resumed but not yet heard: no request');
+
+  order.push('audible');
+  onFirstSound();
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(order, ['audible', 'playing renewal']);
+});
+
+test('a resume that had to ask for the claim sends no extra renewal', async () => {
+  const order = [];
+  const snapshot = { currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' };
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: async () => { snapshot.paused = true; },
+    resumeStreamingPlayback: async () => { order.push('audible'); snapshot.paused = false; return true; },
+    canStartPlaybackInThisTab: async () => { order.push('claim asked'); return true; },
+    publishPlaybackPositionSoon: () => { order.push('playing renewal'); },
+  });
+  context.state.player.current = { src: snapshot.src, path: 'C:/Music/song.flac', title: 'Song' };
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(order.includes('playing renewal'), false);
+  assert.equal(order[0], 'claim asked');
 });

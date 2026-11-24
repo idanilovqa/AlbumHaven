@@ -107,6 +107,9 @@ function createEngineHarness(options = {}) {
     postMessage(message, transfer = []) {
       this.messages.push({ message, transfer });
       this.processor?.port.onmessage({ data: message });
+      if (message.type === 'silence' && !this.processor) {
+        queueMicrotask(() => this.dispatch({ type: 'silenced' }));
+      }
       if (message.type === 'stop' && options.stopPostMessage) {
         options.stopPostMessage(message);
       }
@@ -132,7 +135,8 @@ function createEngineHarness(options = {}) {
             }
           },
           Float32Array, Math, Number, Object, currentTime: 12.5, sampleRate: 48_000,
-          registerProcessor: (_name, Processor) => { port.processor = new Processor(); },
+          Date: FakeDate,
+          registerProcessor: (_name, Processor) => { port.processor = new Processor(nodeOptions); },
         };
         port.events = [];
         vm.createContext(processorContext);
@@ -356,6 +360,10 @@ function createEngineHarness(options = {}) {
     setLocalStorageItem: options.setLocalStorageItem,
     updatePlayerUi: options.updatePlayerUi,
     fetch: options.fetch,
+    getPlaybackOwnershipTabId: options.getPlaybackOwnershipTabId,
+    answerPlaybackHandover: options.answerPlaybackHandover,
+    settlePlaybackHandover: options.settlePlaybackHandover,
+    yieldPausedPlaybackClaim: options.yieldPausedPlaybackClaim,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
     ...(options.document ? { document: options.document } : {}),
@@ -1494,6 +1502,96 @@ test('drops stale generation, unknown stream, and non-monotonic PCM without pois
 
   assert.deepEqual(harness.portMessages('enqueue').map(({ sequence }) => sequence), [0, 1]);
   assert.equal(harness.api.snapshot().diagnostics.staleMessages, 3);
+});
+
+test('a resume marks when its first audible frame renders, once, on the page clock', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('resume-mark.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const consumed = (nonZeroSamples) => harness.nodes[0].port.dispatch({
+    type: 'consumed',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    frames: 40,
+    bufferedFrames: 0,
+    audible: true,
+    finiteSamples: 80,
+    nonZeroSamples,
+    peakSample: nonZeroSamples ? 0.5 : 0,
+    samples: [],
+  });
+  const marks = () => {
+    const { resumedAtMs, resumeFirstFrameAtMs } = harness.api.snapshot().diagnostics;
+    return [resumedAtMs, resumeFirstFrameAtMs];
+  };
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0, contextTime: 1,
+  });
+  consumed(21);
+  assert.deepEqual(marks(), [0, 0], 'a start is no resume');
+
+  await harness.api.pause();
+  harness.setNow(2_000);
+  await harness.api.resume();
+  harness.setNow(2_010);
+  consumed(0);
+  assert.deepEqual(marks(), [2_000, 0], 'silence is no first audible frame');
+  harness.setNow(2_020);
+  consumed(21);
+  harness.setNow(2_030);
+  consumed(21);
+
+  assert.deepEqual(marks(), [2_000, 2_020]);
+});
+
+test('a resume tells its caller once, on its song\'s first audible frame, and a pause, seek or start drops it', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('resume-sound.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const consumed = (nonZeroSamples) => harness.nodes[0].port.dispatch({
+    type: 'consumed',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    frames: 40,
+    bufferedFrames: 0,
+    audible: true,
+    finiteSamples: 80,
+    nonZeroSamples,
+    peakSample: nonZeroSamples ? 0.5 : 0,
+    samples: [],
+  });
+  const heard = [];
+  const resumeListening = async (label) => {
+    await harness.api.pause();
+    await harness.api.resume(null, null, null, () => heard.push(label));
+  };
+
+  await resumeListening('first');
+  consumed(0);
+  assert.deepEqual(heard, [], 'silence is not its sound');
+  consumed(21);
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'once, on the first audible frame');
+
+  await resumeListening('paused again');
+  await harness.api.pause();
+  await harness.api.resume();
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a pause drops it');
+
+  await resumeListening('sought');
+  await harness.api.seek(30);
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a seek drops it');
+
+  await resumeListening('replaced');
+  await harness.api.start(makeTrack('other.flac'));
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a start drops it');
 });
 
 test('pause and explicit resume keep context, processor, and snapshot state aligned', async () => {
@@ -6810,6 +6908,276 @@ test('padding after the last mapped sample never delays end of stream', async ()
   assert.equal(harness.portMessages('eos').at(-1).emittedFrames, 1_152);
 });
 
+// Confirmed handover: Play here elsewhere asks the playing tab over this socket.
+test('the socket names its client, hands a handover to the player and answers only while it is open', async () => {
+  const asked = [];
+  const settled = [];
+  const harness = createEngineHarness({
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    answerPlaybackHandover: async (requestId) => { asked.push(requestId); },
+    settlePlaybackHandover: async () => { settled.push(true); },
+  });
+  const track = makeTrack();
+  await harness.api.start(track, { startSeconds: 87 });
+  const socket = harness.sockets[0];
+  assert.equal(new URL(socket.url).searchParams.get('client_id'), '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70');
+
+  socket.receive({ type: 'handover', requestId: 'request-1' });
+  await harness.settle();
+  assert.deepEqual(asked, [], 'it stops for nothing before it knows the press is still wanted');
+  assert.equal(socket.sent.at(-1).type, 'handover-wanted');
+  assert.equal(socket.sent.at(-1).requestId, 'request-1');
+  socket.receive({ type: 'handover-stop', requestId: 'request-1' });
+  socket.receive({ type: 'handover-done', requestId: 'request-1' });
+  await harness.settle();
+  assert.deepEqual(asked, ['request-1']);
+  assert.deepEqual(settled, [true]);
+
+  const sounding = harness.context.getSoundingStreamingPlayback();
+  assert.equal(sounding.track.path, track.path);
+  assert.equal(sounding.seconds, 87, 'a start with no audio yet is at its start place');
+
+  assert.equal(harness.context.sendStreamingHandoverAnswer({ type: 'handover-answer', requestId: 'request-1' }), true);
+  socket.readyState = 3;
+  assert.equal(harness.context.sendStreamingHandoverAnswer({ type: 'handover-answer', requestId: 'request-2' }), false);
+  assert.notEqual(harness.engine.mode, 'error', 'an answer that cannot be sent never fails playback');
+});
+
+// Review of the confirmed handover: the engine and the ownership code for real, not stand-ins for each
+// other. The holder stops, and its answer still goes out on the socket it was asked on.
+test('a playing tab asked by Play here falls silent and its answer reaches the socket it was asked on', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const track = makeTrack();
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: { claimToken: 'holder-claim', leaseDeadline: Infinity, path: track.path,
+      referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'holder-ref' } },
+  };
+  harness.context.state.player.current = track;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  await harness.api.start(track, { startSeconds: 87 });
+  const socket = harness.sockets[0];
+
+  await harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+
+  const answer = socket.sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(answer, 'the answer was sent');
+  assert.equal(answer.position.ms, 87000);
+  assert.equal(answer.track.playbackRef, 'holder-ref');
+  assert.equal(harness.api.snapshot().paused, true, 'and it is silent');
+  assert.equal(socket.readyState, 1, 'the socket stays for the end of the press');
+});
+
+test('asked during a switch, the real engine answers the song still sounding and keeps the socket', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const old = makeTrack('01.flac');
+  const pressed = makeTrack('02.flac');
+  await harness.api.start(old, { startSeconds: 88 });
+  const open = harness.sent('open')[0];
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: open.generation, streamId: open.streamId, renderedFrame: 0, contextTime: 1,
+  });
+  // Comfortably buffered, so it sounds on through the switch. Not the engine's threshold.
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  const switching = harness.api.start(pressed);
+  void Promise.resolve(switching).catch(() => {});
+  await harness.settle();
+  const known = (track, playbackRef, claimToken) => ({ claimToken, leaseDeadline: Infinity, path: track.path,
+    referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef } });
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: known(pressed, 'pressed-ref', 'holder-claim'),
+    previousClaim: known(old, 'old-ref', 'holder-claim'),
+  };
+  harness.context.state.player.current = old;
+  harness.context.state.player.selectedTrack = pressed;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  const socket = harness.sockets[0];
+
+  await harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+
+  const answer = socket.sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(answer, 'the answer was sent');
+  assert.equal(answer.track.playbackRef, 'old-ref', 'the song that sounds');
+  assert.ok(answer.position.ms >= 87000 && answer.position.ms <= 89000, `at its place: ${answer.position.ms}`);
+  assert.equal(socket.readyState, 1);
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+// Two tabs never sound at the same time, not even shortly.
+test('a tab asked by Play here answers only when its output is silent, at the last frame it sent out', async (t) => {
+  const timers = [];
+  const harness = createEngineHarness({
+    realProcessor: true,
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    setTimeout: (callback, delay) => timers.push({ callback, delay }),
+    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+  });
+  t.after(() => harness.api.stop());
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const track = makeTrack();
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: { claimToken: 'holder-claim', leaseDeadline: Infinity, path: track.path,
+      soundDeadline: Number.MAX_SAFE_INTEGER, soundUntilWallMs: Number.MAX_SAFE_INTEGER,
+      referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'holder-ref' } },
+  };
+  harness.context.state.player.current = track;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  await harness.api.start(track);
+  Object.assign(harness.contexts[0], { baseLatency: 0.02, outputLatency: 0.3 });
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  for (const sequence of [0, 1]) {
+    receivePcmAndAssertEnqueue(harness, {
+      generation: open.generation, streamId: open.streamId, sequence,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+  }
+  const node = harness.nodes[0];
+  node.render();
+  node.deliverEvents();
+  // Rendered before the question arrived, not yet told to the page.
+  for (let quantum = 0; quantum < 99; quantum += 1) assert.equal(node.render()[0][0], 0.25);
+  timers.length = 0;
+
+  const answered = harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+  const answer = () => harness.sockets[0].sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(node.render()[0].every((sample) => sample === 0), 'nothing more is rendered');
+  assert.equal(answer(), undefined, 'no answer before the audio thread says it is silent');
+  node.deliverEvents();
+  await harness.settle();
+  assert.equal(answer(), undefined, 'no answer while rendered audio is still in the output buffer');
+  assert.equal(harness.api.snapshot().paused, true);
+  const drain = timers.filter(({ cleared, delay }) => !cleared && delay >= 320 && delay < 1000);
+  assert.equal(drain.length, 1, 'it waits out the base and output latency');
+  drain[0].callback();
+  await answered;
+
+  assert.equal(answer().position.ms, Math.round((100 * 128) / 48), 'nothing repeated, nothing skipped');
+});
+
+// Play here starts in tab 2 without a glitch.
+test('a paused tab that takes over starts once at that place, with none of the audio it had buffered', async (t) => {
+  const harness = createEngineHarness({ realProcessor: true });
+  t.after(() => harness.api.stop());
+  const fill = (open, value) => {
+    acceptMetadata(harness, open);
+    for (const sequence of [0, 1]) {
+      receivePcmAndAssertEnqueue(harness, {
+        generation: open.generation, streamId: open.streamId, sequence,
+        samples: new Array(48_000 * 2).fill(value),
+      });
+    }
+  };
+  await harness.api.start(makeTrack('mine.flac'));
+  fill(harness.sent('open')[0], 0.25);
+  const node = harness.nodes[0];
+  node.render();
+  node.deliverEvents();
+  await harness.api.pause();
+  const opensBefore = harness.sent('open').length;
+  const playsBefore = harness.portMessages('play').length;
+
+  await harness.api.start(makeTrack('theirs.flac'), { startSeconds: 87.654 });
+  const output = [];
+  for (let quantum = 0; quantum < 4; quantum += 1) output.push(...node.render()[0]);
+  assert.ok(output.every((sample) => sample === 0), 'nothing sounds before the confirmed place has arrived');
+  const opens = harness.sent('open').slice(opensBefore);
+  assert.equal(opens.length, 1, 'one stream, no second start');
+  assert.equal(opens[0].startFrame, Math.round(87.654 * 48_000));
+  fill(opens[0], 0.75);
+  for (let quantum = 0; quantum < 4; quantum += 1) {
+    assert.ok(node.render()[0].every((sample) => sample === 0.75), 'only the taken-over song, from its first frame');
+  }
+  assert.equal(harness.portMessages('play').length - playsBefore, 1);
+});
+
+test('with no node the handover has nothing to silence', async () => {
+  const harness = createEngineHarness();
+  const drained = await harness.context.silenceStreamingPlaybackForHandover();
+  assert.equal(await drained(), true);
+});
+
+test('the audio thread gets a port from a Worker that only this tab\u2019s takeover can use', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => 'this-tab' });
+  const workers = [];
+  Object.assign(harness.context, {
+    PLAYBACK_OWNERSHIP_CHANNEL_NAME: 'albumhaven.playbackOwnership.v1',
+    Blob,
+    Worker: class {
+      constructor() { this.messages = []; workers.push(this); }
+      postMessage(message) { this.messages.push(message); }
+    },
+    MessageChannel: class { constructor() { this.port1 = { side: 1 }; this.port2 = { side: 2 }; } },
+    URL: { createObjectURL: () => 'blob:relay', revokeObjectURL: () => {} },
+  });
+  await harness.api.start(makeTrack());
+
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].messages[0].clientId, 'this-tab');
+  assert.equal(workers[0].messages[0].port.side, 2);
+  assert.equal(harness.portMessages('silence-port')[0].port.side, 1);
+
+  // The Worker's own script: it relays only a takeover of this very tab.
+  const source = vm.runInContext('STREAMING_SILENCE_RELAY_SOURCE', harness.context);
+  const channel = {};
+  const scope = { BroadcastChannel: class { constructor() { return channel; } } };
+  vm.createContext(scope);
+  vm.runInContext(source, scope);
+  const relayed = [];
+  scope.onmessage({ data: { channel: 'c', clientId: 'this-tab', port: { postMessage: (m) => relayed.push(m) } } });
+  channel.onmessage({ data: { type: 'changed', clientId: 'this-tab' } });
+  channel.onmessage({ data: { type: 'taken-over', clientId: 'another-tab' } });
+  assert.deepEqual(relayed, []);
+  channel.onmessage({ data: { type: 'taken-over', clientId: 'this-tab' } });
+  assert.deepEqual(relayed, ['silence']);
+});
+
+// A pause keeps the claim a while; a plain press on another device asks this paused tab to yield, under one
+// contract shared with the phone and the server.
+test('the socket says it answers a yield and hands one to the player', async () => {
+  const contract = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'fixtures', 'playback-handover-yield-v1.json'), 'utf8'));
+  const asked = [];
+  const harness = createEngineHarness({
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    yieldPausedPlaybackClaim: async (requestId) => { asked.push(requestId); },
+  });
+  await harness.api.start(makeTrack(), { startSeconds: 0 });
+  const socket = harness.sockets[0];
+  const [key, value] = contract.socketQuery.split('=');
+  assert.equal(new URL(socket.url).searchParams.get(key), value);
+
+  socket.receive(contract.ask);
+  await harness.settle();
+
+  assert.deepEqual(asked, [contract.ask.requestId]);
+  assert.equal(socket.sent.some((message) => String(message.type).startsWith('handover-')), false,
+    'the player answers, not the socket');
+});
+
+// The WebView prepares a socket when idle. Named as the phone, Play here elsewhere would ask it instead of
+// the native player: today's APK would never answer, a new one would be passed over for the newer socket.
+test('in the app the idle web socket does not speak for the native player', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  harness.context.isAndroidNativePlayback = () => true;
+  await harness.api.prepare();
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.sockets[0].url.includes('client_id='), false);
+});
+
 test('music playback asks for large output buffers', async () => {
   const harness = createEngineHarness();
 
@@ -9591,6 +9959,36 @@ test('an ignored press while the connection is gone retries the connection at on
   assert.equal(harness.sockets[1].closeCalls, 1, 'the hanging attempt is given up');
   assert.equal(harness.sockets.length, 3, 'a fresh attempt starts at once');
   assert.equal(harness.engine.startRequestId, started, 'without starting the song again');
+});
+
+// Nothing is heard before the grant, though the stream loads meanwhile.
+test('a start with no grant loads its audio silently and sounds once the grant arrives', async (t) => {
+  let permission = { untilMs: 0, forMs: 0 };
+  const harness = createEngineHarness({
+    realProcessor: true,
+    playbackSoundPermission: () => permission,
+  });
+  t.after(() => harness.api.stop());
+  harness.context.playbackSoundPermission = () => permission;
+  await harness.api.start(makeTrack());
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  for (const sequence of [0, 1]) {
+    receivePcmAndAssertEnqueue(harness, {
+      generation: open.generation, streamId: open.streamId, sequence,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+  }
+  const node = harness.nodes[0];
+
+  assert.equal(node.options.processorOptions.awaitsPermission, true, 'the audio thread fails closed');
+  assert.ok(harness.sent('credit').length > 0, 'it loads while it waits');
+  for (let quantum = 0; quantum < 10; quantum += 1) assert.ok(node.render()[0].every((sample) => sample === 0));
+
+  permission = { untilMs: Date.now() + 300_000, forMs: 300_000 };
+  harness.context.syncStreamingSoundPermission();
+
+  assert.ok(node.render()[0].some((sample) => sample !== 0));
 });
 
 // Bounded-interaction contracts (tests/ci/bounded-interactions.json): a socket chunk or a worklet

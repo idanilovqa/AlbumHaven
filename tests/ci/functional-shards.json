@@ -1199,6 +1199,27 @@
               "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
               "case": "FTC-PLAYER-028 A press on the next track of the playing album starts it as soon as the server confirms the press",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playAfterPause.spec.js",
+              "case": "FTC-PLAYER-030 Pressing Play within 12 seconds of Pause sounds sooner than pressing Play after those 12 seconds, on a normal and a 4x slower processor",
+              "area": "playback"
             }
           ]
         },
@@ -1372,6 +1393,13 @@
               "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
               "case": "FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+              "area": "playback"
             }
           ]
         },
@@ -1523,6 +1551,27 @@
               "project": "functional",
               "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
               "case": "FTC-PLAYER-029 The playing song keeps sounding through a press until the pressed song starts",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
               "area": "playback"
             }
           ]

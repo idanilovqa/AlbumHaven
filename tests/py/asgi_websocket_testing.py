@@ -17,7 +17,7 @@ class AsgiWebSocketSession:
         scheme: str,
     ) -> None:
         self._app = app
-        self._path = path
+        self._path, _, self._query = path.partition("?")
         self._origin = origin
         self._host = host
         self._scheme = scheme
@@ -31,15 +31,14 @@ class AsgiWebSocketSession:
         headers = [(b"host", self._host.encode("latin1"))]
         if self._origin is not None:
             headers.append((b"origin", self._origin.encode("latin1")))
-        path, _, query = self._path.partition("?")
         scope = {
             "type": "websocket",
             "asgi": {"version": "3.0", "spec_version": "2.4"},
             "http_version": "1.1",
             "scheme": self._scheme,
-            "path": path,
-            "raw_path": path.encode("ascii"),
-            "query_string": query.encode("ascii"),
+            "path": self._path,
+            "raw_path": self._path.encode("ascii"),
+            "query_string": self._query.encode("ascii"),
             "headers": headers,
             "client": ("testclient", 50000),
             "server": (self._host.split(":", 1)[0], 80),

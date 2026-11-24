@@ -55,7 +55,7 @@ test('FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate p
     await second.trackModalActions.playTrackAt(16);
     await expect(second.globalPlayerActions.globalPlayer.blockedStartToast).toBeVisible();
     await second.trackModalActions.close();
-    await second.globalPlayerActions.expectOwnershipBlocked({ artist: ARTIST, album: ALBUM, title: FIRST_TITLE });
+    await second.globalPlayerActions.expectPlayingElsewhereOverlay({ artist: ARTIST, album: ALBUM, title: FIRST_TITLE });
     await expect.poll(() => first.listenJourney.scrobbles.filter(event => event.response?.entry?.scrobbled).length,
       { timeout: 60000 }).toBe(1);
     expect((await second.playbackEvidence.playbackMark()).renderedFrame).toBe(silentSecond.renderedFrame);
@@ -89,7 +89,7 @@ test('FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate p
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
     await expect(second.globalPlayerActions.globalPlayer.time).not.toHaveText(/^0:00\s*\//u);
-    await first.globalPlayerActions.expectOwnershipBlocked({ artist: ARTIST, album: ALBUM, title: SECOND_TITLE });
+    await first.globalPlayerActions.expectPlayingElsewhereOverlay({ artist: ARTIST, album: ALBUM, title: SECOND_TITLE });
     await expect.poll(() => second.listenJourney.scrobbles.filter(event => event.response?.entry?.scrobbled).length,
       { timeout: 60000 }).toBe(1);
     expect((await first.playbackEvidence.playbackMark()).renderedFrame).toBe(silentFirst.renderedFrame);
@@ -111,7 +111,7 @@ test('FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate p
     const evidence = await first.playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: firstTrack.path });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
-    await second.globalPlayerActions.expectOwnershipBlocked({ artist: ARTIST, album: ALBUM, title: FIRST_TITLE });
+    await second.globalPlayerActions.expectPlayingElsewhereOverlay({ artist: ARTIST, album: ALBUM, title: FIRST_TITLE });
     await expect.poll(() => first.listenJourney.completions.filter(event => event.response?.entry?.finished_fully).length,
       { timeout: 60000 }).toBe(1);
     completed = first.listenJourney.completions.find(event => event.response?.entry?.finished_fully);

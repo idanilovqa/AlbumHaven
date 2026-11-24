@@ -1900,3 +1900,33 @@ def test_invitation_handoff_without_cookie_terminates_at_normal_invalid_form(aut
     assert status == 400 and "location" not in dict(headers)
     assert b'http-equiv="refresh"' not in body
     assert b'name="new_password"' not in body
+
+
+# Sign-out clears the player: the account's last-played song and place go, never a live claim (the claims
+# service keeps those), and the sign-out itself never fails for it.
+def test_sign_out_forgets_the_last_played_record_and_never_fails_for_it(auth_asgi, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    forgotten = []
+
+    class Claims:
+        def __init__(self, config):
+            self.config = config
+
+        def forget_last_played(self, actor):
+            if actor == "unreachable":
+                raise RuntimeError("database unavailable")
+            forgotten.append((actor, self.config["ALBUM_HAVEN_APP_DATABASE_URL"]))
+
+    monkeypatch.setattr(auth_asgi, "PostgresPlaybackClaims", Claims)
+
+    def request(actor):
+        return SimpleNamespace(state=SimpleNamespace(current_actor=actor),
+                               app=SimpleNamespace(state=SimpleNamespace(config={"ALBUM_HAVEN_APP_DATABASE_URL": "db"})))
+
+    asyncio.run(auth_asgi._forget_last_played(request("owner"), {}))
+    asyncio.run(auth_asgi._forget_last_played(request("unreachable"), {}))
+    asyncio.run(auth_asgi._forget_last_played(SimpleNamespace(state=SimpleNamespace(), app=None), {}))
+
+    assert forgotten == [("owner", "db")]

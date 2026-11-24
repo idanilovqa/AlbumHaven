@@ -300,6 +300,8 @@ const state = {
       },
       diagnostics: {
         firstFrameAtMs: 0,
+        resumedAtMs: 0,
+        resumeFirstFrameAtMs: 0,
         bufferedFrames: { current: 0, continuity: 0 },
         inFlightFrames: { current: 0, continuity: 0 },
         underruns: 0,

@@ -16,8 +16,8 @@ const BROWSER_PLAYBACK_ENGINE = Object.freeze({
   adopt: () => null,
   start: (track, options) => startBrowserStreamingTrack(track, options),
   pause: () => pauseBrowserStreaming(),
-  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole) =>
-    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole),
+  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound) =>
+    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound),
   seek: seconds => seekBrowserStreaming(seconds),
   continuity: (track, options) => scheduleBrowserStreamingContinuity(track, options),
   setLoop: (active, startSeconds, endSeconds) => setBrowserStreamingLoop(active, startSeconds, endSeconds),
@@ -31,10 +31,11 @@ const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
   holdsOwnClaim: true,
   recordsListens: true,
   claimClientId: () => getAndroidNativePlaybackClientId(),
+  takesOver: () => hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY),
   ownsPlayback: () => isAndroidNativePlaybackOwner(),
   adopt: persistedState => attachAndroidNativePlayback(persistedState),
-  start: (track, { startSeconds = 0, autoplay = true } = {}) =>
-    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay }),
+  start: (track, { startSeconds = 0, autoplay = true, takeover = false } = {}) =>
+    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay, takeover }),
   pause: () => pauseAndroidNativePlayback(),
   resume: (_expectedStartRequestId, onPlaybackStarted) => resumeAndroidNativePlayback(onPlaybackStarted),
   seek: seconds => seekAndroidNativePlayback(seconds),
@@ -77,8 +78,11 @@ function pauseStreamingPlayback() {
   return currentPlaybackEngine().pause();
 }
 
-function resumeStreamingPlayback(expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null) {
-  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole);
+// [onFirstSound]: the browser engine calls it once, on the resumed song's first audible frame.
+function resumeStreamingPlayback(
+  expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null, onFirstSound = null,
+) {
+  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound);
 }
 
 function seekStreamingPlayback(seconds) {

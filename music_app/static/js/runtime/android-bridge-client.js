@@ -18,6 +18,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.media_session.v1": "optional",
     "playback.resumption.v1": "optional",
     "playback.album_details.v1": "optional",
+    "playback.takeover.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
     "updates.choose.v1": "optional",
@@ -284,6 +285,9 @@ const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1'
 // after the session, the process or the device restarted (playback.resumption.v1).
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
 const ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY = 'playback.album_details.v1';
+// `loadQueue` may carry `takeover`. A shell without it refuses that key, so its page never takes
+// playback over: it fails closed before anything is asked of the server.
+const ANDROID_NATIVE_TAKEOVER_CAPABILITY = 'playback.takeover.v1';
 const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
 // How long a seek outlasts positions Android sent before it took the seek, and how near the
@@ -494,7 +498,7 @@ function androidNativeCurrentRole() {
 }
 
 async function startAndroidNativePlaybackTrack(track, {
-  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false,
+  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false, takeover = false,
 } = {}) {
   const native = androidNativePlayback;
   const revision = ++native.revision;
@@ -511,6 +515,8 @@ async function startAndroidNativePlaybackTrack(track, {
     // A pause or play while the references were fetched decides whether the kept item plays.
     if (keepCurrent) autoplay = !native.snapshot.paused;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    // Play while another client plays: Android's claim replaces that client's (playback.claim.takeover).
+    if (takeover && autoplay && hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY)) payload.takeover = true;
     native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {

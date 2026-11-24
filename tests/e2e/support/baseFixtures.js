@@ -532,6 +532,7 @@ export const test = base.extend({
           settingsModalAppBarActions: new SettingsModalAppBarActions(new SettingsModalAppBar(session.page, testInfo)),
           utilityTabBarActions: new UtilityTabBarActions(new UtilityTabBar(session.page, testInfo)),
           utilityIntegrationsActions: new UtilityIntegrationsActions(new UtilityIntegrationsTab(session.page, testInfo)),
+          utilityAppearanceActions: new UtilityAppearanceActions(new UtilityAppearanceTab(session.page, testInfo)),
           playbackEvidence: observePlaybackPcmTraffic(session.page),
           listenJourney: observeLastfmJourneyRequests(session.page),
         });

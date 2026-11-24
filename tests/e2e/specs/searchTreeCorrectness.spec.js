@@ -51,6 +51,11 @@ const DIRECT_COUNT_TRACKS = 16;
 const DIRECT_COUNT_ALBUMS = 60;
 const DIRECT_COUNT_SELECTED_URL = `/?surface=albums&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
 const DIRECT_COUNT_SEARCH_URL = `/?surface=albums&q=${encodeURIComponent(DIRECT_COUNT_ARTIST)}&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
+// Owner (11-24): every search's Artist Tree is alphabetical, typed or direct-linked.
+const alphabetically = (names) => [...names].sort((left, right) => left.localeCompare(right, 'en', {
+  numeric: true,
+  sensitivity: 'base',
+}));
 // The albums gallery's canonical address (700ccdd9b); /?surface=albums redirects here.
 const GALLERY_PATHNAME = '/albums';
 
@@ -440,7 +445,10 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
     await artistFamilyActions.expand();
     const displayedNames = await navigationPanelActions.readSidebarArtistNames();
     expect(displayedNames.length).toBeGreaterThan(1);
-    await galleryActions.readArtistHeadingOccurrencesAcrossGallery({ expectedArtists: displayedNames });
+    expect(displayedNames).toEqual(alphabetically(displayedNames));
+    // The gallery leads with the best match; it shows exactly the tree's artists.
+    const occurrences = await galleryActions.readArtistHeadingOccurrencesAcrossGallery();
+    expect(alphabetically(occurrences.map(({ artist }) => artist))).toEqual(displayedNames);
     const scroll = await galleryActions.readGalleryScrollState();
     await galleryActions.scrollGalleryBy(-scroll.scrollTop);
     await galleryActions.waitForGalleryScrollAtStart();
@@ -738,6 +746,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
     const filteredNames = await navigationPanelActions.readSidebarArtistNames();
     expect(filteredNames.length).toBeGreaterThan(1);
     expect(filteredNames).toEqual(expect.arrayContaining(EXPECTED_NEAL_FAMILY_ARTISTS));
+    expect(filteredNames).toEqual(alphabetically(filteredNames));
     expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(FAMILY_ARTIST);
     return { filteredNames, rootNames };
   });

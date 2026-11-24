@@ -2782,6 +2782,50 @@ test('desktop Loose Tracks keeps the expanded Artist Tree while selecting its co
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
 });
 
+// FTC-ARTIST-TREE-005: a delayed library-wide answer repaints the open page through the page shell, which
+// re-syncs navigation with the default flags; the user's later Artist Tree pick still owns the selection.
+test('a Loose Tracks repaint after the user picks Artist Tree keeps Artist Tree selected', () => {
+  const { context } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
+  const rail = new FakeElement('shell-navigation-rail');
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  const compactArtists = new FakeElement('artist-tree-navigation-button');
+  [main, rail, heading, collections, artists, compactArtists]
+    .forEach((element) => context.document.body.appendChild(element));
+  const compactLooseTracks = new FakeElement();
+  compactLooseTracks.classList.toggle = (token, force) => {
+    if (force) compactLooseTracks.classList.add(token);
+    else compactLooseTracks.classList.remove(token);
+  };
+  collections.querySelectorAll = () => [];
+  context.window = { NavigationTree: { setItemSelected() {} } };
+  context.document.querySelectorAll = (selector) => (
+    selector === '#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]' ? [compactLooseTracks] : []);
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.state.ui.nonAlbumLibraryWide = true;
+  const overlay = new FakeElement('non-album-modal');
+  overlay.classList.toggle = (token, force) => {
+    if (force) overlay.classList.add(token);
+    else overlay.classList.remove(token);
+  };
+  overlay.querySelector = () => null;
+
+  context.setNonAlbumPagePresentation(overlay, true);
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'true', 'opening Loose Tracks selects it');
+  context.syncLibraryNavigationMode('artists', { picked: true });
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'true');
+  context.setNonAlbumPagePresentation(overlay, true, true);
+
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'true', 'the repaint must not take the pick back');
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'false');
+  assert.equal(artists.hidden, false);
+  assert.equal(collections.hidden, true);
+  assert.equal(overlay.classList.contains('non-album-modal--page'), true, 'Loose Tracks stays the open page');
+});
+
 // Mark As A Version renders the real NavigationTree wide item from its template.
 test('hydration-only Loose Tracks repaint preserves an explicit Artist Tree selection', () => {
   const { context } = loadHelper();

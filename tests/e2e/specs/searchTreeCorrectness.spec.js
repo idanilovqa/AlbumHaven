@@ -51,6 +51,8 @@ const DIRECT_COUNT_TRACKS = 16;
 const DIRECT_COUNT_ALBUMS = 60;
 const DIRECT_COUNT_SELECTED_URL = `/?surface=albums&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
 const DIRECT_COUNT_SEARCH_URL = `/?surface=albums&q=${encodeURIComponent(DIRECT_COUNT_ARTIST)}&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
+// The albums gallery's canonical address (700ccdd9b); /?surface=albums redirects here.
+const GALLERY_PATHNAME = '/albums';
 
 test('FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload', { tag: '@area:gallery-search' }, async ({
   freshBrowserSession,
@@ -502,7 +504,7 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
     );
     expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(ONE_FAMILY_QUERY);
     expect(await navigationPanelActions.readAllArtistsVisibleCount()).toBe(rootSnapshot.count);
-    expect(searchToolbarActions.readLocation().pathname).toBe('/');
+    expect(searchToolbarActions.readLocation().pathname).toBe(GALLERY_PATHNAME);
   });
 
   await stepLogger.step('Repeat the search and explicitly select a different artist from the filtered tree', async () => {
@@ -995,7 +997,7 @@ test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clear
       WHITESPACE_DISPLAY_ARTIST,
     );
     expect(await navigationPanelActions.readAllArtistsVisibleCount()).toBe(rootSnapshot.count);
-    expect(searchToolbarActions.readLocation().pathname).toBe('/');
+    expect(searchToolbarActions.readLocation().pathname).toBe(GALLERY_PATHNAME);
   });
 
   const selectedGallerySnapshot = await stepLogger.step('Commit a different search after clearing the direct-loaded state and capture its selected gallery', async () => {
@@ -1033,7 +1035,7 @@ test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clear
     );
     expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(ONE_FAMILY_QUERY);
     expect(await navigationPanelActions.readAllArtistsVisibleCount()).toBe(rootSnapshot.count);
-    expect(searchToolbarActions.readLocation().pathname).toBe('/');
+    expect(searchToolbarActions.readLocation().pathname).toBe(GALLERY_PATHNAME);
   });
 });
 

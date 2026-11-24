@@ -256,6 +256,8 @@ export class GalleryRegressions {
         scrollTop: scroll.scrollTop,
         scrollHeight: scroll.scrollHeight,
         clientHeight: scroll.clientHeight,
+        // Native scrolling lands scrollTop on device pixels.
+        scrollGranularity: 1 / window.devicePixelRatio,
         labelBottoms: [...scroll.querySelectorAll('[data-scroll-artist] .artist-name')]
           .map(label => label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop),
       };

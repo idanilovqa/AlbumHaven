@@ -254,4 +254,5 @@ def test_the_legacy_route_still_serves_a_named_cover_until_it_is_retired(cover_a
     status, headers, body = run_asgi_request(asgi_app, "GET", "/cover", query={"path": str(cover)})
 
     assert status == 200 and body == cover.read_bytes()
-    assert headers["cache-control"] == "private, max-age=300"
+    # An address that names a path is never stored; pages only get /cover/<reference>.
+    assert headers["cache-control"] == "private, no-store"

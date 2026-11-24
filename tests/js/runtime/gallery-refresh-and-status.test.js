@@ -26,6 +26,76 @@ test('a stale gallery projection does not count applying inventory revision', as
   assert.equal(context.state.view.artist_groups[0].albums[0].identity_revision, undefined);
 });
 
+test('FTC-SEARCH-NAV-031: a stale gallery is fetched again by an idle poll though the revision stays', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  let now = 1_000_000;
+  vm.runInContext('Date', context).now = () => now;
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  const idle = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false };
+  // The page loads after the watcher's revision: status will never report a newer one.
+  context.state.status = { ...idle, inventory_mutation_revision: 2 };
+
+  const load = context.fetchAndRender('/view-data?surface=albums&omit_sidebar=1', false, { preserveScroll: true });
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Watcher Artist One', albums: [{ key: 'one' }] }],
+    inventory_mutation_revision: 2,
+    gallery_page: { projection_stale: true },
+  });
+  await load;
+  assert.equal(context.state.ui.staleProjectionViewRefreshDueAt, now + 3000);
+
+  // A poll before the first back-off step asks nothing more.
+  const early = context.pollStatus();
+  pendingRequests[1].resolveWith({ ...idle, inventory_mutation_revision: 2 });
+  await early;
+  for (let attempt = 0; attempt < 5; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 2);
+
+  now += 3000;
+  const due = context.pollStatus();
+  pendingRequests[2].resolveWith({ ...idle, inventory_mutation_revision: 2 });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 4; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 4, 'the due idle poll asks for the view again');
+  pendingRequests[3].resolveWith({
+    artist_groups: [
+      { artist: 'Watcher Artist One', albums: [{ key: 'one' }] },
+      { artist: 'Watcher Artist Two', albums: [{ key: 'two' }] },
+    ],
+    inventory_mutation_revision: 2,
+    gallery_page: { projection_stale: false },
+  });
+  await due;
+
+  assert.deepEqual(calls.fetchRequests.map(request => request.url).slice(1, 3), ['/status', '/status']);
+  assert.deepEqual(context.state.view.artist_groups.map(group => group.artist), ['Watcher Artist One', 'Watcher Artist Two']);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+  assert.equal(context.state.ui.staleProjectionViewRefreshCount, 0);
+  assert.equal(context.state.ui.staleProjectionViewRefreshDueAt, null);
+});
+
+test('a gallery that stays stale is refetched six times, each wait twice as long', async () => {
+  const { context, pendingRequests } = createContext();
+  const now = 1_000_000;
+  vm.runInContext('Date', context).now = () => now;
+  const staleResponse = {
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+    inventory_mutation_revision: 2,
+    gallery_page: { projection_stale: true },
+  };
+  const delays = [];
+  for (let index = 0; index < 7; index += 1) {
+    context.state.ui.staleProjectionViewRefreshDueAt = null;
+    const applied = context.fetchAndRender('/view-data?surface=albums', false, { preserveScroll: true });
+    pendingRequests[index].resolveWith(staleResponse);
+    await applied;
+    delays.push(context.state.ui.staleProjectionViewRefreshDueAt === null
+      ? null : context.state.ui.staleProjectionViewRefreshDueAt - now);
+  }
+
+  assert.deepEqual(delays, [3000, 6000, 12000, 24000, 48000, 96000, null]);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
 const galleryEventHandlersPath = path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js');
 const galleryEventHandlersSource = fs.readFileSync(galleryEventHandlersPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
@@ -3883,6 +3953,25 @@ test('a failed health refresh remains pending even when the utility loader clear
   assert.equal(attempts, 2);
   await fixture.observe(watcherWarning());
   assert.equal(attempts, 2);
+});
+
+test('the first watcher health observation is a baseline, not a change that reloads Problematic Files', async () => {
+  // FTC-UTIL-PROBLEMS-009: Settings opened right after page load; the first status poll landed during
+  // the utility's own load and forced a second complete summary 140 ms after it.
+  const fixture = watcherRefreshFixture();
+  fixture.context.state.status = {};
+  const utility = fixture.context.state.utility;
+  utility.loaded = false;
+  utility.loading = true;
+  utility.loadPromise = Promise.resolve(['summary from the page load']);
+  await fixture.observe({ state: 'healthy', problems: [] });
+  utility.loading = false;
+  utility.loaded = true;
+  utility.loadPromise = null;
+  await fixture.observe({ state: 'healthy', problems: [] });
+  assert.deepEqual(fixture.refreshes, [], 'the page load already reflects the first observed health');
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [true], 'a later real health change still refreshes the loaded list');
 });
 
 test('pollStatus treats the first inventory revision observation as a baseline', async () => {

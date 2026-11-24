@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.50 - 2026-11-23
+
+- One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.
+- Problematic Files no longer loads its full list twice when opened right after the page loads: the first status check takes the folder watcher's health as its starting point instead of a change.
+- Test and CI only: the freeze guard reads an f-string as one SQL text and follows callbacks handed over inside unpacked options, a failed functional gate shard uploads its trace, the startup hydration contract stubs its history scope lookup, and a Cover Lookup timing failure names the longest animation frames and their scripts.
+
+## 0.11.49 - 2026-11-23
+
+- Albums the watcher finds now appear in the Artist Tree without another navigation: a gallery answered before the library change was published is fetched again after 3, 6, 12, 24, 48 and 96 seconds, six times at most.
+
+## 0.11.48 - 2026-11-22
+
+- Scrolling the gallery while its next page loads no longer leaves that scroll unfinished: the page added after the scroll settles now counts as rendered for it.
+- Test and CI only: three end-to-end and live database tests no longer race the app's own background work, and the required check reads the Python shards' results from every attempt of a run.
+
 ## 0.11.47 - 2026-11-22
 
 - Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.

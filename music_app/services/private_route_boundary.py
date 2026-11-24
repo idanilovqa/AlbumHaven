@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import hmac
+import re
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -215,6 +217,51 @@ _PRIVATE_ROUTE_ACTIONS = {
 }
 
 
+# An address naming a file path: by the parameter's name, or a value that is an absolute path.
+_PATH_PARAMS = frozenset({"path", "track_path"})
+_ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/](?!/)|\\\\[^\\]|/[^/]+/)")
+_PRIVATE_CACHE_CONTROL = b"private, no-store"
+
+
+def _names_file_path(query_string: bytes) -> bool:
+    return any(
+        name in _PATH_PARAMS or _ABSOLUTE_PATH.match(value)
+        for name, value in parse_qsl(query_string.decode("latin-1"))
+    )
+
+
+class _PrivateCachePolicy:
+    """No HTTP cache stores a private answer unless its route deliberately says it may.
+
+    An answer to an address that names a file path is never stored, whatever its route says: the
+    address is the cache's key. Outside the boundary, so its refusals and failures follow this too.
+    Headers only, so streamed bodies pass through untouched.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        names_path = _names_file_path(scope.get("query_string", b""))
+        if not names_path and _is_public(scope["method"], scope["path"]):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_policy(message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                if names_path or not any(key.lower() == b"cache-control" for key, _value in headers):
+                    headers = [(key, value) for key, value in headers if key.lower() != b"cache-control"]
+                    headers.append((b"cache-control", _PRIVATE_CACHE_CONTROL))
+                    message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_policy)
+
+
 def install_private_route_boundary(app: FastAPI) -> None:
     """Install the public health endpoint and default-private request boundary."""
 
@@ -292,6 +339,15 @@ def install_private_route_boundary(app: FastAPI) -> None:
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)
         return response
+
+    app.add_middleware(_PrivateCachePolicy)
+
+    # Sent outside every middleware; the failure itself is still raised and logged.
+    @app.exception_handler(Exception)
+    async def failed(_request: Request, _error: Exception) -> PlainTextResponse:
+        return PlainTextResponse(
+            "Internal Server Error", status_code=500, headers={"Cache-Control": _PRIVATE_CACHE_CONTROL.decode()},
+        )
 
 
 def _refresh_session_csrf_cookie(request: Request, response: Response) -> None:

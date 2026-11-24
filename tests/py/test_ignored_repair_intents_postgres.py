@@ -266,3 +266,74 @@ def test_a_pending_unignore_shows_after_a_reload_in_the_rules_and_the_details(li
     ignored, detail_rows, _reasons = _reloaded(repository, item_key)
     assert row_key not in ignored
     assert row_key in detail_rows
+
+
+# 6.5 (11-24): the drain never stalls silently. An intent that cannot be applied is marked failed, logged and
+# reported in the Rules payload; the others still apply. A drain that keeps failing as a whole fails its intents
+# after DRAIN_ATTEMPTS passes instead of leaving them pending forever.
+def _failed(library):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    payload = PostgresLibraryBrowseRepository(library.fixture.config).build_utility_rules_payload()
+    return {item["row_key"]: item for item in payload.get("failed_ignored_repairs") or []}
+
+
+def test_a_drain_where_one_intent_fails_applies_the_others_and_reports_the_failed_one(library, monkeypatch, caplog):
+    from music_app.services import ignored_repair_intents, rule_state_postgres
+
+    keys = _keys(library)
+    first, second = sorted(keys)
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+    save = library.save()
+    try:
+        assert _answered(lambda: _ignore(library, {first: keys[first]})) == "pending"
+        assert _answered(lambda: _ignore(library, {second: keys[second]})) == "pending"
+    finally:
+        save.rollback()
+        save.close()
+    apply = rule_state_postgres._apply_ignored_repair_intent
+
+    def apply_except_first(connection, intent):
+        if first in (intent.get("repair_keys") or []):
+            raise RuntimeError("this intent cannot be applied")
+        return apply(connection, intent)
+
+    monkeypatch.setattr(rule_state_postgres, "_apply_ignored_repair_intent", apply_except_first)
+    with caplog.at_level("WARNING"):
+        assert ignored_repair_intents.drain(library.fixture.config) == 1
+    assert _stored(library) == {second}
+    assert _shown(library) == {second}, "a failed intent is no longer shown as made"
+    failed = _failed(library)
+    assert set(failed) == {first}
+    assert "cannot be applied" in failed[first]["failure"]
+    assert any("failed" in record.getMessage() and first in record.getMessage() for record in caplog.records)
+    # A later drain does not try the failed intent again, and nothing is left pending.
+    monkeypatch.setattr(rule_state_postgres, "_apply_ignored_repair_intent", apply)
+    assert ignored_repair_intents.drain(library.fixture.config) == 0
+    assert _stored(library) == {second}
+
+
+def test_intents_a_drain_keeps_failing_to_apply_are_failed_after_its_last_attempt(library, monkeypatch, caplog):
+    from music_app.services import ignored_repair_intents, rule_state_postgres
+
+    keys = _keys(library)
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+    save = library.save()
+    try:
+        assert _answered(lambda: _ignore(library, keys)) == "pending"
+    finally:
+        save.rollback()
+        save.close()
+
+    def broken(_connection):
+        raise RuntimeError("the drain cannot run")
+
+    monkeypatch.setattr(rule_state_postgres, "apply_pending_ignored_repair_intents", broken)
+    with caplog.at_level("WARNING"):
+        for attempt in range(ignored_repair_intents.DRAIN_ATTEMPTS):
+            assert _failed(library) == {}, f"failed early, at attempt {attempt}"
+            ignored_repair_intents._drain_queued(library.fixture.config, library.fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    assert set(_failed(library)) == set(keys)
+    assert _pending(library) == 1
+    assert _shown(library) == set(), "a failed intent is no longer shown as made"
+    assert any("failed" in record.getMessage() for record in caplog.records)

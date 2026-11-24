@@ -2,6 +2,8 @@
 
 ## 0.11.50 - 2026-11-23
 
+- One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.
+- Problematic Files no longer loads its full list twice when opened right after the page loads: the first status check takes the folder watcher's health as its starting point instead of a change.
 - Test and CI only: the freeze guard reads an f-string as one SQL text and follows callbacks handed over inside unpacked options, a failed functional gate shard uploads its trace, the startup hydration contract stubs its history scope lookup, and a Cover Lookup timing failure names the longest animation frames and their scripts.
 
 ## 0.11.49 - 2026-11-23

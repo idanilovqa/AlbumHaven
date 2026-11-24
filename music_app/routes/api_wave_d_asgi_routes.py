@@ -2075,7 +2075,7 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
     )
     if payload is None:
         return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
-    return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
+    return Response(payload, media_type=mime_type, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.post("/utilities/fetch-cover")

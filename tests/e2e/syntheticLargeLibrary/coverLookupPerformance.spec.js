@@ -17,6 +17,21 @@ const TIMING_BUDGETS = Object.freeze(Object.fromEntries([
   'reopenAllCardsShownMs',
 ].map((key) => [key, Object.freeze(performanceTimingBudget(`cover-lookup.${key}`))])));
 const MAX_INTERACTION_LONG_TASK_MS = 200;
+const PROJECTION_READ_PATH = /^\/view-data$|\/search(?:\/|$)/;
+
+// 6.5 (FTC-COVERS-019P): a gallery or search read answering "projection pending" means a save or open
+// invalidated a projection the next read then had to wait for. Records passively; only a 503 body is read.
+function recordProjectionPendingAnswers(page) {
+  const pending = [];
+  page.on('response', (response) => {
+    if (response.status() !== 503 || !PROJECTION_READ_PATH.test(new URL(response.url()).pathname)) return;
+    pending.push(response.json().then(
+      (body) => ({ url: response.url(), code: String(body?.code ?? '') }),
+      () => ({ url: response.url(), code: '' }),
+    ));
+  });
+  return async () => (await Promise.all(pending)).filter(({ code }) => code.endsWith('_projection_pending'));
+}
 
 // Owner (2026-11-18, see FTC-COVERS-048): the first painted state that already holds the settled cards; LOCAL
 // counts its cards, or its empty state when the album has none, and REMOTE counts cards plus placeholders.
@@ -41,6 +56,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     thirdPartyRequestEvidence,
     trackModalActions,
   }) => {
+    const projectionPendingAnswers = recordProjectionPendingAnswers(page);
     await stepLogger.step('Open the fixture album through the production gallery and Album Details controls', async () => {
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TARGET.artist)}`);
       await galleryActions.waitForGalleryReady();
@@ -186,6 +202,10 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
         `${label} produced a ${measurement.maxLongTaskMs} ms browser main-thread task.`,
       ).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
     }
+    expect(
+      await projectionPendingAnswers(),
+      'A gallery or search read answered 503 projection pending during Cover Lookup.',
+    ).toEqual([]);
     coverLookupLocalReport.recordContractCompletion();
   });
 });

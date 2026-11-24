@@ -822,7 +822,7 @@ test('IAR-W05: in a browser a gateway error (the tunnel without its server) also
   assert.match(await response.text(), /content="cache"/);
 });
 
-// Owner's D2 retest: the Cloudflare tunnel dropped every site for a few minutes, answering 530.
+// A Cloudflare tunnel that lost its server answers 530.
 test('IAR-W12: a gateway error (530) on a cover or image shows the one kept, as offline does', async () => {
   let up = true;
   const server = libraryServer({ coverBytes: 7 });
@@ -850,7 +850,7 @@ test('IAR-W12: a gateway error (530) on a cover or image shows the one kept, as 
   assert.equal(unseen.status, 530);
 });
 
-// Owner report: a slow network flashed the Offline notice. Online, a slow server is waited for.
+// A slow network must not flash the Offline notice. Online, a slow server is waited for.
 test('IAR-W11: in a browser a slow server is waited for; its copy never stands in while it can still answer', async () => {
   let answer = null;
   const { worker, event, handle } = setup({
@@ -892,7 +892,7 @@ test('in a browser without a copy, a page that cannot load fails as today', asyn
   await assert.rejects(handle(navigation('/')), TypeError);
 });
 
-// ---- Owner D2 retest: the copy opens offline after a first visit and across server builds ----
+// ---- The copy opens offline after a first visit and across server builds ----
 
 const immutable = body => new Response(body, { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
 const pageWithAssets = version => page('acct-a', {
@@ -939,7 +939,7 @@ test('IAR-W09: assets the server did not mark immutable for this build are not k
   assert.deepEqual(kept, []);
 });
 
-// Owner D4: every tree entry and Home reload landed on the one kept view (3 Crows), silently.
+// Every tree entry and Home reload once landed on the one kept view, silently.
 test('IAR-W10: in a browser, offline, an address never kept is answered at that address by kept Home marked as standing in', async () => {
   let online = true;
   const { handle, worker } = setup({ mode: 'web', respond: () => (online ? page('acct-a', { body: 'Home' }) : new TypeError('Failed to fetch')) });
@@ -1079,7 +1079,7 @@ test('after a save of a new server build, an asset download cut off by going off
   assert.match(await response.text(), /content="cache"/);
 });
 
-// Owner D2 round 7: signed in, then the connection lost at once; the page had arrived but was
+// Signed in, then the connection lost at once; the page had arrived but was
 // still being written to the copy when a new tab asked for it.
 test('IAR-W12: a page still being kept when the connection drops is there for a new tab', async () => {
   const caches = fakeCaches();
@@ -1106,7 +1106,7 @@ test('IAR-W12: a page still being kept when the connection drops is there for a 
   assert.match(await (await newTab).text(), /content="cache"/);
 });
 
-// Owner D2 round 8 (sandbox5): offline right after sign-in, the library page had arrived but writing
+// Offline right after sign-in, the library page had arrived but writing
 // it (several megabytes, on a busy computer) took longer than the wait for downloads.
 test('IAR-W12: a page that arrived is there for a new tab however long writing it takes', async () => {
   const caches = fakeCaches();
@@ -1128,7 +1128,7 @@ test('IAR-W12: a page that arrived is there for a new tab however long writing i
   assert.match(await (await worker.handle('page', navigation('/'), event)).text(), /content="cache"/);
 });
 
-// Round 10 on sandbox5: right after sign-in an offline tab waited 8-33 s for every cover the page
+// Right after sign-in an offline tab waited 8-33 s for every cover the page
 // had just loaded to be written, though it needed only the page.
 test('IAR-W12: an offline navigation waits for the page being written, not for covers being written', async () => {
   const caches = fakeCaches();
@@ -1168,7 +1168,7 @@ test('IAR-W12: an offline navigation waits for the page being written, not for c
   assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
 });
 
-// Sandbox5 r29 (cold D2): offline seconds after a first visit, the copy was still being filled with
+// Offline seconds after a first visit, the copy was still being filled with
 // the page's assets, and the new tab's page and every asset not yet kept waited for all of them.
 test('asset writes of the fill hold neither an offline navigation nor another asset; an asset waits only for its own write', async () => {
   const caches = fakeCaches();
@@ -1218,7 +1218,7 @@ test('asset writes of the fill hold neither an offline navigation nor another as
   await settled();
 });
 
-// Sandbox5 r25 (D2): offline right after sign-in, a new tab sometimes took 11-13 s. Assets being
+// Offline right after sign-in, a new tab sometimes took 11-13 s. Assets being
 // written queue behind the page's covers, and a navigation or an asset never kept waited for them.
 test('IAR-W12: assets written behind covers hold neither an offline navigation nor an asset never kept', async () => {
   const caches = fakeCaches();
@@ -1267,7 +1267,7 @@ test('IAR-W12: assets written behind covers hold neither an offline navigation n
   await settled();
 });
 
-// Owner round 10 ("B: wait 10 s"): a tunnel held the first request after its server stopped for
+// No answer for 10 s: a tunnel held the first request after its server stopped for
 // 20-60 s, and the tab stayed blank all that time.
 function heldServer() {
   let release;
@@ -1295,7 +1295,7 @@ test('IAR-W14: a navigation with no answer within the wait shows the copy, marke
   assert.match(await kept.text(), /Later/, 'the answer that came after the wait is kept');
 });
 
-// Round 10 on the owner's busy computer: reading the copy took seconds after the wait had ended.
+// On a busy computer, reading the copy took seconds after the wait had ended.
 test('IAR-W14: the copy is prepared while waiting, so it is ready the moment the wait ends', async () => {
   const server = heldServer();
   const caches = fakeCaches();
@@ -1338,7 +1338,7 @@ test('IAR-W14: with nothing kept, a navigation keeps waiting for the server howe
   assert.match(await (await navigationDone).text(), /content="network"/);
 });
 
-// Owner round 8: offline, Album Details' close button was an empty square. Its X is a CSS mask
+// Offline, Album Details' close button was an empty square. Its X is a CSS mask
 // image that loads only when the button first appears, so a copy never shown details lacked it.
 function styledServer({ online = () => true } = {}) {
   const requests = [];
@@ -1374,7 +1374,7 @@ test('IAR-W13: images a kept stylesheet draws (icon masks) are kept, so they sho
   assert.equal(await icon.text(), '<svg>x</svg>');
 });
 
-// Sandbox5: right after signing in, the page the worker loads is never saved again, and its
+// Right after signing in, the page the worker loads is never saved again, and its
 // stylesheets arrived before the copy existed; the close X showed as an empty square offline.
 test('IAR-W13: the page that starts the copy keeps its stylesheets and the images they draw, with no save', async () => {
   let up = true;

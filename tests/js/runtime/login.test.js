@@ -275,7 +275,7 @@ test('startup failure provides recovery and reset restores login interactivity',
   assert.equal(ui.content.inert, false);
 });
 
-// Owner's D2: signed in, the connection lost at once, then a new tab offline showed "This site
+// Signed in, the connection lost at once, then a new tab offline showed "This site
 // can't be reached", because nothing kept the library page until a second render of it.
 function fakeWorkers() {
   let activate;

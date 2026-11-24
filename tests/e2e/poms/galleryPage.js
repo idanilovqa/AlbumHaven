@@ -397,7 +397,7 @@ export class GalleryPage extends BasePage {
   }
 
   // How far apart the vertical centers of an OfflineNotice line's cloud and its text's first line
-  // are, in pixels (owner v004: "centerline the line with the cloud").
+  // are, in pixels (v004: one centerline for both).
   async readOfflineLineCenterOffset(notice) {
     // parity-check: allow-read-only-measurement-evaluate -- reads the rendered cloud and text boxes.
     return notice.evaluate((element) => {

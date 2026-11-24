@@ -1,4 +1,4 @@
-// OfflineNotice (owner-approved v003, unreachable server state): plain text with a muted crossed-out
+// OfflineNotice (approved v003, unreachable server state): plain text with a muted crossed-out
 // cloud and no box; the JavaScript and Jinja renderers draw the same markup.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

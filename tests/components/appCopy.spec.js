@@ -210,7 +210,7 @@ test.describe('app copy service worker', () => {
 
   });
 
-  // Owner's D2 retest: on a busy laptop `load` came late, and Wi-Fi went off before the copy was kept.
+  // On a busy device `load` can come late, and the network can go before the copy is kept.
   test('IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it', async ({ page, context }) => {
     server.androidShell = false;
     server.holdLoad = true;

@@ -4765,7 +4765,7 @@
       "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
       "testIdentity": "request capture: once the server answers again, a view that could not load reloads once, however many failed",
       "performanceTargets": [],
-      "rollback": "Remove the recovery after an unreachable server (owner round 8); surfaces then stay Offline until the user acts again. No data or API change."
+      "rollback": "Remove the recovery after an unreachable server; surfaces then stay Offline until the user acts again. No data or API change."
     },
     {
       "id": "js:runtime/pending-projection-fetch.js#serverReachability",
@@ -4807,7 +4807,7 @@
       "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
       "testIdentity": "request capture: while the server is unreachable, one /health probe per tick, however many requests failed",
       "performanceTargets": [],
-      "rollback": "Remove the recovery after an unreachable server (owner round 8); surfaces then stay Offline until the user acts again. No data or API change."
+      "rollback": "Remove the recovery after an unreachable server; surfaces then stay Offline until the user acts again. No data or API change."
     },
     {
       "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",

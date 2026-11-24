@@ -43,7 +43,7 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   await galleryActions.waitForGalleryReady();
   expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, 'saved library view with the server unreachable');
   // Every stylesheet and script the page loads comes from the copy, Settings' and Account's
-  // included, so those screens are styled offline too (orchestrator round 9).
+  // included, so those screens are styled offline too.
   await page.waitForLoadState('load');
   expect(failedAssets, 'page assets that failed offline').toEqual([]);
   expect(await galleryPage.readUnloadedStylesheets(), 'page stylesheets without rules offline').toEqual([]);
@@ -68,7 +68,7 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   await expect(scanControl).toBeVisible();
 });
 
-// Owner report: "no flashing offline messaging when network is on". A connection slower than the
+// The Offline notice never flashes while the network is on. A connection slower than the
 // old 1.5 s wait, still online, loads the server's page; the notice is never shown at any moment.
 test('FTC-IAR-W11 a slow connection that is still online never shows the Offline notice while the library loads', {
   tag: '@area:gallery-search',
@@ -103,7 +103,7 @@ test('FTC-IAR-W11 a slow connection that is still online never shows the Offline
   expect((await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
 });
 
-// The owner's D2 retest: the first visit with the copy on, then airplane mode without leaving the
+// The first visit with the copy on, then airplane mode without leaving the
 // tab (so it is never hidden while online), then a new tab to the site's address.
 test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the saved library, never a connection error', {
   tag: '@area:gallery-search',
@@ -132,7 +132,7 @@ test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the save
 });
 
 // Reloading, offline, an artist opened in the app after the last save: that address was never
-// kept. Owner D4: the page never lands on another kept view; it names the artist asked for and
+// kept. The page never lands on another kept view; it names the artist asked for and
 // says the server cannot be reached.
 test(`FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'`, {
   tag: '@area:gallery-search',
@@ -161,7 +161,7 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
   await expect(galleryPage.appCopyOfflineNotice).toBeHidden();
   expect(await visibleAlbumNames(galleryPage), 'no other view stands in for the artist').toEqual([]);
 
-  // The same address in a new tab (orchestrator round 9 saw one never finish loading once).
+  // The same address in a new tab (one was once seen never to finish loading).
   const tab = await page.context().newPage();
   const tabStarted = Date.now();
   await tab.goto(artistUrl.href, { waitUntil: 'load' });
@@ -171,7 +171,7 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
   await expect(tabGallery.unreachableDetail).toHaveText(`Can't load ${artist}, check your network or try again later`);
 });
 
-// Owner D4, server down: an album's details spun forever and tree entries quietly kept the view
+// Server down: an album's details spun forever and tree entries quietly kept the view
 // on screen. Offline in an open tab, each says the server cannot be reached and stops loading.
 test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever`, {
   tag: '@area:gallery-search',
@@ -195,7 +195,7 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   await expect(trackModal.offlineArtbox, 'the artbox shows the offline cloud').toBeVisible();
   await expect(trackModal.loadingRow).toHaveCount(0);
   await expect(trackModal.title).toContainText(album);
-  // Owner round 8: the close button shows its X and works offline (it was an empty square).
+  // The close button shows its X and works offline (it was an empty square).
   await expect(trackModal.closeButton).toBeVisible();
   await expect(trackModal.closeButton).toBeEnabled();
   expect(failedAssets, 'Album Details assets that failed offline, the close X included').toEqual([]);
@@ -220,7 +220,7 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   await expect.poll(async () => (await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
 });
 
-// Owner round 10 ("B: wait 10 s"): a tunnel held the first request after its server stopped for
+// No answer for 10 s: a tunnel held the first request after its server stopped for
 // 20-60 s and the new tab stayed blank. With no answer for 10 s the saved library shows with the
 // Offline line, never sooner; when the held answer finally arrives the page goes live in place.
 const NO_ANSWER_WAIT_MS = 10_000;

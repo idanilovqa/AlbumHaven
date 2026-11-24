@@ -198,7 +198,7 @@ def test_index_template_loads_the_app_copy_client_before_the_app(asgi_app):
 
 
 def test_every_stylesheet_and_script_of_the_app_page_can_be_kept_by_the_copy(asgi_app):
-    """Orchestrator round 9: offline, Settings and Account were unstyled. The copy keeps only what
+    """Offline, Settings and Account were unstyled. The copy keeps only what
     the server marks immutable, which takes the current version; an unversioned asset is no-store."""
     import re
 

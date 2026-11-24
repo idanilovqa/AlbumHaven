@@ -2109,7 +2109,7 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 const isGatewayFailureStatus = status => status === 502 || status === 504 || (status >= 520 && status <= 530);
 
 // What a surface that needs the server says while the server cannot be reached, the device
-// offline or the server down alike (the owner's wording): [subject] names what could not load.
+// offline or the server down alike: [subject] names what could not load.
 // The detail stands under an "Offline" title where the message is centered (v004).
 const SERVER_UNREACHABLE_TITLE = 'Offline';
 function serverUnreachableDetail(subject) {
@@ -2119,7 +2119,7 @@ function serverUnreachableMessage(subject) {
   return `${SERVER_UNREACHABLE_TITLE}. ${serverUnreachableDetail(subject)}`;
 }
 
-// Reachability (owner round 8: after the network returned, Offline stayed for minutes). Once a
+// Reachability, so Offline does not outlast an outage after the network returns. Once a
 // request finds the server unreachable, it is probed every few seconds, each probe given up after a
 // few more so a tunnel holding requests cannot stall it, and at once on the browser's `online`
 // event; the first answer, or any answered request, tells every surface showing Offline to load
@@ -4767,7 +4767,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
 // BEGIN js/runtime/offline-notice.js
 
-// OfflineNotice (owner-approved v004, unreachable server state): plain text with a muted crossed-out
+// OfflineNotice (approved v004, unreachable server state): plain text with a muted crossed-out
 // cloud, no box, border or tint. `line` is one line with the small cloud before it, both on one
 // centerline (the end of a kept gallery, the kept-library notice). `message` is centered: the small
 // cloud and a bold, larger title on one centerline, then the detail in muted text (Album Details and
@@ -16448,7 +16448,7 @@ function renderTrackModalUnreachableState(album) {
 }
 
 // The server answers again (onServerReachableAgain): Album Details still showing Offline for the
-// album it is open on loads that album (owner round 8).
+// album it is open on loads that album.
 function reloadTrackModalAfterServerReachable() {
   const els = getTrackModalElements();
   const shown = state.modalReleases?.[state.modalReleaseIndex];
@@ -20208,7 +20208,7 @@ function setGalleryEndOffline(message) {
 
 // The server answers again (onServerReachableAgain): the view that could not load loads, a view
 // shown from the device copy is brought up to date in place, and a gallery that could not load
-// more continues where it stopped (owner round 8).
+// more continues where it stopped.
 function resumeGalleryAfterServerReachable({ copyServed = false } = {}) {
   const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
   const endWasOffline = Boolean(notice && !notice.hidden);

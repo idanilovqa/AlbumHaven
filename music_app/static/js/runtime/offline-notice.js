@@ -1,4 +1,4 @@
-// OfflineNotice (owner-approved v004, unreachable server state): plain text with a muted crossed-out
+// OfflineNotice (approved v004, unreachable server state): plain text with a muted crossed-out
 // cloud, no box, border or tint. `line` is one line with the small cloud before it, both on one
 // centerline (the end of a kept gallery, the kept-library notice). `message` is centered: the small
 // cloud and a bold, larger title on one centerline, then the detail in muted text (Album Details and

@@ -88,7 +88,7 @@ function renderTrackModalUnreachableState(album) {
 }
 
 // The server answers again (onServerReachableAgain): Album Details still showing Offline for the
-// album it is open on loads that album (owner round 8).
+// album it is open on loads that album.
 function reloadTrackModalAfterServerReachable() {
   const els = getTrackModalElements();
   const shown = state.modalReleases?.[state.modalReleaseIndex];

@@ -1,6 +1,6 @@
-// Instant return: the app notices by itself that Album Haven answers again (owner round 8: "the
-// app seems to be not understanding that network is back without reloading ... it has been
-// MINUTES"). With the device offline (W15) or the server down behind its tunnel (W16), Album
+// Instant return: the app notices by itself that Album Haven answers again, so a returned
+// network never needs a reload and Offline does not outlast the outage by minutes.
+// With the device offline (W15) or the server down behind its tunnel (W16), Album
 // Details, an artist and the end of the gallery each say Offline; once the server answers, each
 // loads again within the budget, without a reload and without anyone clicking again.
 import { expect, test } from '../support/baseFixtures.js';
@@ -10,7 +10,7 @@ import { setAppPageHold } from '../helpers/instantReturnHelpers.js';
 // A short page, so the root gallery has more albums to load below the first ones.
 test.use({ serviceWorkers: 'allow', viewport: { width: 1024, height: 480 } });
 
-// Owner round 8: recovery within about 5 s of the server answering again.
+// Recovery within about 5 s of the server answering again.
 const RECOVERY_BUDGET = defineTimingBudget({ metricId: 'instant-return.recoveryMs', targetMaximum: 5000, graceMs: 400 });
 
 // Each surface says Offline while [cutOff] is in force, then loads again by itself after [restore].

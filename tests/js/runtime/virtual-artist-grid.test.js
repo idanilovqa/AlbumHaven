@@ -4038,7 +4038,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   assert.doesNotMatch(containerEl.innerHTML, /Neal Morse|Cosmic Cathedral/);
 }
 
-// Owner D4: a view the server could not be reached for says why it is empty.
+// A view the server could not be reached for says why it is empty.
 {
   const { context, containerEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

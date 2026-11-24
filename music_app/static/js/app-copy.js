@@ -19,7 +19,7 @@
   const ACCOUNT_URL = '/app-copy/account';
   const WEB_WORKER_URL = `${WORKER_URL}?mode=web`;
   // While the server cannot be reached, it is asked again every few seconds, each check given up
-  // after a few more, so a tunnel holding the request never stalls the return (owner round 8).
+  // after a few more, so a tunnel holding the request never stalls the return.
   const RETRY_DELAY_MS = 2500;
   const ACCOUNT_CHECK_TIMEOUT_MS = 4000;
   const WEB_SAVE_INTERVAL_MS = 10 * 60 * 1000;

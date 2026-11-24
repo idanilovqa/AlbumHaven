@@ -3,7 +3,7 @@
 const isGatewayFailureStatus = status => status === 502 || status === 504 || (status >= 520 && status <= 530);
 
 // What a surface that needs the server says while the server cannot be reached, the device
-// offline or the server down alike (the owner's wording): [subject] names what could not load.
+// offline or the server down alike: [subject] names what could not load.
 // The detail stands under an "Offline" title where the message is centered (v004).
 const SERVER_UNREACHABLE_TITLE = 'Offline';
 function serverUnreachableDetail(subject) {
@@ -13,7 +13,7 @@ function serverUnreachableMessage(subject) {
   return `${SERVER_UNREACHABLE_TITLE}. ${serverUnreachableDetail(subject)}`;
 }
 
-// Reachability (owner round 8: after the network returned, Offline stayed for minutes). Once a
+// Reachability, so Offline does not outlast an outage after the network returns. Once a
 // request finds the server unreachable, it is probed every few seconds, each probe given up after a
 // few more so a tunnel holding requests cannot stall it, and at once on the browser's `online`
 // event; the first answer, or any answered request, tells every surface showing Offline to load

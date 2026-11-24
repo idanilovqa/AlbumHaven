@@ -1,4 +1,4 @@
-// Instant return in an ordinary browser, from signing in (IAR-W12). Owner D2, round 7: signed in,
+// Instant return in an ordinary browser, from signing in (IAR-W12). Signed in,
 // the connection lost at once, then a new tab showed "This site can't be reached". The sign-in
 // page installs the copy's worker, so the library page that follows is kept as it arrives and no
 // wait for the copy is needed. The case signs in on its own session through the real form.
@@ -35,7 +35,7 @@ test(`FTC-IAR-W12 signed in and offline at once, a new tab shows the saved libra
   // fold, so the first card's own box is checked against the window.
   await expect(galleryPage.albumCards.first()).toBeInViewport();
 
-  // Owner D4: the end of the kept gallery says why no more albums load, and the line stays.
+  // The end of the kept gallery says why no more albums load, and the line stays.
   const { maxScrollTop } = await library.readGalleryScrollState();
   expect(maxScrollTop, 'the saved first page scrolls toward more albums').toBeGreaterThan(0);
   await library.scrollGalleryBy(maxScrollTop);
@@ -45,7 +45,7 @@ test(`FTC-IAR-W12 signed in and offline at once, a new tab shows the saved libra
   expect(await galleryPage.readOfflineLineCenterOffset(galleryPage.galleryEndOffline), 'cloud and text centerlines apart (px)').toBeLessThanOrEqual(1.5);
 
   // The kept-library line has its own row: scrolled albums pass under a strip of page background,
-  // never under the text (orchestrator round 9: the line drew over the first card).
+  // never under the text (the line once drew over the first card).
   await library.scrollGalleryBy(-Math.round(maxScrollTop / 2));
   await expect(galleryPage.appCopyOfflineNotice).toBeVisible();
   const clearance = await galleryPage.readOfflineNoticeClearance();

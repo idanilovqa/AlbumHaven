@@ -1,4 +1,4 @@
-/* OfflineNotice (owner-approved v004): plain text and a muted crossed-out cloud, no box, border or
+/* OfflineNotice (approved v004): plain text and a muted crossed-out cloud, no box, border or
    tint, in the viewer's theme. Renderers: runtime/offline-notice.js, components/offline-notice.html.
    The cloud's box is the height of the text's line, so cloud and text share one centerline. */
 .offline-notice { display: flex; align-items: center; gap: 8px; color: inherit; line-height: 1.35; }

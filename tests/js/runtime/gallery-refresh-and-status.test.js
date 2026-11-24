@@ -7719,7 +7719,7 @@ test('BI cover completion refresh retry requests the current view once at produc
   measureCompletionRefreshRetry('Cover')
 ));
 
-// ---- Server unreachable (owner D4: server down while the device is online, or the device offline) ----
+// ---- Server unreachable (server down while the device is online, or the device offline) ----
 
 function unreachableGallery() {
   const fixture = createContext();
@@ -7809,7 +7809,7 @@ test('IAR-W10: the app\'s own "not ready yet" (503) is never taken for an unreac
   assert.equal(response.status, 503);
 });
 
-// Owner D4 (v003 "Change both"): the end of the kept gallery says why nothing more loads, and stays
+// v003: the end of the kept gallery says why nothing more loads, and stays
 // until more albums do; the short-lived error toast is gone for this case.
 test('IAR-W10: more albums that cannot load end the gallery with the offline line until some do', async () => {
   let online = false;
@@ -7834,7 +7834,7 @@ test('IAR-W10: more albums that cannot load end the gallery with the offline lin
   assert.equal(endNotice.hidden, true, 'albums that load take the line away');
 });
 
-// ---- Recovery (owner round 8: after the network returned, Offline stayed for minutes) ----
+// ---- Recovery (after the network returns, Offline does not stay for minutes) ----
 
 // [fixture] with timers that run only when the test says, and a window that records listeners.
 function recoveringGallery() {

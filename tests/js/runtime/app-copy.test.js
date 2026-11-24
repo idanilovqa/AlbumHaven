@@ -139,7 +139,7 @@ test('IAR-005: unreachable, the copy is read-only with its notice until the serv
   assert.equal(reconciled, 0);
   assert.ok(timers.length >= 1);
 
-  // Owner round 8: the server is asked again every 2.5 s, not after a growing wait; each check is
+  // The server is asked again every 2.5 s, not after a growing wait; each check is
   // given up after 4 s. The next one that succeeds needs no reload.
   await timers.at(-1).callback();
   const retries = timers.filter(timer => timer.delay !== 4000).map(timer => timer.delay);
@@ -206,7 +206,7 @@ test('nothing is saved while the copy is read-only', async () => {
 
 // ---- Ordinary browsers (IAR-W01, IAR-W07) ----
 
-// Owner's D2 retest: a busy laptop fired `load` late, and Wi-Fi went off before anything was kept.
+// A busy device can fire `load` late, and the network can go before anything is kept.
 test('IAR-W12: in a browser over HTTPS the server-first worker is registered as the page runs, without waiting for load', async () => {
   const { env, listeners, settle } = setup({ androidShell: false, marker: 'network' });
   await settle();
@@ -265,7 +265,7 @@ test('in a browser, a page the worker did not load is saved the first time it is
   assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
 });
 
-// Owner report: the Offline notice flashed during an ordinary load. A connected device shows it only
+// The Offline notice must not flash during an ordinary load. A connected device shows it only
 // once the server has failed to answer the account check.
 test('IAR-W11: in a browser a page from the copy is read-only from its first paint, without the notice while connected', async () => {
   let answer;
@@ -354,7 +354,7 @@ test('bounded interaction: an unreachable copy retries one account check per tic
   });
 });
 
-// Owner D4: an address never kept, opened while the server is unreachable, showed another view.
+// An address never kept, opened while the server is unreachable, showed another view.
 test('IAR-W10: a copy standing in for an address never kept says so, so the page shows that address as unreachable', async () => {
   const offline = async () => { throw new TypeError('Failed to fetch'); };
   const standIn = setup({ androidShell: false, marker: 'cache', viewMissing: true, answer: offline });
@@ -368,7 +368,7 @@ test('IAR-W10: a copy standing in for an address never kept says so, so the page
   assert.equal(standIn.client.isReadOnly(), true);
 });
 
-// Owner round 10 ("B: wait 10 s"): the copy the worker shows after no answer at all says Offline
+// No answer for 10 s: the copy the worker shows after no answer at all says Offline
 // at once, and switches to live in place when the held account check is finally answered.
 test('IAR-W14: a copy shown after no answer shows the notice at once and goes live in place once the server answers', async () => {
   let answerAccount;

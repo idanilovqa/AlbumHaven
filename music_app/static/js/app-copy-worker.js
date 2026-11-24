@@ -34,7 +34,7 @@
   const KEPT_COVER_PREFIX = '/__album-haven-cover/';
   const MAX_COVER_FILLS = 120;
   const KEEP_WAIT_MS = 200;
-  // A navigation with no answer at all for this long shows the copy (owner, round 10: "B: wait 10 s").
+  // A navigation with no answer at all for this long shows the copy.
   const NO_ANSWER_MS = 10000;
   // A referenced cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`).
   const COVER_URL = /\/cover\/[A-Za-z0-9_-]{22}(?=[?"'\s<>&\\]|$)[^"'\s<>]*/g;
@@ -92,7 +92,7 @@
     };
     // Covers are written in a turn of their own: a page, asset or data answer being kept never
     // queues behind the many covers a page just loaded, so an offline tab waiting for those writes
-    // is not held by covers (sandbox5 r25: a new tab offline right after sign-in took 11-13 s).
+    // is not held by covers (a new tab offline right after sign-in took 11-13 s).
     let coverQueue = Promise.resolve();
     const coverTurn = (task) => {
       const run = coverQueue.then(task);
@@ -129,7 +129,7 @@
     // [key] reads (PAGES, or one asset's URL) and arrived is then being written, which touches only
     // storage and is waited for in full. Nothing else being written is: right after a first visit
     // the copy is being filled with every asset of the page, and an offline tab waited for all of
-    // them (sandbox5 r29), as it once did for covers (up to 30 s on a busy computer, round 10).
+    // them, as it once did for covers (up to 30 s on a busy computer).
     const keptSoFar = async (key) => {
       await Promise.race([
         Promise.all(Array.from(keeping)),
@@ -293,7 +293,7 @@
     }
 
     // [copy] is shown: its version is now the one running. Recorded in turn with the other writes,
-    // never awaited: on a busy computer that turn can take seconds (round 10).
+    // never awaited: on a busy computer that turn can take seconds.
     function shown(copy) {
       if (copy.served !== copy.version) {
         void quietly(exclusive(async () => {
@@ -339,7 +339,7 @@
       const network = fetchPage(url, { running: true }, event);
       const answered = network.catch(() => null);
       // The answer for no answer, prepared while waiting so it is ready the moment the wait ends:
-      // on a busy computer reading the cache alone took seconds (round 10).
+      // on a busy computer reading the cache alone took seconds.
       const ready = (async () => {
         const kept = await readCopy(url);
         const copy = kept ? kept.response : await standInCopy(url);

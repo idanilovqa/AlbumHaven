@@ -3525,7 +3525,7 @@ test('request capture: Album Details opens fetch /album-details once per album',
   });
 });
 
-// Owner D4: with the server down, Album Details kept "Loading album details..." forever.
+// With the server down, Album Details kept "Loading album details..." forever.
 for (const [cause, fail] of [
   ['no answer at all', () => { throw new TypeError('Failed to fetch'); }],
   ['a gateway answering for it (530)', () => ({ ok: false, status: 530, json: async () => { throw new SyntaxError('not JSON'); } })],
@@ -3552,7 +3552,7 @@ for (const [cause, fail] of [
   });
 }
 
-// Owner round 8: Album Details kept "Offline" after the network returned, even when reopened.
+// Album Details kept "Offline" after the network returned, even when reopened.
 test('IAR-W15: open Album Details showing Offline loads its album by itself once the server answers again', async () => {
   let online = false;
   const album = { key: 'alpha', name: 'Album Alpha', album_artist: 'Chris Buck', preview_only: true };

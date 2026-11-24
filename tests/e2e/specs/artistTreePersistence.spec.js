@@ -146,7 +146,10 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
     const header = await phone.evaluate(() => {
       const box = (id) => document.getElementById(id).getBoundingClientRect();
       const t = box('mobile-page-title'), s = box('mobile-page-summary');
-      return { below: s.top >= t.bottom - 1, height: s.height, inView: s.bottom <= window.innerHeight && s.top >= 0 };
+      // The phone page header is the shared mobile-primary bar (e84060a4d): its count line is pulled 4px up
+      // into the title's line box (mobile-layout.css, MOBILE-SETTINGS-HEADER 2), so it counts as below the
+      // title when its line's centre is under the title box, never beside it.
+      return { below: s.top + (s.height / 2) >= t.bottom, height: s.height, inView: s.bottom <= window.innerHeight && s.top >= 0 };
     });
     expect(header).toMatchObject({ below: true, inView: true });
     expect(header.height).toBeGreaterThan(8);

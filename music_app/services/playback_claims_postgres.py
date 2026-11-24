@@ -5,7 +5,9 @@ expired lease is no proof, as a client plays on through an outage (B-D4): it onl
 is the holder's own word: its release, its answer to Play here, or its page saying it is leaving once its
 output has drained. The one timeout is a promise kept by the holder's own audio thread:
 it falls silent 5 minutes after it last sent a renewal that was answered, and only a claim that made that
-promise gives way, 5 s later by this server's clock from when that renewal arrived.
+promise gives way, 5 s later by this server's clock from when that renewal arrived. A holder that paused
+promises 15 s from its pause's renewal instead: a Play in its hold renews at once, so a device that dies
+paused blocks nobody for longer.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -26,6 +28,8 @@ _HANDOFF_LEASE_SECONDS = 15
 # A page says it is leaving just before it stops its audio: what it rendered still has to leave the output.
 _LEAVING_DRAIN_SECONDS = 1
 SILENT_WITHOUT_SERVER_SECONDS = 300
+# The 12 s pause hold and 3 s for the renewal a Play in it sends at once.
+PAUSED_SILENT_WITHOUT_SERVER_SECONDS = 15
 # The holder's buffered output, its clock's drift and its audio thread's scheduling.
 _SILENCE_MARGIN_SECONDS = 5
 # Kept in the claim's track, as its position is, and shown as neither.
@@ -85,20 +89,20 @@ def validate_taker(client_id, client_surface):
 
 
 def _silent(table=""):
-    """SQL that is true of a claim whose holder has proved silence, for [_silent_bounds]' two values."""
-    return (f"({table}pending_handoff_expires_at <= %s"
-            f" or (({table}track ->> '{_PROMISE}') is not null and {table}expires_at <= %s))")
+    """SQL that is true of a claim whose holder has proved silence, for [_silent_bounds]' three values."""
+    promised = f"({table}track ->> '{_PROMISE}') is not null"
+    return (f"({table}pending_handoff_expires_at <= %s or ({promised} and ({table}expires_at <= %s"
+            f" or (({table}track ->> '{_PAUSED}') is not null and {table}expires_at <= %s))))")
 
 
 def _gone(table=""):
-    """SQL that is true of a claim no client can take up any more, for [_gone_bounds]' two values: a page that
-    said it was leaving and whose handoff to its next page has expired, or a holder past its promise."""
-    return (f"({table}pending_handoff_expires_at <= %s"
-            f" or (({table}track ->> '{_PROMISE}') is not null and {table}expires_at <= %s))")
+    """SQL that is true of a claim no client can take up any more, for [_gone_bounds]' three values: a page
+    that said it was leaving and whose handoff to its next page has expired, or a holder past its promise."""
+    return _silent(table)
 
 
 def _gone_bounds(now):
-    return now, _silent_bounds(now)[1]
+    return now, *_silent_bounds(now)[1:]
 
 
 def _forget_last_played(connection, account_id, library_id):
@@ -108,15 +112,19 @@ def _forget_last_played(connection, account_id, library_id):
 
 
 def _silent_bounds(now):
-    """Staged long enough ago to have drained; renewed long enough ago to have silenced itself."""
+    """Staged long enough ago to have drained; renewed, playing or paused, long enough ago to have silenced
+    itself."""
+    def renewed_before(silent_after):
+        return now + timedelta(seconds=_CLAIM_LEASE_SECONDS - silent_after - _SILENCE_MARGIN_SECONDS)
     return (now + timedelta(seconds=_HANDOFF_LEASE_SECONDS - _LEAVING_DRAIN_SECONDS),
-            now + timedelta(seconds=_CLAIM_LEASE_SECONDS - SILENT_WITHOUT_SERVER_SECONDS - _SILENCE_MARGIN_SECONDS))
+            renewed_before(SILENT_WITHOUT_SERVER_SECONDS), renewed_before(PAUSED_SILENT_WITHOUT_SERVER_SECONDS))
 
 
-def _promise(silences_itself):
+def _promise(silences_itself, paused=False):
     if type(silences_itself) is not bool:
         raise PlaybackContractError()
-    return {_PROMISE: SILENT_WITHOUT_SERVER_SECONDS * 1000} if silences_itself else {}
+    seconds = PAUSED_SILENT_WITHOUT_SERVER_SECONDS if paused else SILENT_WITHOUT_SERVER_SECONDS
+    return {_PROMISE: seconds * 1000} if silences_itself else {}
 
 
 class PostgresPlaybackClaims:
@@ -234,7 +242,7 @@ class PostgresPlaybackClaims:
         heard = _position(position)
         if type(paused) is not bool or (paused and claim_token is None):
             raise PlaybackContractError()
-        stored_track = {**track, **_promise(silences_itself), **({_PAUSED: True} if paused else {}),
+        stored_track = {**track, **_promise(silences_itself, paused), **({_PAUSED: True} if paused else {}),
                         **({"position": {**heard, "at": now.isoformat()}} if heard else {})}
         expires = now + timedelta(seconds=_CLAIM_LEASE_SECONDS)
         if handoff is not None and claim_token is None:

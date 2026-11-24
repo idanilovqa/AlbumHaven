@@ -86,7 +86,10 @@ class PlaybackClaimOwner(
     private var renewing = false
     private var nextRenewMs = 0L
 
-    /** Until when the held claim may sound: five minutes from before its last answered request was sent. */
+    /**
+     * Until when the held claim may sound: five minutes from before its last answered request was sent, and
+     * at most [PAUSED_SILENT_WITHOUT_SERVER_MS] from before a pause's renewal was sent, answered or not.
+     */
     private var soundUntilMs = 0L
 
     /** When an acquire nobody answered is sent again; null while none waits. */
@@ -139,7 +142,7 @@ class PlaybackClaimOwner(
     fun acquire(claimTrack: ClaimTrack, takeOver: Boolean, onResult: (ClaimOutcome) -> Unit) {
         track = claimTrack
         releasedToken = null
-        // Played again: its next heartbeat says so. Play itself asks nothing of a claim still held.
+        // Played again: it renews once it sounds, as its pause promised silence soon. Play itself asks nothing.
         paused = false
         if (token != null) {
             onResult(ClaimOutcome.GRANTED)
@@ -236,9 +239,11 @@ class PlaybackClaimOwner(
         val requestEpoch = epoch
         val at = position()
         val pausedNow = paused
+        // The pause's promise holds from when it is sent: the server may have it even if no answer comes.
+        if (pausedNow) soundUntilMs = minOf(soundUntilMs, now + PAUSED_SILENT_WITHOUT_SERVER_MS)
         io.execute {
             val response = call { api.acquire(clientId, held, claimTrack, false, at, pausedNow) }
-            post(Runnable { renewed(requestEpoch, now, response) })
+            post(Runnable { renewed(requestEpoch, now, response, pausedNow) })
         }
     }
 
@@ -338,14 +343,16 @@ class PlaybackClaimOwner(
         }
     }
 
-    private fun renewed(requestEpoch: Long, sentMs: Long, response: ClaimResponse) {
+    private fun renewed(requestEpoch: Long, sentMs: Long, response: ClaimResponse, sentPaused: Boolean) {
         if (requestEpoch != epoch) return
         renewing = false
+        // Played again while the pause's renewal was on its way: the playing one goes now.
+        if (sentPaused && !paused) publishNow()
         when (response) {
             is ClaimResponse.Granted -> {
                 token = response.claimToken
                 scrobblingAvailable = response.scrobblingAvailable
-                soundUntilMs = sentMs + SILENT_WITHOUT_SERVER_MS
+                soundUntilMs = sentMs + if (sentPaused) PAUSED_SILENT_WITHOUT_SERVER_MS else SILENT_WITHOUT_SERVER_MS
             }
             // The server no longer recognizes this claim: another client owns playback now.
             ClaimResponse.Conflict, is ClaimResponse.Rejected -> {
@@ -373,5 +380,8 @@ class PlaybackClaimOwner(
 
         /** The server lets another device start 5 s after this, and only a device that promised it. */
         const val SILENT_WITHOUT_SERVER_MS = 300_000L
+
+        /** A pause's renewal promises this instead: the 12 s pause hold and 3 s for the renewal a Play in it sends at once. */
+        const val PAUSED_SILENT_WITHOUT_SERVER_MS = 15_000L
     }
 }

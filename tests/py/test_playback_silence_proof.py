@@ -520,6 +520,9 @@ def test_the_browser_and_the_app_silence_themselves_before_the_server_lets_anoth
     app_ms = int(re.search(r"SILENT_WITHOUT_SERVER_MS = ([\d_]+)L", app).group(1).replace("_", ""))
 
     assert web_ms == app_ms == claims.SILENT_WITHOUT_SERVER_SECONDS * 1000 == 300_000
+    web_paused = int(re.search(r"PLAYBACK_PAUSED_SILENT_WITHOUT_SERVER_MS = (\d+);", web).group(1))
+    app_paused = int(re.search(r"PAUSED_SILENT_WITHOUT_SERVER_MS = ([\d_]+)L", app).group(1).replace("_", ""))
+    assert web_paused == app_paused == claims.PAUSED_SILENT_WITHOUT_SERVER_SECONDS * 1000 == 15_000
 
 
 def test_a_start_replaces_a_holder_that_yielded_only_while_the_claim_is_still_that_holders(player):
@@ -581,14 +584,40 @@ def test_a_page_that_leaves_paused_in_its_hold_frees_playback_at_once_with_its_r
     assert player.start(other)["playbackState"]["is_playing_here"] is True
 
 
-def test_a_paused_holder_that_died_in_its_hold_blocks_only_until_its_promise_lapses(player):
-    # Its socket is gone, so no press can ask it: nothing starts before the time it promised to fall silent by.
+@pytest.mark.parametrize("surface", ["private_web", "mobile"])
+def test_a_paused_holder_that_died_in_its_hold_blocks_only_until_its_short_promise_lapses(player, surface):
+    # Its socket is gone, so no press can ask it: nothing starts before the time it promised to fall silent by,
+    # 15 s after its pause's renewal and the margin, not the five minutes of a playing holder.
     holder, other = str(uuid4()), str(uuid4())
-    token = player.start(holder, silences_itself=True)["claimToken"]
-    player.start(holder, claim_token=token, silences_itself=True, paused=True)
+    token = player.start(holder, surface, silences_itself=True)["claimToken"]
+    player.start(holder, surface, claim_token=token, silences_itself=True, paused=True)
 
-    player.pass_time(304)
+    player.pass_time(19)
     assert refused(lambda: player.start(other)) == 409
+    assert player.service.holder(None)["silent"] is False
 
     player.pass_time(1)
+    assert player.service.holder(None)["silent"] is True
     assert player.start(other)["playbackState"]["is_playing_here"] is True
+
+
+def test_a_play_in_the_hold_renews_the_five_minutes(player):
+    holder = str(uuid4())
+    token = player.start(holder, silences_itself=True)["claimToken"]
+    player.start(holder, claim_token=token, silences_itself=True, paused=True)
+    player.pass_time(11)
+
+    player.start(holder, claim_token=token, silences_itself=True)
+    player.pass_time(300)
+
+    assert refused(lambda: player.start(str(uuid4()))) == 409
+
+
+def test_a_paused_holder_that_made_no_promise_never_times_out(player):
+    holder = str(uuid4())
+    token = player.start(holder)["claimToken"]
+    player.start(holder, claim_token=token, paused=True)
+
+    player.pass_time(86_400)
+
+    assert refused(lambda: player.start(str(uuid4()))) == 409

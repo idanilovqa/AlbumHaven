@@ -375,6 +375,62 @@ class PlaybackClaimOwnerTest {
         assertTrue("an answer lets it sound again", owner.maySound())
     }
 
+    // A phone that dies paused blocks other devices only until this short promise lapses, not five minutes.
+    @Test
+    fun aPauseMaySoundOnlyFifteenSecondsFromItsRenewalAnsweredOrNot() {
+        owner.acquire(track) {}
+        drain()
+        now = 1_000
+        owner.holdThroughPause()
+        api.renewResponse = { ClaimResponse.Unreachable }
+        owner.tick()
+        drain()
+
+        now = 1_000 + PlaybackClaimOwner.PAUSED_SILENT_WITHOUT_SERVER_MS - 1
+        assertTrue(owner.maySound())
+        now += 1
+        assertFalse("its promise holds though nobody answered it", owner.maySound())
+        assertTrue("silent, not given up", owner.owned)
+    }
+
+    @Test
+    fun aPlayInThePauseHoldRenewsAtOnceAndMaySoundFiveMinutesAgain() {
+        owner.acquire(track) {}
+        drain()
+        now = 1_000
+        owner.holdThroughPause()
+        owner.tick()
+        drain()
+        assertEquals("pause:token-1", api.calls.last())
+
+        now = 12_000
+        val outcomes = mutableListOf<ClaimOutcome>()
+        owner.acquire(track, outcomes::add)
+        assertEquals("Play waits for nothing", listOf(ClaimOutcome.GRANTED), outcomes)
+        // What the controller does once it sounds.
+        owner.publishNow()
+        owner.tick()
+        drain()
+
+        assertEquals("acquire:token-1", api.calls.last())
+        now = 12_000 + PlaybackClaimOwner.SILENT_WITHOUT_SERVER_MS - 1
+        assertTrue(owner.maySound())
+    }
+
+    @Test
+    fun aPlayWhileThePausesRenewalIsOnItsWaySendsThePlayingOneOnItsAnswer() {
+        owner.acquire(track) {}
+        drain()
+        now = 1_000
+        owner.holdThroughPause()
+        owner.tick()
+        now = 1_200
+        owner.acquire(track) {}
+        drain()
+
+        assertEquals("then the playing one, at once", 1_200L, owner.nextDeadlineMs())
+    }
+
     @Test
     fun aClaimGivenBackMayNotSound() {
         owner.acquire(track) {}

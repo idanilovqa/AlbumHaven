@@ -24,7 +24,7 @@ reads. Keep real SQL EXPLAIN checks; mocked row fixtures cannot prove query cost
 ## JavaScript and components
 
 ```powershell
-node --test --test-concurrency=1 tests/js/runtime/utility-problematic-load-diagnostics.test.js tests/js/runtime/utility-problematic-tab.test.js tests/js/runtime/problematic-files-virtual-list.test.js tests/js/runtime/utility-problematic-focused-track-render.test.js tests/js/runtime/problem-exclusion-mutations.test.js tests/js/runtime/utility-rules-search.test.js tests/js/problematic-payload-evidence.test.js tests/js/performance-change-impact.test.js tests/js/e2e-performance-helper-guards.test.js
+node --test --test-concurrency=1 tests/js/runtime/utility-problematic-load-diagnostics.test.js tests/js/runtime/problematic-files-virtual-list.test.js tests/js/runtime/utility-problematic-focused-track-render.test.js tests/js/runtime/problem-exclusion-mutations.test.js tests/js/runtime/utility-rules-search.test.js tests/js/problematic-payload-evidence.test.js tests/js/performance-change-impact.test.js tests/js/e2e-performance-helper-guards.test.js
 npx playwright test problematicFilesVirtualFocus.spec.js --config=playwright.component.config.js --workers=1
 ```
 

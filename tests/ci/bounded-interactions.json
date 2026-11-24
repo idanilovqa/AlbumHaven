@@ -1312,10 +1312,8 @@
         "music_app/static/js/runtime/player-loop-playback.js",
         "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
         "music_app/static/js/selection-accent.js",
-        "music_app/static/js/utilities/shell.js",
         "music_app/static/js/runtime/alert-components.js",
         "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
-        "music_app/static/js/utilities/rules-tab.js",
         "music_app/static/js/runtime/status-ui-helpers.js",
         "music_app/static/js/runtime/gallery-main-components.js",
         "music_app/static/js/runtime/android-settings.js",
@@ -8713,97 +8711,6 @@
       ],
       "workClass": "constant",
       "proof": "static"
-    },
-    {
-      "id": "js:utilities/rules-tab.js#loadUtilityRules",
-      "action": "fetch requests installed by loadUtilityRules",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/rules-tab.js#loadUtilityRules:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/rules-tab.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/utilities/rules"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:utilities/shell.js#fetchCoverForAlbum",
-      "action": "fetch requests installed by fetchCoverForAlbum",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/shell.js#fetchCoverForAlbum:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/shell.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/utilities/fetch-cover"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:utilities/shell.js#fetchUnsuccessfulAlbumCovers",
-      "action": "fetch/fetchAndRender requests installed by fetchUnsuccessfulAlbumCovers",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/shell.js#fetchUnsuccessfulAlbumCovers:request:fetch",
-        "js:music_app/static/js/utilities/shell.js#fetchUnsuccessfulAlbumCovers:request:fetchAndRender"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/shell.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/home-data",
-          "/utilities/fetch-covers-unsuccessful",
-          "/view-data"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:utilities/shell.js#loadProblematicFiles",
-      "action": "fetch requests installed by loadProblematicFiles",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/shell.js#loadProblematicFiles:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/shell.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/utilities/problematic-files"
-        ],
-        "forbidden": []
-      }
     },
     {
       "id": "py:__init__.py#_configure_asgi_app.<locals>.require_runtime_javascript_revalidation",

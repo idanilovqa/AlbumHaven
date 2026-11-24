@@ -69,6 +69,24 @@ def _counted_maintenance(fixture, monkeypatch):
     monkeypatch.setattr(browse, "_pooled_connection", counted_pool)
     monkeypatch.setattr(browse, "_connect", counted_fresh)
     monkeypatch.setattr(problematic_index, "_index_rows", counted_batch)
+    drain = problematic_index._drain
+
+    def recorded_drain(repository, connection, library_id, marks, **kwargs):
+        # Diagnosis: the marks this batch drained (album 0 is the loose files; marked_xid is the writing
+        # transaction, the only trace of who set it) and whether it ended in a serialization retry (40001).
+        first = len(counted.details)
+        try:
+            return drain(repository, connection, library_id, marks, **kwargs)
+        except Exception as error:
+            for detail in counted.details[first:]:
+                detail["error_sqlstate"] = getattr(error, "sqlstate", None)
+            raise
+        finally:
+            for detail in counted.details[first:]:
+                detail["marks"] = [(int(problematic_index._value(row, "album_id")), str(problematic_index._value(row, "marked_xid"))) for row in marks]
+                detail["loose_mark"] = any(int(problematic_index._value(row, "album_id")) == 0 for row in marks)
+
+    monkeypatch.setattr(problematic_index, "_drain", recorded_drain)
     return counted
 
 

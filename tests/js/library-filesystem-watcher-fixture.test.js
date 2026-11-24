@@ -328,3 +328,19 @@ test('watcher fixture creation failure cleans partial ownership before returning
   assert.equal(fs.existsSync(path.join(temp, 'media', 'cases', 'watcher-reconciliation')), false);
   assert.deepEqual(calls, ['context', 'drained', 'inventory']);
 });
+
+test('the stale-source helper refuses the installed Postgres before it starts Python', async () => {
+  const { stageLegacyTrackFileWithoutScanSource } = await import('../e2e/helpers/libraryFilesystemWatcherFixture.js');
+  const names = ['GITHUB_ACTIONS', 'ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL', 'PLAYWRIGHT_PYTHON'];
+  const prior = names.map((name) => [name, process.env[name]]);
+  delete process.env.GITHUB_ACTIONS;
+  process.env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL = 'postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e';
+  process.env.PLAYWRIGHT_PYTHON = 'no-such-python-executable';
+  try {
+    await assert.rejects(stageLegacyTrackFileWithoutScanSource('unused.mp3'), /refuses port 5432 outside GitHub Actions/);
+  } finally {
+    for (const [name, value] of prior) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});

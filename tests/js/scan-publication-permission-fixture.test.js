@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import * as privileges from '../e2e/helpers/postgresPrivilegeHelpers.js';
 
 const env = {
-  ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator_scan_failure@localhost:5432/album_haven_ci_scan_failure',
-  ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: 'postgresql://album_haven_app_scan_failure@localhost:5432/album_haven_ci_scan_failure',
+  ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator_scan_failure@localhost:54329/album_haven_ci_scan_failure',
+  ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: 'postgresql://album_haven_app_scan_failure@localhost:54329/album_haven_ci_scan_failure',
 };
 
 test('scan publication fault is scoped, effective, and restored after native work', async () => {
@@ -31,9 +31,9 @@ test('scan publication fault is scoped, effective, and restored after native wor
 test('scan publication fault rejects non-owned or mismatched identities before SQL', async () => {
   assert.equal(typeof privileges.withScanPublicationPrivilegeFailure, 'function');
   for (const overrides of [
-    { ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator@localhost/album_haven_fake_e2e' },
-    { ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: 'postgresql://album_haven_app_other@localhost:5432/album_haven_ci_scan_failure' },
-    { ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: 'postgresql://album_haven_app_scan_failure@localhost:5432/album_haven_core' },
+    { ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator@localhost:54329/album_haven_fake_e2e' },
+    { ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: 'postgresql://album_haven_app_other@localhost:54329/album_haven_ci_scan_failure' },
+    { ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: 'postgresql://album_haven_app_scan_failure@localhost:54329/album_haven_core' },
     { ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: 'postgresql://album_haven_app_scan_failure@remote:5432/album_haven_ci_scan_failure' },
   ]) {
     await assert.rejects(privileges.withScanPublicationPrivilegeFailure(() => assert.fail('native work must not start'), {

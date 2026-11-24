@@ -39,7 +39,7 @@ test('queries isolated Postgres through a sanitized fixed psql script', async ()
     {
       env: {
         ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-          'postgresql://album_haven_migrator_f_123_1_2:secret@127.0.0.1:5432/album_haven_ci_f_123_1_2',
+          'postgresql://album_haven_migrator_f_123_1_2:secret@127.0.0.1:54329/album_haven_ci_f_123_1_2',
       },
       execFileAsync,
       platform: 'win32',
@@ -63,7 +63,7 @@ test('queries isolated Postgres through a sanitized fixed psql script', async ()
     assert.equal(call.options.env.PGPASSFILE, undefined);
     assert.ok(
       call.args.includes(
-        '--dbname=postgresql://album_haven_migrator_f_123_1_2@127.0.0.1:5432/album_haven_ci_f_123_1_2',
+        '--dbname=postgresql://album_haven_migrator_f_123_1_2@127.0.0.1:54329/album_haven_ci_f_123_1_2',
       ),
     );
     assert.ok(
@@ -116,7 +116,7 @@ test('rejects case-insensitive password query parameters before spawning psql', 
       {
         env: {
           ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-            'postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e?PassWord=query-secret',
+            'postgresql://album_haven_migrator@127.0.0.1:54329/album_haven_fake_e2e?PassWord=query-secret',
         },
         execFileAsync: async () => {
           spawned = true;
@@ -144,7 +144,7 @@ test('synthetic search inventory uses one isolated read-only seeded query with e
   const calls = [];
   const artists = ['Neal Morse', ARTIST_PAYLOAD];
   const rows = [{ artist: 'Neal Morse', key: 'seeded-product-key', fixtureKey: 'seed-album' }];
-  const env = { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator:test-only@127.0.0.1/album_haven_fake_e2e' };
+  const env = { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator:test-only@127.0.0.1:54329/album_haven_fake_e2e' };
   const result = await queryPersistedSyntheticSearchInventory(artists, {
     env, platform: 'linux', execFileAsync: async (command, args, options) => {
       calls.push({ command, args, options });

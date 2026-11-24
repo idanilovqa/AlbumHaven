@@ -10,7 +10,7 @@ function identityError() {
   );
 }
 
-export function resolveIsolatedE2ESetupConnection(databaseUrl) {
+export function resolveIsolatedE2ESetupConnection(databaseUrl, environment = process.env) {
   let parsedUrl;
   try {
     parsedUrl = new URL(String(databaseUrl || '').trim());
@@ -33,6 +33,11 @@ export function resolveIsolatedE2ESetupConnection(databaseUrl) {
     || (!legacyIdentity && !ciIdentity)
   ) {
     throw identityError();
+  }
+  // psql obeys a port named in the URL whatever PGPORT says, and no port means 5432: outside GitHub
+  // Actions that is the installed server, possibly production's (see localPostgresGuard.py).
+  if (environment.GITHUB_ACTIONS !== 'true' && ['', '5432', '1'].includes(parsedUrl.port)) {
+    throw new Error("This helper refuses port 5432 outside GitHub Actions: local tests never connect to the installed Postgres server. Name a throwaway cluster's port.");
   }
 
   const password = parsedUrl.password

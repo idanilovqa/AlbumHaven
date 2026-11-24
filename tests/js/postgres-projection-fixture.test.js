@@ -6,7 +6,7 @@ test('projection fixture stales one isolated local library through the setup rol
   const calls = [];
   const env = {
     ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
-      'postgresql://album_haven_migrator:test-only@127.0.0.1/album_haven_fake_e2e',
+      'postgresql://album_haven_migrator:test-only@127.0.0.1:54329/album_haven_fake_e2e',
   };
 
   const affected = await markRelationProjectionStale({
@@ -22,7 +22,7 @@ test('projection fixture stales one isolated local library through the setup rol
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, 'psql');
   assert.match(calls[0].args.find((argument) => argument.startsWith('--dbname=')),
-    /^--dbname=postgresql:\/\/album_haven_migrator@127\.0\.0\.1\/album_haven_fake_e2e$/u);
+    /^--dbname=postgresql:\/\/album_haven_migrator@127\.0\.0\.1:54329\/album_haven_fake_e2e$/u);
   assert.equal(calls[0].options.env.PGPASSWORD, 'test-only');
   const sql = calls[0].args.at(-1);
   assert.match(sql, /join app\.bootstrap_owners/u);
@@ -34,7 +34,7 @@ test('projection fixture rejects non-isolated databases before launching psql', 
   const { markRelationProjectionStale } = await import('../e2e/helpers/postgresProjectionFixture.js');
   await assert.rejects(
     markRelationProjectionStale({
-      env: { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://postgres@localhost/postgres' },
+      env: { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://postgres@localhost:54329/postgres' },
       execFileAsync: async () => { throw new Error('must not connect'); },
     }),
     /requires album_haven_fake_e2e\/album_haven_migrator/u,

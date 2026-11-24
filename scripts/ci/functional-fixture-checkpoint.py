@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote, unquote, urlparse
 
 import psycopg
 from psycopg import sql
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tests.e2e.support import localPostgresGuard  # noqa: E402
+
+localPostgresGuard.install()
 
 
 CHECKPOINT_SCHEMA = "ci_functional_checkpoint"

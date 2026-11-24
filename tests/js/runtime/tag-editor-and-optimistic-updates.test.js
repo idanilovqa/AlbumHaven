@@ -5355,6 +5355,7 @@ test('every version tab after the original offers Separate release through the s
     isMobileClient: () => false,
     usesMobilePageLayout: () => false,
     ensureAlbumCardContextMenu: () => menu,
+    placePointerMenu: (target, x, y) => { target.style.left = `${x}px`; target.style.top = `${y}px`; },
     hideAlbumCardContextMenu: () => { menu.hidden = true; menu.dataset.menuKind = ''; },
     document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null) },
   });

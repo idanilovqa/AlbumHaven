@@ -147,6 +147,8 @@ searchInput?.addEventListener('input', () => {
 
 window.addEventListener('popstate', () => {
   if (typeof handleImageLightboxPopState === 'function' && handleImageLightboxPopState()) return;
-  if (!(typeof handleMobilePagePopState === 'function' && handleMobilePagePopState())) handleGalleryBootstrapPopState();
+  // A phone-width page's own Back restores its parent's exact anchor: the saved place would land beside it.
+  if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
+  handleGalleryBootstrapPopState();
   if (typeof restoreTraversedPlace === 'function') restoreTraversedPlace();
 });

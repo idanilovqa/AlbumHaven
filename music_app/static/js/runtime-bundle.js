@@ -56161,12 +56161,13 @@ function initReturnPlace() {
   return place ? returnToPlace(place) : Promise.resolve();
 }
 
-// Back or Forward within the page.
+// Back or Forward within the page: the gallery's place only. Albums and their editors close and open by
+// their own history entries; reopening one here could reopen what was just closed.
 function restoreTraversedPlace() {
   const owner = getReturnPlaceOwner();
   if (!owner) return;
   const place = owner.placeFor(owner.currentKey());
-  if (place && (place.top > 0 || place.open)) void returnToPlace(place, { afterPopState: true });
+  if (place && place.top > 0) void returnToPlace({ ...place, open: null }, { afterPopState: true });
   else if (returnAttempt) returnAttempt.active = false;
 }
 
@@ -56438,7 +56439,9 @@ searchInput?.addEventListener('input', () => {
 
 window.addEventListener('popstate', () => {
   if (typeof handleImageLightboxPopState === 'function' && handleImageLightboxPopState()) return;
-  if (!(typeof handleMobilePagePopState === 'function' && handleMobilePagePopState())) handleGalleryBootstrapPopState();
+  // A phone-width page's own Back restores its parent's exact anchor: the saved place would land beside it.
+  if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
+  handleGalleryBootstrapPopState();
   if (typeof restoreTraversedPlace === 'function') restoreTraversedPlace();
 });
 

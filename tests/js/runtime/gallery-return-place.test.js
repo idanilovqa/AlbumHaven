@@ -266,6 +266,20 @@ test('IAR-W27: the album that was open opens again, as loaded by the server', as
   assert.equal(calls.opened[0].preview_only, true);
 });
 
+test('IAR-W27: Back within the page never reopens an album: it may have just been closed', async () => {
+  const open = { id: 1500, key: 'artist 041::album 1500', top: 0 };
+  const scrolled = page({ groups: deep, place: { ...PLACE, open }, sidebar, fetched: deep });
+  scrolled.context.restoreTraversedPlace();
+  for (let turn = 0; turn < 200 && !scrolled.calls.done; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(scrolled.calls.opened, [], 'the place is restored, the album is not');
+  assert.equal(scrolled.calls.done, 1);
+
+  const top = page({ groups: deep, place: { top: 0, open }, paged: false });
+  top.context.restoreTraversedPlace();
+  for (let turn = 0; turn < 20; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(top.calls.opened, []);
+});
+
 test('IAR-W27: scrolling or pressing meanwhile takes over', async () => {
   const { context, calls, listeners } = page({ groups: first, place: PLACE, sidebar, fetched: deep });
 

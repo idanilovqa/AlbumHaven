@@ -1177,6 +1177,12 @@ def test_http_reference_and_claim_lifecycle_round_trip(playback_inventory, playb
     claim = decode_json(body)
     assert claim["playbackState"]["is_playing_here"] is True
     assert claim["leaseMs"] == 30_000
+
+    async def phone_socket(_event):
+        return None
+
+    # The phone's playback socket is open, as it is while it plays: one with none shows nothing playing.
+    playback_app.state.playback_pcm_registry.handover.register(fixture.actor.account_id, client_id, phone_socket)
     for client, here in ((client_id, True), (str(uuid4()), False)):
         status, _, body = run_asgi_request(playback_app, "GET", "/playback/state", query={"client_id": client})
         assert status == 200

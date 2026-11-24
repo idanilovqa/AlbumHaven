@@ -34,14 +34,23 @@ class LibraryWatchSuppression:
             for key in keys:
                 active, expires_at = self._entries.get(key, (0, now))
                 self._entries[key] = (active + 1, expires_at)
+        failed = True
         try:
             yield
+            failed = False
         finally:
             with self._lock:
-                expires_at = self._clock() + self._grace_seconds
+                # A failed write left nothing of the app's to hide: it adds no grace, so the next change to that
+                # file (the user putting it back) reaches the watcher (FTC-TAGS-008). An earlier write's grace stays.
+                now = self._clock()
                 for key in keys:
-                    active, _previous_expiry = self._entries.get(key, (1, expires_at))
-                    self._entries[key] = (max(0, active - 1), expires_at)
+                    active, previous_expiry = self._entries.get(key, (1, now))
+                    active = max(0, active - 1)
+                    expires_at = previous_expiry if failed else now + self._grace_seconds
+                    if failed and not active and expires_at <= now:
+                        self._entries.pop(key, None)
+                    else:
+                        self._entries[key] = (active, expires_at)
 
     def contains(self, path: Path | str) -> bool:
         key = self._key(path)

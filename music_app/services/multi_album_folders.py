@@ -3,7 +3,8 @@
 A physical folder is a multi-album folder only when its files carry two or more album tags, each of those
 albums is complete (album_is_complete), and nothing else is in it: no song without an album tag or with an
 exception type, and no album that also has files in another folder. Copies proven to belong to another album
-folder don't count. Decided from the given entries' tags alone, never from folder or file names.
+folder don't count. Decided from the given entries' tags alone, never from folder or file names. An entry
+may say its album also has files outside the given entries (_album_files_elsewhere).
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ def strict_multi_album_folders(entries: Iterable[Mapping[str, object]]) -> set[s
         files_by_folder[folder].append(entry)
         if (identity := _album_identity(entry)) is not None:
             folders_by_album[identity].add(folder)
+            if entry.get("_album_files_elsewhere"):
+                folders_by_album[identity].add("")  # files of this album lie outside the given entries
     strict: set[str] = set()
     for folder, files in files_by_folder.items():
         albums: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)

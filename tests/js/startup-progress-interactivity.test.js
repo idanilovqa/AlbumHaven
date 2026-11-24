@@ -10,6 +10,7 @@ function loadStartupProgress() {
   const fill = { style: {} };
   const percentLabel = { textContent: '' };
   const bar = { hidden: false, setAttribute() {} };
+  const meter = { hidden: false };
   const error = { hidden: true };
   const retry = { addEventListener() {}, focus() {} };
   const content = { inert: false };
@@ -20,6 +21,7 @@ function loadStartupProgress() {
       return {
         '.progress-fill': fill,
         '[role="progressbar"]': bar,
+        '[data-startup-meter]': meter,
         '[data-startup-percent]': percentLabel,
         '[data-startup-error]': error,
         '[data-startup-retry]': retry,
@@ -69,13 +71,18 @@ test('startup progress records the first visible feedback boundary', () => {
   assert.equal(typeof ui.startupMarks[0].atMs, 'number');
 });
 
-test('startup completion holds the full bar before releasing the usable app', () => {
+test('startup completion releases the usable app at once and holds the full bar on top', () => {
   const ui = loadStartupProgress();
   ui.runNextFrame(0);
   assert.equal(ui.root.hidden, false);
   assert.equal(ui.content.inert, true);
+  assert.equal(ui.root.dataset.startupFinishing, undefined);
 
   ui.controller.finish();
+  // The app is ready: input reaches it while the bar finishes its ease on top.
+  assert.equal(ui.content.inert, false);
+  assert.equal(ui.root.dataset.startupFinishing, '');
+  assert.equal(ui.root.hidden, false);
   ui.runNextFrame(16);
   ui.runNextFrame(716);
   assert.equal(ui.root.hidden, false);
@@ -88,6 +95,21 @@ test('startup completion holds the full bar before releasing the usable app', ()
 
   assert.equal(ui.root.hidden, true);
   assert.equal(ui.content.inert, false);
+});
+
+test('a finishing startup overlay never takes pointer events', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../music_app/static/css/startup-progress.css'), 'utf8');
+  assert.match(css, /\.startup-progress\[data-startup-finishing\][^{]*\{[^}]*pointer-events:\s*none/);
+});
+
+test('a reset startup overlay blocks input again until the next finish', () => {
+  const ui = loadStartupProgress();
+  ui.runNextFrame(0);
+  ui.controller.finish();
+  ui.controller.reset();
+  assert.equal(ui.root.dataset.startupFinishing, undefined);
+  ui.controller.show(50);
+  assert.equal(ui.content.inert, true);
 });
 
 test('startup completion animates the visible bar to 100 before hiding', () => {

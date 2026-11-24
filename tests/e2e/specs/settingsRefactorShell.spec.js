@@ -325,7 +325,9 @@ test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard
   await shell.filters.press('ArrowDown');
   await shell.filter('Missing cover art').click();
   await expect(shell.filter('Missing cover art')).toHaveAttribute('aria-selected', 'false');
-  await expect(shell.filterMenu).toBeHidden();
+  // A deselect is a pick too: the menu stays open, and the option no longer shows checked.
+  await expect(shell.filterMenu).toBeVisible();
+  await expect(shell.filter('Missing cover art').locator('.utility-problem-filter-check svg')).toBeHidden();
   await shell.filters.press('ArrowDown');
   await expect(shell.filterMenu).toBeVisible();
   await expect(shell.filterOptions.first()).toBeFocused();

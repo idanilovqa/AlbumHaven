@@ -4323,17 +4323,9 @@ class PostgresLibraryBrowseRepository:
             else None
         )
         if cached and cached.get("fingerprint") == fingerprint:
-            # A generic deepcopy of ~19k aliases cost ~140 ms per search; the maps
-            # hold only strings and string lists, so copy just those containers.
-            views = cached.get("relation_views") or {}
-            return {
-                **views,
-                "alias_to_canonical": dict(views.get("alias_to_canonical") or {}),
-                "canonical_to_aliases": {
-                    canonical: list(aliases) if isinstance(aliases, list) else aliases
-                    for canonical, aliases in (views.get("canonical_to_aliases") or {}).items()
-                },
-            }
+            # A hit shares the read-only maps and copies only the envelope, so its
+            # cost does not grow with the library's ~19k aliases.
+            return dict(cached.get("relation_views") or {})
 
         generation = 0
         if cacheable:

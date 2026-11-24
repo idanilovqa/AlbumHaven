@@ -714,6 +714,67 @@ test('IAR-W03: a save that finishes after signing out does not bring the copy ba
   assert.deepEqual(accountCaches(caches), []);
 });
 
+// Caches whose writes after [signedOut()] are recorded: a put, or a cache opened (created).
+function writeWatchedCaches(signedOut) {
+  const caches = fakeCaches();
+  const writes = [];
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    if (signedOut()) writes.push(`open ${name}`);
+    const cache = await open(name);
+    if (!cache.watched) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => {
+        if (signedOut()) writes.push(`put ${typeof request === 'string' ? request : request.url}`);
+        return put(request, response);
+      };
+      cache.watched = true;
+    }
+    return cache;
+  };
+  return { caches, writes };
+}
+
+test('a save interrupted by signing out fetches nothing more', async () => {
+  // While the page is being answered: no Home beside it, no fills.
+  let out = false;
+  let answer;
+  const first = writeWatchedCaches(() => out);
+  const view = setup({ caches: first.caches, respond: () => new Promise((resolve) => { answer = resolve; }) });
+  const saving = view.worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  await new Promise(resolve => setImmediate(resolve));
+  await view.worker.handle('forget', resource('/logout', 'POST'));
+  out = true;
+  answer(libraryPage());
+  assert.deepEqual(await saving, { stored: false });
+  await view.settled();
+
+  assert.equal(view.calls.length, 1, 'only the view asked for before signing out');
+  assert.deepEqual(first.writes, []);
+  assert.deepEqual(accountCaches(first.caches), []);
+
+  // While covers are being filled: the cover in flight is not kept, and no other is asked for.
+  out = false;
+  let coverAnswer;
+  const second = writeWatchedCaches(() => out);
+  const filling = setup({
+    caches: second.caches,
+    respond: request => (new URL(request.url).pathname === '/'
+      ? libraryPage() : new Promise((resolve) => { coverAnswer = resolve; })),
+  });
+  const saved = filling.worker.message({ type: 'save', url: `${ORIGIN}/` });
+  while (!coverAnswer) await new Promise(resolve => setImmediate(resolve));
+  await filling.worker.handle('forget', resource('/logout', 'POST'));
+  out = true;
+  coverAnswer(coverResponse());
+  await saved;
+  await filling.settled();
+
+  assert.equal(filling.calls.filter(request => new URL(request.url).pathname.startsWith('/cover/')).length, 1);
+  assert.deepEqual(second.writes, []);
+  assert.deepEqual(accountCaches(second.caches), []);
+});
+
 test('saves from several tabs at once keep every page', async () => {
   const { caches, worker } = setup();
 

@@ -276,7 +276,7 @@
         // The page's own stylesheets arrived before the copy existed, so none were kept, and a page
         // the worker loaded is never saved again (app-copy.js): the copy it starts is filled now,
         // or the close X and other icons stay missing offline until the tab is hidden.
-        else if (copy && await keepPage(url, copy, page, fetchedIn)) await fillAssets();
+        else if (copy && await keepPage(url, copy, page, fetchedIn)) await fillAssets(fetchedIn);
       });
       return arrived.then(({ answer }) => answer);
     }
@@ -526,11 +526,13 @@
 
     // The kept pages' versioned assets not yet kept, fetched once while online; only the build the
     // server marks immutable is kept.
-    async function fillAssets() {
+    // Signing out after [filledIn] stops it before its next request.
+    async function fillAssets(filledIn = generation) {
       const target = await accountCache();
-      if (!target) return;
+      if (!target || filledIn !== generation) return;
       const images = new Set();
       for (const href of Array.from(unseenAssets)) {
+        if (filledIn !== generation) return;
         unseenAssets.delete(href);
         let style = await target.cache.match(href);
         if (!style) {
@@ -547,6 +549,7 @@
       // Images a stylesheet draws (the close X and other icons are CSS masks) load only when their
       // button first appears; kept now, so a view never opened online still has them offline.
       for (const href of images) {
+        if (filledIn !== generation) return;
         if (await target.cache.match(href)) continue;
         const fetchedIn = generation;
         const response = await fetch(new Request(href, { credentials: 'same-origin' }));
@@ -565,14 +568,15 @@
     }
 
     // The kept pages' covers not yet kept, fetched once while online, top of the page first.
-    async function fillCovers() {
+    // Signing out after [filledIn] stops it before its next request.
+    async function fillCovers(filledIn = generation) {
       const target = await accountCache();
-      if (!target) return;
+      if (!target || filledIn !== generation) return;
       const { covers } = await readKeptIndex(target.cache);
       // In place, so a save reads one batch however long the backlog; each cover leaves it when read.
       let read = 0;
       for (const [key, url] of unseenCovers) {
-        if (read === MAX_COVER_FILLS) break;
+        if (read === MAX_COVER_FILLS || filledIn !== generation) break;
         read += 1;
         unseenCovers.delete(key);
         if (covers.has(key)) continue;
@@ -615,16 +619,19 @@
       if (data?.type === 'save') {
         const url = new URL(String(data.url || ''), origin);
         if (url.origin === origin && isAppPage(url)) {
+          // Signing out during the save ends it: nothing more is fetched or written for it.
+          const savedIn = generation;
           try {
             const page = { running: false };
             await savePage(url, page);
+            if (savedIn !== generation) return { stored: await hasFreshCopy() };
             // A full restart opens Home, so "a copy exists" must cover it too.
             const target = await accountCache();
             if (pageKey(url) !== '/' && !(target && isFresh((await readMeta(target.cache)).pages['/']))) {
               await savePage(new URL('/', origin), { running: false, beside: true });
             }
-            await fillAssets();
-            await fillCovers();
+            await fillAssets(savedIn);
+            await fillCovers(savedIn);
           } catch (_error) {
             // Offline: the copy kept before stays as it is.
           }

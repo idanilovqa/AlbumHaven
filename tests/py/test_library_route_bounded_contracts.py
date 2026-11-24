@@ -1421,6 +1421,38 @@ class _CandidateFolderConnection:
         return SimpleNamespace(fetchall=lambda: found)
 
 
+
+class _DetailConnection:
+    """The detail request's one connection: the narrowing's read of candidate folders, and the read of the
+    ignored-repair intents a held publication kept (deadlock part 3), each counted."""
+
+    PENDING = (
+        {"id": 1, "action": "upsert", "repair_keys": ["broadcast::tender buttons::problem-album::missing-cover-art"],
+         "album_keys": {"broadcast::tender buttons::problem-album::missing-cover-art": "broadcast::tender buttons"},
+         "remove_keys": []},
+        {"id": 2, "action": "delete", "repair_keys": None, "album_keys": {}, "remove_keys": []},
+    )
+
+    def __init__(self, counts, current):
+        self.counts, self.current = counts, current
+
+    def execute(self, sql, params=None):
+        text = str(sql)
+        if text.startswith("SET LOCAL"):
+            return SimpleNamespace(fetchall=lambda: [])
+        if "library.ignored_repair_intents" in text:
+            self.counts.sql_statements += 1
+            # Scoped to the album's own rows: its key and its files, never every pending intent.
+            selected = self.current["selected"]
+            assert set(params["identities"]) == {"broadcast::tender buttons", *(row["file_private_path"] for row in selected)}
+            assert "scope_identities && %(identities)s::text[]" in text
+            rows = [dict(intent) for intent in self.PENDING]
+            # The Unignore names the stored file rule of the encoding problem's file, wherever it now lies.
+            rows[1]["repair_keys"] = [f"{selected[0]['file_private_path']}::problem-file::encoding-problem"]
+            self.counts.pending_intent_rows += len(rows)
+            return SimpleNamespace(fetchall=lambda: rows)
+        return _CandidateFolderConnection(self.counts, self.current["selected"]).execute(sql, params)
+
 # The mixed-folder narrowing belongs to the Postgres projection: only that backend has candidate folders.
 @pytest.mark.parametrize(("backend", "candidate_folders"), [
     ("in-memory", 0), ("postgres", 0), ("postgres", 1), ("postgres", 5),
@@ -1449,11 +1481,8 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
         )
         repository = library_browse_postgres.PostgresLibraryBrowseRepository
 
-        def load_problematic_file_rows(_self, album_key=None, **_options):
-            # The keyed Postgres read: `where album_key = %(album_key)s`.
-            selected = [row for row in current["rows"] if row["album_key"] == album_key]
-            current["counts"].candidate_rows += len(selected)
-            rows = [dict(row) for row in selected]
+        def selected_album_rows():
+            rows = [dict(row) for row in current["rows"] if row["album_key"] == "broadcast::tender buttons"]
             for index, row in enumerate(rows):
                 if candidate_folders:
                     # The selected album's files spread over the candidate folders the SQL marked mixed.
@@ -1461,9 +1490,22 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
                     row["file_private_path"] = f"{folder}/{index:02d}.mp3"
                     row["file_entry"] = {**row["file_entry"], "path": row["file_private_path"]}
                     row["file_mixed_album_folder"] = True
-            return library_browse_postgres._narrow_mixed_album_folders(
-                _CandidateFolderConnection(current["counts"], rows), rows,
-            )
+            # The encoding problem's file rule is stored; a held publication keeps its Unignore pending.
+            rows[0]["ignored_repair_keys"] = [f"{rows[0]['file_private_path']}::problem-file::encoding-problem"]
+            return rows
+
+        def execute_problematic_sql(_connection, _database_url, _build_sql, params):
+            # The keyed Postgres read of the album's rows (`album_id = any(%(album_ids)s)`), uncounted as before.
+            assert params == {"album_ids": [1]}
+            rows = current["selected"] = selected_album_rows()
+            current["counts"].candidate_rows += len(rows)
+            return SimpleNamespace(fetchall=lambda: rows)
+
+        # The real loader runs: its keyed reads answer above; the narrowing and the pending intents laid over
+        # the rows (deadlock part 3) go through the request's connection.
+        monkeypatch.setattr(library_browse_postgres, "_execute_problematic_sql", execute_problematic_sql)
+        monkeypatch.setattr(library_browse_postgres, "_load_duplicate_candidate_album_ids",
+                            lambda _connection, keys, **_options: [1] if keys == ["broadcast::tender buttons"] else [])
 
         def load_relation_alias_maps(_self, **_options):
             # One Postgres read of the relation alias maps per request.
@@ -1480,9 +1522,8 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
         def browse_connection_context(_self):
             # The request leases one pooled connection for all of its reads.
             current["counts"].pool_leases += 1
-            yield SimpleNamespace()
+            yield _DetailConnection(current["counts"], current)
 
-        monkeypatch.setattr(repository, "_load_problematic_file_rows", load_problematic_file_rows)
         monkeypatch.setattr(repository, "_load_relation_alias_maps", load_relation_alias_maps)
         monkeypatch.setattr(repository, "_load_missing_album_rows", load_missing_album_rows)
         monkeypatch.setattr(repository, "_browse_connection_context", browse_connection_context)
@@ -1500,9 +1541,14 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
         assert len(payload["tracks"]) == 12
         assert "Encoding problem" in payload["problem_reasons"]
         if backend == "postgres":
-            # Exactly one statement without a candidate folder (the alias read), exactly two with any number.
-            assert counts.sql_statements == (2 if candidate_folders else 1)
+            # The pending Ignore and Unignore show as made: the cover problem is ignored, the encoding problem back.
+            assert "Missing cover art" not in payload["problem_reasons"]
+            assert not payload.get("album_problem_rows")
+            # The alias read and the pending-intents read; the narrowing's one read with any number of candidate
+            # folders. The intents read returns this album's two kept intents (6.5, 11-24).
+            assert counts.sql_statements == (3 if candidate_folders else 2)
             assert counts.returned_rows == (12 if candidate_folders else 0)
+            assert counts.pending_intent_rows == 2
         return counts
 
     measure_scale_pair(run=run, **_registered(interaction_id))

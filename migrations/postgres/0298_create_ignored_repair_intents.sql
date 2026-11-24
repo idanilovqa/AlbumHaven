@@ -11,10 +11,15 @@ create table if not exists library.ignored_repair_intents (
   repair_keys text[] not null,
   album_keys jsonb not null default '{}'::jsonb,
   remove_keys text[] not null default '{}'::text[],
+  -- The albums and files the intent names (rule_state_postgres.ignored_repair_identity): a read of one
+  -- album's or one page's problems takes only the intents that name its rows.
+  scope_identities text[] not null default '{}'::text[],
   recorded_at timestamptz not null default now()
 );
 create index if not exists ignored_repair_intents_library_order_idx
   on library.ignored_repair_intents (library_id, id);
+create index if not exists ignored_repair_intents_scope_idx
+  on library.ignored_repair_intents using gin (scope_identities);
 
 do $$
 begin

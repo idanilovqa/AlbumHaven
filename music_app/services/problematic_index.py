@@ -1112,20 +1112,20 @@ def _with_pending_ignores(repository: Any, connection: Any, items: list[dict[str
     page): each album item an intent names is built again from its own rows, which carry the intents
     (library_browse_postgres._lay_pending_ignored_repairs), and leaves the page once nothing in it is left
     to show. An Unignore can bring back only an item still on the page; the rest returns with the drain."""
-    from music_app.services.library_browse_postgres import _ignored_repair_file_path
-    from music_app.services.rule_state_postgres import pending_ignored_repairs
+    from music_app.services.rule_state_postgres import ignored_repair_identity, pending_ignored_repairs
 
-    pending = pending_ignored_repairs(connection) if items else None
+    # Only the intents that name the page's albums or files (and any pending replacement of every rule).
+    identities = {str(value) for item in items for value in [item.get("key"), *(item.get("track_paths") or [])] if value}
+    pending = pending_ignored_repairs(connection, identities) if identities else None
     if not pending:
         return items
-    named_albums = {album for album in pending.added.values() if album}
-    named_paths = {_ignored_repair_file_path(key) for key in [*pending.added, *pending.removed]}
-    named_identities = {key.split("::problem-album::", 1)[0] for key in pending.removed if "::problem-album::" in key}
+    named = {album for album in pending.added.values() if album} | {
+        ignored_repair_identity(key) for key in [*pending.added, *pending.removed]}
     affected = [
         str(item.get("key") or "") for item in items
         if not pending.keeps_stored
-        or str(item.get("key") or "") in named_albums | named_identities
-        or named_paths.intersection(map(str, item.get("track_paths") or []))
+        or str(item.get("key") or "") in named
+        or named.intersection(map(str, item.get("track_paths") or []))
     ]
     album_ids = {
         str(_value(row, "item_key")): int(_value(row, "album_id"))

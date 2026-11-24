@@ -6958,21 +6958,18 @@ def _attach_loose_ignored_repair_keys(connection: Any, rows: list[dict[str, obje
         })
 
 
-def _ignored_repair_file_path(repair_key: str) -> str:
-    """The file a file rule names, as the Rules SQL reads it: before "::problem-file::", or before the last "::"."""
-    if "::problem-file::" in repair_key:
-        return repair_key.rsplit("::problem-file::", 1)[0]
-    return repair_key.rsplit("::", 1)[0]
-
-
 def _lay_pending_ignored_repairs(rows: list[object], connection: Any) -> list[object]:
     """Each problem row's ignored repairs with the pending intents laid over them (6.5: overlay at read
     time). An added album rule counts for the rows of the album it names, an added file rule for that file's
-    rows, as the stored rules reach rows in SQL. One indexed read, of an empty table unless a publication
-    held an Ignore back."""
-    from music_app.services.rule_state_postgres import pending_ignored_repairs
+    rows, as the stored rules reach rows in SQL. One indexed read of only the intents these rows' albums and
+    files name, from a table that is empty unless a publication held an Ignore back."""
+    from music_app.services.rule_state_postgres import ignored_repair_identity, pending_ignored_repairs
 
-    pending = pending_ignored_repairs(connection) if rows else None
+    identities = {
+        str(value) for row in rows if isinstance(row, Mapping)
+        for value in (row.get("album_key"), row.get("album_ref"), row.get("file_private_path")) if value
+    }
+    pending = pending_ignored_repairs(connection, identities) if identities else None
     if not pending:
         return rows
     laid: list[object] = []
@@ -6985,7 +6982,7 @@ def _lay_pending_ignored_repairs(rows: list[object], connection: Any) -> list[ob
         stored = set(_row_string_list(row.get("ignored_repair_keys"))) if pending.keeps_stored else set()
         added = {
             key for key, named_album in pending.added.items()
-            if (named_album == album_key if named_album else _ignored_repair_file_path(key) == path)
+            if (named_album == album_key if named_album else ignored_repair_identity(key) == path)
         }
         laid.append({**row, "ignored_repair_keys": sorted(stored.difference(pending.removed) | added)})
     return laid

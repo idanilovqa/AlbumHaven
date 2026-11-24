@@ -140,7 +140,9 @@ class RuleStatePostgresAdapter:
                 except _LockNotAvailable:
                     connection.execute(
                         _insert_ignored_repair_intent_sql(),
-                        (action, intent["repair_keys"], _jsonb(album_keys), intent["remove_keys"]),
+                        (action, intent["repair_keys"], _jsonb(album_keys), intent["remove_keys"],
+                         sorted({identity for key in [*repair_keys, *remove_keys]
+                                 for identity in (ignored_repair_identity(key), album_keys.get(key, "")) if identity})),
                     )
                     return "pending"
 
@@ -310,12 +312,26 @@ class PendingIgnoredRepairs:
         return cls(keeps_stored, frozenset(removed), added)
 
 
-def pending_ignored_repairs(connection: Any) -> PendingIgnoredRepairs:
-    """The kept intents, folded; one indexed read of a table that is empty unless a publication held an Ignore."""
-    return PendingIgnoredRepairs.fold(
-        _row_mapping(row, _INTENT_FIELDS)
-        for row in connection.execute(_load_ignored_repair_intents_sql()).fetchall()
-    )
+def pending_ignored_repairs(connection: Any, identities: Iterable[object] | None = None) -> PendingIgnoredRepairs:
+    """The kept intents, folded, in one indexed read of a table that is empty unless a publication held an
+    Ignore back. With ``identities`` (the albums and files a read shows), only the intents that name one of
+    them, and any pending replacement of every rule: the rest cannot change those rows (6.5, 11-24)."""
+    if identities is None:
+        rows = connection.execute(_load_ignored_repair_intents_sql()).fetchall()
+    else:
+        rows = connection.execute(
+            _load_scoped_ignored_repair_intents_sql(), {"identities": sorted(_normalize_keys(identities))},
+        ).fetchall()
+    return PendingIgnoredRepairs.fold(_row_mapping(row, _INTENT_FIELDS) for row in rows)
+
+
+def ignored_repair_identity(repair_key: str) -> str:
+    """What a rule names, as the problem reads match it: an album rule's album (before "::problem-album::"),
+    a file rule's file (before "::problem-file::", or before the last "::" for an older field rule)."""
+    for marker in ("::problem-album::", "::problem-file::"):
+        if marker in repair_key:
+            return repair_key.rsplit(marker, 1)[0]
+    return repair_key.rsplit("::", 1)[0]
 
 
 def apply_pending_ignored_repair_intents(connection: Any) -> int:
@@ -660,6 +676,19 @@ def _load_ignored_repair_intents_sql() -> str:
     )
 
 
+def _load_scoped_ignored_repair_intents_sql() -> str:
+    return (
+        _bootstrap_context_sql()
+        + """
+        select intents.id, intents.action, intents.repair_keys, intents.album_keys, intents.remove_keys
+        from library.ignored_repair_intents intents
+        join bootstrap_context on intents.library_id = bootstrap_context.library_id
+        where intents.scope_identities && %(identities)s::text[] or intents.action = 'replace'
+        order by intents.id
+    """
+    )
+
+
 def _load_ignored_repairs_with_intents_sql() -> str:
     """Each stored ignored repair as an upsert of itself, then the pending intents, oldest first."""
     return (
@@ -682,8 +711,9 @@ def _insert_ignored_repair_intent_sql() -> str:
     return (
         _bootstrap_context_sql()
         + """
-        insert into library.ignored_repair_intents (library_id, action, repair_keys, album_keys, remove_keys)
-        select bootstrap_context.library_id, %s, %s::text[], %s, %s::text[]
+        insert into library.ignored_repair_intents
+          (library_id, action, repair_keys, album_keys, remove_keys, scope_identities)
+        select bootstrap_context.library_id, %s, %s::text[], %s, %s::text[], %s::text[]
         from bootstrap_context;
     """
     )

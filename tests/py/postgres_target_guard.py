@@ -2,15 +2,37 @@
 
 from __future__ import annotations
 
+import os
+
+_DEFAULT_PORT = "5432"
+# Set only by the CI workflows, as "<host>:5432": the job's own Postgres service.
+_CI_SERVICE_ENV = "ALBUM_HAVEN_CI_POSTGRES_SERVICE"
+
+
+def _ci_service() -> str:
+    if os.environ.get("GITHUB_ACTIONS", "").strip().lower() != "true":
+        return ""
+    return os.environ.get(_CI_SERVICE_ENV, "").strip().lower()
+
 
 def target_refusal(conninfo: str = "", **kwargs) -> str | None:
-    """Why a connection to this target is refused, or None when it may reach the driver."""
+    """Why a connection to this target is refused, or None when it may reach the driver.
+
+    Every target names its host and port. Port 5432 can be production's server on a developer machine,
+    so it is reached only as the CI job's own service, never by a database's name."""
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
     target_options = {key: kwargs[key] for key in ("host", "hostaddr", "port") if kwargs.get(key) is not None}
     params = conninfo_to_dict(make_conninfo(conninfo, **target_options))
-    if not str(params.get("host") or params.get("hostaddr") or "").strip() or not str(params.get("port") or "").strip():
+    host = str(params.get("host") or params.get("hostaddr") or "").strip().lower()
+    port = str(params.get("port") or "").strip()
+    if not host or not port:
         return "pytest refused a Postgres connection without an explicit host and port"
+    if port == _DEFAULT_PORT and _ci_service() != f"{host}:{port}":
+        return (
+            "pytest refused a Postgres connection on port 5432 outside the CI job's own service; "
+            "use a throwaway cluster on another port"
+        )
     return None
 
 

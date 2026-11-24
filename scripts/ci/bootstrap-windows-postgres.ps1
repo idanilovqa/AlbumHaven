@@ -91,8 +91,8 @@ function Get-MigrationContract {
 }
 
 function Get-PasswordlessUrl([string]$Role, [string]$Database) {
-    $portText = if ($Port -eq 5432) { '' } else { ":$Port" }
-    return "postgresql://$Role@$HostName$portText/$Database"
+    # Always explicit: pytest refuses a URL without a port (tests/py/postgres_target_guard.py).
+    return "postgresql://$Role@$HostName`:$Port/$Database"
 }
 
 function Get-Contract {

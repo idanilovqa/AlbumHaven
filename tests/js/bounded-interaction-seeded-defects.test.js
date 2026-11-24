@@ -857,6 +857,17 @@ const DEFECTS = [
     expected: /^rejected BI-04 forbidden-work:py:music_app\/services\/library_browse_postgres\.py#invalidate_postgres_utility_projection_cache at .* from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_pasted_image_save:route:/,
   },
   {
+    // The whole-library gallery refresh in place of the keyed journal drain the cover save owns.
+    id: 'BI-04 a cover save queuing the full gallery refresh',
+    language: 'py',
+    file: 'music_app/services/cache.py',
+    anchor: '        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain\n\n'
+      + '        queue_journaled_relation_drain(config)\n',
+    replacement: '        from music_app.services.gallery_projection_postgres import schedule_full_gallery_projection_refresh\n\n'
+      + '        schedule_full_gallery_projection_refresh(config)\n',
+    expected: /^rejected BI-04 forbidden-work:py:music_app\/services\/gallery_projection_postgres\.py#schedule_full_gallery_projection_refresh at .* from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_(pasted_image_save|local_select|local_delete):route:/,
+  },
+  {
     id: 'BI-04 a cover-only watcher commit refreshing every library projection',
     language: 'py',
     file: 'music_app/services/state.py',

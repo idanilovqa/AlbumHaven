@@ -11417,6 +11417,7 @@
       "forbiddenWork": [
         "library-state-scan",
         "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },
@@ -11462,6 +11463,7 @@
       "forbiddenWork": [
         "library-state-scan",
         "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },
@@ -11511,6 +11513,7 @@
       "forbiddenWork": [
         "library-state-scan",
         "py:music_app/services/library_browse_postgres.py#invalidate_postgres_utility_projection_cache",
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },
@@ -14164,6 +14167,22 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
+      "action": "Run scheduler schedule_full_gallery_projection_refresh",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh:scheduler:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh",
       "action": "Run scheduler schedule_gallery_projection_refresh",
       "entrypoints": [
@@ -15651,6 +15670,7 @@
       "testIdentity": "test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_production_album_count",
       "rollback": "Revert the contract test commit; no product code changed for this interaction.",
       "forbiddenWork": [
+        "py:music_app/services/gallery_projection_postgres.py#schedule_full_gallery_projection_refresh",
         "py:music_app/services/state.py#invalidate_targeted_library_projections"
       ]
     },

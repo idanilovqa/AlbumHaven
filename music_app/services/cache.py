@@ -365,8 +365,8 @@ def save_cache_to_disk_for_config(
     )
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     if isinstance(adapter, PostgresScanCacheAdapter):
-        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-        schedule_gallery_projection_refresh(config, connect=adapter._connect)
+        from music_app.services.gallery_projection_postgres import schedule_full_gallery_projection_refresh
+        schedule_full_gallery_projection_refresh(config, connect=adapter._connect)
     return result
 
 
@@ -444,9 +444,9 @@ def _persist_cache_updates(
         before_commit=complete_in_transaction if hooks else None,
         rebase_under_lock=rebased,
     )
-    from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+    from music_app.services.gallery_projection_postgres import schedule_full_gallery_projection_refresh
 
-    schedule_gallery_projection_refresh(config, connect=getattr(adapter, "_connect", None))
+    schedule_full_gallery_projection_refresh(config, connect=getattr(adapter, "_connect", None))
     return {**result, "projection_mode": "stale"}
 
 
@@ -551,9 +551,9 @@ def persist_cover_selection_for_tracks_for_config(
     if any(int(result.get(field) or 0) for field in ("album_rows_updated", "track_rows_updated", "track_file_rows_updated")):
         # The commit journaled the album for relations (migration 0108); its owner drains just those
         # albums, queued off the response path.
-        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
 
-        schedule_gallery_projection_refresh(config, incremental_membership=True)
+        queue_journaled_relation_drain(config)
     return result
 
 

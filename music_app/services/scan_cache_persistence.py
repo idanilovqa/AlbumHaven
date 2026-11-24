@@ -1648,11 +1648,11 @@ class PostgresScanCacheAdapter:
             before_commit=before_commit, rebuild_relation_projection=rebuild_relation_projection,
             blank_album_evidence=blank_album_evidence)
         try:
-            from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
             with persistence_stage("gallery_refresh_scheduling"):
                 # The journal's owner drains what the save left (R3): it realigns a header behind the
                 # journal's floor itself, then publishes the albums kept for it.
-                schedule_gallery_projection_refresh(self._config, connect=self._connect, incremental_membership=True)
+                queue_journaled_relation_drain(self._config, connect=self._connect)
         except Exception:
             _LOGGER.exception("Unable to schedule scoped gallery refresh after tag edit")
         return result

@@ -48,6 +48,7 @@ def test_a_targeted_inventory_update_queues_the_full_refresh(monkeypatch, queued
         persist_targeted_inventory_mutation=lambda **_kwargs: {"inventory_mutation_revision": 1},
     )
     monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+    monkeypatch.setattr(cache, "_publication_root_id", lambda _config, _entries: "main")
 
     cache.save_cache_updates_to_disk_for_config(CONFIG, {"a.mp3": {"path": "a.mp3", "title": "A"}})
 

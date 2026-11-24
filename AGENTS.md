@@ -180,8 +180,10 @@ This rule outranks convenience and applies to every agent, chat, and change.
   a route reaching registered library-scale work or enumerating a directory
   directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
   middleware; work an entry lists in its own `forbiddenWork` (a scoped save
-  forbids the library-wide invalidators and `library-state-scan`; add to the
-  list, never shorten it to pass); a database
+  forbids the library-wide invalidators, the whole-library gallery refresh
+  `schedule_full_gallery_projection_refresh` and `library-state-scan`, while
+  its keyed `queue_journaled_relation_drain` stays allowed; add to the list,
+  never shorten it to pass); a database
   connection opened or leased per loop item (BI-05) in a
   route or middleware; a new database connection (`psycopg.connect`) anywhere
   a route, middleware, poller, scheduler, or watcher reaches, instead of a

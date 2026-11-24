@@ -716,14 +716,23 @@ def _first_build_ready(config, connect=None) -> bool:
         return journaled is None
 
 
-def queue_journaled_relation_drain(config):
+def queue_journaled_relation_drain(config, *, connect=None):
     """The owner of a committed write's journaled albums (library.local_relation_dirty_albums) outside a scan,
-    the watcher, a tag save and startup: the keyed incremental drain, queued off the response path. It also
-    retries the catch-up of any verified save whose back-off has run out (owner's rule, 2026-11-23)."""
+    the watcher and startup: the keyed incremental drain, queued off the response path. It also retries the
+    catch-up of any verified save whose back-off has run out (owner's rule, 2026-11-23)."""
     from music_app.services.tag_edit_catch_up import retry_waiting_catch_ups
 
     retry_waiting_catch_ups()
-    return schedule_gallery_projection_refresh(config, incremental_membership=True)
+    # A writer on its own connection factory (the structural save) passes it; the others use the default.
+    options = {} if connect is None else {"connect": connect}
+    return schedule_gallery_projection_refresh(config, incremental_membership=True, **options)
+
+
+def schedule_full_gallery_projection_refresh(config, *, connect=None):
+    """The whole-library form: prepares every common scope from the published relations, after a snapshot
+    save or a targeted inventory mutation. A scoped save queues `queue_journaled_relation_drain` instead;
+    the freeze guard forbids this form on those saves by this name (backlog case 31)."""
+    return schedule_gallery_projection_refresh(config, connect=connect)
 
 
 def schedule_gallery_projection_refresh(

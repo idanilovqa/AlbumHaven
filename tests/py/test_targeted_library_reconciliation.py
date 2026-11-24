@@ -867,6 +867,25 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
         lambda **kwargs: invalidated.append("postgres") or postgres_invalidations.append(kwargs),
         raising=False,
     )
+    # Problematic Files reads its persisted index (251810c0e, owner decision 2026-11-19): the journal marks the
+    # changed albums and index maintenance re-reads only those, so no Problematic Files cache kind is dropped.
+    from music_app.services import problematic_index
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    monkeypatch.setattr(state, "library_browse_postgres_is_effective", lambda config: True)
+    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda repository: invalidated.append("pf-index"))
+
+    def repository(config):
+        fake = SimpleNamespace(
+            _config=config,
+            queue_utility_projection_prewarm=lambda kind: invalidated.append(f"prewarm:{kind}"),
+        )
+        fake.queue_settings_projection_prewarm = (
+            lambda: PostgresLibraryBrowseRepository.queue_settings_projection_prewarm(fake)
+        )
+        return fake
+
+    monkeypatch.setattr(state, "PostgresLibraryBrowseRepository", repository)
     library_state = {
         "_view_payload_root_browse_cache": {"cached": True},
         "inventory_mutation_revision": 3,
@@ -882,10 +901,12 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert library_state["_view_payload_root_browse_cache"] == {}
     assert library_state["inventory_mutation_revision"] == 4
     assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
-    assert invalidated == ["gallery", "problems", "rules", "postgres"]
+    assert invalidated == [
+        "gallery", "problems", "rules", "postgres", "pf-index", "prewarm:loose-tracks", "prewarm:rules",
+    ]
     assert postgres_invalidations == [{
         "database_url": "postgresql://example",
-        "kinds": ("problematic-files", "rules", "loose-tracks"),
+        "kinds": ("rules", "loose-tracks"),
     }]
 
 

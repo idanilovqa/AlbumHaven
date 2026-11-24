@@ -226,6 +226,11 @@ def test_live_rules_route_lays_pending_intents_over_its_page_without_growing(see
                    select id, 'upsert', array[%s], jsonb_build_object(%s::text, %s::text)
                    from library.libraries where name = 'Local Library'""",
                 (pending["row_key"], pending["row_key"], pending["album_key"]))
+        # A rule whose file is no longer in the library (owner, 11-24), stored as any rule is.
+        gone = "C:/No Longer Here/03 Song.flac::problem-file::missing-year"
+        from music_app.services.rule_state_postgres import RuleStatePostgresAdapter
+
+        assert RuleStatePostgresAdapter(_config).upsert_ignored_repair_keys({gone}) == "applied"
         with _held_publication(setup_url):
             assert _unignore(app, stored) == "pending"
         counts = OperationCounts()
@@ -233,8 +238,12 @@ def test_live_rules_route_lays_pending_intents_over_its_page_without_growing(see
             status, _headers, body = run_asgi_request(app, "GET", "/utilities/rules")
         assert status == 200, body
         rule = next(rule for rule in decode_json(body)["rules"] if rule.get("key") == "problem-ignores")
-        shown = {item["row_key"] for item in rule.get("items") or []}
+        items = {item["row_key"]: item for item in rule.get("items") or []}
+        shown = set(items)
         assert pending["row_key"] in shown and stored["row_key"] not in shown
+        # The gone target is told in the same read; the present one is not.
+        assert items[gone]["target_missing"] is True and items[gone]["missing_name"] == "03 Song.flac"
+        assert items[pending["row_key"]]["target_missing"] is False
         counts.count("returned_rows", len(shown))
         return counts
 

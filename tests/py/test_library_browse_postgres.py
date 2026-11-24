@@ -20636,3 +20636,40 @@ def test_visible_album_clause_and_membership_sql_keep_their_exact_default_text()
     assert digest(browse._visible_album_clause("library.local_albums")) == "1bbd452d9d7a4220"
     assert digest(browse._root_gallery_membership_sql())[:12] == "321e8df262c3"
     assert digest(browse._root_gallery_membership_sql(candidate_albums_only=True))[:12] == "514c549b948a"
+
+
+def test_rules_projection_marks_rules_whose_target_is_gone_and_names_failed_changes():
+    """Owner (11-24): a rule whose album or file is no longer in the library is marked, with the name it can
+    show; a change the library could not apply is listed with its name and reason, not among the rules."""
+    from music_app.services.library_browse_postgres import _utility_rules_projection_payload
+
+    gone_path = r"C:\Music\Gone\03 Song.flac"
+    here_path = r"C:\Music\Here\01 Here.flac"
+    base = {"row_kind": "problem_ignore", "ignored_version_key": None, "album_metadata": {}, "alias_to_canonical": {}}
+    rows = [
+        {**base, "ignored_repair_key": f"{gone_path}::problem-file::missing-year", "source_kind": "rule",
+         "album_id": None, "file_private_path": None, "file_entry": None},
+        {**base, "ignored_repair_key": "gone artist::gone album::problem-album::missing-cover-art", "source_kind": "rule",
+         "album_id": None, "album_key": None, "file_private_path": None, "file_entry": None},
+        {**base, "ignored_repair_key": f"{here_path}::problem-file::missing-year", "source_kind": "rule",
+         "album_id": 7, "album_key": "here::album", "album_title": "Here Album", "file_private_path": here_path,
+         "file_entry": {"path": here_path, "album": "Here Album", "album_artist": "Here", "title": "Here"}},
+        {**base, "ignored_repair_key": f"{here_path}::problem-file::missing-cover-art", "source_kind": "failed",
+         "album_id": 7, "album_key": "here::album", "album_title": "Here Album", "file_private_path": here_path,
+         "file_entry": {"path": here_path, "album": "Here Album", "album_artist": "Here", "title": "Here"},
+         "failure": "the database refused it", "failure_kind": "error", "failed_at": "2026-11-24T18:00:00Z"},
+    ]
+
+    payload = _utility_rules_projection_payload(rows)
+
+    rule = next(rule for rule in payload["rules"] if rule["key"] == "problem-ignores")
+    items = {item["row_key"]: item for item in rule["items"]}
+    assert set(items) == {rows[0]["ignored_repair_key"], rows[1]["ignored_repair_key"], rows[2]["ignored_repair_key"]}
+    assert items[rows[0]["ignored_repair_key"]]["target_missing"] is True
+    assert items[rows[0]["ignored_repair_key"]]["missing_name"] == "03 Song.flac"
+    assert items[rows[1]["ignored_repair_key"]]["target_missing"] is True
+    assert items[rows[1]["ignored_repair_key"]]["missing_name"] == "gone artist::gone album"
+    assert items[rows[2]["ignored_repair_key"]].get("target_missing") is False
+    [failed] = payload["failed_ignored_repairs"]
+    assert failed["row_key"] == rows[3]["ignored_repair_key"]
+    assert (failed["filename"], failed["problem_reason"], failed["failure_kind"]) == ("01 Here.flac", "Missing cover art", "error")

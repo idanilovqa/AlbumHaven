@@ -235,7 +235,7 @@ function handleArtistsDrawerClick(event) {
   if (foldButton) {
     event.preventDefault();
     if (foldButton === document.getElementById('artist-tree-navigation-button')
-      && typeof syncLibraryNavigationMode === 'function') syncLibraryNavigationMode('artists');
+      && typeof syncLibraryNavigationMode === 'function') syncLibraryNavigationMode('artists', { picked: true });
     toggleArtistTreeFold();
     return true;
   }

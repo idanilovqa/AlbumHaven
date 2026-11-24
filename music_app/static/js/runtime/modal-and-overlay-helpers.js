@@ -783,7 +783,9 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
 
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
-  if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
+  // The user's Artist Tree pick over an open Loose Tracks page owns the selection: a later repaint (a delayed
+  // library-wide answer, a page-shell sync) never takes it back; only opening Loose Tracks again does.
+  if (page && libraryWideOpen && !state.ui.artistTreePicked) syncCompactLibraryNavigation(true);
 }
 
 function syncCompactLibraryNavigation(looseTracks) {
@@ -802,7 +804,9 @@ function syncCompactLibraryNavigation(looseTracks) {
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
-function syncLibraryNavigationMode(mode) {
+// `picked` marks a user's own navigation choice, as opposed to a presentation sync.
+function syncLibraryNavigationMode(mode, { picked = false } = {}) {
+  if (picked) state.ui.artistTreePicked = mode === 'artists';
   const collections = mode === 'collections';
   document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
@@ -972,6 +976,7 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   state.ui.nonAlbumLibraryWide = libraryWide;
+  if (options.syncNavigation !== false) state.ui.artistTreePicked = false;
   const partial = libraryWide && hasPartialLibraryNonAlbumTracks();
   const hydrationPending = libraryWide
     ? !hasHydratedLibraryNonAlbumTracks() && !partial

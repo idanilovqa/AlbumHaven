@@ -3324,6 +3324,29 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/problemExclusionHeldPublication.spec.js",
+    "case": "FTC-UTIL-PROBLEMS-015 an exclusion the library cannot save after a held scan comes back and is reported in Rules, while the other applies",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "problematic-files:refused-exclusion-after-held-publication"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "kept-exclusion-applies-after-the-publication",
+      "refused-exclusion-comes-back-and-is-reported"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:refused-exclusion-after-held-publication",
+      "filesystemCopy": "media/cases/refused-exclusion-after-held-publication"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/responsiveGallery.spec.js",
     "case": "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale",
     "profile": "functional-core",

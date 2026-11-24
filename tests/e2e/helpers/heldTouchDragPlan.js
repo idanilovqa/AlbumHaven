@@ -2,8 +2,11 @@
 // bar keeps one artist context, so its height (and the gallery under it) cannot change mid-drag.
 //
 // geometry: { scrollTop, scrollHeight, clientHeight, labelBottoms } in content coordinates, where
-// labelBottoms are the artist labels whose bottoms switch the bar's context once they reach scrollTop.
+// labelBottoms are the artist labels whose bottoms switch the bar's context once they reach scrollTop,
+// and scrollGranularity is the smallest scrollTop step the browser lands on (1 / devicePixelRatio).
 // The threshold scrollTop is where the remaining content equals `prefetchViewports` viewports.
+// A whole-pixel swipe lands within half a pixel of its target, then snaps to the scroll granularity,
+// so a start band narrower than 1 px plus that granularity cannot be reached and is not planned.
 export function planSingleArtistHeldDrag(geometry, {
   prefetchViewports,
   maximumDrag,
@@ -24,13 +27,16 @@ export function planSingleArtistHeldDrag(geometry, {
   // The start leaves room before the threshold and the end passes it, both inside the context.
   const startLow = Math.max(startFloor, threshold - drag + thresholdMargin);
   const startHigh = Math.min(endCeiling - drag, threshold - thresholdMargin);
-  if (!(startLow <= startHigh)) return { feasible: false, ...evidence, startLow, startHigh };
+  const minimumStartBand = 1 + (geometry.scrollGranularity ?? 1);
+  if (!(startHigh - startLow >= minimumStartBand)) {
+    return { feasible: false, ...evidence, startLow, startHigh, minimumStartBand };
+  }
   return {
     feasible: true,
     ...evidence,
     startLow,
     startHigh,
-    target: Math.round((startLow + startHigh) / 2),
+    target: (startLow + startHigh) / 2,
     inStartBand: scrollTop >= startLow && scrollTop <= startHigh,
   };
 }
@@ -50,4 +56,15 @@ export function planHeldDragForObservedHeights(geometry, observedHeights, reject
       }),
     }))
     .sort((left, right) => (left.plan.target ?? Infinity) - (right.plan.target ?? Infinity));
+}
+
+// The whole-pixel swipe toward a plan's start, at most `maximumStep` px. A swipe that would round to
+// zero cannot move the gallery, so the preposition stops with the numbers instead of repeating it.
+export function prepositionSwipeDistance(plan, scrollTop, maximumStep = 280) {
+  const distance = Math.round(Math.max(-maximumStep, Math.min(maximumStep, plan.target - scrollTop)));
+  if (distance === 0) {
+    throw new Error(`Held-drag start is closer than the 1 px swipe resolution but outside its band: ${
+      JSON.stringify({ scrollTop, plan })}`);
+  }
+  return distance;
 }

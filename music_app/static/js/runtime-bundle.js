@@ -17998,6 +17998,15 @@ let trackModalCleanupGeneration = 0;
 const trackModalSpeculativePrewarmControllers = new Set();
 const trackModalCoverLoadSuspensionTokens = new Set();
 
+// The newest library revision this page holds: the status poll's, or that of a current view it applied
+// (a save's own view lands before the poll reports its revision).
+function knownInventoryMutationRevision() {
+  return Math.max(
+    Number(state?.status?.inventory_mutation_revision || 0),
+    Number(state?.ui?.appliedViewInventoryMutationRevision || 0),
+  );
+}
+
 function albumRequiresHydration(album) {
   if (!album || typeof album !== 'object') return false;
   if (album.preview_only === true) return true;
@@ -18244,7 +18253,7 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
       aliases,
       previewAlbumsByAlias,
       trustedAliases,
-      inventoryMutationRevision: Number(state?.status?.inventory_mutation_revision || 0),
+      inventoryMutationRevision: knownInventoryMutationRevision(),
       tagEditMutationClaim: options.tagEditMutationClaim || null,
     },
   );
@@ -18300,9 +18309,12 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
   return invalidatedAlbums.size;
 }
 
-function invalidateAllHydratedTrackModalAlbumDetails() {
+// Details fetched once this page already showed `throughRevision` hold that revision's changes and stay.
+function invalidateAllHydratedTrackModalAlbumDetails(throughRevision = Infinity) {
   const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys()).filter((album) => {
-    const claim = trackModalHydratedAlbumDetailsLru.get(album)?.tagEditMutationClaim;
+    const entry = trackModalHydratedAlbumDetailsLru.get(album);
+    const claim = entry?.tagEditMutationClaim;
+    if (Number(entry?.inventoryMutationRevision || 0) >= throughRevision) return false;
     return !(claim
       && typeof tagEditViewMutationStillOwnsResources === 'function'
       && tagEditViewMutationStillOwnsResources(claim));
@@ -18370,14 +18382,14 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
       }
     }
     const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
-    const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+    const currentInventoryRevision = knownInventoryMutationRevision();
     const pendingMutationOwnsCachedMembership = Boolean(
       cachedEntry?.tagEditMutationClaim
       && typeof tagEditViewMutationStillOwnsResources === 'function'
       && tagEditViewMutationStillOwnsResources(cachedEntry.tagEditMutationClaim)
     );
     if (
-      cachedInventoryRevision !== currentInventoryRevision
+      cachedInventoryRevision < currentInventoryRevision
       && !pendingMutationOwnsCachedMembership
     ) {
       invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
@@ -18501,7 +18513,7 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
     trackModalSpeculativePrewarmControllers.delete(speculativeController);
     return existingLoad;
   }
-  const requestInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+  const requestInventoryRevision = knownInventoryMutationRevision();
   let load = null;
   load = fetchTrackModalAlbumDetails(normalizedAlbumKey, options)
     .then((album) => {
@@ -18513,7 +18525,7 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
         // even before that edit advances the inventory revision.
         return currentAlbum;
       }
-      if (requestInventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) {
+      if (requestInventoryRevision !== knownInventoryMutationRevision()) {
         // Release only this request's aliases before joining or starting a load
         // under the current revision. Foreground callers never receive stale data.
         trackModalAlbumDetailsLoads.forEach((mappedLoad, alias) => {
@@ -22465,7 +22477,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     });
     if (appliedNewInventoryRevision
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
-      invalidateAllHydratedTrackModalAlbumDetails();
+      invalidateAllHydratedTrackModalAlbumDetails(appliedInventoryMutationRevision);
       if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
         // An open album that no longer exists must not leave the applied gallery half-finished.
         const openTrackModalRefresh = refreshOpenTrackModalAfterInventoryMutation()
@@ -23173,7 +23185,7 @@ async function pollStatus() {
       && currentInventoryRevision > knownInventoryRevision;
     if (inventoryAdvanced) {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
-        invalidateAllHydratedTrackModalAlbumDetails();
+        invalidateAllHydratedTrackModalAlbumDetails(currentInventoryRevision);
       }
       const appliedViewInventoryRevision = Number(
         state.ui.appliedViewInventoryMutationRevision,
@@ -23368,7 +23380,7 @@ async function pollStatus() {
         if (!refreshApplied) {
           state.ui.pendingInventoryMutationViewRefresh = true;
         } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
-          invalidateAllHydratedTrackModalAlbumDetails();
+          invalidateAllHydratedTrackModalAlbumDetails(Number(state.status?.inventory_mutation_revision || 0));
         }
       } catch (inventoryRefreshError) {
         if (!ownsStatus()) return;

@@ -237,7 +237,8 @@ function Restore-PerformanceDatabase {
         --fixture-root $env:ALBUM_HAVEN_FIXTURE_ROOT `
         --profile $FixtureProfile `
         --database-url $env:DATABASE_MIGRATOR_URL `
-        --replace-existing
+        --replace-existing `
+        --relation-projection ready
     if ($LASTEXITCODE -ne 0) { throw "Fixture restoration failed for $FixtureProfile." }
 }
 

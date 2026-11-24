@@ -9694,8 +9694,9 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 1,
-        "filesystem_enumerations": 0
+        "sql_statements": 2,
+        "filesystem_enumerations": 0,
+        "returned_rows": 12
       },
       "growth": {
         "metric": "candidate_rows",
@@ -9730,8 +9731,9 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 1,
-        "filesystem_enumerations": 0
+        "sql_statements": 2,
+        "filesystem_enumerations": 0,
+        "returned_rows": 12
       },
       "growth": {
         "metric": "candidate_rows",

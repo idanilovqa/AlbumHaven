@@ -1162,7 +1162,7 @@
       "databaseIdentity": "case:accepted-terminal-failure",
       "filesystemCopy": "media/cases/accepted-terminal-failure"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

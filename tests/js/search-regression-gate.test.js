@@ -100,8 +100,11 @@ test('search gate runs every stage after a failure and fails at the end with eve
   const scenario = [
     "$ErrorActionPreference = 'Stop'",
     '$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:SEARCH_GATE_SCRIPT, [ref]$null, [ref]$null)',
-    "$functions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)",
-    '$functions | ForEach-Object { Invoke-Expression $_.Extent.Text }',
+    // The script's stage bookkeeping: its failure list and the stage functions, without running any stage.
+    '$ast.EndBlock.Statements | Where-Object {',
+    '  $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -or',
+    "  ($_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$script:failedStages')",
+    '} | ForEach-Object { Invoke-Expression $_.Extent.Text }',
     "Invoke-Checked { cmd /c exit 3 } 'First functional shard'",
     "Invoke-Checked { cmd /c echo second-stage-ran } 'Second functional shard'",
     "Invoke-Checked { throw 'runner crashed' } 'Performance targets'",

@@ -19,10 +19,23 @@ if (Test-Path -LiteralPath $windowsPowerShellModules) {
     $env:PSModulePath = "$windowsPowerShellModules;$env:PSModulePath"
 }
 
+# Every stage runs even after one fails, so a single run reports the whole failure inventory.
+$script:failedStages = [System.Collections.Generic.List[string]]::new()
+
 function Invoke-Checked([scriptblock]$Command, [string]$Label) {
-    & $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Label failed with exit code $LASTEXITCODE."
+    try {
+        & $Command
+        if ($LASTEXITCODE -ne 0) {
+            $script:failedStages.Add("$Label failed with exit code $LASTEXITCODE.")
+        }
+    } catch {
+        $script:failedStages.Add("$Label failed: $($_.Exception.Message)")
+    }
+}
+
+function Assert-SearchGatePassed {
+    if ($script:failedStages.Count -gt 0) {
+        throw "Search regression gate failed:`n - $($script:failedStages -join "`n - ")"
     }
 }
 
@@ -139,3 +152,5 @@ try {
         Remove-Item -LiteralPath $resolvedPerformanceTemp -Recurse -Force
     }
 }
+
+Assert-SearchGatePassed

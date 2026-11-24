@@ -845,7 +845,11 @@ def create_scan_performance_asgi_app(scenario: str = "cold"):
     prepare_scan_scenario(scenario, music_dir, library_manifest, cover_specs, base_track_path)
 
     from music_app import create_asgi_app
-    return create_asgi_app()
+    from tests.e2e.support.isolatedPostgres import prepare_app_to_serve
+
+    app = create_asgi_app()
+    prepare_app_to_serve(app)
+    return app
 
 
 class ProductionStatusFileSampler:

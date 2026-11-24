@@ -4247,6 +4247,17 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "width": 2000,
             "height": 2000,
         })
+        # FTC-COVERS-018: the first acceptable candidate for a new album the watcher finds.
+        self.cover_lookup_watcher_first_acceptable_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "watcher-first-acceptable-primary",
+            "artist": "Watcher First Acceptable Artist",
+            "album": "Watcher First Acceptable Album",
+            "year": 2008,
+            "width": 1800,
+            "height": 1800,
+            "candidate_fixture_mode": "watcher-first-acceptable",
+        })
         self.cover_lookup_watcher_candidate_spec = prepare_provider_artwork_spec({
             **dict(cover_specs[0]),
             "cover_id": "watcher-automatic-candidate",
@@ -4394,6 +4405,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
             self.cover_lookup_automatic_candidate_spec,
             self.cover_lookup_watcher_candidate_spec,
+            self.cover_lookup_watcher_first_acceptable_spec,
             self.cover_lookup_split_chooser_spec,
             self.cover_lookup_neutral_user_cover_spec,
             self.cover_lookup_user_improvement_spec,
@@ -5121,6 +5133,10 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 "Watcher Automatic Cover Album"
             ) in normalized_query:
                 return [dict(self.server.cover_lookup_watcher_candidate_spec)]
+            if _normalize_provider_query(
+                "Watcher First Acceptable Album"
+            ) in normalized_query:
+                return [dict(self.server.cover_lookup_watcher_first_acceptable_spec)]
             return []
         if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
             return [dict(self.server.cover_lookup_automatic_candidate_spec)]
@@ -5983,13 +5999,11 @@ def main() -> None:
             app.state.config, temp_root, fixture_media_root=fixture_media_root
         )
         provider_service.gate_pasted_cover_saves()
-        # A restored fixture database fills its Problematic Files index once, as a production
-        # server does after the 0188 deploy; tests then start on a ready index, outside their
-        # own time limits.
-        from music_app.services import problematic_index
-        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+        # A restored fixture database runs the deploy step, as a production server does before
+        # it serves (0188, 0268); tests then start on ready indexes, outside their own time limits.
+        from tests.e2e.support.isolatedPostgres import prepare_app_to_serve
 
-        problematic_index.maintain_now(PostgresLibraryBrowseRepository(app.state.config))
+        prepare_app_to_serve(app)
         provider_service.gate_problematic_complete_list()
         print(
             f"Album Haven production E2E app listening on http://127.0.0.1:{args.port} "

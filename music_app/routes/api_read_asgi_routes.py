@@ -737,8 +737,7 @@ def view_data(request: Request) -> JSONResponse:
                 library_state=_postgres_browse_library_state(request),
             )
         except SearchProjectionPending:
-            from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-            schedule_gallery_projection_refresh(_app_config(request))
+            # The relation projection's owners (startup, scans, the watcher, tag saves) prepare it (6.5).
             return JSONResponse(
                 {"ok": False, "code": "search_projection_pending",
                  "error": "Artist relationships are being prepared."},

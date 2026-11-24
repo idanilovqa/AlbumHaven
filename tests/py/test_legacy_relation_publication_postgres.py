@@ -42,14 +42,12 @@ def test_background_replay_verifies_complete_legacy_contract(multi_destination_l
     journal = connection.execute('select album_id,first_gallery_generation from library.local_relation_dirty_albums where library_id=%s order by album_id', (library_id,)).fetchall()
     assert any(row[0] == -1 for row in journal)
     connection.commit()
-    source_sql = relations.load_relation_source_rows_sql
-
-    def bounded_sources(*, scoped=False):
-        assert scoped, 'Background legacy adoption must not reload the full inventory'
-        return source_sql(scoped=True)
-
-    monkeypatch.setattr(relations, 'load_relation_source_rows_sql', bounded_sources)
-    if publication == 'valid':
+    # Only the scoped loader may run; the full-inventory one is forbidden.
+    monkeypatch.setattr(relations, 'load_relation_source_rows_sql',
+                        lambda: pytest.fail('Background legacy adoption must not reload the full inventory'))
+    # Edits always save, R3 (6.5, 11-23): a header behind the journal (journal_gap) is no longer a refusal;
+    # the journal owner's drain realigns it from a complete snapshot, so it ends like a valid publication.
+    if publication in ('valid', 'journal_gap'):
         result = scoped.ensure_pending_relation_projection_ready(fixture['config'])
         assert result['updated']
         assert connection.execute('select library.local_relation_views(%s,true)', (library_id,)).fetchone()[0] == cache['relation_views']

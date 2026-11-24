@@ -275,6 +275,7 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
     worker = SimpleNamespace(
         repository=repository, note_foreground_activity=lambda: None,
         request=lambda selected_root: events.append("queue_root"), request_context=request_context,
+        recheck_context=lambda paths: events.append("queue_recheck"),
         wait_for_context=lambda paths, timeout: events.append("wait_context"),
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context", validated_context, raising=False)
@@ -309,6 +310,10 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
         assert [item["filename"] for item in payload["local_covers"]] == ["front.jpg", "alternate.jpg"]
         assert [item["filename"] for item in payload["other_art"]] == ["booklet.jpg"]
         assert payload["local_inventory_complete"] is True
+        assert events.count("queue_recheck") == 1, "the stored folder is re-resolved off the response"
+        assert "wait_context" not in events, "re-resolving adds no wait to the open"
+        assert payload["local_inventory_pending"] is False, "an unchanged answer never flashes Checking"
+        assert not payload["local_inventory_error"]
     else:
         assert payload["local_inventory_pending"] is True
         assert payload["local_inventory_complete"] is False
@@ -344,6 +349,7 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
         note_foreground_activity=lambda: None,
         request=requested.append,
         request_context=lambda paths: pytest.fail("a known folder needs no context request"),
+        recheck_context=lambda paths: None,
         wait_for_listing=wait_for_listing,
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context",
@@ -3616,6 +3622,7 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
     asgi_app.state.local_cover_inventory = SimpleNamespace(
         remove_path=remove_inventory_path,
         request_context=lambda paths: None,
+        recheck_context=lambda paths: None,
         repository=SimpleNamespace(
             get=lambda root: {"available": True, "complete": True, "candidates": candidates},
         ),

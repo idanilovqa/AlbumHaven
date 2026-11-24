@@ -373,6 +373,17 @@ const DEFECTS = [
     expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#status:route:GET \/status via build_relation_views$/,
   },
   {
+    // 6.5 (11-23): the component builder has its own affected-set name; the library-scale one stays protected.
+    id: 'BI-04 status request that builds relation views from every source row',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    // The BI-H05/H06/H14 case above already seeds the same line, so this one anchors on the comment alone.
+    anchor: '    # Status is observational',
+    replacement: '    build_postgres_relation_views([])\n    # Status is observational',
+    prelude: 'from music_app.services.relation_projection_builder import build_postgres_relation_views\n',
+    expected: /^rejected BI-04 library-scale:py:music_app\/services\/relation_projection_builder\.py#build_postgres_relation_views at music_app\/services\/relation_projection_builder\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#status:route:GET \/status via build_postgres_relation_views$/,
+  },
+  {
     id: 'BI-06 read request that walks the music root',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',

@@ -129,7 +129,34 @@ async function waitForCleanExit(child, exitPromise, operation) {
   }
 }
 
+// A save records its intent before it writes any file, so held here, none has been written.
+export function holdSaveBeforeMediaWrite(options = {}) {
+  return holdStructuralSavePersistence({
+    ...options, lockSql: 'LOCK TABLE library.tag_edit_intents IN SHARE MODE;',
+  });
+}
+
+// The fold decision reads the separate releases; nothing else that draws a card waits for them.
+export function holdFoldDecision(options = {}) {
+  return holdStructuralSavePersistence({
+    ...options, lockSql: 'LOCK TABLE library.separate_releases IN ACCESS EXCLUSIVE MODE;',
+  });
+}
+
+// Another writer commits while the decision is being made, so its answer is outdated.
+export function holdFoldDecisionThenOutdateIt(options = {}) {
+  return holdStructuralSavePersistence({
+    ...options,
+    lockSql: 'LOCK TABLE library.separate_releases IN ACCESS EXCLUSIVE MODE;',
+    releaseSql: `UPDATE library.libraries SET metadata = metadata || jsonb_build_object('inventory_mutation_revision',
+      coalesce(nullif(metadata ->> 'inventory_mutation_revision', '')::bigint, 0) + 1)
+      WHERE name = 'Local Library' AND library_kind = 'local';\nCOMMIT;`,
+  });
+}
+
 export async function holdStructuralSavePersistence({
+  lockSql = 'LOCK TABLE library.local_albums IN SHARE MODE;',
+  releaseSql = 'COMMIT;',
   env = process.env,
   platform = process.platform,
   spawnProcess = spawn,
@@ -158,7 +185,7 @@ export async function holdStructuralSavePersistence({
   const exitPromise = createExitPromise(child, output);
 
   child.stdin.write(
-    `BEGIN;\nLOCK TABLE library.local_albums IN SHARE MODE;\n\\echo ${READY_MARKER}\n`,
+    `BEGIN;\n${lockSql}\n\\echo ${READY_MARKER}\n`,
   );
   try {
     await waitForReady(child, output);
@@ -184,7 +211,7 @@ export async function holdStructuralSavePersistence({
 
   return {
     async release() {
-      await close('COMMIT;', 'release');
+      await close(releaseSql, 'release');
     },
     async dispose() {
       await close('ROLLBACK;', 'dispose');

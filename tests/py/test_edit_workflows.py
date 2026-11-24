@@ -571,6 +571,7 @@ def test_mixed_media_and_exception_failure_compensates_media_before_returning(
     assert payload["ok"] is False
     assert "exception persistence failed" in payload["error"]
     assert payload["edit_outcome"] == "failed_rolled_back"
+    assert payload.get("failure_stage") != "media_write"
     assert media_title[track_path] == "Old Title"
     assert media_writes == [
         {"title": "New Title"},
@@ -1611,6 +1612,8 @@ def test_failed_edit_restores_a_file_another_process_holds_briefly(config, monke
 
     assert albums == {first: "Ремиксы", second: "Ремиксы"}
     assert failure["edit_outcome"] == "failed_rolled_back"
+    # FTC-TAGS-040: the page names a file that can't be written by this stage, never by the path or error.
+    assert failure["failure_stage"] == "media_write"
 
 
 def test_blank_album_edit_hands_the_finalizer_the_selected_albums_loaded_inventory(config):

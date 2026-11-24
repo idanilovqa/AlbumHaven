@@ -1063,7 +1063,23 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 2000
+      },
+      "budgets": {
+        "observers": 2,
+        "listeners": 1
+      },
+      "growth": {
+        "metric": "observers",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/album-track-table.test.js",
+      "testIdentity": "bounded interaction: re-rendering a track table keeps two credit observers and one motion listener at any row count",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; each re-render already disposes the previous observers and listener. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/album-track-table.js#triggerAlbumTrackPlayActivation",
@@ -2722,13 +2738,29 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/utilities/cover-lookup/gallery"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-local-mutation-ownership.test.js",
+      "testIdentity": "bounded interaction: a Cover Look Up gallery refresh reads its own album once and renders once beside any number of notifications",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; a refresh already asks for its own album's gallery once and renders the modal once. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#release",
@@ -3355,6 +3387,38 @@
       }
     },
     {
+      "id": "js:runtime/gallery-main-interactions.js#schedulePendingSourceTotalsRetry",
+      "action": "The one retry schedulePendingSourceTotalsRetry arms while /home-data reports a source combination's totals pending: a bounded back-off that ends when they are published",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#schedulePendingSourceTotalsRetry:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 7,
+        "timers": 1,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-main-refactor-contracts.test.js",
+      "testIdentity": "bounded interaction: pending source totals keep one retry and stop at the same bound at any library size",
+      "performanceTargets": [],
+      "rollback": "Without the bound, a source combination that is never published would ask /home-data again every second for as long as the page stays open."
+    },
+    {
       "id": "js:runtime/gallery-main-interactions.js#revealGalleryArtistInfoSurface",
       "action": "requestAnimationFrame timers installed by revealGalleryArtistInfoSurface",
       "entrypoints": [
@@ -3382,7 +3446,23 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 12,
+        "observers": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-main-refactor-contracts.test.js",
+      "testIdentity": "bounded interaction: a GalleryBar refit visits only its own genres and keeps one size observer at any page size",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the bar already keeps one ResizeObserver and walks only its own genre pills. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/gallery-main-interactions.js#transitionGalleryMain",
@@ -4416,7 +4496,25 @@
         "BI-09"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "listeners": 8,
+        "observers": 1,
+        "animationFrames": 0,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "listeners",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/mobile-feedback.test.js",
+      "testIdentity": "bounded interaction: mobile navigation installs its listeners once at any library size",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; starting mobile navigation already installs its listeners once and reads none of the library. The renders its resize and profile-change listeners start are their own surfaces' interactions."
     },
     {
       "id": "js:runtime/mobile-navigation.js#presentMobilePage",
@@ -4639,9 +4737,9 @@
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability",
-      "action": "scheduleBrowserTimeout timers installed by hydrateArtistNonAlbumAvailability",
+      "action": "The one deferred retry per kind (artist availability, library Loose Tracks) that scheduleDeferredNonAlbumRetry arms for hydrateArtistNonAlbumAvailability and hydrateLibraryNonAlbumTracks: a bounded back-off, cancelled on leaving",
       "entrypoints": [
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability:timer:scheduleBrowserTimeout"
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#scheduleDeferredNonAlbumRetry:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
@@ -4650,22 +4748,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks",
-      "action": "scheduleBrowserTimeout timers installed by hydrateLibraryNonAlbumTracks",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks:timer:scheduleBrowserTimeout"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 9,
+        "timers": 1,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
+      "testIdentity": "bounded interaction: an artist availability pass sends one request, keeps one retry and stops at the same bound at any library size",
+      "performanceTargets": [],
+      "rollback": "Reverting the shared deferred back-off makes a still-deferred count re-poll every 250 ms without end: requests then grow until the test's firing cap and the contract fails."
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#openAlbumInExplorer",
@@ -5053,7 +5153,23 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 200
+      },
+      "budgets": {
+        "timers": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "renderCommits",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/pending-tag-edits.test.js",
+      "testIdentity": "bounded interaction: a retry pass keeps one retry timer and refreshes the view once however many saves it settles",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; a retry pass already asks about each waiting save (the user's own queue), keeps at most one retry timer and refreshes the view once."
     },
     {
       "id": "js:runtime/pending-tag-edits.js#settle",
@@ -5869,13 +5985,30 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/admin/server/preview-storage"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1,
+        "timers": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "timers",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/preview-move-attention.test.js",
+      "testIdentity": "bounded interaction: a preview move poll sends one request, renders the notifications once and arms one timer",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; each poll already sends one storage request and re-arms one timer. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/problem-exclusion-mutations.js#queueProblemExclusionCreate",
@@ -5983,6 +6116,46 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/save-fold-decisions.js#<top-level>",
+      "action": "Show another page's save in this page: storage listeners installed by <top-level>",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/save-fold-decisions.js#<top-level>:event:storage"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/save-fold-decisions.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/save-fold-decisions.js#ask",
+      "action": "Ask which cards the confirmed tag updates fold: fetch requests installed by ask",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/save-fold-decisions.js#ask:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/save-fold-decisions.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/tag-editor/fold-decision"
+        ],
+        "forbidden": [
+          "/utilities/edit-tags"
+        ]
+      }
     },
     {
       "id": "js:runtime/search-input.js#<top-level>",
@@ -6312,9 +6485,10 @@
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum",
-      "action": "fetch requests installed by rescanMissingAlbum",
+      "action": "A missing album's Re-scan: one POST to its rescan endpoint, then while it answers searching at most MISSING_ALBUM_SEARCH_POLLS GETs of the same endpoint, each after one MISSING_ALBUM_SEARCH_POLL_MS timer (one timer at a time); nothing else",
       "entrypoints": [
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum:request:fetch"
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#request:request:fetch",
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
@@ -9864,20 +10038,88 @@
       "rollback": "Reverting fix(versions) makes POST /versions/mark build a key map over every published album again (candidate_rows grows with the album count)."
     },
     {
+      "id": "py:routes/api_wave_a_asgi_routes.py#missing_album_rescan_result",
+      "action": "Answer whether a missing album's background search is still running, or its result, from memory",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#missing_album_rescan_result:route:GET /api/library/albums/{album_key:path}/rescan"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/missing_album_rescan.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/api_wave_a_asgi_routes.py#rescan_missing_album",
       "action": "Serve POST /api/library/albums/{album_key:path}/rescan",
       "entrypoints": [
         "py:music_app/routes/api_wave_a_asgi_routes.py#rescan_missing_album:route:POST /api/library/albums/{album_key:path}/rescan"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/missing_album_rescan.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 400
+      },
+      "budgets": {
+        "sql_statements": 2,
+        "stat_calls": 4,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_missing_album_rescan.py::test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
+      "testIdentity": "test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
+      "rollback": "Walking a root or listing a candidate folder in the request makes filesystem_enumerations exceed 0; checking more places as the library grows makes stat_calls grow (freeze guard case 59)."
+    },
+    {
+      "id": "py:services/missing_album_rescan.py#MissingAlbumSearches._run",
+      "action": "Search the readable roots once, in the background, for a missing album a Re-scan did not find by lookups",
+      "entrypoints": [
+        "py:music_app/services/missing_album_rescan.py#MissingAlbumSearches._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/missing_album_rescan.py",
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 400
+      },
+      "budgets": {
+        "filesystem_enumerations": 5,
+        "stat_calls": 4,
+        "sql_statements": 0
+      },
+      "growth": {
+        "metric": "filesystem_enumerations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_missing_album_rescan.py::test_missing_album_search_contract_walks_each_readable_root_once_at_any_library_size",
+      "testIdentity": "test_missing_album_search_contract_walks_each_readable_root_once_at_any_library_size",
+      "rollback": "Walking a root more than once, or listing each candidate folder, makes filesystem_enumerations grow with the library. The walk stays within the 15 s cap and stops at shutdown (freeze guard case 59)."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#revert_problem_ignore",
@@ -9910,6 +10152,41 @@
       ],
       "workClass": "affected-set",
       "proof": "static"
+    },
+    {
+      "id": "py:routes/api_wave_a_asgi_routes.py#tag_editor_fold_decision",
+      "action": "Serve POST /utilities/tag-editor/fold-decision",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#tag_editor_fold_decision:route:POST /utilities/tag-editor/fold-decision"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/scan_cache_persistence.py",
+        "music_app/services/scoped_relation_projection.py",
+        "music_app/services/stray_fold_decision.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "sql_statements": 10,
+        "returned_rows": 12,
+        "candidate_rows": 2
+      },
+      "growth": {
+        "metric": "returned_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_fold_decision_route_bounded_contract.py::test_fold_decision_route_contract_reads_only_the_edited_albums_at_production_album_count",
+      "testIdentity": "test_fold_decision_route_contract_reads_only_the_edited_albums_at_production_album_count",
+      "rollback": "Revert the fold decision route, its page caller and contract; cards then fold at save completion."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#tag_editor_folder_files",
@@ -10047,7 +10324,7 @@
       "budgets": {
         "builder_calls": 0,
         "returned_rows": 6,
-        "sql_statements": 29,
+        "sql_statements": 31,
         "invalidations": 1
       },
       "growth": {
@@ -10940,14 +11217,31 @@
         "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove:route:POST /utilities/cover-lookup/additional-artwork/remove"
       ],
       "owners": [
-        "music_app/routes/api_wave_d_asgi_routes.py"
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_workflow.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 1,
+        "stat_calls": 4,
+        "path_resolves": 7
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_cancel",
@@ -12065,14 +12359,32 @@
         "py:music_app/routes/web_asgi.py#albums_page:route:GET /albums"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "testIdentity": "test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "rollback": "The route is the index page; giving it its own work outside index fails the delegation assertion, and probing covers per album fails the index's stat_calls growth."
     },
     {
       "id": "py:routes/web_asgi.py#app_copy_account_route",
@@ -12313,14 +12625,32 @@
         "py:music_app/routes/web_asgi.py#loose_tracks_page:route:GET /loose-tracks"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "testIdentity": "test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "rollback": "The route is the index page; giving it its own work outside index fails the delegation assertion, and probing covers per album fails the index's stat_calls growth."
     },
     {
       "id": "py:routes/web_asgi.py#news_center",
@@ -13620,19 +13950,36 @@
     },
     {
       "id": "py:services/edit_state.py#apply_repairs_worker",
-      "action": "Run background apply_repairs_worker",
+      "action": "Write one file's tag repairs while the watcher ignores that one file",
       "entrypoints": [
         "py:music_app/services/edit_state.py#apply_repairs_worker:background:executor"
       ],
       "owners": [
-        "music_app/services/edit_state.py"
+        "music_app/services/edit_state.py",
+        "music_app/services/library_watch_suppression.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "path_resolves": 1,
+        "stat_calls": 0,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "path_resolves",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_edit_repairs_bounded_contracts.py::test_a_tag_repair_resolves_only_its_own_file_however_many_saves_are_in_flight",
+      "testIdentity": "test_a_tag_repair_resolves_only_its_own_file_however_many_saves_are_in_flight",
+      "rollback": "Resolving more than the written file's own path per write (for example every suppressed path) makes path_resolves grow with the saves in flight and the contract fails."
     },
     {
       "id": "py:services/gallery_projection_postgres.py#_publish_gallery_projection_on_connection",
@@ -13720,14 +14067,29 @@
         "py:music_app/services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh:background:executor"
       ],
       "owners": [
-        "music_app/services/gallery_projection_postgres.py"
+        "music_app/services/gallery_projection_postgres.py",
+        "music_app/services/library_browse_postgres.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 5,
+        "production": 60
+      },
+      "budgets": {
+        "builder_calls": 0
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_isolated_postgres_live.py::test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready",
+      "testIdentity": "test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_ready",
+      "rollback": "Case 60 (6.5): a search or browse read while the gallery is ready builds no whole scope. The save-path and targeted-invalidation cases are not yet proven (case60-red-cases.patch in the shared notes)."
     },
     {
       "id": "py:services/generated_preview_relocation.py#GeneratedPreviewRelocationWorker._run",
@@ -13881,7 +14243,7 @@
     },
     {
       "id": "py:services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit",
-      "action": "After a tag save, keep the duplicate projections except the albums the edit can change, so the next search or artist view reads only those albums",
+      "action": "After a tag save, keep the duplicate projections except the albums the edit can change, so the next live duplicate read (album details, the Problematic Files evaluation) reads only those albums",
       "entrypoints": [
         "py:music_app/services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit:refresh:name"
       ],
@@ -13908,7 +14270,7 @@
       },
       "command": "python -m pytest tests/py/test_duplicate_projection_bounded_contracts.py::test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_production_album_count",
       "testIdentity": "test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_production_album_count",
-      "rollback": "Revert the scoped duplicate-projection retention; every save then wipes both duplicate caches and the next view rereads the whole identity index."
+      "rollback": "Revert the scoped duplicate-projection retention; every save then wipes both duplicate caches and the next live duplicate read rereads the whole identity index."
     },
     {
       "id": "py:services/library_event_coordinator.py#LibraryEventCoordinator._run_scheduled_flush",
@@ -14189,19 +14551,38 @@
     },
     {
       "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._run",
-      "action": "Run background LocalCoverInventoryWorker._run",
+      "action": "Re-list only what a scan, live root change, watcher event or open named; an idle poll reads nothing",
       "entrypoints": [
         "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryWorker._run:background:thread"
       ],
       "owners": [
-        "music_app/services/local_cover_inventory.py"
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/library_indexing.py",
+        "music_app/services/scan_state.py",
+        "music_app/__init__.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 200
+      },
+      "budgets": {
+        "affected_rows": 10,
+        "candidate_rows": 64,
+        "filesystem_enumerations": 3
+      },
+      "growth": {
+        "metric": "affected_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_local_cover_inventory_bounded_contracts.py::test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size",
+      "testIdentity": "test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size",
+      "rollback": "Reverting makes every completed scan and live root change invalidate, resolve and hash every album folder again; affected_rows and filesystem_enumerations then grow with the library and the contract fails."
     },
     {
       "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker.schedule_invalidation_retry",
@@ -14818,19 +15199,36 @@
     },
     {
       "id": "py:services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths",
-      "action": "Run publisher PostgresScanCacheAdapter.load_removed_unpublished_paths",
+      "action": "A superseded scan's republish drops what another writer removed: one statement over the scan's files, a disk check only for a file the library lost",
       "entrypoints": [
         "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths:publisher:name"
       ],
       "owners": [
-        "music_app/services/scan_cache_persistence.py"
+        "music_app/services/scan_cache_persistence.py",
+        "music_app/services/scan_state.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 50,
+        "production": 2000
+      },
+      "budgets": {
+        "sql_statements": 1,
+        "stat_calls": 2,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_scan_republish_bounded_contracts.py::test_a_superseded_scans_republish_checks_only_the_files_the_library_lost",
+      "testIdentity": "test_a_superseded_scans_republish_checks_only_the_files_the_library_lost",
+      "rollback": "Checking the disk for every scanned file, or querying per file or batch, makes stat_calls or sql_statements grow with the scan and the contract fails. Values sent equal the scan's own files, at most 5 attempts per scan (6.5, 2026-11-22)."
     },
     {
       "id": "py:services/scan_cache_persistence.py#_execute_semantic_local_album_reconciliation",
@@ -15598,6 +15996,137 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/pending-tag-edits.js#<top-level>",
+      "action": "Show another tab's finishing tag edits over the loaded view when it writes the pending-edit store",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-tag-edits.js#<top-level>:event:storage"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-tag-edits.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/gallery_projection_postgres.py#_header_membership_publisher",
+      "action": "Patch a save's edited albums into each gallery membership header",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#_header_membership_publisher:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#publish_affected_relation_projection_or_defer",
+      "action": "Publish a write's affected relation component in a savepoint, or defer it to the journal owner",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#publish_affected_relation_projection_or_defer:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#_reconcile_intent",
+      "action": "Reconcile one verified save's intent from its files (case 56's per-intent path, run now)",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#_reconcile_intent:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 61,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 13
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the verified-save catch-up (tag_edit_catch_up) with its contract. A DB-step failure after verified files then restores the old tags again, which the owner's rule (2026-11-23) forbids."
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#_run",
+      "action": "Catch the library up with one verified save on the single-flight catch-up worker",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#_run:background:executor"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 61,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 13
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_verified_save_catch_up_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the verified-save catch-up (tag_edit_catch_up) with its contract. A DB-step failure after verified files then restores the old tags again, which the owner's rule (2026-11-23) forbids."
+    },
+    {
+      "id": "py:services/tag_edit_catch_up.py#retry_waiting_catch_ups",
+      "action": "Retry the catch-ups whose back-off has run out (timer and the journal owner's drain)",
+      "entrypoints": [
+        "py:music_app/services/tag_edit_catch_up.py#retry_waiting_catch_ups:background:thread"
+      ],
+      "owners": [
+        "music_app/services/tag_edit_catch_up.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
       "proof": "static"
     }
   ]

@@ -104,9 +104,9 @@ def test_separate_releases_missing_malformed_and_save_normalize_to_key_set(tmp_p
     save_separate_release_keys(config, {" release-b ", "release-a", ""})
     assert load_separate_release_keys(config) == {"release-a", "release-b"}
     assert separate_keys == {"release-a", "release-b"}
-    assert invalidations == [
-        {"database_url": database_url, "kinds": ("problematic-files",)},
-    ]
+    # Since 251810c0e there is no cached Problematic Files list to invalidate: the separate_releases trigger
+    # (migration 0188) marks the changed releases' albums for the indexed list, in the save's transaction.
+    assert invalidations == []
 
 
 def test_exception_overrides_malformed_defaults_and_save_trims_path_keys(tmp_path, monkeypatch):

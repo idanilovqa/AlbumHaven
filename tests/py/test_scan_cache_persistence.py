@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 import re
 import threading
@@ -253,6 +254,10 @@ class FakeConnection:
 
     def commit(self):
         self.commit_calls += 1
+
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        return contextlib.nullcontext()
 
     def pipeline(self):
         connection = self
@@ -714,9 +719,9 @@ def test_one_file_reconciliation_never_rebuilds_full_library_relations(monkeypat
     monkeypatch.setattr(persistence, "load_relation_source_rows_sql", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_family_projection_in_transaction", unexpected_global_work)
     monkeypatch.setattr(persistence, "replace_artist_search_projection_in_transaction", unexpected_global_work)
-    scoped_source_sql = relations.load_relation_source_rows_sql(scoped=True)
-    monkeypatch.setattr(relations, "load_relation_source_rows_sql",
-                        lambda *, scoped=False: scoped_source_sql if scoped else unexpected_global_work())
+    # The scoped publication runs this text through load_scoped_relation_source_rows; the full loader is forbidden.
+    scoped_source_sql = relations._relation_source_rows_sql(scoped=True)
+    monkeypatch.setattr(relations, "load_relation_source_rows_sql", unexpected_global_work)
     connection = Connection(relation_ready=True)
     adapter = persistence.PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://targeted-reconciliation-test"},
@@ -2054,6 +2059,92 @@ def test_cache_wrapper_forwards_expected_inventory_revision(monkeypatch, revisio
 
     assert result == {"album_rows_updated": 1}
     assert calls[0]["expected_inventory_mutation_revision"] == revision
+
+
+@pytest.mark.parametrize("rows", [1, 0])
+def test_a_cover_look_up_save_hands_its_journaled_album_to_the_relation_owner(monkeypatch, rows):
+    """6.5 (option a): a committed Cover Look Up save journals its album for relations (migration 0108); the
+    owner that drains it is queued after the commit, off the response path, with no browse request: the keyed
+    incremental drain (ensure_pending_relation_projection_ready), never a whole-scope refresh. A save that
+    changed nothing queues nothing."""
+    from concurrent.futures import Future
+
+    from music_app.services import cache, gallery_projection_postgres as gallery, scoped_relation_projection
+
+    submitted = []
+
+    class Executor:
+        """Holds each queued owner, as a busy write executor would: the save must not wait for it."""
+
+        def submit(self, action):
+            future = Future()
+            submitted.append((action, future))
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    monkeypatch.setattr(gallery, "_PENDING", {})
+    adapter = SimpleNamespace(persist_cover_selection=lambda **_kwargs: {"album_rows_updated": rows})
+    monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+    drained = []
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda config, **_kwargs: drained.append(config) or {"initialized": True})
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("a cover save queued a whole-scope gallery rebuild"))
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": f"postgresql://cover-save-owner-{rows}"}
+
+    result = cache.persist_cover_selection_for_tracks_for_config(
+        config, {"/music/Artist/Album/01.flac"}, Path("/music/Artist/Album/cover.jpg"), cover_selection_origin="user",
+    )
+
+    assert result == {"album_rows_updated": rows}, "the save returned while its owner is still queued"
+    assert drained == [], "the save does not run the drain itself"
+    if not rows:
+        assert submitted == [], "a save that changed nothing hands nothing to the owner"
+        return
+    assert len(submitted) == 1, "one owner queued after the commit"
+    action, future = submitted[0]
+    future.set_result(action())
+    assert drained == [config], "the queued owner drains the journaled album with no browse request"
+
+
+def test_a_cover_save_owner_returns_quietly_before_the_relation_projection_is_initialized(monkeypatch, caplog):
+    """6.5: startup owns initialization at the incremental builder version. Until then the cover-save owner
+    has nothing to drain: it returns without an exception (nothing logged) and builds nothing."""
+    from concurrent.futures import Future
+
+    from music_app.services import cache, gallery_projection_postgres as gallery, scoped_relation_projection
+
+    submitted = []
+
+    class Executor:
+        def submit(self, action):
+            future = Future()
+            submitted.append((action, future))
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    monkeypatch.setattr(gallery, "_PENDING", {})
+    adapter = SimpleNamespace(persist_cover_selection=lambda **_kwargs: {"album_rows_updated": 1})
+    monkeypatch.setattr(cache, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda _config, **_kwargs: {"initialized": False})
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("an uninitialized projection was rebuilt by a cover save"))
+    monkeypatch.setattr(gallery, "_ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("an uninitialized projection was rebuilt by a cover save"))
+
+    cache.persist_cover_selection_for_tracks_for_config(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://cover-save-uninitialized"},
+        {"/music/Artist/Album/01.flac"}, Path("/music/Artist/Album/cover.jpg"), cover_selection_origin="user",
+    )
+
+    assert len(submitted) == 1
+    action, future = submitted[0]
+    with caplog.at_level("ERROR"):
+        future.set_result(action())
+    assert future.exception() is None
+    assert not [record for record in caplog.records if record.levelname in {"ERROR", "CRITICAL"}], \
+        "the owner logged an exception for a projection startup has not initialized yet"
 
 
 @pytest.mark.parametrize("legacy", [{"expected_cover_selection_origin": "automatic"}, {"expected_cover_revision": "old"}, {"expected_cover_selection_origin": "invalid", "expected_cover_revision": "old"}])
@@ -3573,7 +3664,7 @@ def test_targeted_structural_relation_patch_avoids_full_source_load(monkeypatch)
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services import scoped_relation_projection as scoped
 
-    connection = object()
+    connection = SimpleNamespace(transaction=contextlib.nullcontext)
     published = {"projection_mode": "targeted", "orphaned_source_artists": ["Ovderhead"],
                  "relation_view_patch": {"remove": {"artists": ["Ovderhead"]},
                                          "upsert": {"artists": ["Overhead"]}}}
@@ -3618,7 +3709,7 @@ def test_stale_structural_relation_patch_reports_authoritative_orphan(monkeypatc
 
     monkeypatch.setattr(scoped, "publish_affected_relation_projection", publish)
     result = persistence._patch_structural_relation_projection(
-        object(), previous_entries={"track.flac": {"album_id": 41}},
+        SimpleNamespace(transaction=contextlib.nullcontext), previous_entries={"track.flac": {"album_id": 41}},
         updated_entries={}, source_album_vacated=True,
     )
     assert result is authoritative
@@ -3631,8 +3722,9 @@ def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services import scoped_relation_projection as scoped
 
-    # Incompatible indexed evidence now fails closed; the wrapper cannot replace
-    # that failure with a successful stale snapshot or a global rebuild.
+    # Incompatible indexed evidence never fails the user's save (edits always save, R1): the
+    # publication's savepoint rolls back and the journal owner reconciles later. The wrapper never
+    # replaces it with a stale snapshot or a global rebuild.
     calls = []
 
     def reject(connection, **scope):
@@ -3644,11 +3736,11 @@ def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch
 
     monkeypatch.setattr(scoped, "publish_affected_relation_projection", reject)
     monkeypatch.setattr(persistence, "_commit_structural_relation_projection", forbidden)
-    with pytest.raises(RuntimeError, match="Relation compatibility evidence changed"):
-        persistence._patch_structural_relation_projection(
-            object(), previous_entries={"track.flac": {"album_id": 41}},
-            updated_entries={}, source_album_vacated=True,
-        )
+    result = persistence._patch_structural_relation_projection(
+        SimpleNamespace(transaction=contextlib.nullcontext), previous_entries={"track.flac": {"album_id": 41}},
+        updated_entries={}, source_album_vacated=True,
+    )
+    assert result == {"relation_publication_deferred": True}
     assert len(calls) == 1
     assert calls[0]["album_ids"] == {41}
 
@@ -5441,3 +5533,51 @@ def test_targeted_watcher_preserves_detached_prewrite_scope(monkeypatch, change)
     adapter.persist_targeted_inventory_mutation(root_id='main', **kwargs)
     assert len(selected) == 1
     assert selected[0]['album_ids'] == {0}
+
+
+@pytest.mark.parametrize("outcome", ["acquired", "held-elsewhere", "lock-query-fails"])
+def test_the_metadata_repair_lease_lives_on_a_session_lease_and_is_released_on_every_path(monkeypatch, outcome):
+    """BI-15 (6.5): the metadata repair lease is a session advisory lock held across the repair, so it is taken
+    on a session lease nobody borrows next (session_connection), never the adapter's pooled lease. Every path
+    closes that lease: released after the repair (unlock, then close), not acquired, or the lock query failing."""
+    from music_app.services import scan_cache_persistence as persistence
+
+    leases = []
+
+    class Lease:
+        autocommit = False
+
+        def __init__(self):
+            self.statements, self.closed = [], False
+
+        def execute(self, sql, params=None):
+            self.statements.append(sql)
+            if outcome == "lock-query-fails":
+                raise RuntimeError("lock query failed")
+            return SimpleNamespace(fetchone=lambda: {"acquired": outcome == "acquired"},
+                                   fetchall=lambda: [{"acquired": outcome == "acquired"}])
+
+        def close(self):
+            self.closed = True
+
+    def session_connection(_url):
+        leases.append(Lease())
+        return leases[-1]
+
+    monkeypatch.setattr(persistence, "session_connection", session_connection, raising=False)
+    monkeypatch.setattr(persistence, "_leased_connection",
+                        lambda *_a, **_k: pytest.fail("the repair lease's session lock was taken on a pooled lease"))
+    adapter = persistence.PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://repair-lease"})
+
+    if outcome == "lock-query-fails":
+        with pytest.raises(RuntimeError, match="lock query failed"):
+            adapter.try_acquire_metadata_repair_lease()
+    else:
+        lease = adapter.try_acquire_metadata_repair_lease()
+        if outcome == "acquired":
+            assert lease is not None and not leases[0].closed, "the lease holds its session until released"
+            lease.release()
+            assert any("pg_advisory_unlock" in sql for sql in leases[0].statements)
+        else:
+            assert lease is None
+    assert len(leases) == 1 and leases[0].closed

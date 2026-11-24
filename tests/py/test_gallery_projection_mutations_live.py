@@ -1,6 +1,7 @@
 """Transaction, scope and privilege proof on the existing disposable PG fixture."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
 
@@ -33,13 +34,18 @@ def gallery_inventory(watcher_repair_inventory):
         """, (first["path"],))
     from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
     ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
-    result = gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
-    assert result["built"] > 0
+    # Setup needs the published state, not who built it: since c72277e26 the seed's startup baseline already
+    # publishes both root scopes, so this call may build nothing.
+    gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     fixture.first = first
     fixture.second = second
     fixture.view_state = browse._root_sidebar_view_state({})
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
         fixture.context = gallery.gallery_projection_context(connection)
+        for params in ({}, {"gallery_scope": "new_arrivals"}):
+            assert gallery._ready_header(connection, fixture.context, browse._root_sidebar_view_state(params)), (
+                f"root scope {params or 'all'} has a ready header"
+            )
         assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is not None
     return fixture
 
@@ -161,7 +167,8 @@ def test_override_missing_key_and_explicit_null_change_effective_missing_members
     assert fixture.first_album_key not in {row["album_key"] for row in repository._load_missing_album_rows()}
 
 
-def test_lowest_id_track_override_fallback_and_file_delete_invalidate(gallery_inventory):
+def test_newest_track_override_wins_and_file_delete_invalidates(gallery_inventory):
+    """eea310882: of two track overrides (no path override), the newest decides, as in the loader."""
     fixture = gallery_inventory
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     with isolatedPostgres._connect(fixture.setup_url) as writer:
@@ -169,14 +176,15 @@ def test_lowest_id_track_override_fallback_and_file_delete_invalidate(gallery_in
         writer.execute("update library.local_track_files set metadata="
                        "jsonb_set(metadata,'{scan_cache,stale}','true'::jsonb) where private_path=%s",
                        (fixture.first["path"],))
-        for key, value in (("proof-low", "non-album rarity"), ("proof-high", None)):
+        for key, value in (("proof-older", None), ("proof-newer", "non-album rarity")):
             writer.execute("""insert into library.exception_overrides(library_id,track_id,track_key,override_payload)
                 select library_id,id,%s,%s from library.local_tracks where track_key=%s""",
                 (key, Jsonb({"exception_type": value}), fixture.first["path"]))
+    # The newer rarity override excludes the album from missing albums.
     assert fixture.first_album_key not in {row["album_key"] for row in repository._load_missing_album_rows()}
     with isolatedPostgres._connect(fixture.setup_url) as writer:
         before = generation(writer, fixture.context["library_id"])
-        writer.execute("delete from library.exception_overrides where track_key='proof-low'")
+        writer.execute("delete from library.exception_overrides where track_key='proof-newer'")
         assert generation(writer, fixture.context["library_id"]) == before + 1
     assert fixture.first_album_key in {row["album_key"] for row in repository._load_missing_album_rows()}
     with isolatedPostgres._connect(fixture.setup_url) as writer:
@@ -486,7 +494,8 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
         before = gallery.load_gallery_projection_page(connection, fixture.view_state, {})
     assert before is not None
     added = fixture.entry("New Artist/Third/three.flac", artist="New Artist", album="Third")
-    fixture.seed(fixture.first, fixture.second, added)
+    # A native scan's publication without the startup baseline (c72277e26), which would repair it at once.
+    fixture.seed(fixture.first, fixture.second, added, startup_baseline=False)
     repository = browse.PostgresLibraryBrowseRepository(
         fixture.config, connect=isolatedPostgres._connect,
     )
@@ -516,8 +525,16 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
         return future
 
     monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", record_refresh)
+    # 6.5 (option 1): browsing the stale gallery schedules nothing; the scan's own publication owns recovery.
     repository.build_root_startup_preview_payload()
-    assert len(refreshes) == 1, "Stale root browse did not schedule recovery"
+    assert refreshes == [], "a browse request never schedules the gallery refresh"
+
+    def scan_publication_owner():
+        # As cache.py does after a scan's snapshot is saved.
+        gallery.schedule_gallery_projection_refresh(fixture.config, connect=isolatedPostgres._connect)
+
+    scan_publication_owner()
+    assert len(refreshes) == 1
     assert refreshes[0] is not None
     if fail_first:
         with pytest.raises(RuntimeError, match="temporary relation repair failure"):
@@ -538,10 +555,26 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
                 break
             sleep(0.01)
         assert not pending, "Failed refresh did not release its single-flight slot"
-        repository.build_root_startup_preview_payload()
+        # Requests after the failure still schedule nothing; the next source change recovers it once.
+        for _request in range(3):
+            repository.build_root_startup_preview_payload()
+        assert len(refreshes) == 1, "requests after a failed refresh schedule nothing"
+        scan_publication_owner()
         assert len(refreshes) == 2
-    # Journal replay publishes membership atomically; the outer refresh must reuse it.
-    assert refreshes[-1].result(timeout=10) == {"built": 0}
+    # Keep last families (431e0375b): while a relation rebuild is pending, the refresh publishes both root
+    # scopes with the last families, rebuilds relations, then republishes both once the relation publication
+    # moves the source generation, so 2 scopes x 2 publications. (Before 431e0375b relations were rebuilt
+    # first and the refresh reused the replayed membership: built 0.) After a failed relation rebuild
+    # (fail_first) the failed refresh already published both scopes at this generation, and under option 1
+    # no request changes anything in between, so the recovering refresh skips them (ready headers) and
+    # publishes only after its relation rebuild: 2. That 2 depends on the pre-pass reusing the headers the failed
+    # attempt already published at the current generation; a later change that rebuilds ready headers shows
+    # up here as 4.
+    # Edits always save (R3/R4): the relation replay now patches each header from its own generation by the
+    # journal's albums instead of asking for a full republication. After the relation rebuild the scopes are
+    # already current, so the second full publication of both scopes is gone: 2 (the pre-pass) without a
+    # failure, and 0 after one, since the failed attempt's pre-pass already published them.
+    assert refreshes[-1].result(timeout=10) == {"built": 0 if fail_first else 2}
     assert len(attempts) == (2 if fail_first else 1)
     assert not repository._load_relation_alias_maps().get("projection_stale_reason")
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
@@ -568,7 +601,8 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
 
     fixture = gallery_inventory
     added = fixture.entry("Added/Third/three.flac", artist="Added", album="Third")
-    fixture.seed(fixture.first, fixture.second, added)
+    # The relation refresh must have work to do: no startup baseline (c72277e26), which would publish it first.
+    fixture.seed(fixture.first, fixture.second, added, startup_baseline=False)
     concurrent = fixture.entry("Concurrent/Fourth/four.flac", artist="Concurrent", album="Fourth")
     refresh_locked, target_attempted = Event(), Event()
     inventory_lock = relations.inventory_publication_advisory_lock_sql()
@@ -776,42 +810,155 @@ def test_targeted_inventory_preserves_shared_artist_identity(watcher_repair_inve
 
 
 def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery_inventory):
-    """CI run 44445861031: 5,332 rows estimated as 1 made artist bounds a 1.6 M-buffer nested loop."""
+    """A performance bound on #65's own anchored and previous-page path, which reads the membership tables
+    (7a7dd5933), after a republish whose statistics predate it.
+
+    Main's failure (CI run 44445861031: 5,332 rows estimated as 1 made its occurrence self-join a 1.6 M-buffer
+    nested loop) has no counterpart here: #65's bounds target is a one-row LIMIT 1 subquery on the outer side.
+    Measured on #65 with stale statistics at 5.3k entries, every bounds plan read 152-437 buffers with and
+    without the materialized target; this test keeps that bound."""
+    from music_app.services.utils import artist_collation_key
+
     fixture = gallery_inventory
     scope_key = gallery.gallery_projection_scope_key(fixture.view_state)
     revision = "f" * 64
-    rows = [{
+    payloads = [{
         "artist_id": f"artist-{index // 4:04d}", "artist_name": f"Artist {index // 4:04d}",
-        "album_id": index, "album_key": f"album-{index}", "album_title": f"Album {index}",
+        "album_id": index, "album_key": f"album-{index}", "album_title": f"Album {index:04d}",
         "album_release_year": 2000,
     } for index in range(5332)]
+    rows = [{
+        "artist_id": payload["artist_id"], "album_key": payload["album_key"],
+        "artist_sort": [*artist_collation_key(payload["artist_name"]), *artist_collation_key(payload["artist_name"])],
+        "artist_display": payload["artist_name"], "album_year": 2000,
+        "album_sort": payload["album_title"].casefold(), "payload": payload,
+    } for payload in payloads]
+    tables = ("gallery_membership_entries", "gallery_membership_artists")
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        connection.execute("alter table library.gallery_projection_occurrences set (autovacuum_enabled = false)")
-        connection.execute("analyze library.gallery_projection_occurrences")
-    with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        assert publish(connection, fixture.context, fixture.view_state, revision=revision, rows=rows)
-    with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        estimate = connection.execute("""
-            explain (format json) select 1 from library.gallery_projection_occurrences
-            where library_id = %s and scope_key = %s and revision = %s
-        """, (fixture.context["library_id"], scope_key, revision)).fetchone()["QUERY PLAN"][0]["Plan"]
-        assert estimate["Plan Rows"] < 100, "statistics must still predate the republished revision"
+        # Statistics are taken while the scope is empty and never refreshed after the republish.
+        for table in tables:
+            connection.execute(f"delete from library.{table} where library_id = %s and scope_key = %s",
+                               (fixture.context["library_id"], scope_key))
+            connection.execute(f"alter table library.{table} set (autovacuum_enabled = false)")
+            connection.execute(f"analyze library.{table}")
+    try:
+        state = {key: fixture.view_state.get(key) for key in ("gallery_scope", "visible_library_categories")}
+        with isolatedPostgres._connect(fixture.runtime_url) as connection:
+            assert connection.execute("""
+                select library.patch_gallery_membership(%s, %s, %s, %s, %s, %s, %s, null, %s) as published
+            """, (fixture.context["library_id"], scope_key, fixture.context["generation"],
+                  fixture.context["generation"], gallery.BUILDER_VERSION, revision, Jsonb(state),
+                  Jsonb(rows))).fetchone()["published"]
 
-        started = monotonic()
-        page, _sidebar, count, metadata = gallery.load_gallery_projection_page(
-            connection, fixture.view_state, {"gallery_page_size": "60", "gallery_anchor_artist": "Artist 0666"})
-        elapsed_ms = (monotonic() - started) * 1000
+        class Recording:
+            """Records each bounds query the page runs, to explain it afterwards."""
 
-        explained = connection.execute("explain (analyze, buffers, format json) " + gallery._ARTIST_BOUNDS_SQL, {
-            "library_id": fixture.context["library_id"], "scope_key": scope_key,
-            "revision": revision, "ordinal": 666 * 4,
-        }).fetchone()["QUERY PLAN"][0]
+            def __init__(self, connection):
+                self.connection, self.bounds = connection, []
+
+            def execute(self, query, params=None):
+                if "join library.gallery_membership_artists artist" in str(query):
+                    self.bounds.append((str(query), dict(params or {})))
+                return self.connection.execute(query, params)
+
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+
+        with isolatedPostgres._connect(fixture.runtime_url) as raw:
+            # Both sides of the bounds join still look empty to the planner: the artists table is the outer
+            # side whose underestimate lets an inlined target rerun per artist row.
+            for table in tables:
+                estimate = raw.execute(f"""
+                    explain (format json) select 1 from library.{table}
+                    where library_id = %s and scope_key = %s
+                """, (fixture.context["library_id"], scope_key)).fetchone()["QUERY PLAN"][0]["Plan"]
+                assert estimate["Plan Rows"] < 100, f"statistics for {table} must still predate the republish"
+            connection = Recording(raw)
+
+            started = monotonic()
+            page, _sidebar, count, metadata = gallery.load_gallery_projection_page(
+                connection, fixture.view_state, {"gallery_page_size": "60", "gallery_anchor_artist": "Artist 0666"})
+            anchored_ms = (monotonic() - started) * 1000
+            assert metadata.get("previous_cursor"), "the anchored page has a previous page"
+            started = monotonic()
+            previous, _sidebar, _count, _metadata = gallery.load_gallery_projection_page(
+                connection, fixture.view_state,
+                {"gallery_page_size": "60", "gallery_cursor": metadata["previous_cursor"],
+                 "gallery_page_direction": "previous"})
+            previous_ms = (monotonic() - started) * 1000
+
+            assert {"artist_name", "ordinal"} <= {key for _query, params in connection.bounds
+                                                  for key, value in params.items() if value is not None}, (
+                "both bounds forms ran: by artist name and by ordinal"
+            )
+            explained = [raw.execute("explain (analyze, buffers, format json) " + query, params)
+                         .fetchone()["QUERY PLAN"][0] for query, params in connection.bounds]
+    finally:
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            for table in tables:
+                connection.execute(f"alter table library.{table} reset (autovacuum_enabled)")
 
     assert count == len(rows)
     assert metadata["revision"] == revision
     names = [row["artist_name"] for row in page]
-    assert names.count("Artist 0666") == 4
+    assert names.count("Artist 0666") == 4, "the requested artist's albums are on the page"
     assert all(names.count(name) == 4 for name in set(names)), "pages hold whole artist groups"
-    assert elapsed_ms < 1000, f"first anchored gallery request took {elapsed_ms:.0f} ms"
-    assert "Nested Loop" not in json.dumps(explained)
-    assert explained["Plan"]["Shared Hit Blocks"] + explained["Plan"]["Shared Read Blocks"] < 1000
+    assert previous and all([row["artist_name"] for row in previous].count(name) == 4
+                            for name in {row["artist_name"] for row in previous})
+    assert anchored_ms < 1000, f"first anchored gallery request took {anchored_ms:.0f} ms"
+    assert previous_ms < 1000, f"previous-page gallery request took {previous_ms:.0f} ms"
+    for plan in explained:
+        buffers = plan["Plan"]["Shared Hit Blocks"] + plan["Plan"]["Shared Read Blocks"]
+        assert buffers < 1000, f"a bounds query read {buffers} buffers: {json.dumps(plan)[:400]}"
+
+
+def test_a_cover_look_up_save_journals_one_album_and_its_owner_drains_it_alone(gallery_inventory, monkeypatch):
+    """6.5 (option a), on real Postgres: a Cover Look Up save journals exactly its album; the owner it queues
+    after the commit drains that album alone (affected set 1), with no browse request and no whole-scope
+    gallery rebuild, and leaves no dirty row behind."""
+    from concurrent.futures import Future
+
+    from music_app.services import cache
+
+    fixture = gallery_inventory
+    held = []
+
+    class Executor:
+        """Holds the queued owner, so the save is proven to return before it runs."""
+
+        def submit(self, action):
+            future = Future()
+            held.append((action, future))
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    monkeypatch.setattr(gallery, "ensure_gallery_projection_ready",
+                        lambda *_a, **_k: pytest.fail("a cover save rebuilt the whole gallery scope"))
+    track = fixture.first["path"]
+    cover = Path(track).parent / "chosen.jpg"
+    cover.parent.mkdir(parents=True, exist_ok=True)
+    cover.write_bytes(b"\xff\xd8\xff\xe0cover")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select count(*) as rows from library.local_relation_dirty_albums").fetchone()["rows"] == 0
+        album_id = connection.execute("""
+            select tracks.album_id from library.local_tracks tracks
+            join library.local_track_files files on files.track_id=tracks.id where files.private_path=%s
+        """, (track,)).fetchone()["album_id"]
+
+    result = cache.persist_cover_selection_for_tracks_for_config(
+        fixture.config, {track}, cover, cover_revision="chosen-revision", cover_selection_origin="user",
+    )
+
+    assert result["album_rows_updated"] == 1
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        dirty = [row["album_id"] for row in connection.execute(
+            "select album_id from library.local_relation_dirty_albums order by album_id").fetchall()]
+    assert dirty == [album_id], f"the save journals its album alone, and the save returned before the drain: {dirty}"
+    assert len(held) == 1, "one owner queued after the commit"
+    action, future = held[0]
+    outcome = action()
+    future.set_result(outcome)
+    assert outcome.get("updated") and not outcome.get("gallery_rebuild_required"), outcome
+    assert list(outcome["processed_relation_album_ids"]) == [album_id], "the drain is keyed to that album (affected set 1)"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select count(*) as rows from library.local_relation_dirty_albums").fetchone()["rows"] == 0

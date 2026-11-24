@@ -40,6 +40,7 @@ class PostgresTagEditIntentRepository:
         *,
         connect: Callable[[str], Any] | None = None,
     ) -> None:
+        self._config = config
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
         # The intent's advisory lock is a session lock held through the media writes: never on a
@@ -213,6 +214,11 @@ class PostgresTagEditIntentRepository:
                     status=status,
                     last_error=last_error,
                 )
+        if exception_updates:
+            # Completed on its own, outside the tag save: its overrides' albums go to the relation owner.
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+            queue_journaled_relation_drain(self._config)
 
     def mark_recovery_failed(self, intent_id: str, error: object) -> None:
         with self._connect_to_database() as connection:

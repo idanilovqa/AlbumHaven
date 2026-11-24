@@ -1572,7 +1572,11 @@ function applyViewPayload(payload, options = {}) {
       cacheState.relatedFilterBaseQuery = String(nextView.query || '');
     }
   }
-  return commitViewPayload(previousView, nextView, options);
+  const committed = commitViewPayload(previousView, nextView, options);
+  // Owner (2026-11-23): saves still finishing (files written, the library catching up) keep showing their
+  // values after any load, as at the Save.
+  if (typeof window !== 'undefined') window.AlbumHavenPendingTagEdits?.overlayCurrentView?.();
+  return committed;
 }
 
 // Mounts a normalized view and reconciles the browse state that follows it.
@@ -1603,6 +1607,8 @@ function commitViewPayload(previousView, nextView, options = {}) {
     }
   }
   state.view = nextView;
+  // A different artist (or none) leaves the deferred loose-track count and list it was waiting for.
+  if (selectionChanged && typeof cancelDeferredNonAlbumRetries === 'function') cancelDeferredNonAlbumRetries();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;

@@ -213,8 +213,12 @@ def test_candidate_filters_are_batched_deduplicated_bounded_and_parameterized(
         "track_id_count": 2,
         "private_paths": [r"D:\\a.flac", r"D:\\b.flac"],
         "private_path_count": 2,
+        # The membership-problem group filter (eea310882, Problematic Files groups) is always passed, empty
+        # when no group is asked for; the query only reads it for a group request.
+        "membership_group_ids": [],
         "limit": expected_limit,
     }
+    assert "%(membership_group_ids)s" not in sql, "no group filter without groups"
     assert "%(track_ids)s::bigint[]" in sql
     assert "%(private_paths)s::text[]" in sql
     assert "limit %(limit)s" in sql.lower()

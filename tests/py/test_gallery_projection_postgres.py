@@ -720,7 +720,9 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
                 query_params={"gallery_page_size": str(size)},
                 library_state={"scan_in_progress": True},
             )
-        assert refresh.call_count == (1 if deleted_occurrence == "stale" else 0)
+        # 6.5 option 1: a stale common-scope page waits for its owners (startup, scans, the watcher, tag
+        # saves); a request never schedules the refresh.
+        assert refresh.call_count == 0
         assert calls[-2:] == [("rollback", None), ("close", None)]
         return
     payload = repository.build_root_startup_preview_payload(
@@ -836,7 +838,10 @@ def test_selected_startup_sidebar_uses_only_current_gallery_projection(monkeypat
         "album_count": 3,
         "show_all_artists_sidebar_link": True,
     }
-    assert events[-2:] == ["rollback", "close"]
+    # One read-only snapshot, then the lease ends. Since f9a7873e9 the sidebar reads through the browse
+    # connection context: a pooled lease is reset by the pool, and an owned connection is closed, which
+    # discards the read-only transaction (no explicit rollback).
+    assert events == ["SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", "close"]
 
 
 @pytest.mark.parametrize("relations", ["ready", "cold", "pending"])

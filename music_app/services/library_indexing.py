@@ -458,6 +458,7 @@ def _iter_scandir_entries(
     root: Path,
     *,
     record_file_error: Callable[..., None] | None = None,
+    on_directory: Callable[[Path], None] | None = None,
 ):
     stack = [root]
     while stack:
@@ -472,6 +473,8 @@ def _iter_scandir_entries(
                 error=error,
             )
             continue
+        if on_directory is not None:
+            on_directory(current)
         child_dirs: list[Path] = []
         for entry in entries:
             try:
@@ -497,7 +500,11 @@ def _discover_music_files_with_stats(
     supported_extensions: set[str],
     expected_scan_generation: int | None,
     record_file_error: Callable[..., None] | None = None,
+    image_extensions: set[str] | frozenset[str] = frozenset(),
+    root_definitions: list[dict[str, object]] | None = None,
+    change_check: object | None = None,
 ) -> tuple[list[tuple[Path, os.stat_result]], int, int]:
+    """List the roots' music files; show ``change_check`` the times of folders and images it asks about."""
     discovered_files: list[tuple[Path, os.stat_result]] = []
     discovered_album_folders: set[Path] = set()
     total_bytes = 0
@@ -512,9 +519,16 @@ def _discover_music_files_with_stats(
     library_state["scan_album_folders_total"] = 0
 
     for root in roots:
+        since = None
+        if change_check is not None:
+            definition = root_definition_for_path(list(root_definitions or []), root) or {}
+            since = change_check.changed_since(str(definition.get("id") or ""))
         for entry in _iter_scandir_entries(
             root,
             record_file_error=record_file_error,
+            on_directory=(
+                None if since is None else lambda folder: change_check.note(folder, root, since, folder.stat)
+            ),
         ):
             if expected_scan_generation is not None:
                 current_generation = int(library_state.get("scan_generation") or 0)
@@ -522,7 +536,10 @@ def _discover_music_files_with_stats(
                 if current_generation != expected_scan_generation or not scan_still_active:
                     raise ScanCancelled("Library indexing cancelled")
             path = Path(entry.path)
-            if path.suffix.lower() not in supported_extensions:
+            suffix = path.suffix.lower()
+            if suffix not in supported_extensions:
+                if since is not None and suffix in image_extensions:
+                    change_check.note(path, root, since, entry.stat)
                 continue
             try:
                 stat = entry.stat(follow_symlinks=False)
@@ -824,6 +841,9 @@ def scan_library_file_cache(
         supported_extensions=supported_extensions,
         expected_scan_generation=expected_scan_generation,
         record_file_error=record_file_error,
+        image_extensions=image_extensions,
+        root_definitions=root_definitions,
+        change_check=publication_target.get("cover_inventory_check"),
     )
     finish_scan_stage(library_state, "discover")
     start_scan_stage(library_state, "metadata")

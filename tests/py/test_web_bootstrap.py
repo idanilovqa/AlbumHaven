@@ -696,7 +696,7 @@ def test_bootstrap_data_preserves_startup_hydration_query_contract(asgi_app, mon
     assert payload["initial_view"]["gallery_scale_percent"] == 135
     assert payload["initial_view"]["selected_artist_family_display_mode"] == "chronological"
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
-        "/view-data?surface=albums&artist=Broadcast&family_display=chronological"
+        "/view-data?surface=albums&root_sidebar=1&artist=Broadcast&family_display=chronological"
         "&gallery_display=covers&gallery_scale_percent=135&related_artist=Stereolab&related_artist=Pram"
     )
 
@@ -1572,9 +1572,9 @@ def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asg
         (source, preview)
     )
 
-    status, _headers, body = run_asgi_request(
-        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
-    )
+    # A cover is asked for by reference; an unnamed path is refused (500ac7e02).
+    cover_url = cover_reference_url(asgi_app, cover_path)
+    status, _headers, body = run_asgi_request(asgi_app, "GET", cover_url, query={"size": "480"})
     assert status == 200
     assert body != cover_path.read_bytes()
     assert len(recorded) == 1
@@ -1584,9 +1584,7 @@ def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asg
     assert preview_path.read_bytes() == body
     assert not (app.config["DATA_DIR"] / "display-cover-cache").exists()
 
-    status, _headers, cached_body = run_asgi_request(
-        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
-    )
+    status, _headers, cached_body = run_asgi_request(asgi_app, "GET", cover_url, query={"size": "480"})
     assert status == 200
     assert cached_body == body
     assert len(recorded) == 1
@@ -1612,7 +1610,7 @@ def test_asgi_unrevisioned_cover_preview_keeps_legacy_app_cache_readable(app, as
     )
 
     status, _headers, body = run_asgi_request(
-        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+        asgi_app, "GET", cover_reference_url(asgi_app, cover_path), query={"size": "480"},
     )
     assert status == 200
     assert body == legacy_preview.read_bytes()

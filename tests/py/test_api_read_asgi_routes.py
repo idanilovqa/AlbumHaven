@@ -2721,7 +2721,8 @@ def test_asgi_search_pending_projection_schedules_recovery_and_returns_retryable
     assert _decode_json(body)["code"] == "search_projection_pending"
     assert headers["retry-after"] == "1"
     assert headers["cache-control"] == "no-store"
-    assert scheduled == [app.config]
+    # 6.5 (option 1): a search request never schedules the gallery refresh; its owners do.
+    assert scheduled == []
 
 
 def test_asgi_album_search_all_artists_without_omit_sidebar_uses_postgres_browse(app, asgi_app, monkeypatch):

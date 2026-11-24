@@ -314,6 +314,8 @@ def save_cache_to_disk_for_config(
     rebuild_relation_projection: bool = False,
     observed_library_root_ids: set[str] | None = None,
     unreachable_scope: dict[str, object] | None = None,
+    cover_inventory_checked_at: dict[str, float] | None = None,
+    completes_root_change: bool = False,
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -345,6 +347,10 @@ def save_cache_to_disk_for_config(
         }
     if unreachable_scope is not None:
         snapshot_options["unreachable_scope"] = unreachable_scope
+    if cover_inventory_checked_at:
+        snapshot_options["cover_inventory_checked_at"] = cover_inventory_checked_at
+    if completes_root_change:
+        snapshot_options["completes_root_change"] = True
     adapter = _select_runtime_scan_cache_adapter(config)
     result = adapter.save_snapshot(
         cache_path,
@@ -390,15 +396,14 @@ def _persist_cache_updates(
     updates: tuple[_CacheUpdate, ...],
 ) -> dict[str, object] | None:
     """Publish the albums of the changed tracks only, rebased onto their latest
-    persisted entries, in one revision-guarded targeted inventory mutation.
+    persisted entries, in one targeted inventory mutation.
 
     The mutation marks the relation projection stale; the queued gallery
-    refresh rebuilds it in the background. A cover or inventory commit between
-    loading the latest entries and publishing supersedes the attempt, which is
-    retried once against freshly loaded entries.
+    refresh rebuilds it in the background. The rebase runs under the inventory
+    lock every cover and inventory writer takes, so a commit landing while the
+    update was prepared is rebased over instead of superseding it: the edit is
+    never lost (edits always save, row A11).
     """
-    from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
-
     paths = {str(path) for update in updates for path in update.changed_entries}
     if not paths:
         return None
@@ -409,16 +414,14 @@ def _persist_cache_updates(
         for hook in hooks:
             hook(connection)
 
-    intent_baselines: list[dict[str, dict[str, object]]] = []
-    for attempt in (1, 2):
-        expected_cover_mutation_revision = int(adapter.load_cover_mutation_revision())
-        expected_inventory_mutation_revision = int(adapter.load_inventory_mutation_revision())
-        latest_file_cache = adapter.load_file_entries(paths)
-        if not intent_baselines:
-            intent_baselines = [
-                latest_file_cache if update.baseline_file_cache is None else update.baseline_file_cache
-                for update in updates
-            ]
+    # Each update's own baseline, or the entries as they are now when it has none.
+    current_file_cache = adapter.load_file_entries(paths)
+    intent_baselines = [
+        current_file_cache if update.baseline_file_cache is None else update.baseline_file_cache
+        for update in updates
+    ]
+
+    def rebased(latest_file_cache: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
         # Later updates apply on top of earlier ones, exactly as if each had
         # been published in order.
         rebased_file_cache = latest_file_cache
@@ -428,18 +431,15 @@ def _persist_cache_updates(
                 changed_entries=update.changed_entries,
                 latest_file_cache=rebased_file_cache,
             )
-        try:
-            result = adapter.persist_targeted_inventory_mutation(
-                root_id=_publication_root_id(config, rebased_file_cache),
-                active_file_entries=rebased_file_cache,
-                expected_cover_mutation_revision=expected_cover_mutation_revision,
-                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
-                before_commit=complete_in_transaction if hooks else None,
-            )
-            break
-        except ScanCachePublicationSuperseded:
-            if attempt == 2:
-                raise
+        return rebased_file_cache
+
+    prepared_file_cache = rebased(current_file_cache)
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id=_publication_root_id(config, prepared_file_cache),
+        active_file_entries=prepared_file_cache,
+        before_commit=complete_in_transaction if hooks else None,
+        rebase_under_lock=rebased,
+    )
     from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
 
     schedule_gallery_projection_refresh(config, connect=getattr(adapter, "_connect", None))
@@ -541,6 +541,12 @@ def persist_cover_selection_for_tracks_for_config(
         track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
     )
     _refresh_local_cover_inventory_after_selection(config, track_paths, options)
+    if any(int(result.get(field) or 0) for field in ("album_rows_updated", "track_rows_updated", "track_file_rows_updated")):
+        # The commit journaled the album for relations (migration 0108); its owner drains just those
+        # albums, queued off the response path.
+        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+
+        schedule_gallery_projection_refresh(config, incremental_membership=True)
     return result
 
 

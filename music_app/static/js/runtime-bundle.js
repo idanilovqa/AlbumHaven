@@ -1935,7 +1935,11 @@ function applyViewPayload(payload, options = {}) {
       cacheState.relatedFilterBaseQuery = String(nextView.query || '');
     }
   }
-  return commitViewPayload(previousView, nextView, options);
+  const committed = commitViewPayload(previousView, nextView, options);
+  // Owner (2026-11-23): saves still finishing (files written, the library catching up) keep showing their
+  // values after any load, as at the Save.
+  if (typeof window !== 'undefined') window.AlbumHavenPendingTagEdits?.overlayCurrentView?.();
+  return committed;
 }
 
 // Mounts a normalized view and reconciles the browse state that follows it.
@@ -1966,6 +1970,8 @@ function commitViewPayload(previousView, nextView, options = {}) {
     }
   }
   state.view = nextView;
+  // A different artist (or none) leaves the deferred loose-track count and list it was waiting for.
+  if (selectionChanged && typeof cancelDeferredNonAlbumRetries === 'function') cancelDeferredNonAlbumRetries();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
@@ -5229,22 +5235,37 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
-function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+function galleryArtistCountryPillHtml(artistMusicBrainz) {
   const country = galleryCountryName(artistMusicBrainz?.country);
-  return country
-    ? `<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span></span>`
-    : '';
+  return country ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>` : '';
+}
+
+function galleryArtistGenrePillsHtml(artistMusicBrainz) {
+  return (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean)
+    .map((genre) => (
+      genre === 'Genre unavailable'
+        ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
+        : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
+    ));
+}
+
+// The gallery bar wraps each pill for its header fit.
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+  const pill = galleryArtistCountryPillHtml(artistMusicBrainz);
+  return pill ? `<span class="gallery-bar__artist-country">${pill}</span>` : '';
 }
 
 function buildGalleryArtistGenresHtml(artistMusicBrainz = null) {
-  const genres = (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
-    .map((genre) => String(genre || '').trim())
-    .filter(Boolean);
-  return genres.map((genre) => (
-    genre === 'Genre unavailable'
-      ? '<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span></span>'
-      : `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span></span>`
-  )).join('');
+  return galleryArtistGenrePillsHtml(artistMusicBrainz)
+    .map((pill) => `<span class="gallery-bar__artist-genre">${pill}</span>`).join('');
+}
+
+// The Artist info panel shows bare pills: the country, then at most three genres.
+function buildGalleryArtistInfoMetadataHtml(artistMusicBrainz = null) {
+  return galleryArtistCountryPillHtml(artistMusicBrainz)
+    + galleryArtistGenrePillsHtml(artistMusicBrainz).slice(0, 3).join('');
 }
 
 function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
@@ -8009,6 +8030,31 @@ function cacheCurrentGallerySourceTotals() {
   return cacheGallerySourceTotals(categories, state.view);
 }
 
+// While a source combination's totals are not yet published, ask again after 1 s, doubling to 4 s, six times at most.
+const PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS = [1000, 2000, 4000, 4000, 4000, 4000];
+let pendingSourceTotalsRetry = null;
+
+// One armed retry. Only a retry continues the bounded wait at one inventory revision; a new revision starts it again.
+function schedulePendingSourceTotalsRetry(revision) {
+  if (pendingSourceTotalsRetry?.timer) return;
+  const attempt = pendingSourceTotalsRetry?.revision === revision ? pendingSourceTotalsRetry.attempt + 1 : 0;
+  const delay = PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) return;
+  const entry = { revision, attempt, timer: 0 };
+  entry.timer = scheduleBrowserTimeout(() => {
+    entry.timer = 0;
+    return prefetchGallerySourceTotalsForAllScopes();
+  }, delay);
+  pendingSourceTotalsRetry = entry;
+}
+
+function settlePendingSourceTotalsRetry() {
+  if (pendingSourceTotalsRetry?.timer && typeof clearBrowserTimeout === 'function') {
+    clearBrowserTimeout(pendingSourceTotalsRetry.timer);
+  }
+  pendingSourceTotalsRetry = null;
+}
+
 async function prefetchGallerySourceTotalsForAllScopes() {
   if (typeof state === 'undefined' || !state?.gallery || !state?.view
     || typeof fetch !== 'function') return false;
@@ -8035,6 +8081,7 @@ async function prefetchGallerySourceTotalsForAllScopes() {
       if (!response.ok) return false;
       const payload = await response.json();
       const received = payload?.source_totals_by_scope;
+      const pending = (Array.isArray(payload?.pending_source_scopes) ? payload.pending_source_scopes : []).map(String);
       const responseRevision = Number(payload?.inventory_mutation_revision);
       const latestRevision = Number(
         state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
@@ -8042,15 +8089,20 @@ async function prefetchGallerySourceTotalsForAllScopes() {
       if (!Number.isSafeInteger(responseRevision) || responseRevision !== latestRevision
         || !received || !expectedKeys.every((key) => {
         const total = received[key];
-        return Number.isFinite(Number(total?.artist_count))
-          && Number.isFinite(Number(total?.album_count));
+        return pending.includes(key) || (Number.isFinite(Number(total?.artist_count))
+          && Number.isFinite(Number(total?.album_count)));
       })) return false;
-      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys.map((key) => [key, {
-        artistCount: Number(received[key].artist_count),
-        albumCount: Number(received[key].album_count),
-      }]));
+      // A pending scope keeps the current counts until its totals are published; then the final numbers show.
+      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys
+        .filter(key => !pending.includes(key))
+        .map((key) => [key, {
+          artistCount: Number(received[key].artist_count),
+          albumCount: Number(received[key].album_count),
+        }]));
       state.gallery.sourceTotalsRevision = responseRevision;
       updateGalleryMainChrome();
+      if (pending.length) schedulePendingSourceTotalsRetry(responseRevision);
+      else settlePendingSourceTotalsRetry();
       return true;
     } catch {
       return false;
@@ -8836,7 +8888,7 @@ function renderGalleryArtistInfo(anchor) {
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
   const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
-  const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz);
+  const metadata = buildGalleryArtistInfoMetadataHtml(group.artist_musicbrainz);
   // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the
   // title, and the tag is named beside the links (display only).
   const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);
@@ -16211,6 +16263,48 @@ function getDeferredNonAlbumScopeKey(url) {
 let libraryNonAlbumHydrationRequest = null;
 let artistNonAlbumAvailabilityRequest = null;
 
+// While the server still prepares loose tracks, ask again after 250 ms, doubling to 2 s, eight times at most.
+const DEFERRED_NON_ALBUM_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 2000, 2000, 2000, 2000];
+const deferredNonAlbumRetries = new Map();
+
+function clearDeferredNonAlbumRetryTimer(entry) {
+  if (entry?.timer && typeof clearBrowserTimeout === 'function') clearBrowserTimeout(entry.timer);
+}
+
+// One armed retry per kind ('artist' or 'library'). Only a retry continues the bounded wait; a new scope or
+// a new ask (reopening Loose Tracks) starts it again.
+function scheduleDeferredNonAlbumRetry(kind, scopeKey, isCurrentScope, retry) {
+  const previous = deferredNonAlbumRetries.get(kind);
+  clearDeferredNonAlbumRetryTimer(previous);
+  const attempt = previous?.scopeKey === scopeKey && previous.retrying ? previous.attempt + 1 : 0;
+  const delay = DEFERRED_NON_ALBUM_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) {
+    deferredNonAlbumRetries.set(kind, { scopeKey, attempt, timer: 0, exhausted: true });
+    return;
+  }
+  const entry = { scopeKey, attempt, timer: 0, retrying: false };
+  entry.timer = scheduleBrowserTimeout(() => {
+    entry.timer = 0;
+    if (!isCurrentScope()) {
+      deferredNonAlbumRetries.delete(kind);
+      return undefined;
+    }
+    entry.retrying = true;
+    return retry();
+  }, delay);
+  deferredNonAlbumRetries.set(kind, entry);
+}
+
+function settleDeferredNonAlbumRetry(kind) {
+  clearDeferredNonAlbumRetryTimer(deferredNonAlbumRetries.get(kind));
+  deferredNonAlbumRetries.delete(kind);
+}
+
+// Leaving the view leaves no retry armed.
+function cancelDeferredNonAlbumRetries() {
+  for (const kind of Array.from(deferredNonAlbumRetries.keys())) settleDeferredNonAlbumRetry(kind);
+}
+
 function hasHydratedArtistNonAlbumAvailability(view = state.view || {}) {
   if (!String(view.selected_artist || '').trim()) return false;
   return view.non_album_track_count_scope
@@ -16252,6 +16346,7 @@ function hydrateArtistNonAlbumAvailability() {
       return state.view.non_album_track_count;
     }
     state.view.non_album_track_count_scope = scopeKey;
+    settleDeferredNonAlbumRetry('artist');
     if (String(state.view.query || '').trim()
         && getVisibleNonAlbumTracks().length !== state.view.non_album_track_count) {
       state.view.non_album_tracks_deferred = true;
@@ -16262,12 +16357,13 @@ function hydrateArtistNonAlbumAvailability() {
     if (artistNonAlbumAvailabilityRequest !== request) return;
     artistNonAlbumAvailabilityRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) !== scopeKey) return;
-        return hydrateArtistNonAlbumAvailability().catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'artist', scopeKey,
+        () => getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) === scopeKey,
+        () => hydrateArtistNonAlbumAvailability().catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   artistNonAlbumAvailabilityRequest = request;
@@ -16319,18 +16415,20 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    settleDeferredNonAlbumRetry('library');
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return tracks;
   })().finally(() => {
     if (libraryNonAlbumHydrationRequest !== request) return;
     libraryNonAlbumHydrationRequest = null;
     if (request.deferred) {
-      scheduleBrowserTimeout(() => {
-        if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return;
-        return hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
+      scheduleDeferredNonAlbumRetry(
+        'library', scopeKey,
+        () => getLibraryNonAlbumScopeKey(state.view || {}) === scopeKey,
+        () => hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
           if (typeof warn === 'function') warn(error);
-        });
-      }, 250);
+        }),
+      );
     }
   });
   libraryNonAlbumHydrationRequest = request;
@@ -16904,6 +17002,8 @@ function closeNonAlbumModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('non-album')) return;
   const els = getNonAlbumModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.table);
+  // Leaving Loose Tracks leaves no deferred retry armed.
+  settleDeferredNonAlbumRetry('library');
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);
@@ -18252,7 +18352,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     if (Array.isArray(payload?.current_releases)) error.currentReleases = payload.current_releases;
     throw error;
   }
-  return payload.album;
+  // Owner (2026-11-23): a save still finishing shows its values in the track table too.
+  const pendingTagEdits = typeof window !== 'undefined' ? window.AlbumHavenPendingTagEdits : null;
+  return pendingTagEdits?.overlayAlbumDetails ? pendingTagEdits.overlayAlbumDetails(payload.album) : payload.album;
 }
 
 // The album an open modal shows was split or merged meanwhile. The refreshed gallery shows every
@@ -21455,6 +21557,8 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  // A save still being written shows as it will leave the library, in every render.
+  if (typeof saveFoldDecisions !== 'undefined') saveFoldDecisions.show();
   const renderOptions = { ...options };
   const galleryScroll = document.getElementById('albums-scroll');
   if (
@@ -21710,7 +21814,9 @@ async function refreshArtistTreeAfterInventoryMutation(revision) {
   }
   if (viewBusy() || readViewStateRevision() !== viewRevision
     || String(state.view?.query || '').trim()) return;
-  state.view.artists_sidebar = data.artists_sidebar;
+  state.view.artists_sidebar = typeof withPendingArtistTreeEdits === 'function'
+    ? withPendingArtistTreeEdits(data.artists_sidebar)
+    : data.artists_sidebar;
   if (Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')) {
     state.view.show_all_artists_sidebar_link = data.show_all_artists_sidebar_link;
   }
@@ -21737,6 +21843,10 @@ async function readGalleryResponse(response, ownsResponse) {
     : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  // The tree in a response doesn't hold the saves this page is still writing.
+  if (Array.isArray(data?.artists_sidebar) && typeof withPendingArtistTreeEdits === 'function') {
+    data.artists_sidebar = withPendingArtistTreeEdits(data.artists_sidebar);
   }
   return data;
 }
@@ -26689,7 +26799,22 @@ async function watchSaveTask(taskId, context = {}) {
     }
     : null;
   let completionAnnounced = false;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // Owner (2026-11-23): a finishing save (files written, the library catching up) is watched until it ends,
+  // so the page is never left silent: the usual notice at the usual point, then slower checks.
+  let lastTaskStatus = '';
+  let stillUpdatingShown = false;
+  const showStillUpdating = () => {
+    if (stillUpdatingShown || mutationWasSuperseded()) return;
+    stillUpdatingShown = true;
+    // Owner (2026-11-23), their words: "Tags still updating: your edits remain queued."
+    showRepairAlert(
+      'Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
+  };
+  for (let attempt = 0; attempt < 120 || (lastTaskStatus === 'finishing' && !mutationWasSuperseded()); attempt += 1) {
     const consumesProvidedTerminalPayload = Boolean(
       providedTerminalPayload
       && (attempt === 0 || providedTerminalPayload.status === 'completed'),
@@ -26705,6 +26830,7 @@ async function watchSaveTask(taskId, context = {}) {
       } else if (!data.ok) {
         throw new Error(data.error || 'Unable to load save task.');
       }
+      lastTaskStatus = String(data.status || '').trim().toLowerCase();
       const responseTaskId = String(data.task_id || '').trim();
       if (responseTaskId && responseTaskId !== normalizedId) {
         providedTerminalPayload = null;
@@ -27162,16 +27288,10 @@ async function watchSaveTask(taskId, context = {}) {
       if (consumesProvidedTerminalPayload) throw error;
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
-    await waitForBrowserTimeout(500);
+    if (attempt >= 119) showStillUpdating();
+    await waitForBrowserTimeout(attempt >= 119 ? 5000 : 500);
   }
-  if (!mutationWasSuperseded()) {
-    showRepairAlert(
-      'Tag changes are still being finalized. Your edits remain queued.',
-      'info',
-      8000,
-      { title: 'Tags still updating', dismissible: true },
-    );
-  }
+  showStillUpdating();
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
 }
@@ -29480,7 +29600,10 @@ async function saveUtilityLibrarySettings() {
       }
       scheduleStatusPoll(250);
     }
-    if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
+    if (ownsPresentation()) {
+      const saved = data.refresh_started ? 'Library settings saved. Scan started.' : 'Library settings saved.';
+      showToast(saved, 'success', 3200);
+    }
     return true;
   } catch (error) {
     settleLibraryStatusAction(statusAction);
@@ -41961,15 +42084,30 @@ const PENDING_TAG_EDIT_SAVED = new Set(['completed', 'reconciled_external']);
 const PENDING_TAG_EDIT_FAILED = new Set(['rolled_back', 'recovery_failed']);
 const PENDING_TAG_EDIT_FIRST_DELAY_MS = 2000;
 const PENDING_TAG_EDIT_MAX_DELAY_MS = 60000;
+// 6.5 (11-23): a save with no final answer after a day is dropped and logged, never checked forever.
+const PENDING_TAG_EDIT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Owner (2026-11-23): a "finishing" save (files written and verified, the library still catching up) stays
+// here so a reload or another tab still shows its values; it is never resent, only checked.
+const PENDING_TAG_EDIT_SHOWN_STATES = new Set(['finishing', 'waiting', 'resending']);
+
+// T3: the account and library this page belongs to (an opaque key the page carries); entries of another
+// scope stay in storage for their own pages and are neither shown nor checked here.
+function currentPendingTagEditScope() {
+  if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return '';
+  return String(document.querySelector('meta[name="album-haven-edit-scope"]')?.content || '');
+}
 
 const pendingTagEdits = (() => {
+  const scope = currentPendingTagEditScope();
+  // Ids this tab settled, discarded or expired: never written back from another tab's older copy.
+  const removedIds = new Set();
   let entries = readEntries();
   let timer = 0;
   let delayMs = PENDING_TAG_EDIT_FIRST_DELAY_MS;
   let running = false;
   const listeners = new Set();
 
-  function readEntries() {
+  function readStoredEntries() {
     try {
       const stored = JSON.parse(getLocalStorageItem(PENDING_TAG_EDITS_STORAGE_KEY, '[]') || '[]');
       return Array.isArray(stored) ? stored.filter((entry) => entry && entry.id && entry.payload) : [];
@@ -41978,12 +42116,34 @@ const pendingTagEdits = (() => {
     }
   }
 
+  function inScope(entry) {
+    return !scope || !entry.scope || entry.scope === scope;
+  }
+
+  function expired(entry) {
+    const created = Number(entry.created_at || 0);
+    return entry.state !== 'failed' && created > 0 && Date.now() - created > PENDING_TAG_EDIT_MAX_AGE_MS;
+  }
+
+  function readEntries() {
+    return readStoredEntries().filter((entry) => {
+      if (!inScope(entry) || removedIds.has(entry.id)) return false;
+      if (!expired(entry)) return true;
+      removedIds.add(entry.id);
+      console.warn(`[AlbumHaven][PendingTagEdits] Dropped a pending save with no answer for 24 hours (${entry.id}).`);
+      return false;
+    });
+  }
+
   function snapshot() {
     return entries.map((entry) => ({ ...entry, payload: undefined }));
   }
 
   function publish() {
-    setLocalStorageItem(PENDING_TAG_EDITS_STORAGE_KEY, JSON.stringify(entries));
+    // T4: merge per entry, so another tab's saves (and other scopes' saves) survive this tab's write.
+    const ownIds = new Set(entries.map((entry) => entry.id));
+    const others = readStoredEntries().filter((entry) => !ownIds.has(entry.id) && !removedIds.has(entry.id));
+    setLocalStorageItem(PENDING_TAG_EDITS_STORAGE_KEY, JSON.stringify([...others, ...entries]));
     const current = snapshot();
     listeners.forEach((listener) => {
       try { listener(current); } catch (error) { console.error('[AlbumHaven][PendingTagEdits] Listener failed.', error); }
@@ -42012,7 +42172,8 @@ const pendingTagEdits = (() => {
     if (!status.ok || known.ok !== true) throw new Error(known.error || `Save status answered ${status.status}`);
     if (known.found && PENDING_TAG_EDIT_SAVED.has(known.status)) return 'saved';
     if (known.found && PENDING_TAG_EDIT_FAILED.has(known.status)) return 'failed';
-    if (known.found) return 'waiting';
+    // A finishing save is already held by the server: it is only ever checked, never sent again.
+    if (known.found || entry.state === 'finishing') return 'waiting';
     // The server never received it: send it again under the same id.
     Object.assign(entry, { state: 'resending', attempts: Number(entry.attempts || 0) + 1, last_attempt_at: Date.now() });
     publish();
@@ -42051,6 +42212,7 @@ const pendingTagEdits = (() => {
         }
         if (outcome === 'saved') {
           entries = entries.filter((item) => item !== entry);
+          removedIds.add(entry.id);
           settledAny = true;
         } else if (outcome === 'failed') {
           entry.state = 'failed';
@@ -42059,13 +42221,17 @@ const pendingTagEdits = (() => {
           if (typeof showToast === 'function') {
             showToast(`Tag edit for “${entry.album?.name || 'an album'}” was not saved. It is in the Edit Queue.`, 'error', 5200);
           }
-        } else {
+        } else if (entry.state !== 'finishing') {
           entry.state = 'waiting';
         }
       }
     } finally {
       running = false;
-      delayMs = reachedServer ? PENDING_TAG_EDIT_FIRST_DELAY_MS : Math.min(delayMs * 2, PENDING_TAG_EDIT_MAX_DELAY_MS);
+      // T6: saves the server holds but has not finished are checked less and less often, up to a minute.
+      const onlyFinishing = entries.length > 0 && entries.every((entry) => entry.state === 'finishing');
+      delayMs = reachedServer && !onlyFinishing
+        ? PENDING_TAG_EDIT_FIRST_DELAY_MS
+        : Math.min(delayMs * 2, PENDING_TAG_EDIT_MAX_DELAY_MS);
       publish();
       // What the library holds now replaces the kept edit once the server has decided.
       if (settledAny && typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
@@ -42075,8 +42241,78 @@ const pendingTagEdits = (() => {
     }
   }
 
+  // The Save's own optimistic path lays each shown save's values over the loaded view (every display site).
+  function overlayCurrentView() {
+    let laid = 0;
+    for (const entry of entries) {
+      const updates = entry.payload?.updates;
+      if (!PENDING_TAG_EDIT_SHOWN_STATES.has(entry.state) || !entry.display_album || !updates) continue;
+      if (typeof buildOptimisticUpdatedAlbumsFromEdits !== 'function' || typeof applyUpdatedAlbumsToCurrentView !== 'function') break;
+      applyUpdatedAlbumsToCurrentView(buildOptimisticUpdatedAlbumsFromEdits(entry.display_album, updates), {
+        skipRender: true, originalAlbum: entry.display_album, preserveScroll: true, tagEdits: updates,
+      });
+      if (typeof applyTagEditsToNonAlbumView === 'function') applyTagEditsToNonAlbumView(entry.display_album, updates);
+      laid += 1;
+    }
+    return laid;
+  }
+
+  function overlayAlbumDetails(albumPayload) {
+    if (!albumPayload || !Array.isArray(albumPayload.tracks)) return albumPayload;
+    const values = {};
+    for (const entry of entries) {
+      if (!PENDING_TAG_EDIT_SHOWN_STATES.has(entry.state)) continue;
+      Object.entries(entry.payload?.updates || {}).forEach(([path, fields]) => {
+        values[path] = { ...(values[path] || {}), ...fields };
+      });
+    }
+    if (!Object.keys(values).length) return albumPayload;
+    return {
+      ...albumPayload,
+      tracks: albumPayload.tracks.map((track) => (values[track?.path] ? { ...track, ...values[track.path] } : track)),
+    };
+  }
+
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    // Another tab wrote: show its saves here too (the storage event never fires in the writing tab).
+    window.addEventListener('storage', (event) => {
+      if (event?.key !== PENDING_TAG_EDITS_STORAGE_KEY) return;
+      entries = readEntries();
+      const current = snapshot();
+      listeners.forEach((listener) => {
+        try { listener(current); } catch (error) { console.error('[AlbumHaven][PendingTagEdits] Listener failed.', error); }
+      });
+      if (overlayCurrentView() && typeof renderView === 'function') renderView();
+      schedule(delayMs);
+    });
+  }
+
   return {
     list: snapshot,
+    overlayCurrentView,
+    overlayAlbumDetails,
+    addFinishing({ id, payload, album = {} }) {
+      if (!id || !payload || entries.some((entry) => entry.id === id)) return;
+      entries.push({
+        id,
+        payload,
+        album: {
+          key: String(album.key || ''), name: String(album.name || ''),
+          album_artist: String(album.album_artist || ''), year: album.year ?? null,
+        },
+        display_album: JSON.parse(JSON.stringify(album || {})),
+        scope,
+        track_count: Array.isArray(album.tracks) ? album.tracks.length : 0,
+        created_at: Date.now(),
+        attempts: 0,
+        last_attempt_at: null,
+        state: 'finishing',
+        last_error: '',
+      });
+      delayMs = PENDING_TAG_EDIT_FIRST_DELAY_MS;
+      publish();
+      schedule(delayMs);
+    },
     add({ id, payload, album = {}, trackCount = 0 }) {
       if (!id || !payload || entries.some((entry) => entry.id === id)) return;
       entries.push({
@@ -42087,6 +42323,7 @@ const pendingTagEdits = (() => {
           album_artist: String(album.album_artist || ''), year: album.year ?? null,
         },
         track_count: Number(trackCount) || 0,
+        scope,
         created_at: Date.now(),
         attempts: 0,
         last_attempt_at: null,
@@ -42107,6 +42344,7 @@ const pendingTagEdits = (() => {
     },
     discard(id) {
       entries = entries.filter((item) => item.id !== id);
+      removedIds.add(id);
       publish();
       // A discarded edit may still have landed; show what the library holds.
       if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') void refreshCurrentViewAfterBackgroundCompletion();
@@ -42127,6 +42365,339 @@ if (typeof window !== 'undefined') {
 pendingTagEdits.resume();
 
 // END js/runtime/pending-tag-edits.js
+
+// BEGIN js/runtime/save-fold-decisions.js
+
+// Owner (2026-11-22): cards change at the Save click, before anything is written. Whether a save folds a
+// copy into another album is the server's one rule: it is asked when the confirmation opens, shown in
+// the save's first render, or as soon as it answers after a fast click. A failed or outdated decision
+// keeps that copy's card and says so; it never waits for the save to finish.
+const SAVE_FOLD_STORAGE_KEY = 'albumHaven.savingTagEdits';
+const SAVE_FOLD_FIELDS = ['album', 'album_artist', 'artist', 'year', 'edition', 'title', 'track_number', 'disc_number'];
+const SAVE_FOLD_REQUEST_TIMEOUT_MS = 4000;
+// Longer than any save is waited for; a page closed mid-save leaves nothing behind for longer.
+const SAVE_FOLD_PENDING_MS = 120000;
+const SAVE_FOLD_UNCHECKED = 'The fold couldn’t be checked, so that copy keeps its card for now.';
+
+const saveFoldDecisions = (() => {
+  let asked = null;
+  let saves = readSaves();
+  let showing = false;
+
+  function readSaves() {
+    try {
+      const stored = JSON.parse(getLocalStorageItem(SAVE_FOLD_STORAGE_KEY, '[]') || '[]');
+      return Array.isArray(stored)
+        ? stored.filter((save) => save?.album && save?.updates && Date.now() - Number(save.at) < SAVE_FOLD_PENDING_MS)
+        : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function storeSaves() {
+    setLocalStorageItem(SAVE_FOLD_STORAGE_KEY, JSON.stringify(saves.map(({ own, ...save }) => save)));
+  }
+
+  function knownRevision() {
+    return Number(state.status?.inventory_mutation_revision) || 0;
+  }
+
+  function ask(updates) {
+    if (!Object.values(updates || {}).some((values) => SAVE_FOLD_FIELDS.some((field) => field in (values || {})))) {
+      asked = null;
+      return null;
+    }
+    const question = { key: JSON.stringify(updates), revision: knownRevision(), decision: undefined };
+    question.answer = fetch('/utilities/tag-editor/fold-decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates }),
+      ...(typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? { signal: AbortSignal.timeout(SAVE_FOLD_REQUEST_TIMEOUT_MS) } : {}),
+    }).then(async (response) => {
+      const data = await response.json();
+      return response.ok && data?.ok === true && Array.isArray(data.albums) ? data : null;
+    }).catch(() => null).then((decision) => {
+      question.decision = decision;
+      return decision;
+    });
+    asked = question;
+    return question;
+  }
+
+  // The confirmation's question, if it asked about exactly these updates and this inventory.
+  function questionFor(updates) {
+    const current = asked && asked.key === JSON.stringify(updates) && asked.revision >= knownRevision();
+    const question = current ? asked : ask(updates);
+    asked = null;
+    return question;
+  }
+
+  function isAlbum(card, key, paths) {
+    if (key && String(card?.key || '') === String(key)) return true;
+    const cardPaths = Array.from(getAlbumTrackPaths(card));
+    const albumPaths = new Set(paths || []);
+    return cardPaths.length > 0 && cardPaths.every((path) => albumPaths.has(path));
+  }
+
+  function showFolds(decision) {
+    const folds = decision.albums.filter((album) => album.folds_into);
+    const unfolds = decision.albums.filter((album) => album.card);
+    if (!folds.length && !unfolds.length) return false;
+    const owns = (card) => folds.some((album) => isAlbum(card, album.folds_into_key, album.folds_into));
+    const owned = (card) => unfolds.some((album) => isAlbum(card, album.was_folded_into_key, album.was_folded_into));
+    const isFolded = (card) => !owns(card) && folds.some((album) => isAlbum(card, album.album_key, album.track_paths));
+    const removed = new Set();
+    let changed = false;
+    const patch = {};
+    for (const field of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
+      if (!Array.isArray(state.view[field])) continue;
+      patch[field] = state.view[field].map((group) => ({
+        ...group,
+        albums: (group.albums || []).flatMap((card) => {
+          if (isFolded(card)) {
+            removed.add(String(card.key || card.name));
+            changed = true;
+            return [];
+          }
+          const marked = owns(card) ? true : (owned(card) ? false : null);
+          if (marked === null || (card.has_duplicate_files === true) === marked) return [card];
+          changed = true;
+          return [{ ...card, has_duplicate_files: marked }];
+        }),
+      })).filter((group) => group.albums.length);
+    }
+    if (changed) {
+      mergeViewPayload({
+        ...patch,
+        ...(removed.size ? { album_count: Math.max(0, Number(state.view.album_count || 0) - removed.size) } : {}),
+      }, { trackSidebarReveal: false });
+      synchronizeCurrentViewAlbumIndex();
+    }
+    const visible = collectVisibleAlbumsUnique();
+    const appearing = unfolds
+      .filter((album) => !visible.some((card) => isAlbum(card, album.album_key, album.track_paths)))
+      .map((album) => album.card);
+    if (appearing.length) applyUpdatedAlbumsToCurrentView(appearing, { skipRender: true });
+    return changed || appearing.length > 0;
+  }
+
+  // A view read while the save is being written still holds the album as it was. After a partial move
+  // the source keeps its name, so only an edited track still in it means the view holds it as it was.
+  function showEdit(save) {
+    if (!Object.values(save.updates).some((values) => 'album' in values || 'album_artist' in values)) return false;
+    const edited = new Set(Object.keys(save.updates));
+    const unedited = collectVisibleAlbumsUnique().some((card) => {
+      if (String(card.key || '') !== String(save.album.key || '')
+        || String(card.name || '') !== String(save.album.name || '')
+        || String(card.album_artist || '') !== String(save.album.album_artist || '')) return false;
+      const paths = Array.from(getAlbumTrackPaths(card));
+      if (paths.length) return paths.some((path) => edited.has(path));
+      // A card without paths can only tell when the whole album was edited.
+      return Array.from(getAlbumTrackPaths(save.album)).every((path) => edited.has(path));
+    });
+    if (!unedited) return false;
+    applyUpdatedAlbumsToCurrentView(buildOptimisticUpdatedAlbumsFromEdits(save.album, save.updates), {
+      skipRender: true, originalAlbum: save.album, tagEdits: save.updates,
+    });
+    return true;
+  }
+
+  function show() {
+    // Another page's save is over once the library moves past it; that page may have closed before saying so.
+    saves = saves.filter((save) => save.own || !save.revision || knownRevision() <= save.revision);
+    if (showing || !saves.length) return false;
+    showing = true;
+    try {
+      return saves.reduce((changed, save) => {
+        const edited = showEdit(save);
+        const folded = save.decision ? showFolds(save.decision) : false;
+        return changed || edited || folded;
+      }, false);
+    } finally {
+      showing = false;
+    }
+  }
+
+  return {
+    prepare(updates) {
+      ask(updates);
+    },
+    // Called in the click, before its first render. `stillOwns` says the view is still this save's.
+    start({ album, updates, stillOwns, render }) {
+      const question = questionFor(updates);
+      const save = {
+        id: `${Date.now()}:${Math.random()}`, own: true, at: Date.now(),
+        album, updates, revision: knownRevision(), decision: question?.decision || null,
+      };
+      saves.push(save);
+      storeSaves();
+      let failed = false;
+      const shown = {
+        fail() {
+          failed = true;
+          this.finish();
+        },
+        finish() {
+          if (!saves.includes(save)) return;
+          saves = saves.filter((item) => item !== save);
+          storeSaves();
+        },
+        // The save's own answer lists a folded copy as an album: its card must not come back.
+        keep() {
+          if (save.decision && stillOwns()) showFolds(save.decision);
+        },
+        // After the click's render and its saving alert, so neither hides this.
+        follow() {
+          if (!question) return;
+          void question.answer.then((decision) => {
+            if (failed || !stillOwns()) return;
+            if (!decision) {
+              showRepairAlert(SAVE_FOLD_UNCHECKED, 'warning', 8000, { title: 'Fold not checked' });
+              return;
+            }
+            if (save.decision === decision) return;
+            save.decision = decision;
+            storeSaves();
+            if (showFolds(decision)) render();
+          });
+        },
+      };
+      return shown;
+    },
+    show,
+    // Another page started, decided or finished a save.
+    readOtherPages() {
+      const before = saves;
+      const own = before.filter((save) => save.own);
+      saves = [...own, ...readSaves().filter((save) => !own.some((item) => item.id === save.id))];
+      const ended = before.some((save) => !saves.some((item) => item.id === save.id));
+      if (ended && typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
+        void refreshCurrentViewAfterBackgroundCompletion();
+      } else if (show()) {
+        renderView({ preserveScroll: true });
+      }
+    },
+  };
+})();
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === SAVE_FOLD_STORAGE_KEY) saveFoldDecisions.readOtherPages();
+  });
+}
+
+// END js/runtime/save-fold-decisions.js
+
+// BEGIN js/runtime/optimistic-artist-tree.js
+
+// Owner (2026-11-22): a save changes the Artist Tree at the Save click, as it changes the cards, and every
+// tree drawn while it is written shows it. A failed save takes it back out.
+
+function optimisticTreeArtist(album) {
+  return String(album?.album_artist || album?.artist || '').trim();
+}
+
+function optimisticTreeKey(artist) {
+  return artist.toLocaleLowerCase();
+}
+
+function optimisticAlbumKey(album) {
+  return String(album?.key || '').trim().toLocaleLowerCase();
+}
+
+// Each new album the save leaves counts once; the album it edited, only if it lost its card (``kept``).
+function artistTreeDeltas(original, updatedAlbums, kept) {
+  const from = optimisticTreeArtist(original);
+  const originalKey = optimisticAlbumKey(original);
+  const destinations = (updatedAlbums || [])
+    .filter((album) => !originalKey || optimisticAlbumKey(album) !== originalKey)
+    .map(optimisticTreeArtist)
+    .filter(Boolean);
+  const deltas = new Map();
+  if (!from || !destinations.length) return [];
+  const change = (artist, delta) => {
+    const key = optimisticTreeKey(artist);
+    const entry = deltas.get(key) || { artist, delta: 0 };
+    entry.delta += delta;
+    deltas.set(key, entry);
+  };
+  destinations.forEach((artist) => change(artist, 1));
+  if (!kept) change(from, -1);
+  return Array.from(deltas.entries()).filter(([, { delta }]) => delta);
+}
+
+// ``sign`` -1 takes a save's changes back out.
+function applyArtistTreeDeltas(sidebar, changes, sign = 1) {
+  // No artist gains or loses an album: the tree keeps its list, so nothing redraws.
+  if (!Array.isArray(sidebar) || !changes.length) return sidebar;
+  const next = sidebar.map((entry) => ({ ...entry }));
+  changes.forEach(([key, { artist, delta: change }]) => {
+    const delta = change * sign;
+    const index = next.findIndex((entry) => optimisticTreeKey(String(entry?.artist || '').trim()) === key);
+    if (index >= 0) {
+      next[index].count = Math.max(0, Number(next[index].count || 0) + delta);
+      if (!next[index].count) next.splice(index, 1);
+    } else if (delta > 0) {
+      const at = next.findIndex((entry) => String(entry?.artist_display || entry?.artist || '')
+        .localeCompare(artist, undefined, { sensitivity: 'base', numeric: true }) > 0);
+      next.splice(at < 0 ? next.length : at, 0, { artist, artist_display: artist, count: delta });
+    }
+  });
+  return next;
+}
+
+// Before the optimistic apply: the edited album keeps its card when its visible card holds a file the
+// save doesn't edit (some of its tracks), or has duplicate copies (a card lists one copy, and the save
+// edits only the files it lists).
+function artistTreeKeepsEditedAlbum(album, updates) {
+  const paths = getAlbumTrackPaths(album);
+  const card = (typeof findVisibleAlbumByTrackPaths === 'function' ? findVisibleAlbumByTrackPaths(paths) : null)
+    || album;
+  return Boolean(card?.has_duplicate_files)
+    || Array.from(getAlbumTrackPaths(card)).some((path) => !updates?.[path]);
+}
+
+// The saves this page is writing: a tree the server sends meanwhile doesn't hold them yet.
+const pendingArtistTreeEdits = new Map();
+let nextArtistTreeEditId = 0;
+
+function changeArtistTreeLists(changes, sign) {
+  const view = state.view || {};
+  view.artists_sidebar = applyArtistTreeDeltas(view.artists_sidebar, changes, sign);
+  if (Array.isArray(state.gallery?.sidebarArtistsOverride) && state.gallery.sidebarArtistsOverride.length) {
+    state.gallery.sidebarArtistsOverride = applyArtistTreeDeltas(state.gallery.sidebarArtistsOverride, changes, sign);
+  }
+}
+
+// At the Save click; the id ends it with settleArtistTreeEdit.
+function applyTagEditToArtistTree(original, updatedAlbums, kept) {
+  const changes = artistTreeDeltas(original, updatedAlbums, kept);
+  if (!changes.length) return 0;
+  const id = ++nextArtistTreeEditId;
+  pendingArtistTreeEdits.set(id, changes);
+  changeArtistTreeLists(changes, 1);
+  return id;
+}
+
+// A tree the server sends while saves are written shows them, as the cards do.
+function withPendingArtistTreeEdits(sidebar) {
+  let next = sidebar;
+  pendingArtistTreeEdits.forEach((changes) => { next = applyArtistTreeDeltas(next, changes, 1); });
+  return next;
+}
+
+// When the save ends. A failed save takes its changes back out; a saved one stays until the library's
+// own tree replaces it.
+function settleArtistTreeEdit(id, { failed = false } = {}) {
+  const changes = pendingArtistTreeEdits.get(id);
+  if (!changes) return;
+  pendingArtistTreeEdits.delete(id);
+  if (failed) changeArtistTreeLists(changes, -1);
+}
+
+// END js/runtime/optimistic-artist-tree.js
 
 // BEGIN js/runtime/tag-editor-and-optimistic-updates.js
 
@@ -42577,6 +43148,7 @@ function openTagEditConfirmModal() {
     : null;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof saveFoldDecisions !== 'undefined') saveFoldDecisions.prepare(updates);
 }
 
 function closeTagEditConfirmModal() {
@@ -42990,6 +43562,8 @@ async function confirmManualTagEdit() {
     ...(absoluteScrollPosition ? { absoluteScrollPosition } : {}),
   };
   closeTagEditor();
+  const artistTreeKeepsAlbum = typeof artistTreeKeepsEditedAlbum === 'function'
+    && artistTreeKeepsEditedAlbum(album, updates);
   const reconciledOptimisticAlbums = applyUpdatedAlbumsToCurrentView(
     optimisticUpdatedAlbums,
     {
@@ -42998,6 +43572,20 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
+  const artistTreeEdit = typeof applyTagEditToArtistTree === 'function'
+    ? applyTagEditToArtistTree(album, optimisticUpdatedAlbums, artistTreeKeepsAlbum)
+    : 0;
+  // Before the first render, so no frame shows both cards of a fold that is already decided.
+  const saveFolds = typeof saveFoldDecisions !== 'undefined'
+    ? saveFoldDecisions.start({
+      album,
+      updates,
+      stillOwns: () => tagEditOriginStillOwnsView(originatingViewStateRevision)
+        && tagEditViewMutationStillOwnsResources(tagEditMutationClaim),
+      render: () => renderView(renderOptions),
+    })
+    : null;
+  saveFolds?.keep();
   const coverLookupOptimisticSplit = typeof recordCoverLookupOptimisticSplit === 'function'
     ? recordCoverLookupOptimisticSplit(album, optimisticUpdatedAlbums)
     : null;
@@ -43009,7 +43597,9 @@ async function confirmManualTagEdit() {
   });
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
+  let failedSaveStage = '';
   let failedSaveKeptNewTags = false;
+  let failedRefusalText = '';
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
   // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
@@ -43041,11 +43631,14 @@ async function confirmManualTagEdit() {
     2000,
     { title: 'Saving tags', dismissible: false },
   );
+  saveFolds?.follow();
   try {
     const response = await responsePromise;
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      saveFolds?.fail();
       saveOutcomeUnknown = typeof data.ok !== 'boolean';
+      failedSaveStage = String(data.failure_stage || '').trim();
       if (
         data.save_task_id
         && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
@@ -43061,6 +43654,9 @@ async function confirmManualTagEdit() {
         }
       }
       failedSaveKeptNewTags = data.edit_outcome === 'recovery_pending';
+      // Owner (2026-11-23), "Name the songs": a refusal for tracks the library no longer holds shows the
+      // server's text, which names them by title, never by path.
+      if (data.code === 'tracks_not_in_library') failedRefusalText = String(data.error || '').trim();
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -43069,6 +43665,16 @@ async function confirmManualTagEdit() {
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;
+    // Owner (2026-11-23): the files are written, so the save has succeeded; the library is still catching up.
+    // Kept so a reload or another tab still shows the new values until the library holds them.
+    if (
+      String(data.save_task_status || '').trim().toLowerCase() === 'finishing'
+      && clientRequestId && typeof window !== 'undefined' && window.AlbumHavenPendingTagEdits
+    ) {
+      window.AlbumHavenPendingTagEdits.addFinishing({ id: clientRequestId, payload: requestPayload, album });
+    }
+    // Before anything is awaited: a page left during the refresh must not leave the save as pending.
+    if (responseIsTerminal) saveFolds?.finish();
     const terminalResponseNeedsCanonicalRefresh = responseIsTerminal
       && Boolean(data.requires_view_refresh);
     const committedValues = data.committed_values
@@ -43098,6 +43704,7 @@ async function confirmManualTagEdit() {
         },
       );
       updateOpenTrackModalAfterTagEdit(album, reconciledUpdatedAlbums);
+      saveFolds?.keep();
       renderView(renderOptions);
     }
     const saveTaskWatchOptions = {
@@ -43173,6 +43780,7 @@ async function confirmManualTagEdit() {
       }
     }
   } catch (error) {
+    saveFolds?.fail();
     if (
       coverLookupOptimisticSplit
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
@@ -43210,6 +43818,7 @@ async function confirmManualTagEdit() {
       }
       return;
     }
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit, { failed: true });
     if (
       tagEditOriginStillOwnsView(originatingViewStateRevision)
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
@@ -43232,7 +43841,9 @@ async function confirmManualTagEdit() {
     showRepairAlert(
       failedSaveKeptNewTags
         ? 'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.'
-        : failedSaveTaskError || 'Failed to edit tags.',
+        // Owner (2026-11-22), their words: a file that can't be written. The path and error stay in View details.
+        : (failedSaveStage === 'media_write' ? 'Save failed: Read-only files' : '')
+          || failedRefusalText || failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {
@@ -43250,6 +43861,9 @@ async function confirmManualTagEdit() {
     ) {
       await refreshCurrentViewAfterBackgroundCompletion();
     }
+  } finally {
+    saveFolds?.finish();
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit);
   }
 }
 
@@ -44020,12 +44634,20 @@ async function refreshMissingAlbumView(album, albumKey, pendingRefreshRequest) {
   }
 }
 
+// Owner wording, 2026-11-22 (case 59).
 const MISSING_ALBUM_RESCAN_MESSAGES = {
   restored: ['Album found and restored.', 'success'],
   moved: ['Album found in its new folder and restored.', 'success'],
-  deleted: ['Still missing: its files were deleted from disk.', 'info'],
+  searching: ['Album is not found. Searching your library folders for it...', 'info'],
+  deleted: [
+    'Album must have been deleted or moved out of the library. Add it back to one of the library paths to see it in the app',
+    'info',
+  ],
   unreachable: ['Still missing: its drive or network share cannot be reached.', 'info'],
 };
+// The background search's result is asked for about every 1.5 s, for at most 30 s.
+const MISSING_ALBUM_SEARCH_POLL_MS = 1500;
+const MISSING_ALBUM_SEARCH_POLLS = 20;
 
 async function keepMissingAlbum(album) {
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -44051,22 +44673,33 @@ async function rescanMissingAlbum(album, button) {
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
   }
-  try {
-    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/rescan`, {
-      method: 'POST',
-      headers: { Accept: 'application/json' },
-    });
+  const url = `/api/library/albums/${encodeURIComponent(albumKey)}/rescan`;
+  const request = async (method) => {
+    const response = await fetch(url, { method, headers: { Accept: 'application/json' } });
     let payload = {};
     try {
       payload = await response.json();
     } catch (_error) {
       payload = {};
     }
-    if (!response.ok) throw new Error(payload.error || 'Unable to re-scan this album.');
+    if (!response.ok) throw new Error((method === 'POST' && payload.error) || 'Unable to re-scan this album.');
+    return payload;
+  };
+  const toast = ([message, tone]) => { if (typeof showToast === 'function') showToast(message, tone, 3600); };
+  try {
+    let payload = await request('POST');
+    if (payload.status === 'searching') {
+      toast(MISSING_ALBUM_RESCAN_MESSAGES.searching);
+      for (let poll = 0; payload.status === 'searching'; poll += 1) {
+        // Still searching after 30 s: the button is freed with no further message.
+        if (poll >= MISSING_ALBUM_SEARCH_POLLS) return false;
+        await new Promise(resolve => scheduleBrowserTimeout(resolve, MISSING_ALBUM_SEARCH_POLL_MS));
+        payload = await request('GET');
+      }
+    }
     await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
-    const [message, tone] = MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
-      || ['Still missing.', 'info'];
-    if (typeof showToast === 'function') showToast(message, tone, 3600);
+    toast(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+      || MISSING_ALBUM_RESCAN_MESSAGES.deleted);
     return payload.status !== 'missing';
   } catch (error) {
     if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);

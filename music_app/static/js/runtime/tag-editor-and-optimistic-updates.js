@@ -445,6 +445,7 @@ function openTagEditConfirmModal() {
     : null;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof saveFoldDecisions !== 'undefined') saveFoldDecisions.prepare(updates);
 }
 
 function closeTagEditConfirmModal() {
@@ -858,6 +859,8 @@ async function confirmManualTagEdit() {
     ...(absoluteScrollPosition ? { absoluteScrollPosition } : {}),
   };
   closeTagEditor();
+  const artistTreeKeepsAlbum = typeof artistTreeKeepsEditedAlbum === 'function'
+    && artistTreeKeepsEditedAlbum(album, updates);
   const reconciledOptimisticAlbums = applyUpdatedAlbumsToCurrentView(
     optimisticUpdatedAlbums,
     {
@@ -866,6 +869,20 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
+  const artistTreeEdit = typeof applyTagEditToArtistTree === 'function'
+    ? applyTagEditToArtistTree(album, optimisticUpdatedAlbums, artistTreeKeepsAlbum)
+    : 0;
+  // Before the first render, so no frame shows both cards of a fold that is already decided.
+  const saveFolds = typeof saveFoldDecisions !== 'undefined'
+    ? saveFoldDecisions.start({
+      album,
+      updates,
+      stillOwns: () => tagEditOriginStillOwnsView(originatingViewStateRevision)
+        && tagEditViewMutationStillOwnsResources(tagEditMutationClaim),
+      render: () => renderView(renderOptions),
+    })
+    : null;
+  saveFolds?.keep();
   const coverLookupOptimisticSplit = typeof recordCoverLookupOptimisticSplit === 'function'
     ? recordCoverLookupOptimisticSplit(album, optimisticUpdatedAlbums)
     : null;
@@ -877,7 +894,9 @@ async function confirmManualTagEdit() {
   });
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
+  let failedSaveStage = '';
   let failedSaveKeptNewTags = false;
+  let failedRefusalText = '';
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
   // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
@@ -909,11 +928,14 @@ async function confirmManualTagEdit() {
     2000,
     { title: 'Saving tags', dismissible: false },
   );
+  saveFolds?.follow();
   try {
     const response = await responsePromise;
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      saveFolds?.fail();
       saveOutcomeUnknown = typeof data.ok !== 'boolean';
+      failedSaveStage = String(data.failure_stage || '').trim();
       if (
         data.save_task_id
         && String(data.save_task_status || '').trim().toLowerCase() === 'failed'
@@ -929,6 +951,9 @@ async function confirmManualTagEdit() {
         }
       }
       failedSaveKeptNewTags = data.edit_outcome === 'recovery_pending';
+      // Owner (2026-11-23), "Name the songs": a refusal for tracks the library no longer holds shows the
+      // server's text, which names them by title, never by path.
+      if (data.code === 'tracks_not_in_library') failedRefusalText = String(data.error || '').trim();
       throw new Error(data.error || 'Failed to apply tag edits');
     }
     const updatedAlbums = Array.isArray(data.updated_albums)
@@ -937,6 +962,16 @@ async function confirmManualTagEdit() {
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;
+    // Owner (2026-11-23): the files are written, so the save has succeeded; the library is still catching up.
+    // Kept so a reload or another tab still shows the new values until the library holds them.
+    if (
+      String(data.save_task_status || '').trim().toLowerCase() === 'finishing'
+      && clientRequestId && typeof window !== 'undefined' && window.AlbumHavenPendingTagEdits
+    ) {
+      window.AlbumHavenPendingTagEdits.addFinishing({ id: clientRequestId, payload: requestPayload, album });
+    }
+    // Before anything is awaited: a page left during the refresh must not leave the save as pending.
+    if (responseIsTerminal) saveFolds?.finish();
     const terminalResponseNeedsCanonicalRefresh = responseIsTerminal
       && Boolean(data.requires_view_refresh);
     const committedValues = data.committed_values
@@ -966,6 +1001,7 @@ async function confirmManualTagEdit() {
         },
       );
       updateOpenTrackModalAfterTagEdit(album, reconciledUpdatedAlbums);
+      saveFolds?.keep();
       renderView(renderOptions);
     }
     const saveTaskWatchOptions = {
@@ -1041,6 +1077,7 @@ async function confirmManualTagEdit() {
       }
     }
   } catch (error) {
+    saveFolds?.fail();
     if (
       coverLookupOptimisticSplit
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
@@ -1078,6 +1115,7 @@ async function confirmManualTagEdit() {
       }
       return;
     }
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit, { failed: true });
     if (
       tagEditOriginStillOwnsView(originatingViewStateRevision)
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
@@ -1100,7 +1138,9 @@ async function confirmManualTagEdit() {
     showRepairAlert(
       failedSaveKeptNewTags
         ? 'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.'
-        : failedSaveTaskError || 'Failed to edit tags.',
+        // Owner (2026-11-22), their words: a file that can't be written. The path and error stay in View details.
+        : (failedSaveStage === 'media_write' ? 'Save failed: Read-only files' : '')
+          || failedRefusalText || failedSaveTaskError || 'Failed to edit tags.',
       'error',
       null,
       {
@@ -1118,6 +1158,9 @@ async function confirmManualTagEdit() {
     ) {
       await refreshCurrentViewAfterBackgroundCompletion();
     }
+  } finally {
+    saveFolds?.finish();
+    if (typeof settleArtistTreeEdit === 'function') settleArtistTreeEdit(artistTreeEdit);
   }
 }
 
@@ -1888,12 +1931,20 @@ async function refreshMissingAlbumView(album, albumKey, pendingRefreshRequest) {
   }
 }
 
+// Owner wording, 2026-11-22 (case 59).
 const MISSING_ALBUM_RESCAN_MESSAGES = {
   restored: ['Album found and restored.', 'success'],
   moved: ['Album found in its new folder and restored.', 'success'],
-  deleted: ['Still missing: its files were deleted from disk.', 'info'],
+  searching: ['Album is not found. Searching your library folders for it...', 'info'],
+  deleted: [
+    'Album must have been deleted or moved out of the library. Add it back to one of the library paths to see it in the app',
+    'info',
+  ],
   unreachable: ['Still missing: its drive or network share cannot be reached.', 'info'],
 };
+// The background search's result is asked for about every 1.5 s, for at most 30 s.
+const MISSING_ALBUM_SEARCH_POLL_MS = 1500;
+const MISSING_ALBUM_SEARCH_POLLS = 20;
 
 async function keepMissingAlbum(album) {
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -1919,22 +1970,33 @@ async function rescanMissingAlbum(album, button) {
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
   }
-  try {
-    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/rescan`, {
-      method: 'POST',
-      headers: { Accept: 'application/json' },
-    });
+  const url = `/api/library/albums/${encodeURIComponent(albumKey)}/rescan`;
+  const request = async (method) => {
+    const response = await fetch(url, { method, headers: { Accept: 'application/json' } });
     let payload = {};
     try {
       payload = await response.json();
     } catch (_error) {
       payload = {};
     }
-    if (!response.ok) throw new Error(payload.error || 'Unable to re-scan this album.');
+    if (!response.ok) throw new Error((method === 'POST' && payload.error) || 'Unable to re-scan this album.');
+    return payload;
+  };
+  const toast = ([message, tone]) => { if (typeof showToast === 'function') showToast(message, tone, 3600); };
+  try {
+    let payload = await request('POST');
+    if (payload.status === 'searching') {
+      toast(MISSING_ALBUM_RESCAN_MESSAGES.searching);
+      for (let poll = 0; payload.status === 'searching'; poll += 1) {
+        // Still searching after 30 s: the button is freed with no further message.
+        if (poll >= MISSING_ALBUM_SEARCH_POLLS) return false;
+        await new Promise(resolve => scheduleBrowserTimeout(resolve, MISSING_ALBUM_SEARCH_POLL_MS));
+        payload = await request('GET');
+      }
+    }
     await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
-    const [message, tone] = MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
-      || ['Still missing.', 'info'];
-    if (typeof showToast === 'function') showToast(message, tone, 3600);
+    toast(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+      || MISSING_ALBUM_RESCAN_MESSAGES.deleted);
     return payload.status !== 'missing';
   } catch (error) {
     if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);

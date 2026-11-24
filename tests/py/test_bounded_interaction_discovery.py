@@ -1451,6 +1451,40 @@ def move(request):
     assert not _hazards(tmp_path, "BI-05")
 
 
+def test_additional_artworks_lease_the_pool_on_every_route_that_reaches_them(tmp_path: Path):
+    # BI-15 (6.5, #65 guard): album_additional_artworks_postgres.py kept a psycopg.connect default that the
+    # guard reaches from 47 routes. The real service file runs here against the pool module's surface, read,
+    # save and remove each from a route, and no BI-15 hazard may name it.
+    _write(tmp_path, "music_app/services/postgres_connections.py", """
+from psycopg_pool import ConnectionPool
+
+def pooled_connection(url, *, workload="default"):
+    return ConnectionPool(url).connection()
+
+def leased_connection(url, *, workload="default"):
+    return pooled_connection(url, workload=workload)
+""")
+    service = "music_app/services/album_additional_artworks_postgres.py"
+    _write(tmp_path, service, (REPO_ROOT / service).read_text(encoding="utf-8"))
+    _write(tmp_path, "music_app/routes/artworks.py", """
+from music_app.services.album_additional_artworks_postgres import AlbumAdditionalArtworkRepository
+
+@router.get('/albums/{album_id}/artworks')
+def artworks(request, album_id):
+    return AlbumAdditionalArtworkRepository(request.app.state.config).list_for_album(album_id=album_id)
+
+@router.post('/albums/{album_id}/artworks')
+def save_artwork(request, album_id):
+    return AlbumAdditionalArtworkRepository(request.app.state.config).save(
+        album_id=album_id, slot=1, source_kind="local", cover_path="cover.jpg", remote_url=None, account_id=None)
+
+@router.delete('/albums/{album_id}/artworks')
+def remove_artwork(request, album_id):
+    return AlbumAdditionalArtworkRepository(request.app.state.config).remove(album_id=album_id, slot=1)
+""")
+    assert [hazard for hazard in _hazards(tmp_path, "BI-15") if hazard["path"] == service] == []
+
+
 def test_session_state_is_rejected_unless_its_function_takes_a_connection_nobody_borrows_next(tmp_path: Path):
     # 0.11.45 (PR #113): a session advisory lock and a session setting reached shared leases.
     _write(tmp_path, "music_app/services/postgres_connections.py", """

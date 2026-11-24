@@ -528,6 +528,9 @@ async def _gallery_local_inventory(inventory_worker, album_root, track_paths: se
             album_root = await run_in_threadpool(repository.root_for_tracks, track_paths)
         if album_root is None:
             return None, {"available": False, "complete": False, "error": context.get("error")}
+    else:
+        # The stored answer is shown at once; resolving it again is queued in memory, with no wait or read here.
+        inventory_worker.recheck_context(track_paths)
     inventory = await run_in_threadpool(repository.get, album_root)
     if not inventory or not inventory.get("complete"):
         await run_in_threadpool(inventory_worker.request, album_root)

@@ -18,6 +18,7 @@ const WATCHER_FIXTURE_DIRECTORIES = [
   'generated-preview-storage',
   'problematic-files-missing-album',
   'watcher-problematic-live',
+  'auto-apply-first-cover',
 ];
 
 function resolveWatcherFixtureMediaRoot(environment = process.env) {

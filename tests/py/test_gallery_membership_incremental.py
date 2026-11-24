@@ -45,19 +45,27 @@ def test_gallery_patch_reads_only_affected_album_membership(monkeypatch):
         def fetchone(self):
             return self.rows[0] if self.rows else None
 
+    scope_key = gallery.gallery_projection_scope_key(state)
+
     class Connection:
         def execute(self, sql, params=None):
             calls.append((sql, params))
+            # 6.5 (11-23): every header is patched in one statement; a refusal is that header's false.
+            if "patch_gallery_membership" in sql:
+                return Cursor([{"scope_key": patch["scope_key"], "published": True} for patch in params["patches"].obj])
             if "gallery_membership_headers" in sql:
-                return Cursor([{"scope_key": gallery.gallery_projection_scope_key(state),
+                return Cursor([{"scope_key": scope_key,
                                 "view_state": state, "revision": "a" * 64, "source_generation": 7}])
             if "local_relation_projection_entries" in sql:
                 assert params == (1, ['New Artist', 'guest alias', 'missing alias'])
                 assert "entry_key=any" in sql
                 return Cursor([{'entry_key': 'guest alias', 'payload': 'Guest Canonical'},
                                {'entry_key': 'missing alias', 'payload': 'Missing Canonical'}])
-            if "patch_gallery_membership" in sql:
-                return Cursor([{"published": True}])
+            if "jsonb_to_recordset(%(headers)s)" in sql:
+                # Every header's visible albums in one statement, over the candidate rows' albums only.
+                assert [header["scope_key"] for header in params["headers"].obj] == [scope_key]
+                assert params["gallery_album_ids"] == [18]
+                return Cursor([{"scope_key": scope_key, "album_id": 18}])
             assert sql == "scoped-membership"
             assert params["gallery_album_ids"] == [17, 18]
             return Cursor([{"artist_name": "New Artist", "album_id": 18,
@@ -92,24 +100,31 @@ def test_gallery_patch_reads_only_affected_album_membership(monkeypatch):
     )
     assert count == 1
     published = next(params for sql, params in calls if "patch_gallery_membership" in sql)
-    assert published["expected_generation"] == 7
+    assert [patch["expected_generation"] for patch in published["patches"].obj] == [7]
     assert published["generation"] == 8
     assert published["affected_album_keys"] == ["new artist::new", "old artist::old"]
 
-
-    patched_rows = next(params['rows'].obj for sql, params in calls if 'patch_gallery_membership' in sql)
+    patched_rows = published["patches"].obj[0]["rows"]
     assert {row['payload']['artist_name'] for row in patched_rows} == {'New Artist', 'Guest Canonical', 'Missing Canonical'}
 
 def test_gallery_patch_does_not_promote_a_stale_baseline(monkeypatch):
+    """A header at another generation than the expected baseline is never patched: the publication refuses
+    before any membership work (the header query loads every header; each one's generation is checked)."""
+    state = {"gallery_scope": "all", "visible_library_categories": []}
+
     class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
         def fetchall(self):
-            return []
+            return self.rows
 
     class Connection:
         def execute(self, sql, params=None):
-            assert "source_generation" in sql
-            assert params["expected_generation"] == 7
-            return Cursor()
+            assert "gallery_membership_headers" in sql and "source_generation" in sql, (
+                "a stale baseline reached membership work")
+            return Cursor([{"scope_key": gallery.gallery_projection_scope_key(state), "view_state": state,
+                            "revision": "a" * 64, "source_generation": 6}])
 
     monkeypatch.setattr(gallery, "gallery_projection_context", lambda _: {
         "library_id": 1, "generation": 8,

@@ -6,6 +6,7 @@ Reusing a TLS connection must never turn into caching actors, grants or sessions
 from __future__ import annotations
 
 import atexit
+import contextvars
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from threading import Condition, Lock, get_ident
@@ -120,6 +121,22 @@ _SESSION_WORKLOAD = "session"
 # An edit holds its session lease through the media writes, so session leases need the request
 # pool's headroom or a fifth concurrent save would wait for the first.
 _LARGE_WORKLOADS = frozenset({"default", _SESSION_WORKLOAD})
+# A user's save leases its default-workload connections from a pool of its own (6.5, 11-23, row B3), so
+# publications and browse reads holding every request connection never make a save wait or fail.
+_SAVE_WORKLOAD = "save"
+_SAVE_WORKLOAD_MAX_SIZE = 2
+_user_save = contextvars.ContextVar("album_haven_user_save", default=False)
+
+
+@contextmanager
+def user_save_connections():
+    """While active (in this context and the thread-pool calls it makes), default-workload leases come
+    from the save workload."""
+    token = _user_save.set(True)
+    try:
+        yield
+    finally:
+        _user_save.reset(token)
 
 
 def _observe_pool_lease(
@@ -158,6 +175,8 @@ def pooled_connection(
         raise RuntimeError("Postgres pool workload is required.")
     if ConnectionPool is None:
         raise RuntimeError("psycopg pool support is required; install the application requirements.")
+    if normalized_workload == "default" and _user_save.get():
+        normalized_workload = _SAVE_WORKLOAD
     depth = _held.get(get_ident(), 0)
     pool_key = (database_url, normalized_workload) if depth == 0 else (database_url, normalized_workload, depth)
     with _lock:
@@ -168,7 +187,7 @@ def pooled_connection(
                 conninfo=database_url,
                 connection_class=_state_recording_connection_class(connect_state),
                 min_size=0,
-                max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload in _LARGE_WORKLOADS else _MAX_SIZE,
+                max_size=_pool_max_size(normalized_workload, depth),
                 max_waiting=32,
                 timeout=30, max_idle=120,
                 max_lifetime=0 if normalized_workload == _SESSION_WORKLOAD else 600,
@@ -201,6 +220,12 @@ def pooled_connection(
         lease_observer=lease_observer,
         keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
     )
+
+
+def _pool_max_size(workload: str, depth: int) -> int:
+    if depth == 0 and workload == _SAVE_WORKLOAD:
+        return _SAVE_WORKLOAD_MAX_SIZE
+    return _DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and workload in _LARGE_WORKLOADS else _MAX_SIZE
 
 
 def _restore_session_defaults(connection) -> None:

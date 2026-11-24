@@ -60,7 +60,7 @@ from music_app.services.relation_state import (
 )
 from music_app.services.cover_provider_cache import _BULK_NEGATIVE_CACHE_TTL_SECONDS
 from music_app.services.runtime_shutdown import create_daemon_executor
-from music_app.services.scan_state import refresh_library_state
+from music_app.services.scan_state import QUEUED_ROOT_CHANGE_KEY, refresh_library_state
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
@@ -91,6 +91,10 @@ _WATCHER_COVER_REFRESH_MAX_SETTLE_RETRIES = 60
 
 class _WatcherCoverRefreshStale(RuntimeError):
     """The watcher's album projection changed while its covers were refreshed."""
+
+
+class _WatcherCoverRefreshAfterScan(_WatcherCoverRefreshStale):
+    """A scan is running: the queued albums wait for it, then get their own lookup (case 65)."""
 
 
 def _schedule_watcher_cover_refresh_retry(delay_seconds: float, callback: Callable[[], None]) -> None:
@@ -198,6 +202,30 @@ def queue_watcher_cover_refresh_for_track_paths_for_state(
         library_state["_watcher_cover_refresh_attempts"] = 0
 
     _submit_watcher_cover_refresh(library_state, config, logger)
+
+
+def queue_cover_lookup_for_added_albums_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger: object,
+    albums: list[object],
+) -> None:
+    """A scan's added albums get the watcher's bounded cover lookup: only their own tracks are queued and read.
+    An album the watcher already queued (waiting or in flight) is skipped, so it is looked up once."""
+    with _CACHE_LOCK:
+        queued = set(library_state.get("_watcher_cover_refresh_token_by_track_path") or ())
+    paths_by_album = {
+        str(album.key): {str(track.path) for track in getattr(album, "tracks", None) or []} - queued
+        for album in albums
+    }
+    paths_by_album = {key: paths for key, paths in paths_by_album.items() if paths}
+    queue_watcher_cover_refresh_for_track_paths_for_state(
+        library_state,
+        config,
+        logger,
+        set().union(*paths_by_album.values()),
+        affected_album_keys=tuple(paths_by_album),
+    )
 
 
 def _submit_watcher_cover_refresh(
@@ -331,15 +359,13 @@ def _drain_watcher_cover_refresh_queue(
                     }
                 return targeted_state
 
-            def preserve_refresh_after_active_scan() -> None:
-                with _CACHE_LOCK:
-                    if library_state.get("scan_in_progress"):
-                        library_state["pending_cover_refresh_after_scan"] = True
-                        library_state["pending_cover_refresh_force_search"] = False
+            def stale() -> _WatcherCoverRefreshStale:
+                if library_state.get("scan_in_progress"):
+                    return _WatcherCoverRefreshAfterScan("Watcher cover refresh waits for the running scan.")
+                return _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
 
             if targeted_state_while_current() is not targeted_state:
-                preserve_refresh_after_active_scan()
-                raise _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
+                raise stale()
 
             result = refresh_cover_artwork_request(
                 get_state=targeted_state_while_current,
@@ -368,8 +394,7 @@ def _drain_watcher_cover_refresh_queue(
                 ),
             )
             if targeted_state_while_current() is not targeted_state:
-                preserve_refresh_after_active_scan()
-                raise _WatcherCoverRefreshStale("Watcher cover refresh projection became stale.")
+                raise stale()
             with _CACHE_LOCK:
                 revision = int(library_state.get("inventory_mutation_revision") or 0)
             if (
@@ -399,6 +424,19 @@ def _drain_watcher_cover_refresh_queue(
                     album_keys_by_path.pop(path, None)
                     tokens_by_path.pop(path, None)
         except Exception as exc:
+            if isinstance(exc, _WatcherCoverRefreshAfterScan):
+                with _CACHE_LOCK:
+                    library_state.setdefault("_watcher_cover_refresh_pending_track_paths", set()).update(
+                        path for path in track_paths
+                        if tokens_by_path.get(path) == batch_tokens_by_path.get(path)
+                    )
+                    library_state["_watcher_cover_refresh_scheduled"] = False
+                    scan_running = bool(library_state.get("scan_in_progress"))
+                logger.info("Watcher cover refresh waits for the running scan.")
+                if not scan_running:
+                    # The scan ended after the check: its end may already have looked for waiting albums.
+                    _submit_watcher_cover_refresh(library_state, config, logger)
+                return
             settle_retries = int(library_state.get("_watcher_cover_refresh_settle_retries") or 0)
             if (
                 isinstance(exc, _WatcherCoverRefreshStale)
@@ -622,6 +660,13 @@ def background_cover_negative_cache_ttl_seconds(
     return float(config.get("BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS", _BULK_NEGATIVE_CACHE_TTL_SECONDS))
 
 
+def _root_change_waits_for_its_scan(config: dict[str, object]) -> bool:
+    """A root change saved during a scan, not yet published. A bare identity mismatch never starts a scan."""
+    load = getattr(select_scan_cache_adapter(config), "load_pending_root_change", None)
+    pending = load() if callable(load) else None
+    return bool(pending) and pending == library_root_cache_identity(config)
+
+
 def file_metadata_repair_required_on_startup(app) -> bool:
     """Postgres keeps file entries read by older metadata readers until rescanned.
 
@@ -631,6 +676,8 @@ def file_metadata_repair_required_on_startup(app) -> bool:
     """
     if app.config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
         return False
+    if _root_change_waits_for_its_scan(app.config):
+        return True
     # A full re-read is an operator decision for a real library, so it is
     # opt-in; test fixtures and CI never start it implicitly.
     enabled = app.config.get(_STARTUP_METADATA_REPAIR_ENV, os.environ.get(_STARTUP_METADATA_REPAIR_ENV, ""))
@@ -971,6 +1018,10 @@ def refresh_relation_views_for_state(
             raise ValueError(
                 "expected_scan_generation is required for the final scan publication"
             )
+        if target_state.get("scan_root_identity"):
+            snapshot_options["completes_root_change"] = True
+        if target_state.get("cover_inventory_checked_at"):
+            snapshot_options["cover_inventory_checked_at"] = dict(target_state["cover_inventory_checked_at"])
         snapshot_options["publication_commit_guard"] = (
             lambda commit_action: _run_scan_publication_commit_for_current_generation(
                 library_state,
@@ -988,6 +1039,8 @@ def refresh_relation_views_for_state(
         )
     publication_generation = int(library_state.get("scan_generation") or 0)
     repaired_cover_published = False
+    # Inside a scan: the roots it walked, so old-root results never look current under newly saved roots.
+    pinned_identity = target_state.get("scan_root_identity") if expected_scan_generation is not None else None
 
     def save_relation_snapshot() -> None:
         nonlocal repaired_cover_published
@@ -995,7 +1048,7 @@ def refresh_relation_views_for_state(
             config,
             config["CACHE_PATH"],
             dict(target_state.get("file_cache") or {}),
-            library_root_cache_identity(config),
+            pinned_identity or library_root_cache_identity(config),
             float(target_state.get("last_scan") or 0.0),
             **snapshot_options,
         )
@@ -1114,14 +1167,17 @@ def scan_music_incremental(
 ) -> tuple[dict[str, dict[str, object]], float]:
     history_scope = resolve_media_host_history_scope(config)
     cfg = config
-    configured_roots = iter_library_root_paths(cfg)
+    pinned_roots = publication_state.get("scan_library_roots") if publication_state is not None else None
+    configured_roots = (
+        [Path(str(root["path"])) for root in pinned_roots] if pinned_roots else iter_library_root_paths(cfg)
+    )
     scan_roots = [root for root in configured_roots if root.exists()]
     if not scan_roots:
         raise FileNotFoundError(
             "No configured library roots are currently available: "
             + ", ".join([str(root) for root in configured_roots] or [str(cfg["MUSIC_DIR"])])
         )
-    root_definitions = get_library_roots(cfg)
+    root_definitions = pinned_roots or get_library_roots(cfg)
     available_paths = {
         normcase(str(Path(root).resolve(strict=False)))
         for root in scan_roots
@@ -1433,6 +1489,9 @@ def refresh_library_for_state(
                 job_workers=config.get("BULK_COVER_JOB_WORKERS", _BULK_COVER_JOB_WORKERS),
             ),
         ),
+        start_added_album_cover_lookup=lambda albums: queue_cover_lookup_for_added_albums_for_state(
+            library_state, config, logger, albums,
+        ),
         queue_problematic_albums_prewarm=lambda: _queue_problematic_albums_prewarm_for_state(
             library_state,
             config,
@@ -1451,6 +1510,7 @@ def refresh_library_for_state(
                 _run_mbid_assertion_follow_up,
                 logger,
                 kwargs,
+                config,
             ),
         ),
         queue_musicbrainz_enrichment=config.get(
@@ -1476,6 +1536,10 @@ def start_background_refresh_for_state(
     with _CACHE_LOCK:
         if library_state.get("scan_in_progress"):
             return False
+        if force:
+            # A forced scan is the queued one: it pins the new roots. Its covers come from the lookup for
+            # the albums it adds, never a whole-library refresh (case 65).
+            library_state.pop(QUEUED_ROOT_CHANGE_KEY, None)
         if accepted_state_updates:
             library_state.update(accepted_state_updates)
         library_state["scan_in_progress"] = True
@@ -1544,13 +1608,58 @@ def cancel_background_refresh_for_state(library_state: dict[str, object]) -> boo
         library_state["scan_phase"] = "idle"
         return True
 
+
+def queue_root_change_scan_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger,
+    root_identity: str,
+) -> bool:
+    """Queue one scan of roots saved while a scan runs; False when that scan has already ended."""
+    try:
+        mark_pending = getattr(select_scan_cache_adapter(config), "mark_root_change_pending", None)
+        if callable(mark_pending):
+            # Before queueing, so the publication that covers it can only ever clear it afterwards.
+            mark_pending(root_identity)
+    except Exception:
+        logger.exception("Could not persist the saved root change; its scan stays queued in this process only.")
+    with _CACHE_LOCK:
+        if not library_state.get("scan_in_progress"):
+            return False
+        library_state[QUEUED_ROOT_CHANGE_KEY] = root_identity
+        return True
+
+
+def _start_queued_root_change_scan(library_state: dict[str, object], config: dict[str, object], logger) -> None:
+    with _CACHE_LOCK:
+        queued = library_state.get(QUEUED_ROOT_CHANGE_KEY)
+        if not queued or library_state.get("scan_in_progress"):
+            return
+        if library_state.get("published_root_identity") == queued:
+            del library_state[QUEUED_ROOT_CHANGE_KEY]
+            return
+    try:
+        start_background_refresh_for_state(
+            library_state, config, logger, force=True, scan_mode="library_settings_update",
+        )
+    except Exception:
+        # Shutdown closed the executor; the persisted flag starts this scan at the next start.
+        logger.exception("Could not start the scan of the saved root change.")
+
+
 def _refresh_library_worker(
     library_state: dict[str, object],
     config: dict[str, object],
     logger,
     force: bool,
 ):
-    refresh_library_for_state(library_state, config, logger, force=force)
+    try:
+        refresh_library_for_state(library_state, config, logger, force=force)
+    finally:
+        # Completed, failed or cancelled: roots saved during that scan still get theirs.
+        _start_queued_root_change_scan(library_state, config, logger)
+        # Albums the watcher added during the scan get their own cover lookup now (case 65).
+        _submit_watcher_cover_refresh(library_state, config, logger)
 
 
 def _library_inventory_ready(library_state: dict[str, object]) -> bool:
@@ -1640,9 +1749,15 @@ def _hydrate_library_state_worker(
                 logger.exception("Root browse prewarm failed after library hydration")
 
 
-def _run_mbid_assertion_follow_up(logger, kwargs: dict[str, object]) -> None:
+def _run_mbid_assertion_follow_up(logger, kwargs: dict[str, object], config: dict[str, object] | None = None) -> None:
     try:
-        run_post_scan_artist_mbid_assertion_follow_up(**kwargs)
+        result = run_post_scan_artist_mbid_assertion_follow_up(**kwargs)
     except Exception:
         if logger is not None:
             logger.exception("Post-scan MBID assertion follow-up failed")
+        return
+    if config is not None and int((result or {}).get("artist_count") or 0):
+        # Its upsert sets local_artists.name, which journals the artists' albums for relations (migration 0108).
+        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+        queue_journaled_relation_drain(config)

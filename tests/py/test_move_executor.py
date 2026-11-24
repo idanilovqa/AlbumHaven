@@ -87,6 +87,25 @@ def _record_moved_album_publication(monkeypatch, calls: list[dict[str, object]])
     monkeypatch.setattr(move_executor_module, "persist_moved_album_inventory_for_config", persist)
 
 
+def _stub_seeded_album_tags(monkeypatch):
+    """The seeded album's tags for its moved files. Since c72277e26 (owner, 11-04: untagged files are loose),
+    an untagged stand-in file would become a loose track instead of a track of the moved album."""
+    from music_app.services import move_executor as move_executor_module
+
+    def seeded_album_tags(path):
+        path = Path(path)
+        # The same album identity the module's seeded tracks carry (_make_track).
+        track = _make_track(path)
+        return {
+            "path": str(path), "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+            **{field: getattr(track, field) for field in (
+                "album", "album_artist", "artist", "year", "title", "track_number", "disc_number",
+                "disc_number_raw", "duration_seconds", "cover_path")},
+        }
+
+    monkeypatch.setattr(move_executor_module, "read_metadata_for_file", seeded_album_tags)
+
+
 def _seed_arrivals_album_state(library_state: dict[str, object], *, track_path: Path) -> dict[str, object]:
     st = library_state
     track = _make_track(track_path)
@@ -337,6 +356,7 @@ def test_execute_album_move_moves_arrivals_album_and_refreshes_state(config, log
         arrivals_root=arrivals_root,
     )
     st = _seed_arrivals_album_state(library_state, track_path=track_path)
+    _stub_seeded_album_tags(monkeypatch)
     problematic_requests: list[set[str]] = []
     follow_up_requests: list[set[str]] = []
     persistence_calls: list[dict[str, object]] = []
@@ -689,6 +709,9 @@ def test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_libra
         growth=("stat_calls", 0),
     )
     assert small.media_parses == production.media_parses == len(moved)
+    # 6.5 (11-23): opens never grow with the library (the scale pair's one growth slot holds stat_calls).
+    assert production.open_calls <= small.open_calls, (
+        f"Opens grew with the library: {small.open_calls} at 20 vs {production.open_calls} at 1,000 albums.")
 
 
 class _Rows:
@@ -730,6 +753,12 @@ class _MovedAlbumDatabase:
 
     def commit(self):
         self.commits += 1
+
+    def transaction(self):
+        # The relation publication's savepoint: nothing to roll back in the fake.
+        from contextlib import nullcontext
+
+        return nullcontext()
 
     def pipeline(self):
         from contextlib import nullcontext
@@ -773,6 +802,7 @@ def test_move_album_contract_publishes_only_the_moved_album_at_production_track_
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     monkeypatch.setattr(state_module, "library_browse_postgres_is_effective", lambda _config: False)
     monkeypatch.setattr(state_module, "invalidate_postgres_utility_projection_cache", lambda **_kwargs: None)
+    _stub_seeded_album_tags(monkeypatch)
     current: dict[str, OperationCounts] = {}
 
     def count_global_relation_work(module, name):
@@ -797,6 +827,12 @@ def test_move_album_contract_publishes_only_the_moved_album_at_production_track_
         "schedule_gallery_projection_refresh",
         lambda _config, **_kwargs: current["counts"].count("invalidations"),
     )
+    # Edits always save (R1): a publication the relation index refuses rolls back its savepoint only, and the
+    # move's albums go to the journal's owner.
+    from music_app.services import gallery_projection_postgres
+    deferred_to_owner = []
+    monkeypatch.setattr(gallery_projection_postgres, "queue_journaled_relation_drain",
+                        lambda _config: deferred_to_owner.append(True))
 
     def run(track_count: int) -> OperationCounts:
         run_root = tmp_path / f"library-{track_count}"
@@ -854,10 +890,10 @@ def test_move_album_contract_publishes_only_the_moved_album_at_production_track_
         assert st["inventory_mutation_revision"] == 11
         assert st["relation_views"] is relation_views
         assert database.commits == 1
-        assert any(
-            "update library.libraries" in sql and "relation_projection,status" in sql
-            for sql in database.executed
-        ), "the move must leave the relation projection stale for the background rebuild"
+        # No code marks the relation projection stale any more (no writer on the candidate or guard heads):
+        # the move commits and hands its albums to the journal's owner.
+        assert deferred_to_owner, "the move must hand its albums to the journal's owner"
+        deferred_to_owner.clear()
         return counts
 
     small, production = measure_scale_pair(
@@ -865,7 +901,7 @@ def test_move_album_contract_publishes_only_the_moved_album_at_production_track_
         small=20,
         large=160_000,
         run=run,
-        budgets={"builder_calls": 0, "returned_rows": 6, "sql_statements": 29, "invalidations": 1},
+        budgets={"builder_calls": 0, "returned_rows": 6, "sql_statements": 31, "invalidations": 1},
         growth=("returned_rows", 0),
     )
     assert small.invalidations == production.invalidations == 1

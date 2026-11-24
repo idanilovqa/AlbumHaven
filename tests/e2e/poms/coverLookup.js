@@ -60,6 +60,7 @@ export class CoverLookup extends BasePage {
     this.savedRemoteCoverCards = this.modalBody.locator('[data-cover-lookup-saved-remote]');
     this.savedRemoteCoverCard = this.savedRemoteCoverCards.first();
     this.openLightboxButtons = this.modalBody.locator('[data-cover-lookup-open-lightbox]');
+    this.lightboxImage = page.locator(this.lightboxImageSelector);
     this.activeLocalCoverImage = this.modalBody
       .locator('[data-cover-lookup-local-active] .cover-lookup-art-preview-image')
       .first();
@@ -475,6 +476,10 @@ export class CoverLookup extends BasePage {
     return '.cover-lookup-art-resolution';
   }
 
+  get lightboxImageSelector() {
+    return '#image-lightbox-image';
+  }
+
   get remoteCoverImageWithinCardSelector() {
     return '.cover-lookup-art-preview-image';
   }
@@ -551,6 +556,10 @@ export class CoverLookup extends BasePage {
 
   remoteCoverImageWithin(card) {
     return card.locator(this.remoteCoverImageWithinCardSelector).first();
+  }
+
+  openLightboxButtonWithin(card) {
+    return card.locator('[data-cover-lookup-open-lightbox]').first();
   }
 
   remoteCoverNameWithin(card) {

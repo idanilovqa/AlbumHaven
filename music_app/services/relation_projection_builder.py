@@ -698,6 +698,28 @@ def build_postgres_relation_views(
     alias_policy: str = CURRENT_ALIAS_POLICY,
     cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
+    """Relation views from every live source row of the library (library-scale: registered)."""
+    return _relation_views_from_rows(rows, alias_policy=alias_policy, cooperate=cooperate)
+
+
+def build_component_relation_views(
+    component_rows: list[object],
+    *,
+    alias_policy: str = CURRENT_ALIAS_POLICY,
+    cooperate: Callable[[], None] | None = None,
+) -> dict[str, object]:
+    """Relation views of one affected component: the source rows of the albums a write changed and the
+    albums related to them (affected-set, 6.5 11-23). It takes only those rows and never reads anything; an
+    empty component (a library-wide marker alone) has empty views."""
+    return _relation_views_from_rows(list(component_rows), alias_policy=alias_policy, cooperate=cooperate)
+
+
+def _relation_views_from_rows(
+    rows: list[object],
+    *,
+    alias_policy: str,
+    cooperate: Callable[[], None] | None,
+) -> dict[str, object]:
     if cooperate is None:
         albums = _album_facts(rows)
         alias_views = _build_alias_views(albums, alias_policy=alias_policy)

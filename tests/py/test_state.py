@@ -731,7 +731,7 @@ def test_watcher_cover_refresh_uses_live_state_as_its_commit_guard(
     assert get_state()["scan_generation"] == -1
 
 
-def test_watcher_cover_refresh_requeues_when_projection_changes_during_lookup(
+def test_watcher_cover_refresh_waits_for_a_scan_that_starts_during_lookup(
     config,
     logger,
     monkeypatch,
@@ -782,14 +782,26 @@ def test_watcher_cover_refresh_requeues_when_projection_changes_during_lookup(
     )
     submissions[0]()
 
-    assert settle_delays == [state_module._WATCHER_COVER_REFRESH_SETTLE_SECONDS]
-    assert len(submissions) == 2
+    # Case 65 (6.5): a scan started during the lookup. The album waits for that scan with its own track
+    # paths; it never turns into the whole-library manual cover refresh after the scan.
+    assert settle_delays == [], "no timer while the scan runs"
+    assert len(submissions) == 1
     assert library_state["_watcher_cover_refresh_attempts_by_track_path"]["track-a"] == 0
     assert library_state["_watcher_cover_refresh_pending_track_paths"] == {"track-a"}
     assert library_state["_watcher_cover_refresh_album_keys_by_track_path"] == {
         "track-a": {"artist::album"}
     }
-    assert library_state["pending_cover_refresh_after_scan"] is True
+    assert not library_state.get("pending_cover_refresh_after_scan")
+
+    def end_scan(state, *_args, **_options):
+        state["scan_in_progress"] = False
+
+    monkeypatch.setattr(state_module, "refresh_library_for_state", end_scan)
+    monkeypatch.setattr(state_module, "_start_queued_root_change_scan", lambda *_args: None)
+    state_module._refresh_library_worker(library_state, config, logger, False)
+
+    assert len(submissions) == 2, "the scan's end submits the album's own lookup again"
+    assert not library_state.get("pending_cover_refresh_after_scan")
 
 
 def test_watcher_cover_refresh_outlasts_an_album_that_is_still_being_copied(
@@ -1707,6 +1719,12 @@ def test_state_utility_prewarm_routes_to_authoritative_postgres_projections_when
         RepositoryStub,
         raising=False,
     )
+    # Problematic Files is kept by its index's maintenance, not a projection prewarm (251810c0e).
+    monkeypatch.setattr(
+        state_module.problematic_index,
+        "queue_maintenance",
+        lambda repository: queued_kinds.append("problematic-files") if isinstance(repository, RepositoryStub) else None,
+    )
     monkeypatch.setattr(
         problematic_albums,
         "queue_problematic_albums_prewarm",
@@ -1724,6 +1742,35 @@ def test_state_utility_prewarm_routes_to_authoritative_postgres_projections_when
     assert repository_configs == [config, config]
     assert queued_kinds == ["problematic-files", "duplicate-identities", "rules"]
     assert legacy_calls == []
+
+
+def test_refresh_library_for_state_queues_a_scans_added_albums_like_watcher_additions(config, logger, library_state, monkeypatch):
+    """Owner (relayed 2026-11-22): a scan's added albums get the bounded cover lookup the watcher's get,
+    keyed by their own tracks and album keys."""
+    queued = []
+
+    def fake_refresh_library_state(_library_state, **kwargs):
+        kwargs["start_added_album_cover_lookup"]([SimpleNamespace(
+            key="artist::added", tracks=[SimpleNamespace(path=Path("/music/Added/01.flac")),
+                                         SimpleNamespace(path=Path("/music/Added/02.flac"))],
+        )])
+
+    monkeypatch.setattr(state_module, "refresh_library_state", fake_refresh_library_state)
+    monkeypatch.setattr(
+        state_module,
+        "queue_watcher_cover_refresh_for_track_paths_for_state",
+        lambda state, cfg, log, track_paths, *, affected_album_keys: queued.append(
+            (state, cfg, log, set(track_paths), tuple(affected_album_keys)),
+        ),
+    )
+
+    state_module.refresh_library_for_state(library_state, config, logger, force=False)
+
+    assert queued == [(
+        library_state, config, logger,
+        {str(Path("/music/Added/01.flac")), str(Path("/music/Added/02.flac"))},
+        ("artist::added",),
+    )]
 
 
 def test_refresh_library_for_state_threads_explicit_manual_cover_refresh_dependencies(config, logger, library_state, monkeypatch):
@@ -1873,6 +1920,7 @@ def test_refresh_library_for_state_runs_without_flask_context(config, logger, li
         state_module._run_mbid_assertion_follow_up,
         logger,
         {"artist_names": ["Stereolab"], "scan_run_ref": "scan-9"},
+        config,
     )]
     assert all(not hasattr(arg, "app_context") for arg in mbid_submissions[0])
 
@@ -3747,11 +3795,14 @@ def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_c
         cover_refresh_execution, "log_job_event",
         lambda _config, _logger, action, **fields: events.append((action, fields)),
     )
-    with pytest.raises(RuntimeError, match="isolated recovery commit failed") as raised:
-        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    # A recovery failure is one failed job and the refresh goes on to the next (eea310882).
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
-    assert raised.value is failure
-    assert attempts == ["private-frame-local"]
+    assert [(item["reason"], item["error_type"]) for item in result["job_results"]] == [
+        ("cover_selection_recovery_failed", "RuntimeError"),
+    ] * 2
+    assert (result["failed"], result["changed"]) == (2, False)
+    assert attempts == ["private-frame-local"] * 2
     assert case.entries == baseline
     assert case.state["file_cache"] == baseline
     assert case.cover.read_bytes() == b"recovered-cover-bytes"
@@ -3763,7 +3814,7 @@ def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_c
     assert diagnostics == [{
         "level": "error",
         "stage": "recover_existing_cover_selection",
-        "queue_index": 1,
+        "queue_index": queue_index,
         "queue_total": 2,
         "error_type": "RuntimeError",
         "origin_frame": {
@@ -3771,12 +3822,16 @@ def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_c
             "function": "fail_persistence",
             "line": origin.tb_lineno,
         },
-    }]
+    } for queue_index in (1, 2)]
     assert origin.tb_lineno > 0
-    assert not any(action == "Cover fetch outcome" for action, _fields in events)
+    outcomes = [fields for action, fields in events if action == "Cover fetch outcome"]
+    assert [fields["terminal_category"] for fields in outcomes] == ["failed", "failed"]
     for private_value in (*private_values, private_source, "private-source-directory",
                           "private-frame-local", "raise failure"):
         assert private_value not in repr(diagnostics)
+    for private_value in (*private_values[-3:], private_source, "private-frame-local", "raise failure"):
+        assert private_value not in repr(outcomes)
+        assert private_value not in repr([item.get("error_type") for item in result["job_results"]])
 
 
 @pytest.mark.parametrize("blocked_flag", ["blocked_by_user_selection", "blocked_by_expected_cover_state"])
@@ -4080,7 +4135,21 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
 
     def search(**kwargs):
         searches.append(kwargs["folder"])
+        if album_ids == (12, 13) and kwargs["folder"] == tmp_path / "Album":
+            def write():
+                writes.append("file")
+
+            write.provisional_cover_revision = "candidate-revision"
+            assert kwargs["automatic_write_guard"](write, cover_selection_origin="automatic") is False
+            return None, False, {"reason": write.blocked_reason}
         return None, False, {"reason": "remote_search_returned_no_candidate"}
+
+    def persist(_config, paths, *_args, **options):
+        if album_ids == (12, 13) and {Path(path).parent for path in paths} == {tmp_path / "Album"}:
+            # Postgres knows the folder holds two albums, so it refuses before any write (5518b3ed6).
+            assert options["reject_if_mixed_album_folder"] is True
+            return {"blocked_by_mixed_album_folder": True}
+        writes.append("selection")
 
     monkeypatch.setattr(
         cover_refresh_execution.cover_refresh_provider, "ensure_best_cover_for_folder", search,
@@ -4094,10 +4163,7 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
             begin_candidate_generation=lambda: None, fail=lambda: None, complete=lambda: None,
         ),
     )
-    monkeypatch.setattr(
-        cover_refresh_execution, "persist_cover_selection_in_shared_transaction",
-        lambda *_args, **_kwargs: writes.append("selection"),
-    )
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
 
     result = cover_refresh_execution.run_cover_jobs(
         get_state=lambda: library_state, config=config, logger=logger,
@@ -4106,17 +4172,17 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
         cover_cache=SimpleNamespace(save=lambda: None), job_workers=workers,
     )
 
-    expected_searches = {tmp_path / "Following"}
-    if album_ids == (12, 12):
-        expected_searches.add(tmp_path / "Album")
-    assert set(searches) == expected_searches
-    assert len(searches) == len(expected_searches)
+    # Each album in the folder keeps its own search (eea310882); only its automatic write is refused.
+    album_searches = 2 if album_ids == (12, 13) else 1
+    expected_searches = [tmp_path / "Album"] * album_searches + [tmp_path / "Following"]
+    assert sorted(searches) == sorted(expected_searches)
     assert writes == []
     assert entries == baseline
-    assert result["processed"] == 2, "ambiguous selected jobs need an explicit terminal outcome"
+    assert result["processed"] == len(expected_searches), "ambiguous selected jobs need an explicit terminal outcome"
     assert result["downloaded"] == 0
     if album_ids == (12, 13):
-        assert sum(item["reason"] == "mixed_album_folder" for item in result["job_results"]) == 1
+        assert sum(item["reason"] == "mixed_album_folder" for item in result["job_results"]) == 2
+        assert result["skipped"] == 2, "a refusal is skipped, not failed"
     else:
         assert all(item["reason"] == "remote_search_returned_no_candidate" for item in result["job_results"])
 
@@ -4336,12 +4402,17 @@ def test_recovered_cover_rechecks_state_at_persistence_commit(recovered_cover_ca
         def commit():
             committed.append(selected)
             return {"updated": True}
-        return options["commit_guard"](commit)
+        with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit") as refused:
+            options["commit_guard"](commit)
+        raise refused.value
 
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
-    with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit"):
-        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
+    assert [(item["reason"], item["error_type"]) for item in result["job_results"]] == [
+        ("cover_selection_recovery_failed", "RuntimeError"),
+    ]
+    assert (result["failed"], result["changed"]) == (1, False)
     assert len(attempts) == 1
     assert committed == []
     if mutation == "runtime_selection":
@@ -4452,13 +4523,17 @@ def test_recovered_cover_rechecks_resolved_containment_before_commit(recovered_c
 
     def persist(_config, _paths, selected, **options):
         redirected.append(True)
-        options["commit_guard"](lambda: commits.append(selected))
-        return {"album_rows_updated": 1, "track_file_rows_updated": len(case.tracks)}
+        with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit") as refused:
+            options["commit_guard"](lambda: commits.append(selected))
+        raise refused.value
 
     monkeypatch.setattr(Path, "resolve", resolve_alias)
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
-    with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit"):
-        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert redirected == [True]
+    assert [(item["reason"], item["error_type"]) for item in result["job_results"]] == [
+        ("cover_selection_recovery_failed", "RuntimeError"),
+    ]
     assert commits == []
     assert case.entries == baseline
 

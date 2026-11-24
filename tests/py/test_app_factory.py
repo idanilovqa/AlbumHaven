@@ -237,6 +237,13 @@ def test_runtime_app_scaffold_does_not_fabricate_flask_context_methods():
     assert "test_request_context=" not in scaffold_source
 
 
+@pytest.fixture
+def migrated_empty_library(monkeypatch):
+    from tests.py.runtime_testing import stub_migrated_empty_library
+
+    stub_migrated_empty_library(monkeypatch)
+
+
 def _run_asgi_http_get(app, path: str) -> tuple[int, dict[str, str], bytes]:
     return run_asgi_request(app, "GET", path)
 
@@ -899,6 +906,7 @@ def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
         asyncio.run(handle.stop())
 
 
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
@@ -946,6 +954,7 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     assert retry_calls == ["started"]
 
 
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
     monkeypatch, unreachable_postgres_pool,
 ):
@@ -1055,6 +1064,7 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
     ]
 
 
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch,
     caplog,
@@ -1196,6 +1206,7 @@ def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_re
 
 
 @pytest.mark.parametrize("root_query", [{}, {"surface": "albums"}], ids=["home", "albums"])
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch, root_query):
     from config import Config
     from music_app import create_asgi_app

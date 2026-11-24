@@ -5,15 +5,30 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import AsyncIterator
+from typing import AsyncIterator, NoReturn
 
 from music_app.services.app_copy import APP_COPY_HEADER
 
 
 _POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
+
+
+def _exit_refusing(logger: logging.Logger, refusal: Exception) -> NoReturn:
+    """End a refused start with its own exit code and one line.
+
+    An exception cannot do this: uvicorn turns every failed lifespan startup into exit 3
+    and a traceback. Nothing has started yet, so there is nothing to shut down.
+    """
+    from music_app.services.app_logging import flush_log_handlers
+    from music_app.services.problematic_index import REFUSED_TO_START_EXIT_CODE
+
+    logger.critical("STARTUP REFUSED (exit code %d): %s", REFUSED_TO_START_EXIT_CODE, refusal)
+    flush_log_handlers(logger)
+    os._exit(REFUSED_TO_START_EXIT_CODE)
 
 
 class _BoundedExecutorAdmission:
@@ -139,7 +154,7 @@ def _start_library_warmup(
                         return
                 try:
                     runtime.logger.info(
-                        "Stored file metadata predates the current reader; starting a background repair scan."
+                        "A saved root change or older file metadata still needs a scan; starting it in the background."
                     )
                     started = start_refresh(
                         runtime.library_state,
@@ -354,6 +369,9 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
     app.state.local_cover_inventory = LocalCoverInventoryWorker(runtime.config, logger=runtime.logger)
     runtime.config["_LOCAL_COVER_INVENTORY"] = app.state.local_cover_inventory
+    from music_app.services.missing_album_rescan import MissingAlbumSearches
+
+    app.state.missing_album_searches = MissingAlbumSearches()
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
     runtime.library_watch_health_service = LibraryWatchHealthService(
@@ -543,6 +561,16 @@ def create_asgi_app():
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        from starlette.concurrency import run_in_threadpool
+
+        from music_app.services.problematic_index import NotReadyToServeError, refuse_to_serve_until_ready
+
+        # Before any writer, watcher, worker or prewarm starts: a refusal leaves nothing
+        # running, writes nothing and serves nothing.
+        try:
+            await run_in_threadpool(refuse_to_serve_until_ready, runtime.config)
+        except NotReadyToServeError as refusal:
+            _exit_refusing(runtime.logger, refusal)
         for template_name in _app.state.templates.env.list_templates():
             _app.state.templates.env.get_template(template_name)
         from music_app.services.log_history import resolve_media_host_history_scope
@@ -654,6 +682,8 @@ def create_asgi_app():
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
                 ("local cover inventory", _app.state.local_cover_inventory.stop),
+                # Joining the search threads stays off the event loop.
+                ("missing album searches", lambda: asyncio.to_thread(_app.state.missing_album_searches.stop)),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop
@@ -949,8 +979,8 @@ def create_asgi_app():
 
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
+            # The cover inventory is not written: each open checks its stored folder against the new roots.
             targeted_reconciler.replace_roots(root_definitions)
-            _app.state.local_cover_inventory.rescan()
             try:
                 runtime.library_watch_service.replace_roots(root_definitions)
             except Exception:

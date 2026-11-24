@@ -45,6 +45,9 @@ class PostgresMissingAlbumRemovalService:
             row = connection.execute(_KEEP_MISSING_SQL, {"album_key": normalized_key}).fetchone()
         if row is None:
             raise MissingAlbumNotFound()
+        from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+        queue_journaled_relation_drain(self._config)
 
     def confirm_removal(self, album_key: object) -> dict[str, object]:
         normalized_key = str(album_key or "").strip()
@@ -57,7 +60,7 @@ class PostgresMissingAlbumRemovalService:
             inventory_publication_advisory_lock_sql,
             relation_projection_advisory_lock_sql,
         )
-        from music_app.services.scoped_relation_projection import publish_affected_relation_projection
+        from music_app.services.scoped_relation_projection import publish_affected_relation_projection_or_defer
 
         with self._connect(self._database_url) as connection:
             with connection.transaction():
@@ -115,7 +118,7 @@ class PostgresMissingAlbumRemovalService:
                     if not healthy:
                         # This also rolls back changes made by the SQL function.
                         raise MissingAlbumRootUnavailable()
-                publish_affected_relation_projection(
+                publish_affected_relation_projection_or_defer(
                     connection, album_keys=(normalized_key,), reason="missing_album_removal",
                     config=self._config,
                     expected_gallery_generation=(gallery_context_before or {}).get("generation"),

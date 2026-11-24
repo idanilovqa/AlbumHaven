@@ -21,6 +21,7 @@ class AlbumAdditionalArtworkRepository:
         connect: Callable[[str], Any] | None = None,
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+        # Requests lease the shared pool; ``connect`` is a test's own connection.
         self._connect = connect
 
     def list_for_album(self, *, album_id: int) -> list[dict[str, object]]:

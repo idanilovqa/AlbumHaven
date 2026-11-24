@@ -35,6 +35,26 @@ def configure_test_app_paths(tmp_path: Path, monkeypatch) -> dict[str, Path]:
     }
 
 
+def stub_migrated_empty_library(monkeypatch) -> None:
+    """For lifespan tests that name a database which does not exist: the startup gate runs
+    for real on a double of its one read, a migrated database with an empty library."""
+    from music_app.services import problematic_index
+
+    monkeypatch.setattr(problematic_index, "_serving_state", lambda _url, _timeout: (True, False, False, False))
+
+
+def publish_relations_with_each_save(monkeypatch) -> None:
+    """A save's relation publication (it moves stray-copy links) runs before the save returns,
+    so no test reads the library once before it and once after."""
+    from music_app.services import gallery_projection_postgres
+    from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
+
+    monkeypatch.setattr(
+        gallery_projection_postgres, "schedule_gallery_projection_refresh",
+        lambda config, *, connect=None, **_options: ensure_pending_relation_projection_ready(config, connect=connect),
+    )
+
+
 def stub_targeted_reconciliation_repository(monkeypatch) -> None:
     """Keep unrelated lifespan unit tests off persistence while retaining lifecycle code."""
     from types import SimpleNamespace

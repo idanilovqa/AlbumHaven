@@ -402,7 +402,7 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
   });
 });
 
-test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, gallery-ordered, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
+test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -440,7 +440,7 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
     expect(albums.length).toBeGreaterThan(0);
   });
 
-  await stepLogger.step('Display the one-family search tree in the same order as the gallery', async () => {
+  await stepLogger.step('Display the one-family search tree in alphabetical order', async () => {
     await artistFamilyActions.waitForViewReady(ONE_FAMILY_QUERY, { queryValue: ONE_FAMILY_QUERY });
     await artistFamilyActions.expand();
     const displayedNames = await navigationPanelActions.readSidebarArtistNames();

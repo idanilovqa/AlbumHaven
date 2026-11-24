@@ -6,6 +6,7 @@ request's statements and its wait for that lock are counted: the wait stays unde
 with the library. The drain that applies the kept intents afterwards reads and writes only those intents.
 """
 import contextlib
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from tests.py.test_isolated_postgres_live import (
 SIZES = (20, 200)
 HOLD_INVENTORY_PUBLICATION = "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))"
 PUBLICATION_LOCK = "hashtext('album-haven:local-inventory-publication')"
+DRAIN_THREAD = "albumhaven-ignored-repair-intents"
 
 
 def _entry(music_dir, relative, album, number=1):
@@ -73,10 +75,14 @@ def seeded_app(monkeypatch, tmp_path):
 
 @contextlib.contextmanager
 def _counted(counts):
-    """Every statement the app's connections run, and the time each spends on the publication lock."""
+    """Every statement the app's connections run for the measured work, and the time each spends on the
+    publication lock. The background drain a pending Ignore queues is its own interaction (measured below):
+    its statements are left out, even when one ends after the request did."""
     original = psycopg.Connection.execute
 
     def execute(self, query, params=None, *args, **kwargs):
+        if threading.current_thread().name.startswith(DRAIN_THREAD):
+            return original(self, query, params, *args, **kwargs)
         started = time.perf_counter()
         try:
             return original(self, query, params, *args, **kwargs)
@@ -139,8 +145,8 @@ def _unignore(app, problem):
 # The routes' budgets (tests/ci/bounded-interactions.json): a held publication is waited on for at most
 # PUBLICATION_WAIT_MS (500), so a request's wait stays under a second, and the statements do not grow.
 ROUTES = {
-    "py:routes/api_wave_a_asgi_routes.py#create_problem_ignores": (_ignore, {"sql_statements": 40, "lock_wait_ms": 1000}),
-    "py:routes/api_wave_a_asgi_routes.py#revert_problem_ignore": (_unignore, {"sql_statements": 20, "lock_wait_ms": 1000}),
+    "py:routes/api_wave_a_asgi_routes.py#create_problem_ignores": (_ignore, {"sql_statements": 11, "lock_wait_ms": 1000}),
+    "py:routes/api_wave_a_asgi_routes.py#revert_problem_ignore": (_unignore, {"sql_statements": 9, "lock_wait_ms": 1000}),
 }
 
 
@@ -186,5 +192,5 @@ def test_live_drain_applies_only_the_kept_intents(seeded_app, monkeypatch):
     measure_scale_pair(
         interaction_id="py:services/ignored_repair_intents.py#_drain_queued",
         small=SIZES[0], large=SIZES[1], run=run,
-        budgets={"sql_statements": 12}, growth=("sql_statements", 0),
+        budgets={"sql_statements": 5}, growth=("sql_statements", 0),
     )

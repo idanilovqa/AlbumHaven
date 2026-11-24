@@ -9912,7 +9912,7 @@
         "production": 200
       },
       "budgets": {
-        "sql_statements": 40,
+        "sql_statements": 11,
         "lock_wait_ms": 1000
       },
       "growth": {
@@ -10208,7 +10208,7 @@
         "production": 200
       },
       "budgets": {
-        "sql_statements": 20,
+        "sql_statements": 9,
         "lock_wait_ms": 1000
       },
       "growth": {
@@ -16334,7 +16334,7 @@
         "production": 200
       },
       "budgets": {
-        "sql_statements": 12
+        "sql_statements": 5
       },
       "growth": {
         "metric": "sql_statements",

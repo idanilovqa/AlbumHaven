@@ -16,6 +16,7 @@ import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHe
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
 import { observeGalleryTraffic, readGalleryRuntimeState } from '../helpers/passiveGalleryDiagnostics.js';
 import { isSearchLooseTracksPrefetchUrl } from '../helpers/productionViewObserver.js';
+import { planSingleArtistHeldDrag } from '../helpers/heldTouchDragPlan.js';
 
 const PREFETCH_VIEWPORTS = 8;
 const FULL_REFRESH_SEARCH_QUERY = 'Neal Morse';
@@ -233,35 +234,36 @@ async function dispatchTouchSwipe(ui, cdp, point, startY, endY) {
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
 
-// The window is measured with the gallery bar in the artist layout it keeps during the drag: at the
-// gallery top the bar is one row shorter, so a window measured there sits 8 x 42 px too far from the
-// app's own continuation threshold once the bar takes its artist row.
-async function positionWithTouchBeforeContinuation(ui, page, cdp, point, lowerY) {
-  for (let step = 0; step < 100; step += 1) {
+// The held drag must cross the continuation threshold while one artist stays at the gallery top:
+// the bar's height follows that artist's name (owner: keep today's bar), so a drag that reaches the
+// next artist resizes the gallery and moves the app's own threshold under the gesture. Each step
+// measures with the settled bar of the artist on screen.
+async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY) {
+  let plan = null;
+  for (let step = 0; step < 60; step += 1) {
     const bar = await ui.waitForGalleryBarSettled();
-    const geometry = await ui.readContinuationGeometry();
-    const lower = geometry.viewport * (PREFETCH_VIEWPORTS + 0.1);
-    const upper = geometry.viewport * (PREFETCH_VIEWPORTS + 0.3);
-    if (geometry.remaining >= lower && geometry.remaining <= upper) {
-      if (bar.kind !== 'artist') {
-        throw new Error(`Mobile preposition reached the window outside an artist: ${JSON.stringify(bar)}`);
-      }
-      return bar;
+    const geometry = await ui.readGalleryContextGeometry();
+    const remaining = geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
+    if (remaining <= geometry.clientHeight * PREFETCH_VIEWPORTS) {
+      throw new Error(`Mobile preposition crossed the continuation boundary: ${JSON.stringify({ geometry, bar })}`);
     }
-    if (geometry.remaining < lower) {
-      throw new Error('Mobile preposition crossed the continuation boundary.');
+    plan = planSingleArtistHeldDrag(geometry, {
+      prefetchViewports: PREFETCH_VIEWPORTS,
+      maximumDrag: Math.floor(geometry.clientHeight * 0.38),
+    });
+    if (!plan.feasible) {
+      throw new Error(`No artist section holds a held drag across the continuation threshold: ${JSON.stringify({ plan, bar })}`);
     }
-    const distance = Math.min(
-      280 + TOUCH_ACTIVATION_DISTANCE,
-      Math.max(40 + TOUCH_ACTIVATION_DISTANCE, geometry.remaining - upper + TOUCH_ACTIVATION_DISTANCE),
-    );
-    await dispatchTouchSwipe(ui, cdp, point, lowerY, lowerY - distance);
-    await expect.poll(
-      async () => (await ui.readContinuationGeometry()).remaining,
-      { intervals: [0, 8, 16, 32], timeout: 2000 },
-    ).toBeLessThan(geometry.remaining);
+    if (plan.inStartBand && bar.kind === 'artist') return { bar, plan };
+    const distance = Math.max(-280, Math.min(280, plan.target - geometry.scrollTop));
+    if (distance >= 0) {
+      await dispatchTouchSwipe(ui, cdp, point, lowerY, lowerY - distance - TOUCH_ACTIVATION_DISTANCE);
+    } else {
+      await dispatchTouchSwipe(ui, cdp, point, upperY, upperY - distance + TOUCH_ACTIVATION_DISTANCE);
+    }
+    await ui.waitForNativeScrollSettled();
   }
-  throw new Error('Mobile preposition did not reach the continuation boundary.');
+  throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify(plan)}`);
 }
 
 test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () => {
@@ -280,21 +282,24 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       const point = y => ({ x, y, radiusX: 1, radiusY: 1, force: 1, id: 1 });
       // Drag points come from the gallery as the drag will see it, after the bar settles.
       let lowerY = Math.round(initialBox.y + initialBox.height * 0.72);
-      let upperY;
+      let upperY = Math.round(initialBox.y + initialBox.height * 0.34);
       let activatedY;
       let touchEndY;
       let barDuringDrag = null;
+      let dragPlan = null;
     let responseBoundary;
       let touchActive = false;
       let observation;
     let originalFailure = null;
       let samples;
       try {
-        barDuringDrag = await positionWithTouchBeforeContinuation(ui, page, cdp, point, lowerY);
+        ({ bar: barDuringDrag, plan: dragPlan } = await positionForSingleArtistHeldDrag(
+          ui, cdp, point, lowerY, upperY,
+        ));
         const box = await ui.galleryScroll.boundingBox();
         if (!box) throw new Error('Gallery scroll surface is not visible.');
         lowerY = Math.round(box.y + box.height * 0.72);
-        upperY = Math.round(box.y + box.height * 0.34);
+        upperY = lowerY - dragPlan.drag;
         activatedY = lowerY - TOUCH_ACTIVATION_DISTANCE;
         touchEndY = upperY - TOUCH_ACTIVATION_DISTANCE;
         const loadedBefore = await readLoadedAlbumCount(page);
@@ -307,6 +312,11 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       });
       await ui.waitForAnimationFrame();
       await ui.waitForNativeScrollSettled();
+      const dragStartTop = (await ui.readGalleryContextGeometry()).scrollTop;
+      expect(
+        dragStartTop >= dragPlan.startLow && dragStartTop <= dragPlan.startHigh,
+        `held drag starts inside its planned single-artist band: ${JSON.stringify({ dragStartTop, dragPlan })}`,
+      ).toBe(true);
       responseBoundary = await observeResponseBoundary(cdp, isRootContinuationUrl);
         const diagnosticSequenceBeforeInput = await readLatestDiagnosticSequence(galleryActions);
         const anchor = await ui.captureMiddleVisibleCard();

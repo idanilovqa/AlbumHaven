@@ -246,6 +246,21 @@ export class GalleryRegressions {
     }
     throw new Error(`Gallery bar did not settle: ${JSON.stringify(previous)}`);
   }
+  // Scroll geometry plus the content positions where the gallery bar's artist context changes:
+  // the bottom of each mounted artist label (the bar names the last label scrolled past the top).
+  async readGalleryContextGeometry() {
+    // parity-check: allow-read-only-measurement-evaluate -- read scroll extent and artist label boundaries
+    return this.galleryScroll.evaluate(scroll => {
+      const viewportTop = scroll.getBoundingClientRect().top;
+      return {
+        scrollTop: scroll.scrollTop,
+        scrollHeight: scroll.scrollHeight,
+        clientHeight: scroll.clientHeight,
+        labelBottoms: [...scroll.querySelectorAll('[data-scroll-artist] .artist-name')]
+          .map(label => label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop),
+      };
+    });
+  }
   async waitForNativeScrollSettled({ stableFrames = 2, maximumFrames = 60 } = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- read native scroll position until it stabilizes
     let previous = await this.galleryScroll.evaluate(scroll => Number(scroll.scrollTop || 0));

@@ -19656,7 +19656,7 @@ let playerWaveformForegroundSuspensionDepth = 0;
 // The waveform request sent when Play was pressed, until the playing generation takes it.
 let playerWaveformStartRequest = null;
 // The track the page opened with, until another song sounds. Like a playing song's, its
-// waveform is never low priority (owner rule); its one request outlives its stream opening,
+// waveform is never low priority; its one request outlives its stream opening,
 // failing or starting to play.
 let playerWaveformRestingTrack = null;
 
@@ -19881,8 +19881,8 @@ function endTrackWaveformRest() {
   playerWaveformRestingTrack = null;
 }
 
-// Until the pressed song sounds, the resting track's waveform is the old one the player keeps
-// (owner, round 10), but it never slows the pressed song's: that builds alone, and the resting one
+// Until the pressed song sounds, the resting track's waveform is the old one the player keeps,
+// but it never slows the pressed song's: that builds alone, and the resting one
 // loads again once it is built or the switch ends without it.
 function endTrackWaveformRestOnSound(path) {
   if (playerWaveformRestingTrack && playerWaveformRestingTrack.path !== String(path || '')) endTrackWaveformRest();

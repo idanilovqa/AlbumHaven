@@ -2543,11 +2543,13 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      # Every attempt of this run, not only the current one: rerunning failed
+      # jobs leaves the passing shards' evidence in the attempt that ran them.
       - name: Download Python contract evidence
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.test_python.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
-          pattern: foundation-versions-python-windows-*-${{ github.run_attempt }}
+          pattern: foundation-versions-python-windows-*
           path: ${{ runner.temp }}/python-shards
 
       # Every Python bounded-interaction contract must have measured its own

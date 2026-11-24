@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import shutil
 
+from music_app.services.child_process import start_child_process
 from music_app.services.ffmpeg_runtime import hidden_subprocess_creation_flags
 
 
@@ -171,11 +172,10 @@ async def ignored_mp3_gapless_info(
     info = await asyncio.to_thread(read_mp3_gapless_info, path)
     if info is None:
         return None
-    process = await asyncio.create_subprocess_exec(
+    process = await start_child_process(
         executable, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
         "-map", "0:a:0", "-c:a", "copy", "-frames:a", "1", "-f", "framecrc", "pipe:1",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        stdin=asyncio.subprocess.DEVNULL, creationflags=hidden_subprocess_creation_flags(),
+        creationflags=hidden_subprocess_creation_flags(),
     )
     async def collect():
         try:

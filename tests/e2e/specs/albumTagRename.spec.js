@@ -189,6 +189,13 @@ test("FTC-ALBUM-DETAILS-029 an open Album Details whose album is split or merged
   ]) {
     await stepLogger.step(`Send the ${label} back to the refreshed gallery`, async () => {
       if (comeOnline) {
+        // Reconnected at a random point, the next status poll could replace the stale card before
+        // the click. Bring the card into view, then reconnect just after a poll failed.
+        await session.galleryActions.scrollToAlbumUnderHeading(FIXTURE_ARTIST, FAILURE_FIXTURE_ALBUM, {
+          year: FIXTURE_YEAR,
+          detailsAction: true,
+        });
+        await session.galleryActions.waitForFailedStatusPoll();
         await session.context.setOffline(false);
         await session.galleryActions.selectAlbumDetailsByIdentity({
           artist: FIXTURE_ARTIST,

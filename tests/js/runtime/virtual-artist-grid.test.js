@@ -7468,3 +7468,44 @@ test('a root gallery continuation during a held touch defers its append until th
     'the replayed append follows the loaded groups',
   );
 });
+
+test('a page appended after a scroll settles leaves that scroll reported as rendered', async () => {
+  const { context, prepareNextPage, runFrame, scrollEl, virtualGrid } = loadCountedRootContinuation(40);
+  const timers = new Map();
+  let timerId = 0;
+  context.scheduleBrowserTimeout = (callback) => { timers.set(++timerId, callback); return timerId; };
+  context.clearBrowserTimeout = (id) => { timers.delete(id); };
+  const pomSource = fs.readFileSync(path.join(__dirname, '..', '..', 'e2e', 'poms', 'galleryPage.js'), 'utf8');
+  const predicateSource = pomSource.slice(
+    pomSource.indexOf('export function hasSettledVirtualGalleryRender'),
+    pomSource.indexOf('export function hasSettledVirtualGalleryMeasurement'),
+  ).replace('export ', '');
+  class ScrollSurface {}
+  const gallery = Object.assign(new ScrollSurface(), { clientHeight: scrollEl.clientHeight });
+  const waitIsSatisfied = new Function(
+    'document', 'HTMLElement', 'globalThis',
+    `${predicateSource}; return hasSettledVirtualGalleryRender;`,
+  )(
+    { querySelector: () => gallery },
+    ScrollSurface,
+    { __ALBUM_HAVEN_VIRTUAL_GRID__: virtualGrid.diagnostics },
+  );
+  prepareNextPage();
+  const priorPosition = scrollEl.scrollTop;
+  scrollEl.scrollTop += 240;
+  virtualGrid.onScroll();
+  runFrame(virtualGrid._raf);
+  await settleRootContinuation();
+  assert.equal(virtualGrid.hasDeferredMountedGroupUpdate(), true, 'the page waits for the scroll to settle');
+  const settled = () => {
+    Object.assign(gallery, { scrollTop: scrollEl.scrollTop, scrollHeight: virtualGrid.totalHeight });
+    return waitIsSatisfied({ priorPosition, expectedDirection: 1 });
+  };
+  assert.equal(settled(), true, 'the scroll itself rendered');
+
+  for (const [id, callback] of [...timers]) {
+    if (timers.delete(id)) callback();
+  }
+  assert.equal(virtualGrid.hasDeferredMountedGroupUpdate(), false);
+  assert.equal(settled(), true, 'the replayed page must not strand the scroll-render signal');
+});

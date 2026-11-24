@@ -9248,6 +9248,9 @@ function syncGalleryBarNameFit(bar, name) {
     const actions = bar.querySelector?.('.gallery-bar__actions');
     if (actions) bar.galleryNameFitObserver.observe(actions);
   }
+  // A hidden bar (a mobile page covers the gallery) has nothing to measure; its fitted rows stay
+  // as they were so the gallery is not shown with a shorter bar for a frame.
+  if (bar.getClientRects?.().length === 0) return;
   const contextKind = String(bar.dataset.galleryContextKind || '');
   const metadata = bar.querySelector?.('[data-gallery-context-metadata]')?.textContent || '';
   const summary = bar.querySelector?.('[data-gallery-context-summary]')?.textContent || '';

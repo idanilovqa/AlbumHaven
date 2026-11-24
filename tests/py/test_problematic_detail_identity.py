@@ -13,6 +13,8 @@ from music_app.services import library_browse_postgres as browse
     ("1988", "foreign artist::foreign title"),
 ])
 def test_separate_release_summary_key_resolves_composite_persisted_credit(monkeypatch, requested_year, requested_base):
+    monkeypatch.setattr("music_app.services.library_browse_postgres._duplicate_identity_helpers_available",
+                        lambda _connection: False)  # The fake answers the whole-library identity index only.
     base = "ддт::студийные записи"
     rows = []
     for identifier, artist, title, year in [

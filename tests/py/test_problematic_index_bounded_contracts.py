@@ -16,6 +16,27 @@ INTERACTION = "py:services/problematic_index.py#_maintain"
 BATCH = 5  # so the small library takes 2 batches and the production-size one 12
 
 
+class _KeyedCandidateRows:
+    """The keyed duplicate-candidate read's rows, counted apart: those its PostgreSQL 17-only arm alone
+    placed (candidate_rows) and the keyed ones (membership_rows)."""
+
+    def __init__(self, cursor, counts: OperationCounts):
+        self._cursor, self._counts = cursor, counts
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        arm = sum(1 for row in rows if row["pg17_superset"])
+        self._counts.candidate_rows += arm
+        self._counts.membership_rows += len(rows) - arm
+        return rows
+
+
+class _MaintenanceConnection(CountingConnection):
+    def execute(self, query, params=None, *args, **kwargs):
+        cursor = super().execute(query, params, *args, **kwargs)
+        return _KeyedCandidateRows(cursor, self._counts) if "pg17_superset" in str(query) else cursor
+
+
 def _counted_maintenance(fixture, monkeypatch):
     """Counts the pass's statements, its own connections, every other connection and every pool lease."""
     from contextlib import contextmanager
@@ -26,12 +47,12 @@ def _counted_maintenance(fixture, monkeypatch):
     monkeypatch.setenv("ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED", "1")
     monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: None)
     monkeypatch.setattr(problematic_index, "BACKFILL_BATCH", BATCH)
-    counted = SimpleNamespace(counts=OperationCounts(), own=[], batches=[], fresh=browse._connect)
+    counted = SimpleNamespace(counts=OperationCounts(), own=[], batches=[], batch_rows=[], fresh=browse._connect)
     open_worker, pooled = problematic_index._worker_connection, browse._pooled_connection
 
     def worker_connection(repository):
         counted.own.append(repository)
-        return CountingConnection(open_worker(repository), counted.counts)
+        return _MaintenanceConnection(open_worker(repository), counted.counts)
 
     @contextmanager
     def counted_pool(*args, **kwargs):
@@ -46,11 +67,13 @@ def _counted_maintenance(fixture, monkeypatch):
     index_rows = problematic_index._index_rows
 
     def counted_batch(*args, **kwargs):
-        before = counted.counts.sql_statements
+        counts = counted.counts
+        before = (counts.sql_statements, counts.membership_rows, counts.candidate_rows)
         try:
             return index_rows(*args, **kwargs)
         finally:
-            counted.batches.append(counted.counts.sql_statements - before)
+            counted.batches.append(counts.sql_statements - before[0])
+            counted.batch_rows.append((counts.membership_rows - before[1], counts.candidate_rows - before[2]))
 
     monkeypatch.setattr(problematic_index, "_worker_connection", worker_connection)
     monkeypatch.setattr(browse, "_pooled_connection", counted_pool)
@@ -62,6 +85,7 @@ def _counted_maintenance(fixture, monkeypatch):
 def _start_pass(counted):
     counted.own.clear()
     counted.batches.clear()
+    counted.batch_rows.clear()
     counted.counts.sql_statements = counted.counts.pool_leases = 0
 
 
@@ -95,11 +119,17 @@ def test_maintenance_holds_one_connection_of_its_own_and_its_batches_stay_flat(w
             measured.pool_leases += counted.counts.pool_leases
             # Per batch, not per pass: the most statements any one batch ran.
             measured.sql_statements = max(measured.sql_statements, *counted.batches)
-        print(f"{albums} albums: largest batch {measured.sql_statements} statements, {measured.pool_leases} pool leases")
+            # The keyed duplicate-candidate read's rows, and apart from them its PostgreSQL 17-only arm's
+            # (P9-CI-024; zero on 18, and on 17 for this ASCII library): the most any one batch read.
+            measured.membership_rows = max(measured.membership_rows, *(keyed for keyed, _arm in counted.batch_rows))
+            measured.candidate_rows = max(measured.candidate_rows, *(arm for _keyed, arm in counted.batch_rows))
+        print(f"{albums} albums: largest batch {measured.sql_statements} statements, keyed candidate rows "
+              f"{measured.membership_rows}, PostgreSQL 17 arm rows {measured.candidate_rows}, "
+              f"{measured.pool_leases} pool leases")
         return measured
 
     entry = _checked_in_entries()[INTERACTION]
-    measure_scale_pair(
+    small, large = measure_scale_pair(
         interaction_id=INTERACTION,
         small=entry["cardinalities"]["small"],
         large=entry["cardinalities"]["production"],
@@ -107,6 +137,10 @@ def test_maintenance_holds_one_connection_of_its_own_and_its_batches_stay_flat(w
         budgets=entry["budgets"],
         growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
     )
+    # Growth lines the registry's single growth field cannot hold, kept apart: the keyed read's rows, and the
+    # PostgreSQL 17-only arm's rows (CI-only; delete with the arm, P9-CI-024). Neither grows with the library.
+    assert large.membership_rows - small.membership_rows <= 0, (small.membership_rows, large.membership_rows)
+    assert large.candidate_rows - small.candidate_rows <= 0, (small.candidate_rows, large.candidate_rows)
 
 
 def test_maintenance_warms_the_first_detail_on_at_most_one_pooled_lease_per_process(

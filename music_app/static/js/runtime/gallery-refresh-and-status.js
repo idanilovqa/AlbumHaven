@@ -1618,24 +1618,24 @@ async function fetchAndRender(url, push = true, options = {}) {
         hydrationTier: startupHydrationTier,
       });
     }
-    // A selected page answered while its root sidebar was still being rebuilt names the sidebar request.
-    const startupFollowupEndpoint = requestOptions.startupRefresh
-      ? String(requestOptions.startupHydrationFollowupEndpoint || data?.root_sidebar_followup_endpoint || '').trim()
-      : '';
     if (
       response.ok
       && data?.ok !== false
       && (
-        (requestOptions.startupRefresh && !startupFollowupEndpoint)
+        (requestOptions.startupRefresh
+          && !String(requestOptions.startupHydrationFollowupEndpoint || '').trim())
         || isCanonicalFullViewPayload(data, requestOptions)
       )
     ) {
       startupMetrics.completeInitialRefresh(state.view);
     }
-    if (startupFollowupEndpoint) {
+    if (
+      requestOptions.startupRefresh
+      && String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
+    ) {
       const followupHydrationTier = startupHydrationTier === 'sidebar' ? 'full' : 'sidebar';
       queueStartupHydrationFollowup(
-        startupFollowupEndpoint,
+        requestOptions.startupHydrationFollowupEndpoint,
         {
           startupHydrationTier: followupHydrationTier,
           ...(followupHydrationTier === 'sidebar'

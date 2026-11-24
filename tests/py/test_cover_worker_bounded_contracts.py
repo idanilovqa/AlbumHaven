@@ -342,14 +342,18 @@ def test_cover_job_contract_reads_only_the_job_album_folder_at_production_librar
 
 
 def test_missing_album_removal_contract_probes_only_the_album_files_at_production_library_size(music_dir, monkeypatch):
-    from music_app.services import gallery_projection_postgres
+    from music_app.services import scoped_relation_projection
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
     stale_tracks = 12
-    # The doubled connection cannot publish the relation journal, so the removal hands its album to the
-    # journal owner; that owner's queued drain is a Postgres collaborator too.
-    queued_drains: list[object] = []
-    monkeypatch.setattr(gallery_projection_postgres, "queue_journaled_relation_drain", queued_drains.append)
+    # The relation journal's publication is Postgres work on the removal's own connection. The doubled
+    # connection cannot run it, and a failed publication would be deferred with a logged traceback whose
+    # formatting stats source files: work the contract would wrongly charge to the removal.
+    published: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        scoped_relation_projection, "publish_affected_relation_projection",
+        lambda _connection, *, album_keys, **_options: published.append(tuple(album_keys)) or {},
+    )
 
     def run(album_count: int) -> OperationCounts:
         library = music_dir / f"library-{album_count}"
@@ -382,6 +386,7 @@ def test_missing_album_removal_contract_probes_only_the_album_files_at_productio
         )
         counts, result = _counted(monkeypatch, lambda: service.confirm_removal("removed-album"))
         assert result == {"removed_album_key": "removed-album", "library_revision": 7}
+        assert published.pop() == ("removed-album",)
         return counts
 
     measure_scale_pair(

@@ -182,7 +182,9 @@ _STORE_ROWS_SQL = """
 """
 
 # Problematic Files reads only these, for the albums it lists or one page of them, and the stored
-# total: no comparison runs when it opens, and the library is never counted or sorted.
+# total: no comparison runs when it opens, and the library is never counted or sorted. Only an
+# album with a change waiting for approval needs a correction there; automatic ones stay in the
+# Edits Queue alone.
 _SUMMARIES_SQL = _active_library_cte() + """
     select stored.album_key, albums.title as album_title, artists.name as artist_name,
            albums.release_year as year, albums.cover_path, stored.release_mbid::text as release_mbid,
@@ -192,7 +194,7 @@ _SUMMARIES_SQL = _active_library_cte() + """
     join library.local_albums albums
       on albums.library_id = stored.library_id and albums.album_key = stored.album_key
     left join library.local_artists artists on artists.id = albums.artist_id
-    where stored.correction_count > 0
+    where (stored.review_count > 0 or stored.review_whole)
       and stored.album_key = any(%(album_keys)s::text[]);
 """
 # A page walks the page index to its offset: no summary read, no sort. (Offset, not a cursor: the
@@ -262,7 +264,7 @@ _STORE_GROUPS_SQL = _LISTED_SQL + f"""
       from library.local_album_musicbrainz_corrections stored
       join active_library on active_library.library_id = stored.library_id
       join library.local_albums local on local.library_id = stored.library_id and local.album_key = stored.album_key
-      where stored.album_key = any(%(album_keys)s::text[]) and stored.correction_count > 0
+      where stored.album_key = any(%(album_keys)s::text[]) and (stored.review_count > 0 or stored.review_whole)
     ), removed as (
       delete from library.local_album_musicbrainz_correction_groups groups
       using active_library

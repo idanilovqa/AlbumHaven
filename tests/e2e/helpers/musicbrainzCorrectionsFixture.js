@@ -86,8 +86,9 @@ repository.refresh(album_ids=synthetic_ids)
 with psycopg.connect(database_url, row_factory=dict_row) as connection:
     connection.execute("analyze")
     stored = connection.execute(
-        "select count(*) filter (where correction_count > 0) as needing,"
-        " count(*) filter (where correction_count > 0 and album_key not like 's4-correction::%%') as listed,"
+        "select count(*) filter (where review_count > 0 or review_whole) as needing,"
+        " count(*) filter (where (review_count > 0 or review_whole) and album_key not like 's4-correction::%%')"
+        " as listed,"
         " (select count(*) from library.local_album_musicbrainz_correction_rows) as rows"
         " from library.local_album_musicbrainz_corrections").fetchone()
 print(json.dumps({"albums": stored["needing"], "fixtureAlbums": stored["listed"], "rows": stored["rows"]}))

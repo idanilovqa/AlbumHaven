@@ -171,7 +171,8 @@ def project_correction_problems_into_problematic_files(request: Request, payload
 
 
 def project_correction_into_problematic_detail(request: Request, payload: object) -> object:
-    """A loaded album detail carries its label and its stored rows."""
+    """A loaded album detail carries its label and its stored rows when a change waits for
+    approval; automatic changes alone are listed in the Edits Queue only."""
     if not isinstance(payload, dict) or not payload.get("key") \
             or not _is_current_library_owner(getattr(request.state, "current_actor", None)):
         return payload
@@ -180,7 +181,8 @@ def project_correction_into_problematic_detail(request: Request, payload: object
     except Exception:
         _logger(request).warning("MusicBrainz data correction was unavailable for an album detail.")
         return payload
-    if isinstance(album, Mapping):
+    if isinstance(album, Mapping) and any(isinstance(row, Mapping) and row.get("mode") == "review"
+                                          for row in album.get("corrections") or ()):
         _label(payload, _correction_payload(album))
     return payload
 

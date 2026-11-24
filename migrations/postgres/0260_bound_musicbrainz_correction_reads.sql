@@ -5,10 +5,10 @@
 -- 1. A change to anything a comparison reads appends a mark for its album; the background refresh
 --    compares only marked albums. Marks have no unique key and no foreign key, so recording one
 --    never waits for a running refresh.
--- 2. Each album's Edits Queue groups, and whether it needs a correction at all (section 'needed',
---    for Problematic Files), are stored, indexed for keyset pages. Their totals are kept
---    as appended deltas (compacted by the writers of groups), so deleting an album never waits on
---    a totals row.
+-- 2. Each album's Edits Queue groups, and whether a change of it waits for approval (section
+--    'needed', Problematic Files' "Data Correction Needed"), are stored, indexed for keyset
+--    pages. Their totals are kept as appended deltas (compacted by the writers of groups), so
+--    deleting an album never waits on a totals row.
 
 create table if not exists library.musicbrainz_correction_refresh_marks (
   id bigint generated always as identity primary key,
@@ -196,7 +196,7 @@ select stored.library_id, stored.album_key, 'needed', 'album',
        left(lower(coalesce(albums.title, '')), 256), stored.correction_count::bigint
 from library.local_album_musicbrainz_corrections stored
 join library.local_albums albums on albums.library_id = stored.library_id and albums.album_key = stored.album_key
-where stored.correction_count > 0
+where stored.review_count > 0 or stored.review_whole
 on conflict (library_id, album_key, section, grouping) do nothing;
 
 delete from library.musicbrainz_correction_group_counts;

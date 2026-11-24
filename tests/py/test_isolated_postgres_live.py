@@ -726,6 +726,40 @@ def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_si
     )
 
 
+def test_live_loose_track_drain_reads_only_its_marked_tracks_at_any_library_size(watcher_repair_inventory):
+    """Case 64 (affected-set drain): draining INLINE_DRAIN_LIMIT marked loose tracks reads the same table rows
+    whether the library holds 5 or 400 other albums. A plan that reaches the marked tracks through the
+    library's index reads every track of the library, so its reads grow with the library."""
+    from music_app.services import loose_track_store
+
+    fixture = watcher_repair_inventory
+    waiting = loose_track_store.INLINE_DRAIN_LIMIT
+    reads = {}
+    for albums in (5, 400):
+        _entries, loose_entries = _loose_library(fixture, albums, loose=waiting)
+        repository = _prepare_store(fixture)
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute("analyze library.local_tracks")
+            connection.execute("analyze library.local_track_files")
+        changed = {
+            entry["path"]: {**entry, "title": f"Changed {index}", "mtime": entry["mtime"] + 1}
+            for index, entry in enumerate(loose_entries)
+        }
+        fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries=changed)
+        assert _marks(fixture) == waiting
+        with isolatedPostgres._connect(fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+            before = {row["relname"]: int(row["rows_read"]) for row in connection.execute(_DRAIN_ROWS_READ_SQL)}
+            assert loose_track_store.drain(repository._inventory_repository, connection) == waiting
+            after = {row["relname"]: int(row["rows_read"]) for row in connection.execute(_DRAIN_ROWS_READ_SQL)}
+        reads[albums] = {table: after[table] - before.get(table, 0) for table in after
+                         if after[table] != before.get(table, 0)}
+    small, large = reads[5], reads[400]
+    assert sum(large.values()) - sum(small.values()) <= _DRAIN_ROWS_READ_SLACK, (
+        f"the drain read {sum(small.values())} table rows beside 5 albums and {sum(large.values())} beside 400: "
+        f"{small} vs {large}"
+    )
+
+
 def test_live_real_changes_run_every_loose_track_trigger_function_with_overrides(watcher_repair_inventory):
     """Case 64 (phase 1 on sandbox2's data, 42703): a real album-tag change failed in the file trigger, which
     read a column exception_overrides does not have. With overrides present (an object and a bare-string

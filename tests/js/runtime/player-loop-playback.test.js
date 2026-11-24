@@ -891,7 +891,8 @@ for (const failure of ['network', 'abort']) {
     context.state.player.listenSession = session;
     assert.equal(await context.pausePlayerPlaybackForHandoff(), false);
     assert.deepEqual(warnings, []);
-    assert.equal(releases.length, 1);
+    // The pause keeps its claim for the hold; the heartbeat gives it back after.
+    assert.deepEqual(releases, []);
     assert.strictEqual(context.state.player.listenSession, session);
   });
 }
@@ -1711,8 +1712,7 @@ test('a stale rapid-selection start completion cannot replace the newer streamin
     },
   });
   context.updatePlayerUi = () => {
-    // A redraw while a press waits draws the pressed song; these count the playing song's.
-    if (!context.state.player.selectedTrack) uiCurrentPaths.push(String(context.state.player.current?.path || ''));
+    uiCurrentPaths.push(String(context.state.player.current?.path || ''));
   };
   const olderTrack = {
     path: 'C:\\Music\\Older.flac', src: '/track?path=Older.flac', title: 'Older',
@@ -1782,8 +1782,7 @@ test('playTrackFromPayload reconciles a promoted-current notification exactly on
     },
   });
   context.updatePlayerUi = () => {
-    // A redraw while a press waits draws the pressed song; these count the playing song's.
-    if (!context.state.player.selectedTrack) uiCurrentPaths.push(String(context.state.player.current?.path || ''));
+    uiCurrentPaths.push(String(context.state.player.current?.path || ''));
   };
   const repeatedFirstFrame = {
     generation: promotedCurrent.generation,

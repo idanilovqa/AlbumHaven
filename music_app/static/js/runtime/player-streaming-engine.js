@@ -3808,8 +3808,9 @@ async function openBrowserStreamingTrack(track, {
   engine.mode = 'starting';
   engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
-  engine.diagnostics.resumedAtMs = 0;
-  engine.diagnostics.resumeFirstFrameAtMs = 0;
+  // A resume's marks exist only once a song resumes: the diagnostics written with every position stay small.
+  delete engine.diagnostics.resumedAtMs;
+  delete engine.diagnostics.resumeFirstFrameAtMs;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
@@ -4353,8 +4354,9 @@ async function cleanupStreamingResources(reason, {
   }
   engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
-  engine.diagnostics.resumedAtMs = 0;
-  engine.diagnostics.resumeFirstFrameAtMs = 0;
+  // A resume's marks exist only once a song resumes: the diagnostics written with every position stay small.
+  delete engine.diagnostics.resumedAtMs;
+  delete engine.diagnostics.resumeFirstFrameAtMs;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };

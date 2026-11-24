@@ -299,17 +299,10 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[OTHER_TITLE] });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     await page.waitForTimeout(1000);
-    const { started, frames, events } = await pressPaint;
+    const { frames } = await pressPaint;
     const samples = frames.map(({ title, time }) => ({ title, seconds: displayedSeconds(time) }));
-    // The press shows its song at once: within 150 ms, in the first frame after its click.
-    const pressedAt = events.find(({ name }) => name !== 'click')?.startTime ?? started;
-    const clickEnded = events.find(({ name }) => name === 'click')?.processingEnd;
-    const shown = frames.find(({ shows }) => shows);
-    expect(shown, 'the pressed title is painted').toBeTruthy();
-    expect(shown.at - pressedAt, `press to title (${JSON.stringify(events)})`).toBeLessThan(150);
-    if (clickEnded !== undefined) {
-      expect(frames.find(({ at }) => at > clickEnded)?.shows, 'the first frame after the click shows it').toBe(true);
-    }
+    // The title changes when the pressed song sounds, not at the press (owner, 11-22).
+    expect(frames.find(({ shows }) => shows), 'the pressed title is painted').toBeTruthy();
     expect(samples.length, 'read often enough to see a flicker').toBeGreaterThan(50);
     const firstPressed = samples.findIndex(({ title }) => title.includes(OTHER_TITLE));
     expect(firstPressed, 'the pressed song shows').toBeGreaterThanOrEqual(0);

@@ -129,6 +129,10 @@ function openPage({ paused = true, android = false, adopted = '', streamFails = 
     },
     getLocalStorageItem: () => JSON.stringify({ track: TRACK, currentTime: 0, paused }),
     setLocalStorageItem: () => true,
+    // A saved playing track is this tab's own: only that goes on by itself after a reload.
+    getSessionStorageItem: () => (paused ? null : JSON.stringify({ track: TRACK, currentTime: 0, paused })),
+    removeSessionStorageItem() {},
+    canThisTabResumePlayback: () => !paused,
     resolveAlbumForPlayerTrack: () => null,
     getTrackIdentity: (track) => String(track?.path || ''),
     loopEditSessionExpiryController: { start() {}, stop() {} },

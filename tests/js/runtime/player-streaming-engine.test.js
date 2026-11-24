@@ -1524,7 +1524,8 @@ test('a resume marks when its first audible frame renders, once, on the page clo
   });
   const marks = () => {
     const { resumedAtMs, resumeFirstFrameAtMs } = harness.api.snapshot().diagnostics;
-    return [resumedAtMs, resumeFirstFrameAtMs];
+    // Unset until a song resumes, as the page reads them (`|| 0`).
+    return [resumedAtMs || 0, resumeFirstFrameAtMs || 0];
   };
   harness.nodes[0].port.dispatch({
     type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0, contextTime: 1,
@@ -9458,6 +9459,8 @@ function installRowPresses(harness, current = makeTrack('01.flac')) {
   vm.runInContext(fs.readFileSync(path.join(path.dirname(enginePath), 'album-track-table.js'), 'utf8'), context);
   Object.assign(context, {
     canStartPlaybackInThisTab: () => true,
+    // Granted at once, as above: the claim lets the audio thread sound.
+    playbackSoundPermission: () => ({ untilMs: context.Date.now() + 3_600_000, forMs: 3_600_000 }),
     setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
     renderSelectedTrackState: () => {},
     beginStreamingPlayerListenSession: () => {},

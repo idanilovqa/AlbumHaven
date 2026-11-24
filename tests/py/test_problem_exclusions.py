@@ -206,9 +206,11 @@ def test_create_problem_exclusions_validates_durable_album_key_separately_from_p
             if key not in {"album_key", "legacy_row_keys"}
         }
     ]
+    # Owner (11-24): each rule keeps the name the user saw, shown if its album or file is later gone.
     assert mutations == [{
         "row_keys": {row_key},
         "album_keys_by_repair_key": {row_key: durable_album_key},
+        "labels_by_repair_key": {row_key: "Neal Morse – ?"},
         "remove_row_keys": set(),
     }]
 
@@ -313,6 +315,7 @@ def test_create_problem_exclusions_applies_mixed_batch_once_and_returns_full_can
     assert mutations == [{
         "row_keys": {album_row_key, file_row_key},
         "album_keys_by_repair_key": {album_row_key: durable_album_key},
+        "labels_by_repair_key": {album_row_key: "Neal Morse – ?", file_row_key: "01 - The Temple.mp3"},
         "remove_row_keys": set(legacy_keys),
     }]
     assert result.removed_legacy_row_keys == legacy_keys

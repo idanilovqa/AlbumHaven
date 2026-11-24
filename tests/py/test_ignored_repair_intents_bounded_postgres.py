@@ -242,7 +242,7 @@ def test_live_rules_route_lays_pending_intents_over_its_page_without_growing(see
         shown = set(items)
         assert pending["row_key"] in shown and stored["row_key"] not in shown
         # The gone target is told in the same read; the present one is not.
-        assert items[gone]["target_missing"] is True and items[gone]["missing_name"] == "03 Song.flac"
+        assert items[gone]["target_missing"] is True and items[gone]["missing_name"] == "No Longer Here/03 Song.flac"
         assert items[pending["row_key"]]["target_missing"] is False
         counts.count("returned_rows", len(shown))
         return counts

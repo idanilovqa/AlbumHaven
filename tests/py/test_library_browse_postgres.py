@@ -20668,10 +20668,15 @@ def test_rules_projection_marks_rules_whose_target_is_gone_and_names_failed_chan
     items = {item["row_key"]: item for item in rule["items"]}
     assert set(items) == {rows[0]["ignored_repair_key"], rows[1]["ignored_repair_key"], rows[2]["ignored_repair_key"]}
     assert items[rows[0]["ignored_repair_key"]]["target_missing"] is True
-    assert items[rows[0]["ignored_repair_key"]]["missing_name"] == "03 Song.flac"
+    # Rules from before names were kept: the file's folder and name, or the album's normalized key.
+    assert items[rows[0]["ignored_repair_key"]]["missing_name"] == "Gone/03 Song.flac"
     assert items[rows[1]["ignored_repair_key"]]["target_missing"] is True
     assert items[rows[1]["ignored_repair_key"]]["missing_name"] == "gone artist::gone album"
     assert items[rows[2]["ignored_repair_key"]].get("target_missing") is False
+    # A rule that kept the name the user saw shows that name once its target is gone.
+    named = _utility_rules_projection_payload([{**rows[1], "rule_label": "Gone Artist – Gone Album"}])
+    [named_item] = next(rule for rule in named["rules"] if rule["key"] == "problem-ignores")["items"]
+    assert named_item["missing_name"] == "Gone Artist – Gone Album"
     [failed] = payload["failed_ignored_repairs"]
     assert failed["row_key"] == rows[3]["ignored_repair_key"]
     assert (failed["filename"], failed["problem_reason"], failed["failure_kind"]) == ("01 Here.flac", "Missing cover art", "error")

@@ -95,7 +95,9 @@ def test_live_a_save_stores_both_albums_results_while_maintenance_is_held(librar
 
     with psycopg.connect(library.url, autocommit=True, row_factory=dict_row) as maintenance:
         library_id = library.sql("select library_id from library.local_albums limit 1")[0][0]
-        assert problematic_index._locked(maintenance, library_id)
+        assert maintenance.execute(  # what a maintenance pass holds for its whole run
+            "select pg_try_advisory_lock(%s, %s::integer) as locked", (problematic_index._LOCK_NAMESPACE, library_id),
+        ).fetchone()["locked"]
 
         library.save(second, album="Same Réléase")
         assert library.marked(first, second) == [True, True], "Forming a pair marks both at commit."
@@ -186,6 +188,21 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
         return write(*arguments, **options)
 
     monkeypatch.setattr(problematic_index, "_write", paused)
+    queued = []
+    monkeypatch.setattr(problematic_index, "queue_maintenance", queued.append)
+    drains = []  # per _drain call of the paused pass: the sqlstate it failed with, or None
+    drain = problematic_index._drain
+
+    def recorded_drain(*arguments, **options):
+        try:
+            result = drain(*arguments, **options)
+        except Exception as error:
+            drains.append(getattr(error, "sqlstate", None) or type(error).__name__)
+            raise
+        drains.append(None)
+        return result
+
+    monkeypatch.setattr(problematic_index, "_drain", recorded_drain)
     evaluation = threading.Thread(target=problematic_index._maintain, args=(library.repository,))
     evaluation.start()
     expected = [change == "forms"] * 2
@@ -203,10 +220,32 @@ def test_live_an_older_evaluation_neither_blocks_a_save_nor_overwrites_it(librar
         release.set()
         evaluation.join(60)
 
+    def marks():
+        return library.sql("select count(*) from library.problematic_index_dirty_albums where album_id <> 0")[0][0]
+
+    # 6.5 (28592adb3): background maintenance walks once, and an older evaluation never overwrites a save.
     assert library.marked(first, second) == expected, "An older evaluation overwrote the save."
-    assert library.sql("select count(*) from library.problematic_index_dirty_albums where album_id <> 0")[0][0] == 0, (
-        "The pass retries what the save outran."
-    )
+    if change == "breaks":
+        # Breaking the pair, the save rewrites the rows this pass read, so the pass's write fails as outrun
+        # (40001) and the same pass evaluates again from the save's commit: no mark left, no extra pass.
+        outruns = drains.count("40001")
+        assert 1 <= outruns <= problematic_index.OUTRUN_RETRIES, f"The pass was outrun and retried: {drains}"
+        assert drains[-1] is None and len(drains) > outruns, f"The same pass drained again after it: {drains}"
+        assert set(drains) <= {"40001", None}, f"Only outruns failed: {drains}"
+        assert marks() == 0, "The pass evaluated the save's marks after it was outrun."
+        assert queued == [], "queue_maintenance is never called: no extra pass."
+        return
+    # Forming the pair, the pass's write goes through: the save's marks are left free for the next pass,
+    # which is queued exactly once.
+    assert marks() == 2, "The save's marks on both albums are left for the next pass."
+    assert queued == [library.repository], "Exactly one next pass is queued."
+
+    queued.clear()
+    problematic_index._maintain(library.repository)
+
+    assert marks() == 0, "The queued pass evaluates both of the save's marks."
+    assert queued == [], "Nothing further is queued: one extra pass at most."
+    assert library.marked(first, second) == expected, "The save's result stands after the next pass."
 
 
 # Plan rows the write's reads produce for each track of an affected album: at most 48.6 as

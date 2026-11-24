@@ -5,7 +5,8 @@ import pytest
 from music_app.services import problematic_index
 from scripts import prepare_duplicate_results
 
-READY = {"problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0}
+READY = {"problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0,
+         "changed_loose_groups_waiting": 0}
 
 
 def _run(*arguments):
@@ -38,6 +39,7 @@ def test_the_step_reports_progress_and_exits_zero_only_once_ready(monkeypatch, a
     ("problematic_index", None),
     ("duplicate_results", "building"),
     ("changed_albums_waiting", 3),
+    ("changed_loose_groups_waiting", 2),
 ])
 def test_the_check_changes_nothing_and_fails_while_not_ready(monkeypatch, field, value):
     monkeypatch.setattr(problematic_index, "prepare_for_serving", lambda *_a, **_k: pytest.fail("--check must not write"))

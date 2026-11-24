@@ -282,3 +282,25 @@ def test_a_drain_never_marks_the_album_it_evaluates(index, monkeypatch):
     assert index.marks() == []
     assert walks == [1]
     assert queued == []
+
+
+def test_maintenance_clears_marks_it_cannot_evaluate_and_queues_nothing(index, monkeypatch):
+    """A mark whose album is gone, and one whose album lost every track, end cleared after one pass: a free
+    mark the drain left behind would make maintenance queue itself back to back with writers idle."""
+    emptied = index.albums[0]
+    with psycopg.connect(index.setup_url) as connection:
+        gone = connection.execute("select coalesce(max(id), 0) + 1000 from library.local_albums").fetchone()[0]
+        connection.execute(
+            "delete from library.local_track_files where track_id in "
+            "(select id from library.local_tracks where album_id = %s)", (emptied,))
+        connection.execute("delete from library.local_tracks where album_id = %s", (emptied,))
+    index.committed_marks(gone, emptied)
+    queued = []
+    monkeypatch.setattr(index.module, "queue_maintenance", lambda repository: queued.append(repository))
+    walks = _count_walks(index, monkeypatch)
+
+    index.module._maintain(index.repository)
+
+    assert index.marks() == []
+    assert walks == [1]
+    assert queued == []

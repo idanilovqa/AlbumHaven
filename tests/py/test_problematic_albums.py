@@ -1136,6 +1136,7 @@ def test_live_deploy_step_fills_before_serving_and_reruns_without_redoing_it(wat
     assert ("Duplicate results", 1, 1) in progress
     assert problematic_index.serving_readiness(repository) == {
         "problematic_index": "ready", "duplicate_results": "ready", "changed_albums_waiting": 0,
+        "changed_loose_groups_waiting": 0,
     }
 
     backfilled = []
@@ -1427,3 +1428,67 @@ def test_live_problematic_index_follows_a_legacy_album_rule_revert(watcher_repai
     set_rule(False)
     assert "Missing year" in _indexed_by_name(database_url)["Legacy Album"]["problem_reasons"]
     assert _as_served(_indexed_problematic_items(database_url)) == _as_served(_evaluated_problematic_items(fixture.config))
+
+
+def test_live_problematic_index_follows_a_loose_group_exclusion_and_its_revert(watcher_repair_inventory):
+    """An excluded loose group leaves the list and its detail; reverting the exclusion brings both back."""
+    from music_app.services import library_browse_postgres as browse, problematic_index
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    # A loose file has no artist tag ("Missing artist"). One in each of two folders makes two groups, so the
+    # other group proves the rule is scoped.
+    def stray(folder):
+        entry = fixture.entry(f"Owner/{folder}/01.flac", artist="")
+        entry["album_artist"] = ""
+        return entry
+
+    fixture.seed(*(fixture.entry(f"Owner/Album/{track}.flac") for track in ("01", "02", "03")),
+                 stray("Strays A"), stray("Strays B"))
+    _ready_problematic_index(database_url)
+    repository = browse.PostgresLibraryBrowseRepository(
+        {**fixture.config, problematic_index.ENABLED_KEY: "1"})
+
+    def loose():
+        return {item["key"]: item for item in _indexed_problematic_items(database_url, limit=50)
+                if browse._is_problematic_loose_tracks_key(item["key"])}
+
+    before = loose()
+    assert len(before) == 2, "The fixture needs two loose groups."
+    key, other = sorted(before)
+    assert problematic_index.loose_group_detail(repository, key)
+    rule_keys = {
+        browse._problem_identity_row_key(identity, reason, scope=scope)
+        for reason in before[key]["problem_reasons"]
+        for scope, identities in (("album", [key]), ("file", before[key]["track_paths"]))
+        for identity in identities
+    }
+
+    def set_rules(present):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            library_id = connection.execute(
+                "select id from library.libraries where library_kind = 'local' limit 1").fetchone()["id"]
+            for rule_key in sorted(rule_keys):
+                if present:
+                    connection.execute("insert into library.ignored_repairs (library_id, repair_key) values (%s, %s)",
+                                       (library_id, rule_key))
+                else:
+                    connection.execute("delete from library.ignored_repairs where repair_key = %s", (rule_key,))
+
+    set_rules(True)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        marked = connection.execute(
+            "select count(*) as n from library.problematic_loose_groups where item_key = %s and marked_xid is not null",
+            (key,)).fetchone()["n"]
+    assert marked == 1, "The rule did not mark its loose group."
+    listed = loose()
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        still_marked = connection.execute(
+            "select count(*) as n from library.problematic_loose_groups where marked_xid is not null").fetchone()["n"]
+    assert still_marked == 0, "The read did not drain the group's mark."
+    assert set(listed) == {other}, "The excluded loose group is still listed."
+    assert problematic_index.loose_group_detail(repository, key) is None, "The excluded group still has a detail."
+    set_rules(False)
+    assert loose() == before
+    assert problematic_index.loose_group_detail(repository, key)

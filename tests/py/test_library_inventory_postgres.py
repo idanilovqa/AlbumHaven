@@ -225,6 +225,17 @@ def test_candidate_filters_are_batched_deduplicated_bounded_and_parameterized(
     assert r"D:\\a.flac" not in sql
 
 
+# Case 64: the loader's qualifying predicate moved, verbatim, into library.loose_track_qualifies (the case 64
+# migration), which the Loose Tracks store's triggers call too. Its arguments carry the effective album in the
+# shaper's order (the file's scanned album, then the track's, then the album title) and the ranked override
+# (its exception type, then its payload), so an override's exception type still qualifies an album track.
+_QUALIFIES_CALL = (
+    "library.loose_track_qualifies( library.local_track_files.scan_file_album, "
+    "library.local_tracks.metadata ->> 'album', library.local_albums.title, library.local_track_files.metadata, "
+    "exception_override.exception_type, exception_override.override_payload )"
+)
+
+
 def test_candidate_query_includes_only_loose_tracks_or_meaningfully_overridden_album_tracks():
     sql = inventory_module._non_album_candidates_sql().lower()
     normalized_sql = " ".join(sql.split())
@@ -241,11 +252,7 @@ def test_candidate_query_includes_only_loose_tracks_or_meaningfully_overridden_a
         eligible_track_file_scope,
     )
     assert " ~ " in eligible_track_file_scope
-    assert (
-        "coalesce( library.local_track_files.scan_file_album, "
-        "library.local_tracks.metadata ->> 'album', library.local_albums.title, '' )"
-    ) in normalized_sql
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in normalized_sql
     assert "nullif(btrim(ranked_exception_overrides.override_payload ->> 'exception_type'), '')" in sql
     assert "jsonb_typeof(ranked_exception_overrides.override_payload) = 'string'" in sql
     assert "then nullif(btrim(ranked_exception_overrides.override_payload #>> '{}'), '')" in sql
@@ -272,7 +279,7 @@ def test_candidate_query_does_not_treat_a_detached_track_with_a_real_album_as_no
         normalized_sql,
     )
     assert " ~ " in normalized_sql
-    assert "exception_override.exception_type is not null" in normalized_sql
+    assert _QUALIFIES_CALL in normalized_sql
 
 
 def test_candidate_query_excludes_stale_files_and_files_belonging_to_inactive_roots():
@@ -327,7 +334,7 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_requi
     assert "library.local_track_files.scan_file_album" in sql
     assert "library.local_tracks.metadata ->> 'album'" in sql
     assert "library.local_albums.title" in sql
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in " ".join(sql.split())
     assert "active_track_files.private_path," in sql
     assert "active_track_files.id\n        limit %(limit)s" in sql
 
@@ -407,7 +414,7 @@ def test_candidate_query_prefilters_active_files_through_four_indexed_eligibilit
     assert "where ranked_exception_overrides.match_rank = 1" in sql
     assert "library.local_tracks.album_id is null" not in sql
     assert "library.local_track_files.scan_file_album" in loose_track_path
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in " ".join(sql.split())
 
 
 def test_candidate_query_selects_private_path_override_before_track_id_then_newest_and_id():
@@ -625,3 +632,38 @@ def test_inventory_repository_rejects_missing_database_url_before_connecting():
 
     with pytest.raises(RuntimeError, match="ALBUM_HAVEN_APP_DATABASE_URL is required"):
         repository.load_support_state()
+
+
+def _cte_body(sql: str, name: str) -> tuple[str, str]:
+    """(the keyword after AS, the body) of CTE ``name``: the text up to the next top-level CTE or SELECT."""
+    match = re.search(rf"\s{name} as (materialized )?\(", sql)
+    assert match, f"no CTE {name}"
+    depth, start = 1, match.end()
+    for index in range(start, len(sql)):
+        depth += {"(": 1, ")": -1}.get(sql[index], 0)
+        if depth == 0:
+            return (match.group(1) or "").strip(), sql[start:index]
+    raise AssertionError(f"CTE {name} is not closed")
+
+
+def test_a_drain_batch_reads_overrides_in_materialized_steps_that_no_outer_row_can_rerun():
+    """Case 55: a folder batch's overrides are read once per statement. batch_keys, override_hits,
+    exception_candidates and their ranking are each AS MATERIALIZED; exception_overrides is read only inside
+    override_hits, one scan per branch keyed by the batch's keys as an array (no join to the keys and no lateral,
+    so nothing re-scans the table per key), referring to nothing but batch_keys and bootstrap_context; nothing
+    after it reads exception_overrides again."""
+    sql = " ".join(inventory_module._non_album_candidates_sql(
+        unassigned_only=True, membership_problems_only=True, all_roots=True, membership_folders=True,
+    ).lower().split()).replace(" ( ", " (").replace(" )", ")")
+    sql = "\n " + sql.replace(", ", ",\n ")
+    for name in ("batch_keys", "override_hits", "exception_candidates", "ranked_exception_overrides"):
+        keyword, _body = _cte_body(sql, name)
+        assert keyword == "materialized", f"{name} must be AS MATERIALIZED"
+    _keyword, hits = _cte_body(sql, "override_hits")
+    assert hits.count("from library.exception_overrides overrides") == 2, "one scan per branch"
+    assert hits.count("= any(array(select batch_keys.") == 2, "each branch keyed by the batch's array"
+    assert sql.count("library.exception_overrides") == hits.count("library.exception_overrides"), (
+        "exception_overrides is read only inside override_hits")
+    outer = set(re.findall(r"\b([a-z_]+)\.(?:private_path|track_id|library_id)\b", hits)) - {"overrides"}
+    assert outer <= {"batch_keys", "bootstrap_context"}, f"override_hits refers to an outer row: {outer}"
+    assert "lateral" not in hits, "a set join of the batch keys, never a per-key lateral"

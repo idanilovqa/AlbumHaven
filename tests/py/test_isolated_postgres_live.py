@@ -467,6 +467,487 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
     )
 
 
+_CASE64_DRAFT_ENV = "ALBUM_HAVEN_CASE64_DRAFT_SQL"
+# Rows a Loose Tracks read returns beside its stored list: state, mark count, the marks it drains, their
+# candidate rows, alias maps and roots (about 155 measured at both sizes in helper 1's run at fdecfdb59).
+_LOOSE_READ_FIXED_ROWS = 200
+# The read at 20,000 stored rows took about 2.0 s on the hosted runner (expand, sort, 5,000 track entries);
+# 3.0 s leaves 50% headroom for runner variance while still catching a read that scans the store twice.
+_LOOSE_READ_SECONDS_AT_SCALE = 3.0
+# Table rows the inline drain itself reads (sequential tuples read plus index tuples fetched, summed over
+# every user table) may differ between 20 and 20,000 stored rows by at most this many: index depth and
+# planner choices on the small tables, never a pass over the store.
+_DRAIN_ROWS_READ_SLACK = 100
+
+_DRAIN_ROWS_READ_SQL = """
+    select relname, coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0) as rows_read
+    from pg_stat_xact_user_tables
+"""
+
+
+def _apply_case64_draft(fixture):
+    """Case 64's migration is a draft until the owner approves it: the phase 2 run names its SQL file here
+    (after case 55's NNNN). Without it these cases cannot run, and the run must not count them."""
+    draft = os.environ.get(_CASE64_DRAFT_ENV)
+    if not draft:
+        _skip_or_fail_ci(f"{_CASE64_DRAFT_ENV} names case 64's draft migration for the phase 2 run.")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        if connection.execute("select to_regclass('library.non_album_track_rows') as present").fetchone()["present"] is None:
+            connection.execute(Path(draft).read_text(encoding="utf-8"))
+
+
+def _loose_library(fixture, albums, loose=3):
+    entries = [
+        fixture.entry(f"Artist {index:03d}/Album {index:03d}/01.flac", artist=f"Artist {index:03d}", album=f"Album {index:03d}")
+        for index in range(albums)
+    ]
+    loose_entries = [
+        fixture.entry(f"Loose/Single {index}/01.flac", artist=f"Loose Artist {index}", album="", exception="Non-album rarity")
+        for index in range(loose)
+    ]
+    fixture.seed(*entries, *loose_entries)
+    return entries, loose_entries
+
+
+def _store_rows(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return {
+            row["track_id"]: (row["track"], row["updated_at"])
+            for row in connection.execute("select track_id, track, updated_at from library.non_album_track_rows").fetchall()
+        }
+
+
+def _marks(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return connection.execute("select count(*) as marks from library.non_album_track_marks").fetchone()["marks"]
+
+
+def _prepare_store(fixture):
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
+    return repository
+
+
+def _loose_payload(repository):
+    payload = repository.build_library_loose_tracks_payload(query_params={})
+    return sorted(json.dumps(track, sort_keys=True, default=str) for track in payload["library_non_album_tracks"])
+
+
+@pytest.mark.parametrize("albums", [5, 60])
+def test_live_loose_track_reads_without_a_store_never_queue_a_build(watcher_repair_inventory, monkeypatch, albums):
+    """Case 64 (freeze guard, red): a Loose Tracks read without a ready store answers "preparing" and never
+    queues the whole-library loose-track build, however often it is asked and at any library size."""
+    from music_app.services import library_browse_postgres as browse
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _loose_library(fixture, albums)
+    queued = []
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: queued.append(kind))
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+
+    answers = [
+        repository.build_library_loose_tracks_payload(query_params={})
+        for _read in range(50)
+    ]
+
+    assert all(answer.get("non_album_tracks_deferred") for answer in answers), "without a store a read answers preparing"
+    assert queued == [], "a read never queues the loose-track build"
+
+
+@pytest.mark.parametrize("albums", [5, 60])
+def test_live_one_changed_loose_track_rewrites_one_stored_row(watcher_repair_inventory, albums):
+    """Case 64: once the store is ready, one changed loose file marks its track and the drain rewrites one row."""
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, albums)
+    repository = _prepare_store(fixture)
+    before = _store_rows(fixture)
+    assert before and _marks(fixture) == 0
+
+    retitled = {**loose_entries[0], "title": "Retitled loose track", "mtime": loose_entries[0]["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={retitled["path"]: retitled})
+    assert _marks(fixture) == 1, "one changed loose file marks one track"
+    _loose_payload(repository)  # a read drains the few waiting marks inline
+    after = _store_rows(fixture)
+
+    changed = [track_id for track_id in after if before.get(track_id) != after[track_id]]
+    assert len(changed) == 1 and set(after) == set(before), "exactly that track's row was rewritten"
+    assert _marks(fixture) == 0
+
+
+def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size(watcher_repair_inventory, monkeypatch):
+    """Case 64 (selected-set contract, keyed by waiting marks): with INLINE_DRAIN_LIMIT marks waiting, the
+    read request drains them itself in one keyed candidate load. At 20 and 20,000 stored loose rows it reads
+    one candidate row per marked file, writes one store row per marked track (affected rows also count the
+    cleared marks) and runs a constant number of statements."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+    from tests.py.bounded_interactions import (
+        CountingConnection, OperationCounts, _checked_in_entries, measure_scale_pair,
+    )
+
+    import sys
+    from time import monotonic
+
+    from music_app.services.library_inventory_postgres import MAX_NON_ALBUM_CANDIDATE_LIMIT
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    waiting = loose_track_store.INLINE_DRAIN_LIMIT
+    synthetic_base = 9_000_000_000
+    started = monotonic()
+    drains = []
+
+    def phase(name, stored):
+        # Written past pytest's capture, so a run that times out still shows where its time went.
+        print(f"[case64-drain-contract] stored={stored} {name} t={monotonic() - started:.1f}s",
+              file=sys.__stderr__, flush=True)
+
+    def run(stored):
+        # The library holds only the INLINE_DRAIN_LIMIT real loose tracks that get marked; the other ``stored``
+        # loose rows are written straight into the store, set-based, as copies of a real stored row. The
+        # contract is about stored rows: seeding a real library of that size ran the full-scan publication,
+        # the startup relation and gallery builds and a drain of every new track before anything was counted.
+        _entries, loose_entries = _loose_library(fixture, 5, loose=waiting)
+        _prepare_store(fixture)
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute("delete from library.non_album_track_rows where track_id >= %s", (synthetic_base,))
+            connection.execute("""
+                insert into library.non_album_track_rows (library_id, track_id, track, updated_at)
+                select seed.library_id, %(base)s + n, jsonb_build_object('files', jsonb_build_array(
+                    (seed.track -> 'files' -> 0) || jsonb_build_object(
+                      'track_id', %(base)s + n, 'track_file_id', %(base)s + n,
+                      'private_path', (seed.track -> 'files' -> 0 ->> 'private_path') || '.stored-' || n,
+                      '_order', jsonb_build_array('zz stored', 'Stored ' || lpad(n::text, 6, '0'), '', %(base)s + n)))),
+                  now()
+                from (select library_id, track from library.non_album_track_rows
+                      where track_id < %(base)s order by track_id limit 1) seed,
+                  generate_series(1, %(stored)s) n
+            """, {"base": synthetic_base, "stored": stored})
+            # Setup only: fresh statistics for the seeded store, so the planner never judges 20,000 rows by
+            # an empty table's estimates before autovacuum gets to it.
+            connection.execute("analyze library.non_album_track_rows")
+        phase("seed done", stored)
+        before = _store_rows(fixture)
+        assert len(before) == stored + waiting
+        # Warm the read once (no marks wait yet), so both sizes are measured warm: the relation alias maps
+        # are cached per process, and a cold first size ran one more statement (10 vs 9).
+        _loose_payload(browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect))
+        changed = {
+            entry["path"]: {**entry, "title": f"Changed {index}", "mtime": entry["mtime"] + 1}
+            for index, entry in enumerate(loose_entries[:waiting])
+        }
+        fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries=changed)
+        assert _marks(fixture) == waiting
+        counts = OperationCounts()
+        repository = browse.PostgresLibraryBrowseRepository(
+            fixture.config, connect=lambda *args: CountingConnection(isolatedPostgres._connect(*args), counts),
+        )
+        loads = []
+        load = repository._inventory_repository.load_non_album_candidates
+
+        def counted_load(**kwargs):
+            rows = load(**kwargs)
+            loads.append(kwargs.get("track_ids"))
+            counts.count("candidate_rows", len(rows))
+            return rows
+
+        monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted_load)
+        drain = loose_track_store.drain
+
+        def rows_read(raw):
+            return {row["relname"]: int(row["rows_read"]) for row in raw.execute(_DRAIN_ROWS_READ_SQL).fetchall()}
+
+        def measured_drain(inventory, connection, **kwargs):
+            # The drain on its own: what it adds to the read's shared counters, its wall time, and the table
+            # rows it reads. The drain runs inside the read's transaction, so the transaction-local statistics
+            # (pg_stat_xact_user_tables) give its reads exactly, with no wait for the asynchronous stats
+            # flush. They are read on the uncounted connection, so they add nothing to the read's counters.
+            raw = getattr(connection, "_connection", connection)
+            read_before = rows_read(raw)
+            statements, rows = counts.sql_statements, counts.returned_rows
+            drain_started = monotonic()
+            cleared = drain(inventory, connection, **kwargs)
+            seconds = monotonic() - drain_started
+            statement_delta, row_delta = counts.sql_statements - statements, counts.returned_rows - rows
+            read_after = rows_read(raw)
+            per_table = {
+                table: read_after[table] - read_before.get(table, 0)
+                for table in read_after if read_after[table] != read_before.get(table, 0)
+            }
+            drains.append({"stored": stored, "statements": statement_delta, "returned_rows": row_delta,
+                           "seconds": seconds, "rows_read": sum(per_table.values()), "per_table": per_table})
+            phase(f"drain alone {seconds * 1000:.0f} ms, {sum(per_table.values())} table rows read {per_table}",
+                  stored)
+            return cleared
+
+        read_candidates = loose_track_store.read_candidates
+        stored_read = []
+        # Patched for the measured read only, so the next size's preparation drains unmeasured.
+        with monkeypatch.context() as measured:
+            measured.setattr(loose_track_store, "drain", measured_drain)
+            measured.setattr(loose_track_store, "read_candidates", lambda *args, **kwargs: stored_read.append(
+                read_candidates(*args, **kwargs)) or stored_read[-1])
+            # These bracket the whole read (state, mark count, inline drain, stored list, expand and sort);
+            # the drain's own time and reads are logged by measured_drain.
+            phase("read start", stored)
+            read_started = monotonic()
+            _loose_payload(repository)  # the read request drains inline
+            read_seconds = monotonic() - read_started
+            phase(f"read done in {read_seconds:.3f} s", stored)
+        assert len(stored_read) == 1
+        assert len(stored_read[0]) == min(stored + waiting, MAX_NON_ALBUM_CANDIDATE_LIMIT), (
+            "the read returns the stored list up to the cap, so the cap is reached at scale"
+        )
+        assert read_seconds < _LOOSE_READ_SECONDS_AT_SCALE, f"the read took {read_seconds:.2f} s at {stored} stored"
+        after = _store_rows(fixture)
+        assert _marks(fixture) == 0, "the read drained every waiting mark"
+        assert len(loads) == 1 and len(loads[0]) == waiting, "one candidate load, keyed by the marked tracks"
+        assert sum(1 for track_id in after if before.get(track_id) != after[track_id]) == waiting
+        # The read returns the whole stored list up to the loader's cap (paging is a later item), plus a fixed
+        # number of rows for its state, marks, drain and alias maps.
+        assert counts.returned_rows <= MAX_NON_ALBUM_CANDIDATE_LIMIT + _LOOSE_READ_FIXED_ROWS, (
+            f"the read returned {counts.returned_rows} rows at {stored} stored"
+        )
+        return counts
+
+    interaction = "py:routes/api_read_asgi_routes.py#library_loose_tracks"
+    entry = _checked_in_entries()[interaction]
+    small, large = measure_scale_pair(
+        interaction_id=interaction,
+        small=entry["cardinalities"]["small"],
+        large=entry["cardinalities"]["production"],
+        run=run,
+        budgets=entry["budgets"],
+        growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
+    )
+    # The registry's growth metric is candidate_rows; a statement per stored track must fail here too.
+    assert small.sql_statements == large.sql_statements, (
+        f"statements grew from {small.sql_statements} at 20 stored rows to {large.sql_statements} at 20,000"
+    )
+    # The drain alone is keyed by its marks: the same statements and returned rows at both store sizes.
+    assert len(drains) == 2, f"one inline drain per size: {drains}"
+    small_drain, large_drain = drains
+    assert (small_drain["statements"], small_drain["returned_rows"]) == (
+        large_drain["statements"], large_drain["returned_rows"]), f"the drain grew with the store: {drains}"
+    # The table rows the drain reads, not just the rows it returns: a drain that scans the store reads 20,000
+    # more rows at scale even when it returns the same 50.
+    assert large_drain["rows_read"] - small_drain["rows_read"] <= _DRAIN_ROWS_READ_SLACK, (
+        f"the drain read {small_drain['rows_read']} table rows at 20 stored and {large_drain['rows_read']} at "
+        f"20,000: {small_drain['per_table']} vs {large_drain['per_table']}"
+    )
+
+
+def test_live_real_changes_run_every_loose_track_trigger_function_with_overrides(watcher_repair_inventory):
+    """Case 64 (phase 1 on sandbox2's data, 42703): a real album-tag change failed in the file trigger, which
+    read a column exception_overrides does not have. With overrides present (an object and a bare-string
+    payload), a real file change, a track update and an artist rename each run 64's functions without error,
+    mark their track, and the drained store equals a full rebuild."""
+    from music_app.services import loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, 5)
+    repository = _prepare_store(fixture)
+
+    def setup_sql(sql, params=None):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute(sql, params or {})
+        # A low-level change journals a relation publication that production finishes before the next edit.
+        _finish_live_reconciliation(fixture.config)
+
+    def track_of(entry):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            return connection.execute(
+                """select tracks.id, tracks.library_id, tracks.artist_id from library.local_track_files files
+                   join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %(path)s""",
+                {"path": entry["path"]},
+            ).fetchone()
+
+    # Tag changes go to loose 0 (keyed override) and loose 1 (none); the track and artist edits to loose 2,
+    # whose override names its track, so a tag change cannot replace the track they edit.
+    keyed, by_track = track_of(loose_entries[0]), track_of(loose_entries[2])
+    setup_sql("""insert into library.exception_overrides (library_id, track_key, override_payload)
+                 values (%(library)s, %(path)s, '{"exception_type": "Interview"}'::jsonb)""",
+              {"library": keyed["library_id"], "path": loose_entries[0]["path"]})
+    # The loader also reads a bare JSON string payload as the exception type.
+    setup_sql("""insert into library.exception_overrides (library_id, track_id, override_payload)
+                 values (%(library)s, %(track)s, '"Non-album rarity"'::jsonb)""",
+              {"library": by_track["library_id"], "track": by_track["id"]})
+    loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
+    assert _marks(fixture) == 0
+
+    def marked_by(step, action):
+        action()
+        assert _marks(fixture) >= 1, f"{step} marks its track"
+        drained = _loose_payload(repository)
+        loose_track_store.build(repository._inventory_repository, repository._owned_connection_context)
+        assert drained == _loose_payload(repository), f"after {step}, the drained store differs from a full rebuild"
+
+    for index, entry in enumerate(loose_entries[:2]):
+        tagged = {**entry, "album": f"Real Album {index}", "mtime": entry["mtime"] + 1}
+        marked_by(f"a real album-tag change ({index})", lambda tagged=tagged: (
+            fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={tagged["path"]: tagged})
+        ))
+    marked_by("a track update", lambda: setup_sql(
+        "update library.local_tracks set title = title || ' (edit)' where id = %(track)s", {"track": by_track["id"]},
+    ))
+    marked_by("an artist rename", lambda: setup_sql(
+        "update library.local_artists set name = name || ' (renamed)' where id = %(artist)s", {"artist": by_track["artist_id"]},
+    ))
+
+
+def test_live_loose_tracks_show_the_rows_stored_so_far_while_the_store_builds(watcher_repair_inventory, monkeypatch):
+    """Owner (relayed 2026-11-22): "If at least one loose track is already indexed let that page show it",
+    with a note that more may appear. The build commits its rows in keyed batches while its state stays
+    "building": a read between batches shows the rows stored so far, flagged partial, and queues nothing.
+    Each batch loads only its own tracks; only the whole build, once, covers the library."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, 5, loose=5)
+    monkeypatch.setattr(loose_track_store, "BUILD_BATCH", 2)
+    queued = []
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: queued.append(kind))
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    loads = []
+    load = repository._inventory_repository.load_non_album_candidates
+
+    def counted_load(**kwargs):
+        rows = load(**kwargs)
+        loads.append((kwargs.get("track_ids"), len(rows)))
+        return rows
+
+    monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted_load)
+    reads, progress = [], []
+
+    def report(stage, **values):
+        progress.append((stage, values))
+        if stage == "batch":
+            payload = repository.build_library_loose_tracks_payload(query_params={})
+            reads.append((len(payload["library_non_album_tracks"]), payload["non_album_tracks_deferred"],
+                          payload.get("non_album_tracks_partial", False)))
+
+    loose_track_store.build(repository._inventory_repository, repository._owned_connection_context, progress=report)
+
+    assert reads, "the build reports each committed batch"
+    for rows, deferred, partial in reads:
+        assert (deferred, partial) == ((True, False) if rows == 0 else (False, True)), (
+            "no stored row: preparing; any stored row: shown, with more to come"
+        )
+    assert any(0 < rows < len(loose_entries) for rows, _deferred, _partial in reads), (
+        "rows appear batch by batch, before the build ends"
+    )
+    batches = [values for stage, values in progress if stage == "batch"]
+    assert [values["done"] for values in batches] == sorted(values["done"] for values in batches)
+    assert batches[-1]["done"] == batches[-1]["total"], "progress reaches tracks done of total"
+    assert loads and all(track_ids is not None and 0 < len(track_ids) <= 2 for track_ids, _rows in loads), (
+        "every batch loads only its own tracks"
+    )
+    final = repository.build_library_loose_tracks_payload(query_params={})
+    assert len(final["library_non_album_tracks"]) == len(loose_entries)
+    assert final["non_album_tracks_deferred"] is False and "non_album_tracks_partial" not in final
+    assert queued == [], "a read during the build never queues it"
+
+
+def test_live_a_rebuild_over_an_existing_store_never_shows_an_empty_list(watcher_repair_inventory, monkeypatch):
+    """6.5: a rebuild (builder change, owner rebuild, failed build's retry) builds over the stored rows: each
+    batch replaces its own tracks' rows, and only the end removes rows no batch touched. A read between
+    batches never sees an empty or shrunken list, and the finished store equals a fresh build."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, 5, loose=5)
+    repository = _prepare_store(fixture)
+    before = _loose_payload(repository)
+    assert len(before) == len(loose_entries)
+    monkeypatch.setattr(loose_track_store, "BUILD_BATCH", 2)
+    queued = []
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: queued.append(kind))
+    reads = []
+
+    def report(stage, **_values):
+        if stage == "batch":
+            payload = repository.build_library_loose_tracks_payload(query_params={})
+            reads.append((len(payload["library_non_album_tracks"]), payload["non_album_tracks_deferred"]))
+
+    loose_track_store.build(repository._inventory_repository, repository._owned_connection_context, progress=report)
+
+    assert reads and all(rows == len(loose_entries) and not deferred for rows, deferred in reads), (
+        f"the stored list is replaced batch by batch, never emptied: {reads}"
+    )
+    assert _loose_payload(repository) == before
+    assert queued == []
+
+
+def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_repair_inventory):
+    """Case 64's deciding test: after each change the drained store reads the same as a full rebuild."""
+    from music_app.services import loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    entries, loose_entries = _loose_library(fixture, 8)
+    repository = _prepare_store(fixture)
+
+    def setup_sql(sql, params=None):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute(sql, params or {})
+        # A low-level change journals a relation publication that production finishes before the next edit.
+        _finish_live_reconciliation(fixture.config)
+
+    def rebuilt_equals_drained(step):
+        drained = _loose_payload(repository)
+        loose_track_store.build(repository._inventory_repository, repository._owned_connection_context)
+        rebuilt = _loose_payload(repository)
+        assert drained == rebuilt, f"after {step}, the drained store differs from a full rebuild"
+
+    no_problem = {**loose_entries[1], "title": "No problem, new title", "mtime": loose_entries[1]["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={no_problem["path"]: no_problem})
+    rebuilt_equals_drained("a tag edit of a loose file without a membership problem")
+
+    gaining = {**entries[0], "exception_type": "Non-album rarity", "mtime": entries[0]["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={gaining["path"]: gaining})
+    rebuilt_equals_drained("an album track becoming a rarity")
+
+    setup_sql("update library.local_artists set name = name || ' (renamed)' where name = %(name)s", {"name": "Loose Artist 2"})
+    rebuilt_equals_drained("an artist rename")
+
+    setup_sql("""update library.local_albums set title = 'Unknown Album'
+                 where id = (select album_id from library.local_tracks where album_id is not null limit 1)""")
+    rebuilt_equals_drained("an album retitled to a loose value")
+
+    marks_before = _marks(fixture)
+    setup_sql("update library.library_roots set is_active = false where metadata ->> 'root_id' = 'repair-hoard'")
+    assert _marks(fixture) == marks_before, "a root on or off writes no mark"
+    rebuilt_equals_drained("a root turned off")
+
+    setup_sql("""insert into library.exception_overrides (library_id, track_key, override_payload)
+                 select tracks.library_id, files.private_path, '{"exception_type": "Interview"}'::jsonb
+                 from library.local_track_files files join library.local_tracks tracks on tracks.id = files.track_id
+                 where files.private_path = %(path)s""", {"path": entries[1]["path"]})
+    rebuilt_equals_drained("an override added")
+    setup_sql("delete from library.exception_overrides where track_key = %(path)s", {"path": entries[1]["path"]})
+    rebuilt_equals_drained("an override removed")
+
+    unchanged = {entry["path"]: entry for entry in entries[2:4]}
+    marks_before = _marks(fixture)
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries=unchanged)
+    assert _marks(fixture) == marks_before, "a no-change pass writes no mark"
+
+    removed = loose_entries[0]
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id="repair-main", active_file_entries={}, deleted_paths=(removed["path"],),
+    )
+    rebuilt_equals_drained("a loose file deleted")
+
+
 def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(
     watcher_repair_inventory,
     monkeypatch,
@@ -1356,11 +1837,10 @@ def test_live_library_loose_tracks_come_without_the_gallery(
         "album_artist": "Other",
         "title": "Other Loose",
     }
+    _apply_case64_draft(fixture)
     fixture.seed(album_track, family_loose, other_loose)
 
-    repository = PostgresLibraryBrowseRepository(
-        fixture.config, connect=isolatedPostgres._connect,
-    )
+    repository = _prepare_store(fixture)  # case 64: the store's own owner builds it once
     payload = repository.build_library_loose_tracks_payload()
 
     assert "artist_groups" not in payload
@@ -1376,7 +1856,7 @@ def test_live_library_loose_tracks_come_without_the_gallery(
     monkeypatch.setattr(
         cached_repository,
         "_load_non_album_entries",
-        lambda **_kwargs: pytest.fail("the persisted snapshot must avoid a global rebuild"),
+        lambda **_kwargs: pytest.fail("the stored rows must avoid a global rebuild"),
     )
     assert cached_repository.build_library_loose_tracks_payload(
         query_params={"artist": "Owner", "availability": "1"}
@@ -1393,22 +1873,7 @@ def test_live_library_loose_tracks_come_without_the_gallery(
         "title": "Added Loose",
     }
     fixture.seed(album_track, family_loose, other_loose, added_loose)
-    with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        assert cached_repository._load_non_album_track_snapshot(connection) is None
-
-    stale = PostgresLibraryBrowseRepository(
-        fixture.config, connect=isolatedPostgres._connect,
-    ).build_library_loose_tracks_payload(
-        query_params={"artist": "Owner", "availability": "1"}
-    )
-    assert stale == {
-        "non_album_track_count": 0,
-        "non_album_tracks_deferred": True,
-    }
-
-    PostgresLibraryBrowseRepository(
-        fixture.config, connect=isolatedPostgres._connect,
-    ).build_library_loose_tracks_payload()
+    # Case 64: the added track is marked and the next read drains it inline; nothing is rebuilt.
     refreshed = PostgresLibraryBrowseRepository(
         fixture.config, connect=isolatedPostgres._connect,
     ).build_library_loose_tracks_payload(

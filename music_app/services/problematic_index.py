@@ -20,7 +20,8 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from threading import Lock
 from typing import Any
 
@@ -192,12 +193,12 @@ _LINKED_ALBUMS_SQL = """
 
 _UPSERT_SQL = """
     insert into library.problematic_index_items
-      (library_id, item_key, album_id, sort_name, sort_artist, sort_year, sort_key,
+      (library_id, item_key, album_id, root_id, sort_name, sort_artist, sort_year, sort_key,
        search_text, duplicate_identities, item)
-    values (%(library_id)s, %(item_key)s, %(album_id)s, %(sort_name)s, %(sort_artist)s,
+    values (%(library_id)s, %(item_key)s, %(album_id)s, %(root_id)s, %(sort_name)s, %(sort_artist)s,
             %(sort_year)s, %(sort_key)s, %(search_text)s, %(duplicate_identities)s, %(item)s::jsonb)
     on conflict (library_id, item_key) do update set
-      album_id = excluded.album_id, sort_name = excluded.sort_name,
+      album_id = excluded.album_id, root_id = excluded.root_id, sort_name = excluded.sort_name,
       sort_artist = excluded.sort_artist, sort_year = excluded.sort_year,
       sort_key = excluded.sort_key, search_text = excluded.search_text,
       duplicate_identities = excluded.duplicate_identities, item = excluded.item
@@ -243,15 +244,21 @@ def _duplicate_result_rows(repository: Any, connection: Any, library_id: int,
 
 def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: list[int],
                 include_loose: bool, *, duplicates: bool = True,
+                loose_folders: list[tuple[int, str]] | None = None,
                 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[int]]:
     """Fresh items and duplicate results of ``album_ids`` (plus duplicate peers), and the
-    loose-track items when asked.
+    loose-track items of ``loose_folders`` (root id, folder), or of every loose group with
+    ``include_loose``. Loose groups are read under every root: a read applies root activity.
 
     Returns the item rows, the duplicate result rows (none without ``duplicates``) and
     every album id whose old rows they replace. A pair a save formed or broke is in scope
     through either identity or through the stored references, so both albums' results are
     rewritten together.
+
+    Every read takes ``connection``: without it a reader would lease the pool or open a connection per batch.
     """
+    if connection is None:
+        raise TypeError("An index batch reads on its caller's connection; none was given.")
     browse = _browse()
     if duplicates and album_ids:
         album_ids = sorted({int(_value(row, "album_id")) for row in connection.execute(
@@ -287,7 +294,16 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
         if _value(row, "track_id") is not None
     ]
     if include_loose:
-        rows = [*rows, *repository._load_problematic_loose_file_rows(connection=connection, limit=None)]
+        loose_folders = [(int(_value(row, "root_id")), str(_value(row, "folder"))) for row in connection.execute(
+            "select root_id, folder from library.problematic_loose_groups where library_id = %s", (library_id,),
+        ).fetchall()]
+    loose_rows = repository._load_problematic_loose_file_rows(
+        connection=connection, limit=None, membership_folders=set(loose_folders), all_roots=True,
+    ) if loose_folders else []
+    rows = [*rows, *loose_rows]
+    root_by_loose_key = {
+        str(_value(row, "album_key")): _value(row, "file_library_root_id") for row in loose_rows
+    }
     missing_rows = (
         repository._load_missing_album_rows(connection=connection, album_keys=album_keys)
         if album_keys else []
@@ -330,6 +346,7 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
             "library_id": library_id,
             "item_key": key,
             "album_id": album_id,
+            "root_id": root_by_loose_key.get(key) if album_id is None else None,
             "sort_name": sort_name,
             "sort_artist": sort_artist,
             "sort_year": sort_year,
@@ -343,12 +360,16 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
 
 def _write(connection: Any, library_id: int, index_rows: list[dict[str, object]],
            duplicate_rows: list[dict[str, object]], replaced_album_ids: list[int], *,
-           replace_loose: bool) -> None:
+           replace_loose: bool, loose_keys: list[str] = ()) -> None:
+    """``loose_keys`` names the loose groups re-evaluated: their items are replaced by key, and a group
+    with no loose file left loses its item."""
     connection.execute(
         """delete from library.problematic_index_items
            where library_id = %(library_id)s
-             and (album_id = any(%(album_ids)s::bigint[]) or (%(loose)s and album_id is null))""",
-        {"library_id": library_id, "album_ids": replaced_album_ids, "loose": replace_loose},
+             and (album_id = any(%(album_ids)s::bigint[]) or (%(loose)s and album_id is null)
+                  or item_key = any(%(loose_keys)s::text[]))""",
+        {"library_id": library_id, "album_ids": replaced_album_ids, "loose": replace_loose,
+         "loose_keys": list(loose_keys)},
     )
     if index_rows:
         connection.cursor().executemany(_UPSERT_SQL, index_rows)
@@ -396,11 +417,24 @@ def _worker_connection(repository: Any) -> Any:
     return psycopg.connect(repository._database_url, row_factory=dict_row, autocommit=True)
 
 
-def _locked(connection: Any, library_id: int) -> bool:
-    row = connection.execute(
-        "select pg_try_advisory_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
-    ).fetchone()
-    return bool(_value(row, "locked"))
+@contextmanager
+def _evaluation_lock(repository: Any, *, deploy_step: bool = False) -> Iterator[tuple[Any, int | None, bool]]:
+    """(connection, library id, whether this pass holds the evaluation lock), on the worker's own
+    connection; the lock is released on every path."""
+    with _worker_connection(repository) as connection:
+        library_id = _library_id(connection)
+        locked = library_id is not None and bool(_value(connection.execute(
+            "select pg_try_advisory_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
+        ).fetchone(), "locked"))
+        if locked and deploy_step:
+            # Maintenance holds the lock above too; this one says a deploy step runs, so an app
+            # restarted meanwhile waits outside. Closing the connection releases it.
+            connection.execute("select pg_advisory_lock(%s, %s::integer)", (_STEP_LOCK_NAMESPACE, library_id))
+        try:
+            yield connection, library_id, locked
+        finally:
+            if locked:
+                connection.execute("select pg_advisory_unlock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
 
 
 def _locked_for_transaction(connection: Any, library_id: int) -> bool:
@@ -408,10 +442,6 @@ def _locked_for_transaction(connection: Any, library_id: int) -> bool:
         "select pg_try_advisory_xact_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
     ).fetchone()
     return bool(_value(row, "locked"))
-
-
-def _unlock(connection: Any, library_id: int) -> None:
-    connection.execute("select pg_advisory_unlock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
 
 
 def _enabled(config: Mapping[str, object]) -> bool:
@@ -447,19 +477,30 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
                    where library_id = %s limit %s""",
                 (library_id, inline_limit + 1),
             ).fetchall() if ready else []
+            groups = connection.execute(
+                _MARKED_GROUPS_SQL, (library_id, "", inline_limit + 1),
+            ).fetchall() if ready else []
         if library_id is None:
             return False
         if not ready:
             queue_maintenance(repository)
             return False
         _READY.add(repository._database_url)
-        if not marks:
+        if not marks and not groups:
             return True
-        if len(marks) > inline_limit:
+        if len(marks) + len(groups) > inline_limit:
             queue_maintenance(repository)
             return True
-        with repository._connect_to_database() as connection:
-            _drain(repository, connection, library_id, marks, try_lock=True)
+        # Each drain on a lease of its own. A lease is not autocommit, and a drain's last statement runs after
+        # its transaction block, so a second drain on the same lease ran inside that implicit transaction and
+        # its SET TRANSACTION ISOLATION LEVEL failed (ActiveSqlTransaction): the list stayed "indexing" after
+        # any change that marks albums and loose groups together. Leaving a lease commits it.
+        if marks:
+            with repository._connect_to_database() as connection:
+                _drain(repository, connection, library_id, marks, try_lock=True)
+        if groups:
+            with repository._connect_to_database() as connection:
+                _drain_groups(repository, connection, library_id, groups, try_lock=True)
         return True
     except Exception as error:
         if _is_undefined_table(error):
@@ -503,6 +544,41 @@ def _drain(repository: Any, connection: Any, library_id: int, marks: list[object
             "album_ids": [int(_value(row, "album_id")) for row in marks],
             "xids": [str(_value(row, "marked_xid")) for row in marks],
         },
+    ).rowcount
+
+
+_MARKED_GROUPS_SQL = """
+    select item_key, root_id, folder, marked_xid::text as marked_xid from library.problematic_loose_groups
+    where library_id = %s and marked_xid is not null and item_key > %s order by item_key limit %s
+"""
+
+
+def _drain_groups(repository: Any, connection: Any, library_id: int, groups: list[object], *,
+                  try_lock: bool = False) -> int:
+    """Evaluate the loose groups ``groups`` and clear exactly their marks, never waiting for one a writer
+    holds; how many it cleared. A group whose last loose file went loses its item and keeps its row."""
+    folders = [(int(_value(row, "root_id")), str(_value(row, "folder"))) for row in groups]
+    keys = [str(_value(row, "item_key")) for row in groups]
+    with connection.transaction():
+        connection.execute("set transaction isolation level repeatable read")
+        if try_lock and not _locked_for_transaction(connection, library_id):
+            return 0
+        connection.execute("set local work_mem = '16MB'")
+        connection.execute("set local jit = off")
+        index_rows, _duplicate_rows, _replaced = _index_rows(
+            repository, connection, library_id, [], False, duplicates=False, loose_folders=folders,
+        )
+        _write(connection, library_id, index_rows, [], [], replace_loose=False, loose_keys=keys)
+    return connection.execute(
+        """with free as (
+             select marked.item_key from library.problematic_loose_groups marked
+             join unnest(%(keys)s::text[], %(xids)s::text[]) claimed(item_key, marked_xid)
+               on marked.item_key = claimed.item_key and marked.marked_xid = claimed.marked_xid::xid8
+             where marked.library_id = %(library_id)s
+             order by marked.item_key for update skip locked)
+           update library.problematic_loose_groups marked set marked_xid = null from free
+           where marked.library_id = %(library_id)s and marked.item_key = free.item_key""",
+        {"library_id": library_id, "keys": keys, "xids": [str(_value(row, "marked_xid")) for row in groups]},
     ).rowcount
 
 
@@ -550,6 +626,16 @@ def _backfill(repository: Any, connection: Any, library_id: int,
     # A mark also says a stored duplicate result may be out of date. Ready results stay
     # readable through this pass and keep their marks for the evaluation that follows it;
     # otherwise their own backfill follows and covers what this pass saw.
+    connection.execute(
+        """with free as (
+             select item_key from library.problematic_loose_groups
+             where library_id = %(library_id)s and marked_xid is not null
+               and pg_visible_in_snapshot(marked_xid, %(snapshot)s::pg_snapshot)
+             order by item_key for update skip locked)
+           update library.problematic_loose_groups marked set marked_xid = null from free
+           where marked.library_id = %(library_id)s and marked.item_key = free.item_key""",
+        {"library_id": library_id, "snapshot": snapshot},
+    )
     if _duplicate_results_state(connection, library_id) != "ready":
         connection.execute(
             f"""with free as (
@@ -665,12 +751,27 @@ def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebu
             evaluated += len(marks)
             if report:
                 report("Changed albums", evaluated, evaluated)
+        after_key = ""
+        while groups := connection.execute(_MARKED_GROUPS_SQL, (library_id, after_key, BACKFILL_BATCH)).fetchall():
+            try:
+                _drain_groups(repository, connection, library_id, groups)
+            except Exception as error:
+                if getattr(error, "sqlstate", None) != "40001" or outrun >= OUTRUN_RETRIES:
+                    raise
+                outrun += 1
+                continue
+            after_key = str(_value(groups[-1], "item_key"))
+            evaluated += len(groups)
+            if report:
+                report("Changed albums", evaluated, evaluated)
         free = _free_marks(connection, library_id)
         if not free:
             break
     left = int(_value(connection.execute(
-        "select count(*) as marks from library.problematic_index_dirty_albums where library_id = %s",
-        (library_id,),
+        """select (select count(*) from library.problematic_index_dirty_albums where library_id = %(library_id)s)
+             + (select count(*) from library.problematic_loose_groups
+                where library_id = %(library_id)s and marked_xid is not null) as marks""",
+        {"library_id": library_id},
     ).fetchone(), "marks"))
     return left, free
 
@@ -678,10 +779,14 @@ def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebu
 def _free_marks(connection: Any, library_id: int) -> int:
     """Marks no writer holds now: the lock test ends with its statement, so it never waits or keeps a lock."""
     return int(_value(connection.execute(
-        f"""select count(*) as marks from (
-              select album_id from library.problematic_index_dirty_albums
-              where library_id = %s {_TAKE_FREE_MARKS}) free""",
-        (library_id,),
+        f"""select (select count(*) from (
+                     select album_id from library.problematic_index_dirty_albums
+                     where library_id = %(library_id)s {_TAKE_FREE_MARKS}) free_albums)
+             + (select count(*) from (
+                     select item_key from library.problematic_loose_groups
+                     where library_id = %(library_id)s and marked_xid is not null
+                     order by item_key for update skip locked) free_groups) as marks""",
+        {"library_id": library_id},
     ).fetchone(), "marks"))
 
 
@@ -689,20 +794,13 @@ def prepare_for_serving(repository: Any, *, rebuild_duplicates: bool = False,
                         report: Callable[[str, int, int], None] | None = None) -> None:
     """The deploy step (scripts/prepare_duplicate_results.py): what maintenance does, in the
     foreground, raising instead of retrying later. A ready backfill is not redone."""
-    with _worker_connection(repository) as connection:
-        library_id = _library_id(connection)
+    with _evaluation_lock(repository, deploy_step=True) as (connection, library_id, locked):
         if library_id is None:
             raise PreparationError("No Local Library exists in this database.")
-        if not _locked(connection, library_id):
+        if not locked:
             raise PreparationError("Another process is evaluating the index: stop every writer first.")
-        # Maintenance holds the lock above too; this one says a deploy step runs, so an app
-        # restarted meanwhile waits outside. Closing the connection releases it.
-        connection.execute("select pg_advisory_lock(%s, %s::integer)", (_STEP_LOCK_NAMESPACE, library_id))
-        try:
-            held, _free = _bring_up_to_date(repository, connection, library_id, rebuild_duplicates=rebuild_duplicates,
-                                            report=report, walks=OUTRUN_RETRIES + 1)
-        finally:
-            _unlock(connection, library_id)
+        held, _free = _bring_up_to_date(repository, connection, library_id, rebuild_duplicates=rebuild_duplicates,
+                                        report=report, walks=OUTRUN_RETRIES + 1)
     if held:
         raise PreparationError(
             f"{held} changed album(s) were held or marked again by a writer during this pass: stop every writer first.")
@@ -715,13 +813,17 @@ def serving_readiness(repository: Any) -> dict[str, object]:
         if library_id is None:
             raise PreparationError("No Local Library exists in this database.")
         marks = connection.execute(
-            "select count(*) as marks from library.problematic_index_dirty_albums where library_id = %s",
-            (library_id,),
+            """select (select count(*) from library.problematic_index_dirty_albums where library_id = %(library_id)s)
+                 as albums,
+               (select count(*) from library.problematic_loose_groups
+                where library_id = %(library_id)s and marked_xid is not null) as groups""",
+            {"library_id": library_id},
         ).fetchone()
         return {
             "problematic_index": _state(connection, library_id),
             "duplicate_results": _duplicate_results_state(connection, library_id),
-            "changed_albums_waiting": int(_value(marks, "marks")),
+            "changed_albums_waiting": int(_value(marks, "albums")),
+            "changed_loose_groups_waiting": int(_value(marks, "groups")),
         }
 
 
@@ -849,19 +951,15 @@ def _maintain(repository: Any) -> None:
         _RUNNING.add(repository._database_url)
     free = 0
     try:
-        with _worker_connection(repository) as connection:
-            library_id = _library_id(connection)
-            if library_id is None or not _locked(connection, library_id):
+        with _evaluation_lock(repository) as (connection, library_id, locked):
+            if not locked:
                 return
-            try:
-                _held, free = _bring_up_to_date(repository, connection, library_id)
-                first = connection.execute(
-                    """select item_key from library.problematic_index_items where library_id = %s
-                       order by sort_name, sort_artist, sort_year, sort_key limit 1""",
-                    (library_id,),
-                ).fetchone()
-            finally:
-                _unlock(connection, library_id)
+            _held, free = _bring_up_to_date(repository, connection, library_id)
+            first = connection.execute(
+                """select item_key from library.problematic_index_items where library_id = %s
+                   order by sort_name, sort_artist, sort_year, sort_key limit 1""",
+                (library_id,),
+            ).fetchone()
         # The first page opens on this album's detail: building it once per process warms the
         # connection pool and alias maps a restarted server would otherwise pay on first open.
         if first is not None and repository._database_url not in _WARMED:
@@ -951,26 +1049,53 @@ def wait_for_background_work(timeout: float = 600) -> None:
         _EXECUTOR.submit(lambda: None).result(timeout=timeout)
 
 
+# Case 55 (6.5's correction c): a page reads each branch through 0294's (library_id, root_id, sort keys)
+# index, at most a page each: album items (no root) and every active root's loose groups. Items under an
+# inactive root are never read, however many sort before the first one shown.
+_PAGE_FILTER = """
+          and (%(after)s::text[] is null
+               or (items.sort_name, items.sort_artist, items.sort_year, items.sort_key)
+                  > ((%(after)s::text[])[1], (%(after)s::text[])[2],
+                     (%(after)s::text[])[3], (%(after)s::text[])[4]))
+          and (%(needle)s = '' or strpos(items.search_text, %(needle)s) > 0)"""
+_READ_PAGE_SQL = f"""
+    with library_scope as materialized (select ({_LIBRARY_SQL}) as library_id),
+    page as (
+      (select items.item, items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+       from library.problematic_index_items items, library_scope
+       where items.library_id = library_scope.library_id and items.root_id is null{_PAGE_FILTER}
+       order by items.root_id, items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+       limit %(limit)s)
+      union all
+      (select picked.item, picked.sort_name, picked.sort_artist, picked.sort_year, picked.sort_key
+       from library_scope
+       join library.library_roots roots
+         on roots.library_id = library_scope.library_id and roots.is_active is true
+       cross join lateral (
+         select items.item, items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+         from library.problematic_index_items items
+         where items.library_id = library_scope.library_id and items.root_id = roots.id{_PAGE_FILTER}
+         order by items.sort_name, items.sort_artist, items.sort_year, items.sort_key
+         limit %(limit)s
+       ) picked)
+    )
+    select item from page
+    order by sort_name, sort_artist, sort_year, sort_key
+    limit %(limit)s"""
+
+
 def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str, str] | None,
               needle: str = "") -> list[dict[str, object]] | None:
     """Up to ``limit + 1`` items (every item when None) after ``after`` matching ``needle``.
 
-    None when no ready index exists yet.
+    None when no ready index exists yet. Items under an inactive root are not served (a read applies
+    root activity, case 55).
     """
     if not refresh(repository):
         return None
     with repository._browse_connection_context() as connection:
         rows = connection.execute(
-            f"""select items.item
-                from library.problematic_index_items items
-                where items.library_id = ({_LIBRARY_SQL})
-                  and (%(after)s::text[] is null
-                       or (items.sort_name, items.sort_artist, items.sort_year, items.sort_key)
-                          > ((%(after)s::text[])[1], (%(after)s::text[])[2],
-                             (%(after)s::text[])[3], (%(after)s::text[])[4]))
-                  and (%(needle)s = '' or strpos(items.search_text, %(needle)s) > 0)
-                order by items.sort_name, items.sort_artist, items.sort_year, items.sort_key
-                limit %(limit)s""",
+            _READ_PAGE_SQL,
             {"after": list(after) if after is not None else None, "needle": needle,
              "limit": None if limit is None else limit + 1},
         ).fetchall()

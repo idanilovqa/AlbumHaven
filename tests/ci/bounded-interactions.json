@@ -16337,9 +16337,11 @@
     },
     {
       "id": "py:services/ignored_repair_intents.py#_drain_queued",
-      "action": "Apply the ignored-repair intents a held publication kept back, in order, under the inventory publication lock, on a connection no request reuses",
+      "action": "Apply the ignored-repair intents a held publication kept back, in order, under the inventory publication lock, on a connection no request reuses; a failed pass is retried once after 60 s",
       "entrypoints": [
-        "py:music_app/services/ignored_repair_intents.py#_drain_queued:background:executor"
+        "py:music_app/services/ignored_repair_intents.py#_drain_queued:background:executor",
+        "py:music_app/services/ignored_repair_intents.py#_schedule_retry:scheduler:name",
+        "py:music_app/services/ignored_repair_intents.py#queue_drain:background:thread"
       ],
       "owners": [
         "music_app/services/ignored_repair_intents.py",

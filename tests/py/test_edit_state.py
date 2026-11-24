@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from music_app.routes import api_view_payload_helpers
 from music_app.services import edit_state as edit_state_module
 from music_app.services.edit_state import (
@@ -279,3 +281,20 @@ def test_a_tag_write_is_hidden_from_the_library_watcher(tmp_path, monkeypatch):
 
     assert edit_state_module.apply_repairs_worker(str(path), {"album": "B"}) == (str(path), True, ["album"])
     assert observed == [True]
+
+
+def test_a_failed_tag_write_leaves_the_file_visible_to_the_library_watcher(tmp_path, monkeypatch):
+    """FTC-TAGS-008 (run 45470185804, diagnostic run 45494961464): the save's write failed, the file was put
+    back within the grace period, and the watcher dropped that restore, so the album kept only its other track."""
+    from music_app.services.library_watch_suppression import is_library_watch_event_suppressed
+
+    path = tmp_path / "track.mp3"
+
+    def write(_target, _repairs):
+        raise PermissionError("the file cannot be written")
+
+    monkeypatch.setattr(edit_state_module, "apply_text_repairs_to_file", write)
+
+    with pytest.raises(PermissionError):
+        edit_state_module.apply_repairs_worker(str(path), {"album": "B"})
+    assert is_library_watch_event_suppressed(path) is False

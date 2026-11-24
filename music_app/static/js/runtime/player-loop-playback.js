@@ -455,7 +455,8 @@ async function playTrackFromPayload(track, options = {}) {
   const shouldAutoplay = options.autoplay !== false;
   if (shouldAutoplay && typeof noteStreamingPress === 'function') noteStreamingPress(track);
   const requestedTrackPath = String(track?.path || '');
-  const currentTrackPath = String(state.player.current?.path || '');
+  const previousTrack = state.player.current || null;
+  const currentTrackPath = String(previousTrack?.path || '');
   // Replaced by this press: the current song, and one pressed before it that has yet to sound.
   const replacesSong = [currentTrackPath, String(state.player.selectedTrack?.path || '')]
     .some((replaced) => replaced && replaced !== requestedTrackPath);
@@ -564,8 +565,23 @@ async function playTrackFromPayload(track, options = {}) {
   if (selectionToken !== playerTrackSelectionToken) return false;
   if (waitsForGrant && (diedWaiting || getPlayerPlaybackSnapshot().mode === 'error')) {
     // Answered, it starts by itself, with no second press.
-    startedRole = await start();
+    let retryError = null;
+    try {
+      startedRole = await start();
+    } catch (error) {
+      retryError = error;
+    }
     if (selectionToken !== playerTrackSelectionToken) return false;
+    if (retryError || startedRole === null) {
+      // As any failed start: the song it replaced stays the player's, with its waveform.
+      pendingPlayerStart = null;
+      setCurrentPlayerTrack(previousTrack, { previousPlaybackSnapshot });
+      if (previousTrack?.path && typeof loadPlayingWaveformPeaks === 'function') {
+        void loadPlayingWaveformPeaks(previousTrack.path).catch(() => {});
+      }
+      updatePlayerUi();
+      throw retryError || new Error('Streaming playback did not start');
+    }
   }
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({

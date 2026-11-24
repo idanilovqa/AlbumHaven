@@ -3,6 +3,8 @@ more album tags, each of those albums is complete, and nothing else is in the fo
 to another album folder don't count against it. Decided from the files' tags alone, never from names."""
 from pathlib import PureWindowsPath
 
+import pytest
+
 DUPLICATE = "Duplicate track outside album folder"
 
 
@@ -159,3 +161,29 @@ def test_albums_known_as_discs_of_one_release_are_not_a_multi_album_folder(monke
     assert multi_album_folders.strict_multi_album_folders(entries)
     monkeypatch.setattr(multi_album_folders, "discs_of_one_release", lambda albums: True)
     assert multi_album_folders.strict_multi_album_folders(entries) == set()
+
+
+
+
+@pytest.mark.parametrize("first, second", [
+    ("Live Set (Deluxe Edition) - Disc 1", "Live Set (Deluxe Edition) (Bonus Concert) - Disc 2"),
+    ("Live Set (Deluxe Edition) disc 1", "Live Set [Deluxe Edition] (Disc 2)"),
+    ("Live Set [Deluxe Edition] (CD 1 of 2)", "Live Set [Deluxe Edition] (CD 2 of 2)"),
+    ("Live Set [Deluxe Edition]", "Live Set [Deluxe Edition] (disc 2)"),
+    ("\u0416\u0438\u0432\u043e\u0439 \u0437\u0432\u0443\u043a \u0414\u0438\u0441\u043a 1",
+     "\u0416\u0438\u0432\u043e\u0439 \u0437\u0432\u0443\u043a \u0414\u0438\u0441\u043a 2"),
+])
+def test_one_release_split_by_disc_tags_is_not_a_multi_album_folder(first, second):
+    """Owner (2026-11-24): a release split by disc counts as one album. A folder whose album tags carry disc
+    markers for one release (two marked titles, or a marked title equal to another once the marker is
+    removed) is never a multi-album folder."""
+    entries = _album(r"C:\\Music\\Deluxe", first, (1, 2, 3)) + _album(r"C:\\Music\\Deluxe", second, (1, 2))
+    assert _strict(entries) == set()
+
+
+def test_one_disc_marker_on_a_different_album_still_counts_the_folder_normally():
+    """Two different tribute albums, one titled with "Disc 1": the titles differ beyond the marker, so the folder
+    is judged like any other (here: two complete albums alone, a multi-album folder)."""
+    first = "A Tribute To First Band. XXV. \u0414\u0438\u0441\u043a 1"
+    entries = (_album(r"C:\\Music\\Bonus", first, (1, 2)) + _album(r"C:\\Music\\Bonus", "A Tribute to Second Band. XXV", (1, 2)))
+    assert _strict(entries) == {_folder(r"C:\\Music\\Bonus\\x.flac")}

@@ -1,10 +1,18 @@
 import { expect, test } from '../support/performanceFixtures.js';
 import {
   expectTimingBudget,
+  expectTimingBudgetOutcome,
   measureInteractionToPaint,
   performanceTimingBudget,
 } from '../helpers/index.js';
 import { COVER_LOOKUP_TEST_TARGETS } from '../helpers/coverLookupFixtureData.js';
+import {
+  PROJECTION_PENDING_WINDOW_METRIC_ID,
+  PROJECTION_READ_PATH,
+  STATUS_PATH,
+  evaluateProjectionPendingTimeline,
+  projectionReadScope,
+} from './projectionPendingWindows.js';
 
 const CASE_ID = 'FTC-COVERS-019P';
 const TARGET = COVER_LOOKUP_TEST_TARGETS.performanceInteractions;
@@ -17,20 +25,48 @@ const TIMING_BUDGETS = Object.freeze(Object.fromEntries([
   'reopenAllCardsShownMs',
 ].map((key) => [key, Object.freeze(performanceTimingBudget(`cover-lookup.${key}`))])));
 const MAX_INTERACTION_LONG_TASK_MS = 200;
-const PROJECTION_READ_PATH = /^\/view-data$|\/search(?:\/|$)/;
+const PROJECTION_PENDING_WINDOW_BUDGET = Object.freeze(performanceTimingBudget(PROJECTION_PENDING_WINDOW_METRIC_ID));
 
-// 6.5 (FTC-COVERS-019P): a gallery or search read answering "projection pending" means a save or open
-// invalidated a projection the next read then had to wait for. Records passively; only a 503 body is read.
-function recordProjectionPendingAnswers(page) {
-  const pending = [];
+// 6.5 (FTC-COVERS-019P): passive. Reads the page's own /status polls until the first relation_projection.ready
+// and the bodies of 503 gallery/search reads; every other response contributes only its URL and status.
+function recordProjectionPendingTimeline(page) {
+  const events = [];
+  let readySeen = false;
   page.on('response', (response) => {
-    if (response.status() !== 503 || !PROJECTION_READ_PATH.test(new URL(response.url()).pathname)) return;
-    pending.push(response.json().then(
-      (body) => ({ url: response.url(), code: String(body?.code ?? '') }),
-      () => ({ url: response.url(), code: '' }),
-    ));
+    const atMs = performance.now();
+    const url = response.url();
+    const { pathname } = new URL(url);
+    const status = response.status();
+    if (pathname === STATUS_PATH) {
+      if (readySeen || !response.ok()) return;
+      events.push(response.json().then(
+        (body) => {
+          if (body?.relation_projection?.ready !== true) return null;
+          readySeen = true;
+          return { atMs, kind: 'ready' };
+        },
+        () => null,
+      ));
+      return;
+    }
+    if (!PROJECTION_READ_PATH.test(pathname)) return;
+    const scope = projectionReadScope(url);
+    if (status >= 200 && status < 300) {
+      events.push({ atMs, kind: 'success', scope });
+    } else if (status === 503) {
+      events.push(response.json().then(
+        (body) => {
+          const code = String(body?.code ?? '');
+          return code.endsWith('_projection_pending') ? { atMs, kind: 'pending', scope, code } : null;
+        },
+        () => null,
+      ));
+    }
   });
-  return async () => (await Promise.all(pending)).filter(({ code }) => code.endsWith('_projection_pending'));
+  return async () => evaluateProjectionPendingTimeline(
+    (await Promise.all(events)).filter(Boolean),
+    PROJECTION_PENDING_WINDOW_BUDGET,
+  );
 }
 
 // Owner (2026-11-18, see FTC-COVERS-048): the first painted state that already holds the settled cards; LOCAL
@@ -56,7 +92,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     thirdPartyRequestEvidence,
     trackModalActions,
   }) => {
-    const projectionPendingAnswers = recordProjectionPendingAnswers(page);
+    const projectionPendingTimeline = recordProjectionPendingTimeline(page);
     await stepLogger.step('Open the fixture album through the production gallery and Album Details controls', async () => {
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TARGET.artist)}`);
       await galleryActions.waitForGalleryReady();
@@ -159,6 +195,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
 
     await coverLookupActions.closeModal();
     await trackModalActions.close();
+    const projectionPending = await projectionPendingTimeline();
 
     const metrics = {
       modalVisibleMs: modalVisible.durationMs,
@@ -166,6 +203,10 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       candidateSelectionMs: candidateSelection.durationMs,
       saveAcceptedMs: saveAccepted.durationMs,
       localCardsShownMs,
+      projectionPendingPreReadyCount: projectionPending.preReadyPendingCount,
+      projectionPendingWindows: projectionPending.windows.map(({ scope, code, durationMs, outcome }) => ({
+        scope, code, durationMs, status: outcome.status,
+      })),
       reopenAllCardsShownMs,
       selectedCandidateId: selectedCandidate.id,
       selectedCandidateSource: selectedCandidate.source,
@@ -192,6 +233,16 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
         expectTimingBudget(expect.soft, timingMs, TIMING_BUDGETS[key], key),
       );
     }
+    for (const [index, pendingWindow] of projectionPending.windows.entries()) {
+      const key = `projectionPendingWindowMs.${index + 1}`;
+      await coverLookupLocalReport.recordTimingCheckpoint({
+        key,
+        label: `projection pending window ${index + 1}`,
+        timingMs: pendingWindow.durationMs,
+        details: { scope: pendingWindow.scope, code: pendingWindow.code, budgetMetricId: PROJECTION_PENDING_WINDOW_METRIC_ID },
+      });
+      expectTimingBudgetOutcome(expect.soft, pendingWindow.outcome, `${key} (${pendingWindow.scope})`);
+    }
     for (const [label, measurement] of [
       ['modal open', modalVisible],
       ['candidate selection', candidateSelection],
@@ -204,8 +255,8 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       ).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
     }
     expect(
-      await projectionPendingAnswers(),
-      'A gallery or search read answered 503 projection pending during Cover Lookup.',
+      projectionPending.violations,
+      'A gallery or search read answered 503 projection pending outside its one post-ready window.',
     ).toEqual([]);
     coverLookupLocalReport.recordContractCompletion();
   });

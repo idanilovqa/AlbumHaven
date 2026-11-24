@@ -377,6 +377,13 @@ function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
       note: 'Cover Lookup action to every LOCAL card, or the empty state',
     },
     {
+      label: 'Projection Pending Windows',
+      value: (metricsPayload?.projectionPendingWindows || [])
+        .map(({ durationMs }) => `${Math.round(Number(durationMs))} ms`).join(', ') || 'none',
+      note: `First post-ready pending to success per scope; ${
+        Number(metricsPayload?.projectionPendingPreReadyCount || 0)} pending before readiness`,
+    },
+    {
       label: 'Reopen Cards Shown',
       value: `${Math.round(Number(metricsPayload?.reopenAllCardsShownMs || 0))} ms`,
       note: 'Reopening after Save to every LOCAL and REMOTE card',

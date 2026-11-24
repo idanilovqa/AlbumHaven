@@ -385,3 +385,11 @@ test('prepared-fixture target mode validates identity but suppresses target-leve
     'prepared mode must retain the normal fixture-profile and owner-database identity preflight',
   );
 });
+
+test('a restored performance database starts with its relation projection published', () => {
+  const source = fs.readFileSync(path.join(repoRoot, 'scripts', 'ci', 'run-performance-shard.ps1'), 'utf8');
+  assert.match(
+    source,
+    /function Restore-PerformanceDatabase \{[^}]*--relation-projection ready[^}]*\}/,
+  );
+});

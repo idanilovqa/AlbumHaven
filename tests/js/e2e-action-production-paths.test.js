@@ -2645,17 +2645,17 @@ test('tag moves protect transient topology where observable and settle every rep
   );
 });
 
-test('FTC-TAGS-008 terminal-failure compensation reloads one exact two-track rarity card before later cases', () => {
+test('FTC-TAGS-008 failed-write cleanup reloads one exact two-track rarity card before later cases', () => {
   const spec = read('tests/e2e/specs/albumTagRename.spec.js');
-  const caseStart = spec.indexOf("test('FTC-TAGS-008 keeps an accepted terminal failure");
+  const caseStart = spec.indexOf("test('FTC-TAGS-008 keeps a failed file write readable");
   const caseEnd = spec.indexOf("test('FTC-TAGS-009", caseStart);
   const caseSource = spec.slice(caseStart, caseEnd);
 
   assert.ok(caseStart >= 0 && caseEnd > caseStart);
   assert.match(
     caseSource,
-    /readVisibleHistoryText\(\)[\s\S]*?settingsModalAppBarActions\.closeSettings\(\)[\s\S]*?privilegeGuard\.restore\(\)[\s\S]*?Reload the compensated rarity fixture as one exact two-track album[\s\S]*?trackModalActions\.closeIfOpen\(\)[\s\S]*?page\.reload\(\{ waitUntil: 'domcontentloaded' \}\)[\s\S]*?waitForGalleryReady\(\)[\s\S]*?readAlbumIdentityCardCount\(\{[\s\S]*?album:\s*FAILURE_FIXTURE_ALBUM[\s\S]*?year:\s*FIXTURE_YEAR[\s\S]*?\}\)\)\.toBe\(1\)[\s\S]*?waitForExactAlbumDetails\(\{[\s\S]*?trackTitles:\s*\['Apply Rarity Here', 'Remain Editable'\]/,
-    'terminal-failure cleanup must prove the reloaded rarity identity has one card and its exact two physical tracks',
+    /unwritableTrack\.restore\(\)[\s\S]*?readVisibleHistoryText\(\)[\s\S]*?settingsModalAppBarActions\.closeSettings\(\)[\s\S]*?changedId3Frames\(filesBefore, filesAfter\)[\s\S]*?Reload the unchanged rarity fixture as one exact two-track album[\s\S]*?trackModalActions\.closeIfOpen\(\)[\s\S]*?page\.reload\(\{ waitUntil: 'domcontentloaded' \}\)[\s\S]*?waitForGalleryReady\(\)[\s\S]*?readAlbumIdentityCardCount\(\{[\s\S]*?album:\s*FAILURE_FIXTURE_ALBUM[\s\S]*?year:\s*FIXTURE_YEAR[\s\S]*?\}\)\)\.toBe\(1\)[\s\S]*?waitForExactAlbumDetails\(\{[\s\S]*?trackTitles:\s*\['Apply Rarity Here', 'Remain Editable'\]/,
+    'failed-write cleanup must restore the file, prove both files unchanged, and reload one card with its exact two tracks',
   );
 });
 
@@ -2698,17 +2698,22 @@ test('terminal tag-save contracts keep one pending POST authoritative without st
 
 test('FTC-TAGS-008 keeps terminal failure actionable and opens the exact Log History detail', () => {
   const spec = read('tests/e2e/specs/albumTagRename.spec.js');
-  const caseStart = spec.indexOf("test('FTC-TAGS-008 keeps an accepted terminal failure");
+  const caseStart = spec.indexOf("test('FTC-TAGS-008 keeps a failed file write readable");
   const caseEnd = spec.indexOf("test('FTC-TAGS-009", caseStart);
   const caseSource = spec.slice(caseStart, caseEnd);
 
   assert.ok(caseStart >= 0 && caseEnd > caseStart);
   assert.match(caseSource, /utilityLogHistoryActions/);
-  assert.match(caseSource, /expect\(failure\.task\.error\)\.toContain\('ignored_versions'\)/);
-  assert.match(caseSource, /expect\(failure\.alertText\)\.toContain\('ignored_versions'\)/);
+  // The file write fails on the real media path (no interception): the page shows the owner's copy, and the
+  // path and raw error stay in Log History.
+  assert.doesNotMatch(caseSource, /page\.route\(|temporarilyRevokeRuntimeDeletePrivileges/);
+  assert.match(caseSource, /temporarilyMakeGeneratedMp3Unavailable\(\{[\s\S]*?filename: FAILURE_FIXTURE_TRACK/);
+  assert.match(caseSource, /applyAndWaitForFailure\(\{ expectedErrorPattern: \/\^Save failed: Read-only files\$\/u \}\)/);
+  assert.match(caseSource, /expect\(failure\.payload\.failure_stage\)\.toBe\('media_write'\)/);
+  assert.match(caseSource, /expect\(failure\.alertText\)\.not\.toContain\(FAILURE_FIXTURE_TRACK\)/);
   assert.match(
     caseSource,
-    /expectTerminalFailureRemainsReadable\(failure\.task\.error\)[\s\S]*?openLogHistoryFromFailure\(\)[\s\S]*?utilityLogHistoryActions\.waitForReady\(\)[\s\S]*?readVisibleHistoryText\(\)[\s\S]*?toContain\(failure\.task\.error\)/,
+    /openLogHistoryFromFailure\(\)[\s\S]*?utilityLogHistoryActions\.waitForReady\(\)[\s\S]*?readVisibleHistoryText\(\)\)\.toContain\(failureError\)/,
   );
 });
 

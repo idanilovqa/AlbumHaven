@@ -31,6 +31,8 @@ jobs:
     env:
       ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e
       ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app@127.0.0.1:5432/album_haven_fake_e2e
+      # The job's own Postgres service: the one port-5432 target pytest may reach (tests/py/postgres_target_guard.py).
+      ALBUM_HAVEN_CI_POSTGRES_SERVICE: 127.0.0.1:5432
     steps:
       - uses: actions/checkout@v5
         with:

@@ -748,12 +748,24 @@ def test_live_loose_track_drain_reads_only_its_marked_tracks_at_any_library_size
         fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries=changed)
         assert _marks(fixture) == waiting
         with isolatedPostgres._connect(fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+            # Structural proof that the index path exists, not the performance proof: with sequential scans
+            # off, every read is one of the query's own index paths, so the rows counted are the rows its
+            # scoping reaches (a few hundred rows otherwise make a whole-table pass the cheapest plan). The
+            # real proof is the default-planner drain measurement, flat at both store sizes, in
+            # test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size.
+            connection.execute("set local enable_seqscan = off")
             before = {row["relname"]: int(row["rows_read"]) for row in connection.execute(_DRAIN_ROWS_READ_SQL)}
             assert loose_track_store.drain(repository._inventory_repository, connection) == waiting
             after = {row["relname"]: int(row["rows_read"]) for row in connection.execute(_DRAIN_ROWS_READ_SQL)}
         reads[albums] = {table: after[table] - before.get(table, 0) for table in after
                          if after[table] != before.get(table, 0)}
     small, large = reads[5], reads[400]
+    # Structural proof that the index path exists: at each size, every table is read at most three rows per
+    # marked track (its mark, file and owners).
+    for albums, per_table in reads.items():
+        assert all(rows <= 3 * waiting for rows in per_table.values()), (
+            f"the drain beside {albums} albums read more than {3 * waiting} rows of a table: {per_table}"
+        )
     assert sum(large.values()) - sum(small.values()) <= _DRAIN_ROWS_READ_SLACK, (
         f"the drain read {sum(small.values())} table rows beside 5 albums and {sum(large.values())} beside 400: "
         f"{small} vs {large}"

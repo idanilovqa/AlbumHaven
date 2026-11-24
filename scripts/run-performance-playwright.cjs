@@ -2002,6 +2002,9 @@ function reloadPreloadedFixtureForAttempt(target, env, spawnSync = childProcess.
     '--profile', selectedProfile,
     '--database-url', databaseUrl,
     '--replace-existing',
+    // Production starts with its relation projection published; a missing one is rebuilt at startup
+    // while the measured target is already reading, which answers projection_pending (FTC-COVERS-019P).
+    '--relation-projection', 'ready',
   ], {
     cwd: repoRoot,
     env,

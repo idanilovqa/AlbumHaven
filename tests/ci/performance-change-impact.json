@@ -101,6 +101,7 @@
     "music_app/services/cover_lookup_runtime.py",
     "music_app/routes/api_wave_d_asgi_routes.py",
     "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
+    "tests/e2e/syntheticLargeLibrary/projectionPendingWindows.js",
     "music_app/services/cover_reference_boundary.py",
     "music_app/services/cover_references.py",
     "migrations/postgres/0200_create_cover_references.sql",
@@ -405,7 +406,8 @@
         "music_app/services/cover_lookup_runtime.py",
         "music_app/routes/api_wave_d_asgi_routes.py",
         "music_app/services/library_browse_postgres.py",
-        "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js"
+        "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
+        "tests/e2e/syntheticLargeLibrary/projectionPendingWindows.js"
       ],
       "targets": [
         "cover-lookup"

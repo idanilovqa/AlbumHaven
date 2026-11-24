@@ -6457,6 +6457,7 @@
       "proof": "contract",
       "requestOwnership": {
         "allowed": [
+          "/",
           "/home-data",
           "/view-data"
         ],

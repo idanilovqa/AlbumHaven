@@ -102,3 +102,41 @@ def test_separate_release_summary_key_resolves_composite_persisted_credit(monkey
         assert detail["year"] == requested_year
         assert [track["path"] for track in detail["tracks"]] == [f"/music/1/{requested_year}/01.flac"]
     assert set(selected) <= {1}
+
+
+def test_problematic_detail_without_a_matching_album_runs_no_whole_library_duplicate_sql(monkeypatch):
+    """A Problematic Files detail whose separate-release key matches no album has no duplicate identity to
+    look up: it reads no duplicate candidates at all, never the whole library's identity index."""
+    statements = []
+
+    class Connection:
+        result = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            statements.append(" ".join(sql.split()))
+            self.result = []
+            return self
+
+        def fetchall(self):
+            return self.result
+
+        def fetchone(self):
+            return None
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "pf-no-key-duplicates"}, connect=lambda _url: Connection(),
+    )
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", lambda _kind: None)
+
+    rows = repository._load_problematic_file_rows(album_key="nobody::no such album::year::2001")
+
+    assert rows == []
+    whole_library = [sql for sql in statements
+                     if "inventory_mutation_revision" in sql or "select distinct albums.id as album_id" in sql]
+    assert whole_library == [], whole_library

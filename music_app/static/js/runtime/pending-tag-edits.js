@@ -194,17 +194,27 @@ const pendingTagEdits = (() => {
   }
 
   // The Save's own optimistic path lays each shown save's values over the loaded view (every display site).
+  // Each update commits the patched view, and every view commit lays the open saves over it: that nested call
+  // finds this pass already laying them and returns.
+  let laying = false;
+
   function overlayCurrentView() {
+    if (laying) return 0;
+    laying = true;
     let laid = 0;
-    for (const entry of entries) {
-      const updates = entry.payload?.updates;
-      if (!PENDING_TAG_EDIT_SHOWN_STATES.has(entry.state) || !entry.display_album || !updates) continue;
-      if (typeof buildOptimisticUpdatedAlbumsFromEdits !== 'function' || typeof applyUpdatedAlbumsToCurrentView !== 'function') break;
-      applyUpdatedAlbumsToCurrentView(buildOptimisticUpdatedAlbumsFromEdits(entry.display_album, updates), {
-        skipRender: true, originalAlbum: entry.display_album, preserveScroll: true, tagEdits: updates,
-      });
-      if (typeof applyTagEditsToNonAlbumView === 'function') applyTagEditsToNonAlbumView(entry.display_album, updates);
-      laid += 1;
+    try {
+      for (const entry of entries) {
+        const updates = entry.payload?.updates;
+        if (!PENDING_TAG_EDIT_SHOWN_STATES.has(entry.state) || !entry.display_album || !updates) continue;
+        if (typeof buildOptimisticUpdatedAlbumsFromEdits !== 'function' || typeof applyUpdatedAlbumsToCurrentView !== 'function') break;
+        applyUpdatedAlbumsToCurrentView(buildOptimisticUpdatedAlbumsFromEdits(entry.display_album, updates), {
+          skipRender: true, originalAlbum: entry.display_album, preserveScroll: true, tagEdits: updates,
+        });
+        if (typeof applyTagEditsToNonAlbumView === 'function') applyTagEditsToNonAlbumView(entry.display_album, updates);
+        laid += 1;
+      }
+    } finally {
+      laying = false;
     }
     return laid;
   }

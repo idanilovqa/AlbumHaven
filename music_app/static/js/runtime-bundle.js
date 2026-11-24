@@ -39166,9 +39166,17 @@ function loadTrackModalCoverImage(imageElement, coverSrc, isCurrent) {
   });
 }
 
-// A changed cover never blanks the one on screen: its replacement loads and decodes off the
-// page, then takes its place. One that cannot decode goes through the ordinary visible load,
-// which owns the retry, remote fallback and placeholder.
+function isCoverDecodedOnPage(coverSrc) {
+  const absoluteSrc = new URL(coverSrc, window.location.href).href;
+  return Array.from(document.images || []).some((image) => (
+    image.currentSrc === absoluteSrc && image.complete && image.naturalWidth > 0
+  ));
+}
+
+// A changed cover never blanks the one on screen. One already decoded on the page, such as the
+// cover just picked in Cover Look Up, takes its place at once; any other loads and decodes off
+// the page first. One that cannot decode goes through the ordinary visible load, which owns the
+// retry, remote fallback and placeholder.
 async function replaceTrackModalCoverWhenDecoded(shownImage, coverSrc, visualHtml, ownsSwap, ownsModalCover) {
   const createVisual = () => {
     const host = document.createElement('span');
@@ -39176,6 +39184,14 @@ async function replaceTrackModalCoverWhenDecoded(shownImage, coverSrc, visualHtm
     const image = host.querySelector('img');
     return { image, visual: image.closest('.track-modal-cover-visual') };
   };
+  if (isCoverDecodedOnPage(coverSrc)) {
+    const next = createVisual();
+    next.image.setAttribute('data-production-cover-src', coverSrc);
+    next.image.setAttribute('src', coverSrc);
+    shownImage.closest('.track-modal-cover-visual').replaceWith(next.visual);
+    if (next.image.complete && next.image.naturalWidth > 0) handleTrackModalCoverImageLoad(next.image);
+    return;
+  }
   const replacement = createVisual();
   let decoded = false;
   try {

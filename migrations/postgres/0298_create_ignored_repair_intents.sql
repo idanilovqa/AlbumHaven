@@ -1,5 +1,4 @@
--- NNNN_create_ignored_repair_intents.sql
--- (The number is being reserved in the owner's ledger; this file is renamed before it merges.)
+-- 0298_create_ignored_repair_intents.sql
 -- An Ignore or Unignore made while a publication holds the library waits at most a moment, then keeps an
 -- intent here and answers. The drain applies the intents in id order under the inventory publication lock
 -- once the publication ends, and deletes them; every read of the ignored repairs lays them over the

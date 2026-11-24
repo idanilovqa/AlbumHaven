@@ -86,3 +86,24 @@ def test_live_a_copy_folder_keeps_every_copy_as_a_duplicate_track(watcher_repair
     assert {path: twin[path] for path in copies & set(twin)} == {path: DUPLICATE for path in copies & set(twin)}, (
         "Album Details classifies a proven copy as a duplicate, not as a mixed-folder file"
     )
+
+
+def test_live_the_real_album_links_each_copied_track_to_its_copy(watcher_repair_inventory):
+    """Owner (2026-11-24): opening the real album shows the Problematic Files icon on exactly the tracks that
+    have a copy outside the album folder, and the icon leads to the copy's entry."""
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    copies, _real = _seed_copy_folder_library(fixture)
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        album_key = connection.execute(
+            "select album_key from library.local_albums where title = 'Album One'").fetchone()["album_key"]
+
+    detail = PostgresLibraryBrowseRepository(fixture.config).build_album_detail_payload(album_key)
+
+    marked = {track["title"]: track for track in detail["tracks"] if track.get("is_problematic")}
+    assert set(marked) == {"Album One song 1", "Album One song 2"}, "only the copied tracks carry the icon"
+    for title, track in marked.items():
+        assert track["problem_track_path"] in copies
+        assert track["problem_track_path"].endswith(f"1-0{title[-1]}.flac"), "the link opens that track's own copy"
+        assert DUPLICATE in track["problem_reasons"]

@@ -100,6 +100,23 @@ test('AlbumTrackTable names the track problem on the Problematic Files icon', ()
   assert.match(html, new RegExp(`class="track-problem-link"[^>]*title="${title}"[^>]*aria-label="Open this track in Problematic Files"`));
 });
 
+test('AlbumTrackTable links a track with an outside copy to the Problematic Files entry of that copy', () => {
+  // Owner (2026-11-24): the album's own track shows the icon, and it leads to the copy's entry.
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{
+      discNumber: 1,
+      tracks: [{
+        path: 'Album/01.flac', title: 'Copied Song', trackNumber: 1, duration: '3:00',
+        isProblematic: true, problemReasons: ['Duplicate track outside album folder'],
+        problemTrackPath: 'Copied songs/1-01.flac',
+      }],
+    }],
+  });
+
+  assert.match(html, /class="track-problem-link"[^>]*data-track-path="Copied songs\/1-01\.flac"/);
+});
+
 test('AlbumTrackTable Loose Tracks variant inserts File path and drops the unused problem slot', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

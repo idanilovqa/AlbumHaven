@@ -342,9 +342,14 @@ def test_cover_job_contract_reads_only_the_job_album_folder_at_production_librar
 
 
 def test_missing_album_removal_contract_probes_only_the_album_files_at_production_library_size(music_dir, monkeypatch):
+    from music_app.services import gallery_projection_postgres
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
     stale_tracks = 12
+    # The doubled connection cannot publish the relation journal, so the removal hands its album to the
+    # journal owner; that owner's queued drain is a Postgres collaborator too.
+    queued_drains: list[object] = []
+    monkeypatch.setattr(gallery_projection_postgres, "queue_journaled_relation_drain", queued_drains.append)
 
     def run(album_count: int) -> OperationCounts:
         library = music_dir / f"library-{album_count}"
@@ -416,6 +421,7 @@ def test_background_hydration_contract_publishes_the_inventory_without_probing_f
         lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="postgres"),
     )
     monkeypatch.setattr(state_module, "load_exception_overrides", lambda _config: {})
+    monkeypatch.setattr(state_module, "resolve_media_host_history_scope", lambda _config: None)
     monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", InlineExecutor())
     monkeypatch.setattr(state_module, "_prewarm_root_browse_payload_for_state", lambda *_args: None)
     config = {

@@ -1,52 +1,57 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
+import threading
+
+import pytest
 
 from music_app.services import cover_provider_cache
-from music_app.services.cover_provider_cache import CoverSearchCache
+from music_app.services.cover_provider_cache import CoverSearchCache, import_cover_search_cache_file
+from tests.e2e.support import isolatedPostgres
+from tests.py.test_isolated_postgres_live import _dedicated_database_urls_or_skip, _drop_application_schemas
 
 
-def test_cover_search_cache_loads_missing_and_malformed_files_as_empty(tmp_path):
-    cache_path = (tmp_path / "cover_search_cache.json").resolve()
+class _Result:
+    def __init__(self, row):
+        self._row = row
 
-    missing_cache = CoverSearchCache(cache_path)
-
-    assert missing_cache.get("artist::album") is None
-
-    for payload in (
-        "not-json",
-        json.dumps(["not", "a", "mapping"]),
-        json.dumps({"queries": ["not", "a", "mapping"]}),
-        json.dumps({"queries": {"artist::album": ["malformed", "entry"]}}),
-    ):
-        cache_path.write_text(payload, encoding="utf-8")
-        malformed_cache = CoverSearchCache(cache_path)
-
-        assert malformed_cache.get("artist::album") is None
+    def fetchone(self):
+        return self._row
 
 
-def test_cover_search_cache_logs_permission_read_errors(tmp_path, monkeypatch, caplog):
-    cache_path = (tmp_path / "cover_search_cache.json").resolve()
-    original_exists = Path.exists
+class _Connection:
+    """Records every statement; answers `select payload` from `rows` and the import marker from `imported`."""
 
-    def raise_permission_error(self: Path) -> bool:
-        if self == cache_path:
-            raise PermissionError("locked")
-        return original_exists(self)
+    def __init__(self, rows=None, *, imported=False, fail=False):
+        self.rows, self.imported, self.fail, self.statements = dict(rows or {}), imported, fail, []
 
-    monkeypatch.setattr(Path, "exists", raise_permission_error)
+    def __call__(self, _url):
+        return self
 
-    with caplog.at_level("WARNING"):
-        cache = CoverSearchCache(cache_path)
+    def __enter__(self):
+        return self
 
-    assert cache.get("artist::album") is None
-    assert "Cover search cache read skipped" in caplog.text
+    def __exit__(self, *_exc):
+        return False
+
+    def execute(self, sql, params=()):
+        if self.fail:
+            raise RuntimeError("database unavailable")
+        self.statements.append((" ".join(sql.split()), params))
+        if "from library.cover_provider_cache_imports" in sql:
+            return _Result((1,) if self.imported else None)
+        if "from library.cover_provider_cache_entries where cache_key" in sql:
+            payload = self.rows.get(params[0])
+            return _Result(None if payload is None else {"payload": payload})
+        return _Result(None)
 
 
-def test_cover_search_cache_get_and_set_use_shallow_copies_and_ignore_malformed_queries(tmp_path):
-    cache = CoverSearchCache((tmp_path / "cover_search_cache.json").resolve())
+def _jsonb_object(param) -> dict:
+    return getattr(param, "obj", param)
+
+
+def test_without_a_database_answers_stay_in_this_process_and_nothing_is_written(tmp_path):
+    cache = CoverSearchCache()
     nested = {"inner": "original"}
     value = {"url": "https://images.example/cover.jpg", "nested": nested}
 
@@ -55,146 +60,201 @@ def test_cover_search_cache_get_and_set_use_shallow_copies_and_ignore_malformed_
     nested["inner"] = "mutated"
     first_hit = cache.get("artist::album")
     assert first_hit == {"url": "https://images.example/cover.jpg", "nested": {"inner": "mutated"}}
-
     first_hit["url"] = "changed"
-    assert cache.get("artist::album") == {
-        "url": "https://images.example/cover.jpg",
-        "nested": {"inner": "mutated"},
-    }
-
-    cache._payload["queries"] = "malformed"
-    cache._dirty = False
-    cache.set("ignored", {"value": True})
-    assert cache._dirty is False
-    assert cache.get("ignored") is None
-
-
-def test_cover_search_cache_save_failure_keeps_dirty_for_retry(tmp_path, monkeypatch, caplog):
-    cache_path = (tmp_path / "cover_search_cache.json").resolve()
-    cache = CoverSearchCache(cache_path)
-    previous = {"url": "https://images.example/previous.jpg"}
-    cache.set("artist::album", previous)
+    assert cache.get("artist::album") == {"url": "https://images.example/cover.jpg", "nested": {"inner": "mutated"}}
     cache.save()
-    previous_bytes = cache_path.read_bytes()
+    assert cache.get("artist::album") is not None
+    assert CoverSearchCache().get("artist::album") is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_lookup_reads_one_row_by_its_key_and_never_the_whole_cache():
+    connection = _Connection({"artist::album": {"missing": True}})
+    cache = CoverSearchCache("postgresql://cache", connect=connection)
+
+    assert cache.get("artist::album") == {"missing": True}
+    assert cache.get("other::album") is None
+
+    assert connection.statements == [
+        ("select payload from library.cover_provider_cache_entries where cache_key = %s", ("artist::album",)),
+        ("select payload from library.cover_provider_cache_entries where cache_key = %s", ("other::album",)),
+    ]
+
+
+def test_construction_reads_nothing():
+    connection = _Connection()
+
+    CoverSearchCache("postgresql://cache", connect=connection)
+
+    assert connection.statements == []
+
+
+def test_save_upserts_only_the_staged_keys_once_and_a_clean_save_writes_nothing():
+    connection = _Connection({"stored::album": {"missing": True}})
+    cache = CoverSearchCache("postgresql://cache", connect=connection)
     cache.set("artist::album", {"url": "https://images.example/cover.jpg"})
-    original_replace = os.replace
-    attempted_sources = []
+    assert cache.get("artist::album") == {"url": "https://images.example/cover.jpg"}
+    assert connection.statements == []
 
-    def raise_permission_error(source, destination, *args, **kwargs):
-        if Path(destination) == cache_path:
-            attempted_sources.append(Path(source))
-            assert Path(source).parent == cache_path.parent
-            assert Path(source) != cache_path
-            assert json.loads(Path(source).read_text(encoding="utf-8"))["queries"]["artist::album"] == {
-                "url": "https://images.example/cover.jpg",
-            }
-            raise PermissionError("locked")
-        return original_replace(source, destination, *args, **kwargs)
+    cache.save()
+    cache.save()
 
-    monkeypatch.setattr(os, "replace", raise_permission_error)
+    assert len(connection.statements) == 1
+    sql, params = connection.statements[0]
+    assert sql.startswith("insert into library.cover_provider_cache_entries")
+    assert "on conflict (cache_key) do update" in sql
+    assert _jsonb_object(params[0]) == {"artist::album": {"url": "https://images.example/cover.jpg"}}
+
+
+def test_a_failed_write_keeps_the_staged_answer_for_the_next_save(caplog):
+    connection = _Connection(fail=True)
+    cache = CoverSearchCache("postgresql://cache", connect=connection)
+    cache.set("artist::album", {"missing": True})
 
     with caplog.at_level("WARNING"):
         cache.save()
 
-    assert "Cover search cache write skipped" in caplog.text
-    assert cache._dirty is True
-    assert attempted_sources
-    assert cache_path.read_bytes() == previous_bytes
-    assert CoverSearchCache(cache_path).get("artist::album") == previous
-    assert set(tmp_path.iterdir()) == {cache_path}
-
-    monkeypatch.setattr(os, "replace", original_replace)
-
+    assert "Cover provider cache write failed" in caplog.text
+    assert cache.get("artist::album") == {"missing": True}
+    connection.fail = False
     cache.save()
-
-    assert cache._dirty is False
-    saved_text = cache_path.read_text(encoding="utf-8")
-    assert saved_text.startswith('{\n  "queries": {')
-    assert json.loads(saved_text) == {
-        "queries": {
-            "artist::album": {
-                "url": "https://images.example/cover.jpg",
-            },
-        },
-    }
-    assert CoverSearchCache(cache_path).get("artist::album") == {
-        "url": "https://images.example/cover.jpg",
-    }
-    assert set(tmp_path.iterdir()) == {cache_path}
-
-
-def test_cover_search_cache_publishes_complete_checkpoint_by_atomic_replace(tmp_path, monkeypatch):
-    cache_path = tmp_path / "cover_search_cache.json"
-    cache = CoverSearchCache(cache_path)
-    cache.set("old", {"status": "no_match"})
+    assert _jsonb_object(connection.statements[-1][1][0]) == {"artist::album": {"missing": True}}
     cache.save()
-    previous_bytes = cache_path.read_bytes()
-    cache.set("new", {"url": "https://images.example/new.jpg"})
-    original_replace = os.replace
-    replacements = []
-
-    def observe_replace(source, destination, *args, **kwargs):
-        if Path(destination) == cache_path:
-            assert cache_path.read_bytes() == previous_bytes
-            assert Path(source).parent == cache_path.parent
-            assert Path(source) != cache_path
-            staged = json.loads(Path(source).read_text(encoding="utf-8"))
-            assert set(staged["queries"]) == {"old", "new"}
-            replacements.append(Path(source))
-        return original_replace(source, destination, *args, **kwargs)
-
-    monkeypatch.setattr(os, "replace", observe_replace)
-    cache.save()
-
-    assert len(replacements) == 1
-    reloaded = CoverSearchCache(cache_path)
-    assert reloaded.get("old") == {"status": "no_match"}
-    assert reloaded.get("new") == {"url": "https://images.example/new.jpg"}
-    assert cache._dirty is False
-    assert set(tmp_path.iterdir()) == {cache_path}
-    cache.save()
-    assert len(replacements) == 1
+    assert len(connection.statements) == 1
 
 
-def test_cover_search_cache_cleanup_permission_failure_preserves_checkpoint(tmp_path, monkeypatch, caplog):
-    cache_path = tmp_path / "cover_search_cache.json"
-    cache = CoverSearchCache(cache_path)
-    cache.set("old", {"status": "no_match"})
-    cache.save()
-    previous_bytes = cache_path.read_bytes()
-    cache.set("new", {"url": "https://images.example/new.jpg"})
-    original_replace = os.replace
-    original_unlink = Path.unlink
-    owned_temporary_paths = []
+def test_a_failed_lookup_is_a_miss_and_is_logged(caplog):
+    cache = CoverSearchCache("postgresql://cache", connect=_Connection(fail=True))
 
-    def deny_replace(source, destination, *args, **kwargs):
-        if Path(destination) == cache_path:
-            owned_temporary_paths.append(Path(source))
-            raise PermissionError("checkpoint locked")
-        return original_replace(source, destination, *args, **kwargs)
+    with caplog.at_level("WARNING"):
+        assert cache.get("artist::album") is None
 
-    def deny_owned_cleanup(self, *args, **kwargs):
-        if self in owned_temporary_paths:
-            raise PermissionError("temporary checkpoint locked")
-        return original_unlink(self, *args, **kwargs)
+    assert "Cover provider cache read failed" in caplog.text
 
-    with monkeypatch.context() as patch:
-        patch.setattr(os, "replace", deny_replace)
-        patch.setattr(Path, "unlink", deny_owned_cleanup)
-        with caplog.at_level("WARNING"):
-            cache.save()
 
-    assert cache._dirty is True
-    assert cache_path.read_bytes() == previous_bytes
-    assert CoverSearchCache(cache_path).get("old") == {"status": "no_match"}
-    assert CoverSearchCache(cache_path).get("new") is None
-    assert "Cover search cache write skipped" in caplog.text
-    assert "cleanup" in caplog.text.casefold()
-    assert len(owned_temporary_paths) == 1
-    assert owned_temporary_paths[0].exists()
-    assert json.loads(owned_temporary_paths[0].read_text(encoding="utf-8"))["queries"]["new"] == {
-        "url": "https://images.example/new.jpg",
-    }
+def _old_cache_file(tmp_path, count):
+    path = tmp_path / "cover_search_cache.json"
+    queries = {f"artist-{index}::album": {"missing": True} for index in range(count)}
+    queries["malformed::album"] = ["not", "an", "object"]
+    path.write_text(json.dumps({"queries": queries}), encoding="utf-8")
+    return path
+
+
+def test_the_import_runs_once_in_batches_and_leaves_the_old_file_in_place(tmp_path, caplog):
+    path = _old_cache_file(tmp_path, 1_201)
+    connection = _Connection()
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://cache", "COVER_CACHE_PATH": path}
+
+    with caplog.at_level("INFO"):
+        result = import_cover_search_cache_file(config, connect=connection)
+
+    assert result == {"status": "imported", "total": 1_201}
+    inserts = [params for sql, params in connection.statements if "on conflict (cache_key) do nothing" in sql]
+    assert [len(_jsonb_object(params[0])) for params in inserts] == [500, 500, 201]
+    assert connection.statements[-1][1] == ("cover_search_cache_json", 1_201)
+    assert "Cover provider cache import progress imported=1000 of 1201" in caplog.text
+    assert path.is_file()
+
+
+def test_a_finished_import_reads_only_its_marker_and_never_the_file(tmp_path, monkeypatch):
+    path = _old_cache_file(tmp_path, 3)
+    connection = _Connection(imported=True)
+    monkeypatch.setattr(type(path), "read_text", lambda *_a, **_k: pytest.fail("the old file was read"))
+
+    result = import_cover_search_cache_file(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://cache", "COVER_CACHE_PATH": path}, connect=connection,
+    )
+
+    assert result == {"status": "done"}
+    assert len(connection.statements) == 1
+
+
+def test_a_stopped_import_records_nothing_finished_so_the_next_startup_resumes(tmp_path):
+    path = _old_cache_file(tmp_path, 1_200)
+    connection = _Connection()
+    stop = threading.Event()
+    stop.set()
+
+    result = import_cover_search_cache_file(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://cache", "COVER_CACHE_PATH": path},
+        connect=connection, stop_requested=stop,
+    )
+
+    assert result == {"status": "stopped", "imported": 0, "total": 1_200}
+    assert not any("cover_provider_cache_imports (source" in sql for sql, _ in connection.statements)
+
+
+def test_a_browse_only_sandbox_skips_the_import(tmp_path):
+    connection = _Connection()
+
+    result = import_cover_search_cache_file(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://cache", "COVER_CACHE_PATH": _old_cache_file(tmp_path, 2),
+         "SHARED_LIBRARY_BROWSE_ONLY": True},
+        connect=connection,
+    )
+
+    assert result == {"status": "skipped"}
+    assert connection.statements == []
+
+
+def test_without_an_old_file_the_import_records_zero_entries(tmp_path):
+    connection = _Connection()
+
+    result = import_cover_search_cache_file(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://cache", "COVER_CACHE_PATH": tmp_path / "absent.json"},
+        connect=connection,
+    )
+
+    assert result == {"status": "imported", "total": 0}
+    assert connection.statements[-1][1] == ("cover_search_cache_json", 0)
+
+
+@pytest.fixture
+def cover_cache_database(monkeypatch):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    try:
+        yield runtime_url
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
+
+
+def _connect(url):
+    return isolatedPostgres._connect(url)
+
+
+def test_postgres_rows_are_read_by_primary_key_and_upserted_per_key(cover_cache_database, tmp_path):
+    url = cover_cache_database
+    writer = CoverSearchCache(url, connect=_connect)
+    writer.set("artist::album", {"missing": True})
+    writer.set("musicbrainz-release::artist::album", {"updated_at": 1.0, "releases": [{"id": "release-1"}]})
+    writer.save()
+    writer.set("artist::album", {"url": "https://images.example/cover.jpg"})
+    writer.save()
+
+    restarted = CoverSearchCache(url, connect=_connect)
+    assert restarted.get("artist::album") == {"url": "https://images.example/cover.jpg"}
+    assert restarted.get("musicbrainz-release::artist::album") == {"updated_at": 1.0, "releases": [{"id": "release-1"}]}
+    assert restarted.get("absent::album") is None
+    with _connect(url) as connection:
+        indexes = [row["indexdef"] for row in connection.execute(
+            "select indexdef from pg_indexes where schemaname = 'library' and tablename = 'cover_provider_cache_entries'"
+        ).fetchall()]
+    assert any(definition.startswith("CREATE UNIQUE INDEX") and definition.endswith("(cache_key)")
+               for definition in indexes), indexes
+
+    path = tmp_path / "cover_search_cache.json"
+    path.write_text(json.dumps({"queries": {
+        "artist::album": {"missing": True},
+        "imported::album": {"missing": True},
+    }}), encoding="utf-8")
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": url, "COVER_CACHE_PATH": path}
+    assert import_cover_search_cache_file(config, connect=_connect) == {"status": "imported", "total": 2}
+    assert import_cover_search_cache_file(config, connect=_connect) == {"status": "done"}
+    # Rows already in Postgres win over the old file.
+    assert restarted.get("artist::album") == {"url": "https://images.example/cover.jpg"}
+    assert restarted.get("imported::album") == {"missing": True}
 
 
 def test_cover_query_key_preserves_automatic_refresh_normalization():
@@ -205,8 +265,8 @@ def test_cover_query_key_preserves_automatic_refresh_normalization():
     assert cover_provider_cache.cover_query_key(" Artist ", " Album ", None, None) == "artist::album::::"
 
 
-def test_musicbrainz_release_disk_cache_namespace_filters_and_skips_empty(tmp_path, monkeypatch):
-    cache = CoverSearchCache((tmp_path / "cover_search_cache.json").resolve())
+def test_musicbrainz_release_disk_cache_namespace_filters_and_skips_empty(monkeypatch):
+    cache = CoverSearchCache()
     monkeypatch.setattr(cover_provider_cache, "_MUSICBRAINZ_RELEASE_DISK_CACHE", cache)
     monkeypatch.setattr(cover_provider_cache.time, "time", lambda: 1234.0)
 
@@ -237,8 +297,8 @@ def test_musicbrainz_release_disk_cache_namespace_filters_and_skips_empty(tmp_pa
     ]
 
 
-def test_caa_results_disk_cache_namespace_filters_ttl_and_skips_empty(tmp_path, monkeypatch):
-    cache = CoverSearchCache((tmp_path / "cover_search_cache.json").resolve())
+def test_caa_results_disk_cache_namespace_filters_ttl_and_skips_empty(monkeypatch):
+    cache = CoverSearchCache()
     now = 2_000.0
     monkeypatch.setattr(cover_provider_cache, "_MUSICBRAINZ_RELEASE_DISK_CACHE", cache)
     monkeypatch.setattr(cover_provider_cache.time, "time", lambda: now)

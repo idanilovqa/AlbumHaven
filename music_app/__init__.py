@@ -68,6 +68,7 @@ def _start_library_warmup(
     prewarm_postgres,
     hydrate_metadata=None,
     recover_persistence=None,
+    import_cover_cache=None,
 ):
     stop_requested = threading.Event()
     runtime.relation_projection_startup_started_at = datetime.now(timezone.utc)
@@ -100,6 +101,11 @@ def _start_library_warmup(
                         raise
                     except Exception:
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
+                if import_cover_cache is not None:
+                    try:
+                        import_cover_cache(runtime.config, stop_requested=stop_requested)
+                    except Exception:
+                        runtime.logger.exception("Cover provider cache import failed.")
                 if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
                     return
                 ensure_relations(runtime, cancel_requested=stop_requested)
@@ -450,6 +456,7 @@ def create_asgi_app():
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.runtime_asset_versions import runtime_asset_version_cache
     from music_app.services.postgres_connections import prewarm_connection_pool
+    from music_app.services.cover_provider_cache import import_cover_search_cache_file
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
@@ -570,6 +577,7 @@ def create_asgi_app():
             prewarm_connection_pool,
             hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
             recover_persistence=recover_runtime_library_persistence_on_startup,
+            import_cover_cache=import_cover_search_cache_file,
         )
         lastfm_started = False
         welcome_worker = None

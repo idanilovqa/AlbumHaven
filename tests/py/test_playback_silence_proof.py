@@ -625,8 +625,13 @@ def test_a_holder_with_no_socket_shows_nothing_playing_elsewhere(player):
     # A dead or unreachable device plays nowhere a press could reach.
     holder, other = str(uuid4()), str(uuid4())
     player.start(holder)
+    gone = lambda _account, _client: False  # noqa: E731
+    assert player.service.get(None, other, reachable=gone)["is_playing_elsewhere"] is True, "just claimed"
+    assert player.service.holder(None)["fresh"] is True
+    player.pass_time(claims.SOCKET_GRACE_SECONDS)
+    assert player.service.holder(None)["fresh"] is False
 
-    seen = player.service.get(None, other, reachable=lambda _account, _client: False)
+    seen = player.service.get(None, other, reachable=gone)
     assert (seen["is_playing_elsewhere"], seen["can_start_here"], seen["track"]) == (False, True, None)
     assert player.service.get(None, other, reachable=lambda _account, _client: True)["is_playing_elsewhere"] is True
     assert player.service.get(None, holder, reachable=lambda _account, _client: False)["is_playing_here"] is True

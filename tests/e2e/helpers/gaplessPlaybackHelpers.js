@@ -1397,3 +1397,10 @@ export async function waitForGaplessBoundary(page, options = {}) {
   }
   return readGaplessPlaybackDiagnostics(page);
 }
+
+// Whether the page holds a playback claim: a Play the server had not answered yet plays without one.
+export async function pageHoldsPlaybackClaim(page) {
+  // parity-check: allow-read-only-measurement-evaluate -- cleanup reads whether a give-back will follow
+  return page.evaluate(() => Boolean(
+    typeof state !== 'undefined' && state.player?.ownership?.activeClaim?.claimToken));
+}

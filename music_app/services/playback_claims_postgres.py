@@ -30,6 +30,9 @@ _LEAVING_DRAIN_SECONDS = 1
 SILENT_WITHOUT_SERVER_SECONDS = 300
 # The 12 s pause hold and 3 s for the renewal a Play in it sends at once.
 PAUSED_SILENT_WITHOUT_SERVER_SECONDS = 15
+# A holder with no socket is gone only once its claim was last granted this long ago: a client that has just
+# claimed (as Play here does) is still opening its socket.
+SOCKET_GRACE_SECONDS = 3
 # The holder's buffered output, its clock's drift and its audio thread's scheduling.
 _SILENCE_MARGIN_SECONDS = 5
 # Kept in the claim's track, as its position is, and shown as neither.
@@ -120,6 +123,11 @@ def _silent_bounds(now):
             renewed_before(SILENT_WITHOUT_SERVER_SECONDS), renewed_before(PAUSED_SILENT_WITHOUT_SERVER_SECONDS))
 
 
+def _fresh(row, now):
+    """Whether the claim was granted or renewed within [SOCKET_GRACE_SECONDS]."""
+    return row["expires_at"] > now + timedelta(seconds=_CLAIM_LEASE_SECONDS - SOCKET_GRACE_SECONDS)
+
+
 def _promise(silences_itself, paused=False):
     if type(silences_itself) is not bool:
         raise PlaybackContractError()
@@ -197,8 +205,9 @@ class PostgresPlaybackClaims:
             if row is not None and row["gone"]:
                 self._keep_last_played(connection, account_id, library_id, row, now)
         # A holder that proved it is silent plays nowhere, whether or not its claim can still be taken up.
-        if row is not None and (row["silent"] or (reachable is not None and str(row["client_id"]) != client_id
-                                                  and not reachable(account_id, str(row["client_id"])))):
+        if row is not None and (row["silent"] or (
+                reachable is not None and str(row["client_id"]) != client_id and not _fresh(row, now)
+                and not reachable(account_id, str(row["client_id"])))):
             row = None
         return self._state(row, client_id, actor if include_path else None)
 
@@ -385,15 +394,18 @@ class PostgresPlaybackClaims:
         """
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
-            row = connection.execute(f"""select client_id, token_digest, coalesce({_silent()}, false) as silent
+            now = self._clock()
+            row = connection.execute(f"""select client_id, token_digest, expires_at,
+                    coalesce({_silent()}, false) as silent
                 from app.playback_claims where account_id = %s and library_id = %s""",
-                (*_silent_bounds(self._clock()), account_id, library_id)).fetchone()
+                (*_silent_bounds(now), account_id, library_id)).fetchone()
             record = None if row else connection.execute("""select 1 from app.playback_last_played
                 where account_id = %s and library_id = %s""", (account_id, library_id)).fetchone()
         return {"account_id": account_id, "library_id": library_id,
                 "client_id": str(row["client_id"]) if row else None,
                 "digest": bytes(row["token_digest"]) if row else None,
-                "silent": bool(row["silent"]) if row else record is not None}
+                "silent": bool(row["silent"]) if row else record is not None,
+                "fresh": _fresh(row, now) if row else False}
 
     def holds(self, holder, token):
         try:

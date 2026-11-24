@@ -36,7 +36,7 @@ class Claims:
 
     def holder(self, actor):
         return {"account_id": actor.account_id, "library_id": 1, "client_id": HOLDER, "digest": b"held",
-                "silent": False}
+                "silent": False, "fresh": False}
 
     def get(self, actor, client_id, **_kwargs):
         return {"protocol": 1, "is_playing_elsewhere": False}
@@ -141,7 +141,8 @@ def test_a_holder_that_says_nothing_is_gone_taken_over_and_told_so(handover_app)
 
 def test_a_page_that_said_it_left_gives_way_without_being_asked(handover_app, monkeypatch):
     def left(self, actor):
-        return {"account_id": actor.account_id, "library_id": 1, "client_id": HOLDER, "digest": b"held", "silent": True}
+        return {"account_id": actor.account_id, "library_id": 1, "client_id": HOLDER, "digest": b"held", "silent": True,
+                "fresh": False}
 
     monkeypatch.setattr(Claims, "holder", left)
 
@@ -196,7 +197,8 @@ def test_a_socket_naming_no_valid_client_still_plays_and_is_never_asked(handover
 
 def test_play_here_on_a_tab_that_just_paused_starts_at_its_paused_place(handover_app, monkeypatch):
     def nobody(self, actor):
-        return {"account_id": actor.account_id, "library_id": 1, "client_id": None, "digest": None, "silent": False}
+        return {"account_id": actor.account_id, "library_id": 1, "client_id": None, "digest": None, "silent": False,
+                "fresh": False}
 
     def release(self, actor, *, client_id, claim_token):
         return {"account_id": actor.account_id, "library_id": 1, "client_id": client_id, "digest": b"held"}
@@ -441,5 +443,24 @@ def test_a_holder_that_says_nothing_in_time_is_gone_and_the_press_starts(handove
             status, _, _ = await pressing
             assert status == 200
             assert len(Claims.started) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_holder_that_has_just_claimed_is_not_gone_while_its_socket_opens(handover_app, monkeypatch):
+    # Play here elsewhere has just handed it the claim: a press here must not start over it.
+    from music_app.routes import playback_control_asgi
+
+    monkeypatch.setattr(playback_control_asgi, "YIELD_ANSWER_SECONDS", 30)
+    monkeypatch.setattr(Claims, "holder", lambda self, actor: {"account_id": actor.account_id, "library_id": 1,
+                        "client_id": HOLDER, "digest": b"held", "silent": False, "fresh": True})
+
+    async def scenario():
+        status, _, _ = await asyncio.wait_for(start_song(handover_app), 5)
+        assert status == 409
+        assert Claims.started == []
+        status, _, _ = await asyncio.wait_for(press(handover_app), 5)
+        assert status == 409
+        assert Claims.replaced == []
 
     asyncio.run(scenario())

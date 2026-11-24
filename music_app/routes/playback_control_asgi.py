@@ -224,7 +224,10 @@ async def _start_over_quiet_holder(request, claims, client_id, acquire, refused)
     holder = (observed["account_id"], observed["library_id"], observed["client_id"])
     taken = False
     try:
-        if await hub.yielded(*holder, timeout=YIELD_ANSWER_SECONDS) == "declined":
+        answer = await hub.yielded(*holder, timeout=YIELD_ANSWER_SECONDS)
+        # A holder that has just claimed may still be opening its socket: not gone yet.
+        if answer == "declined" or (answer == GONE and observed["fresh"]
+                                    and not hub.connected(observed["account_id"], observed["client_id"])):
             raise refused
         result = await acquire(yielded_digest=observed["digest"])
         taken = True
@@ -278,8 +281,8 @@ async def _confirmed_takeover(request, payload):
                 timeout=HANDOVER_ANSWER_SECONDS)
         # A holder that is gone (no socket, no word at all) plays nowhere that can be reached: its song goes on
         # here from its last known place, and it stops once it reaches the server again.
-        gone = answer == GONE
-        if gone:
+        gone = answer == GONE and not (observed.get("fresh") and not hub.connected(observed["account_id"], observed["client_id"]))
+        if answer == GONE:
             answer = None
         timing["ask_ms"] = round((time.perf_counter() - asked_at) * 1000)
         try:

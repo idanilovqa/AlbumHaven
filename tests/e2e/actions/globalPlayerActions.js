@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { pageHoldsPlaybackClaim } from '../helpers/gaplessPlaybackHelpers.js';
 
 function parseDisplayedPlayerTime(label) {
   const currentLabel = String(label || '').split('/')[0].trim();
@@ -388,15 +389,16 @@ export class GlobalPlayerActions {
     };
   }
 
+  // A Play the server had not answered yet plays without a claim, so its pause has none to give back.
   async pauseToReleasePlaybackClaim() {
     const player = this.globalPlayer;
     if (player.page.isClosed() || !await player.playButton.isVisible()
         || await player.playButton.getAttribute('aria-label') !== 'Pause') return;
-    const released = player.page.waitForResponse(response => (
+    const released = await pageHoldsPlaybackClaim(player.page) && player.page.waitForResponse(response => (
       response.request().method() === 'DELETE' && new URL(response.url()).pathname === '/playback/state'
     ));
     await this.togglePlaybackWithSpace({ paused: true });
-    expect((await released).ok()).toBe(true);
+    if (released) expect((await released).ok()).toBe(true);
   }
 
   async togglePlaybackWithSpace(expectedState, options = {}) {

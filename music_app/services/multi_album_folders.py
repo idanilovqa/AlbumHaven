@@ -73,10 +73,15 @@ def discs_of_one_release(albums: Mapping[tuple[str, str], list[Mapping[str, obje
     """The MusicBrainz seam (owner, 2026-11-24): True once enrichment knows the folder's albums are discs of one
     release, which excludes the folder.
 
-    Signal, per the MusicBrainz line: library.local_album_musicbrainz_releases (library_id, album_key) with
-    release_mbid and disc_position. Two or more albums sharing one release_mbid with different disc_position
-    values are discs of one release. disc_position is empty today and the contract is not final, so this
-    reads nothing yet."""
+    Contract, final per the MusicBrainz line: two albums of the folder are discs of one release when both of their
+    rows in library.local_album_musicbrainz_releases have state = 'release', the same release_mbid, and
+    disc_position set and different. Manual and automatic matches count alike. Not a signal: state
+    'release_group', the same release with an empty disc_position, or Discogs rows. The read is one query per
+    folder on the primary key (library_id = %s and album_key = any(%s)). The exclusion holds as soon as the
+    match shows discs, before the owner approves any tag fix (the owner approved clearing it then). Showing such discs as one
+    album belongs to the MusicBrainz line; this seam only lifts the multi-album flag.
+
+    Reads nothing until the MusicBrainz matcher lands."""
     return False
 
 

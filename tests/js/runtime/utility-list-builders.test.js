@@ -133,6 +133,10 @@ function loadHelpers() {
         family_artist_groups: [],
       },
     },
+    // browser-navigation-helpers.js, loaded before this file in the page.
+    replaceBrowserViewState(view) {
+      (context.window.history || context.history).replaceState({}, '', context.buildUrl(view));
+    },
     mergeViewPayload(payload) {
       context.lastMergedPayload = payload;
       context.state.view = {

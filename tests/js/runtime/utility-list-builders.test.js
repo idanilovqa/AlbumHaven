@@ -767,6 +767,83 @@ test('a view mount lays each finishing save exactly once, and committing a laid 
   assert.equal(context.state.view.album_count, 1);
 });
 
+// 6.5 (11-24): two finishing saves on albums of the same view; one finishes. The other keeps showing ITS
+// pending edit while that save's answer is applied, when the finished one's new view is mounted, and after
+// a reload: a commit marked as already laid must never drop another album's overlay.
+function loadTwoFinishingSaves({ storedIds }) {
+  const context = loadHelpers();
+  const albums = ['First', 'Second'].map((name) => ({
+    key: `mono::${name.toLowerCase()}::2026`, name, album_artist: 'Mono', year: 2026,
+    tracks: [{ path: `C:\\Music\\Mono\\${name}\\01 ${name}.flac` }],
+  }));
+  const mount = (shownAlbums) => {
+    const group = { artist: 'Mono', albums: shownAlbums.map((album) => JSON.parse(JSON.stringify(album))) };
+    context.state.view = { ...context.state.view, selected_artist: 'Mono', artist_groups: [group],
+      primary_artist_groups: [group], family_artist_groups: [] };
+  };
+  const ids = { First: '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a01', Second: '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a02' };
+  const stored = albums
+    .filter((album) => storedIds.includes(album.name))
+    .map((album) => ({
+      id: ids[album.name],
+      payload: { confirmed: true, updates: { [album.tracks[0].path]: { album: `${album.name} Renamed` } } },
+      album: { key: album.key, name: album.name, album_artist: 'Mono', year: 2026 },
+      display_album: album, state: 'finishing', created_at: Date.now(),
+    }));
+  Object.assign(context, {
+    getLocalStorageItem: (key, fallback) => (key === 'albumHaven.pendingTagEdits' ? JSON.stringify(stored) : fallback),
+    setLocalStorageItem() {},
+    setTimeout: () => 0,
+    clearTimeout() {},
+    addEventListener() {},
+    dispatchEvent() {},
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
+    buildOptimisticUpdatedAlbumsFromEdits: (source, updates) => [{
+      ...source, key: `${source.key}::renamed`, name: Object.values(updates)[0].album,
+      tracks: source.tracks.map((track) => ({ ...track, ...updates[track.path] })),
+    }],
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'pending-tag-edits.js'), 'utf8'), context);
+  const overlay = context.AlbumHavenPendingTagEdits.overlayCurrentView;
+  // applyViewPayload's tail (response-state-helpers.js): a mount lays the open saves unless already laid.
+  context.mergeViewPayload = (payload, options = {}) => {
+    context.state.view = { ...context.state.view, ...payload };
+    if (options.overlayPendingTagEdits !== false) overlay();
+    return context.state.view;
+  };
+  const mountServerView = (shownAlbums) => { mount(shownAlbums); overlay(); };
+  const shown = () => JSON.parse(JSON.stringify(
+    context.state.view.primary_artist_groups.flatMap((group) => group.albums.map((album) => album.name)),
+  )).sort();
+  return { context, albums, ids, mountServerView, shown };
+}
+
+test('when one of two finishing saves in a view finishes, the other album keeps showing its pending edit', () => {
+  const { context, albums, ids, mountServerView, shown } = loadTwoFinishingSaves({ storedIds: ['First', 'Second'] });
+  const [first, second] = albums;
+  mountServerView(albums);
+  assert.deepEqual(shown(), ['First Renamed', 'Second Renamed'], 'both pending edits show after the mount');
+
+  // The first save finishes: its answer is applied as an already laid commit.
+  context.AlbumHavenPendingTagEdits.discard(ids.First);
+  const finished = { ...first, key: 'mono::first renamed::2026', name: 'First Renamed' };
+  const shownFirst = context.state.view.primary_artist_groups[0].albums.find((album) => album.name === 'First Renamed');
+  context.applyUpdatedAlbumsToCurrentView([finished], { originalAlbum: shownFirst, skipRender: true,
+    tagEdits: { [first.tracks[0].path]: { album: 'First Renamed' } } });
+  assert.deepEqual(shown(), ['First Renamed', 'Second Renamed'], 'the other pending edit survives the finished save');
+
+  // The library's next view holds the first save only: the second is laid over it again.
+  mountServerView([finished, second]);
+  assert.deepEqual(shown(), ['First Renamed', 'Second Renamed'], 'the other pending edit survives the next mount');
+});
+
+test('after a reload, the save still finishing shows its pending edit beside the one that finished', () => {
+  const { albums, mountServerView, shown } = loadTwoFinishingSaves({ storedIds: ['Second'] });
+  const [first, second] = albums;
+  mountServerView([{ ...first, key: 'mono::first renamed::2026', name: 'First Renamed' }, second]);
+  assert.deepEqual(shown(), ['First Renamed', 'Second Renamed']);
+});
+
 test('applyUpdatedAlbumsToCurrentView inserts an album restored from selected-artist loose tracks', () => {
   const context = loadHelpers();
   const existingAlbum = {

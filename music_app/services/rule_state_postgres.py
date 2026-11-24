@@ -337,12 +337,14 @@ def ignored_repair_intents_with_failures(connection: Any) -> tuple[PendingIgnore
     """Every intent in one read: the pending ones folded, and each failed one's rules, for the Rules list."""
     pending, failed = [], []
     for row in connection.execute(_load_ignored_repair_intents_sql(include_failed=True)).fetchall():
-        intent = _row_mapping(row, _INTENT_FIELDS + ("failed_at", "failure"))
+        intent = _row_mapping(row, _INTENT_FIELDS + ("failed_at", "failure", "failure_kind"))
         if intent.get("failed_at") is None:
             pending.append(intent)
             continue
+        album_keys = dict(intent.get("album_keys") or {})
         failed.extend(
-            {"row_key": key, "action": intent.get("action"), "failure": str(intent.get("failure") or ""),
+            {"row_key": key, "album_key": _text(album_keys.get(key)), "action": intent.get("action"),
+             "failure": str(intent.get("failure") or ""), "failure_kind": str(intent.get("failure_kind") or "error"),
              "failed_at": intent.get("failed_at")}
             for key in sorted(_normalize_keys(intent.get("repair_keys")))
         )
@@ -388,7 +390,7 @@ def fail_ignored_repair_intents_after_a_failed_drain(connection: Any, error: obj
             "update library.ignored_repair_intents set drain_attempts = drain_attempts + 1 where failed_at is null")
         rows = connection.execute(
             """update library.ignored_repair_intents
-               set failed_at = now(), failure = %s
+               set failed_at = now(), failure = %s, failure_kind = 'error'
                where failed_at is null and drain_attempts >= %s
                returning repair_keys""",
             (f"Not applied after {attempts} attempts: {error}"[:500], attempts),
@@ -417,7 +419,8 @@ def _apply_ignored_repair_intent(connection: Any, intent: Mapping[str, object]) 
 
 
 def _fail_ignored_repair_intents_sql() -> str:
-    return "update library.ignored_repair_intents set failed_at = now(), failure = %s where id = any(%s::bigint[])"
+    return ("update library.ignored_repair_intents set failed_at = now(), failure = %s, failure_kind = 'error' "
+            "where id = any(%s::bigint[])")
 
 
 def _album_keys_for(repair_keys: set[str], album_keys_by_repair_key: Mapping[object, object] | None) -> dict[str, str]:
@@ -720,7 +723,7 @@ def _load_ignored_repair_intents_sql(*, include_failed: bool = False) -> str:
         _bootstrap_context_sql()
         + f"""
         select intents.id, intents.action, intents.repair_keys, intents.album_keys, intents.remove_keys,
-               intents.failed_at, intents.failure
+               intents.failed_at, intents.failure, intents.failure_kind
         from library.ignored_repair_intents intents
         join bootstrap_context on intents.library_id = bootstrap_context.library_id
         {"" if include_failed else "where intents.failed_at is null"}

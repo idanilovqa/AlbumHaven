@@ -4606,9 +4606,14 @@ class PostgresLibraryBrowseRepository:
             from music_app.services.rule_state_postgres import ignored_repair_intents_with_failures
 
             pending, failed = ignored_repair_intents_with_failures(connection)
-            cursor = connection.execute(_utility_rules_sql(), _utility_rules_params(pending))
-            # A failed intent's rules are listed apart: the Rules tab reports them (6.5, 11-24).
-            return [*cursor.fetchall(), *({"row_kind": "failed_problem_ignore", **item} for item in failed)]
+            cursor = connection.execute(_utility_rules_sql(), _utility_rules_params(pending, failed))
+            # A failed intent's rules come back named, as source_kind "failed"; the Rules tab reports them apart.
+            failures = {str(item["row_key"]): item for item in failed}
+            return [
+                {**row, **{key: failures[row["ignored_repair_key"]].get(key) for key in ("failure", "failure_kind", "failed_at")}}
+                if isinstance(row, Mapping) and row.get("source_kind") == "failed" else row
+                for row in cursor.fetchall()
+            ]
 
     def wait_for_inventory_publication(self, *, timeout_seconds: float) -> bool:
         """Wait, at most ``timeout_seconds``, for a publication holding the inventory lock to commit.
@@ -8061,8 +8066,11 @@ def _utility_rules_projection_payload(rows: list[object]) -> dict[str, object]:
     failed_ignores: list[dict[str, object]] = []
     for row in rows:
         row_payload = _row_mapping(row)
-        if row_payload.get("row_kind") == "failed_problem_ignore":
-            failed_ignores.append({key: row_payload.get(key) for key in ("row_key", "action", "failure", "failed_at")})
+        if row_payload.get("source_kind") == "failed":
+            failed_ignores.append({
+                **_utility_problem_ignore_payload(row_payload),
+                **{key: row_payload.get(key) for key in ("failure", "failure_kind", "failed_at")},
+            })
             continue
         ignored_version_key = str(row_payload.get("ignored_version_key") or "").strip()
         if ignored_version_key:
@@ -8193,6 +8201,9 @@ def _utility_problem_ignore_payload(row_payload: Mapping[str, object]) -> dict[s
         part for part in [artist_name.strip(), album_name.strip()] if part
     ) or (identity if scope == "album" else str(Path(identity).parent))
     path = "" if scope == "album" else identity
+    target_missing = (
+        row_payload.get("album_id") is None if scope == "album" else not str(row_payload.get("file_private_path") or "")
+    )
     return {
         "row_key": row_key,
         "scope": scope,
@@ -8204,6 +8215,9 @@ def _utility_problem_ignore_payload(row_payload: Mapping[str, object]) -> dict[s
         "year": str(entry.get("year") or ""),
         "problem_reason": reason,
         "album_group_key": album_group_key,
+        # Owner (11-24): the rule's album or file is no longer in the library, told by the same read's joins.
+        "target_missing": target_missing,
+        "missing_name": (Path(identity).name or identity) if target_missing else "",
     }
 
 
@@ -14072,17 +14086,21 @@ def _execute_problematic_sql(
         return connection.execute(build_sql(False), params)
 
 
-def _utility_rules_params(pending: Any = None) -> dict[str, object]:
-    """_utility_rules_sql's parameters: the pending ignored-repair intents, folded (none by default)."""
+def _utility_rules_params(pending: Any = None, failed: Iterable[Mapping[str, object]] = ()) -> dict[str, object]:
+    """_utility_rules_sql's parameters: the pending ignored-repair intents, folded, and the failed ones' rules
+    (none by default)."""
     from music_app.services.rule_state_postgres import PendingIgnoredRepairs
 
     pending = pending if pending is not None else PendingIgnoredRepairs()
     added = sorted(pending.added.items())
+    failed = list(failed)
     return {
         "keeps_stored": pending.keeps_stored,
         "removed_keys": sorted(pending.removed),
         "added_keys": [key for key, _album_key in added],
         "added_album_keys": [album_key for _key, album_key in added],
+        "failed_keys": [str(item["row_key"]) for item in failed],
+        "failed_album_keys": [str(item.get("album_key") or "") for item in failed],
     }
 
 
@@ -14100,7 +14118,7 @@ def _utility_rules_sql() -> str:
         ),
         -- The stored ignored repairs with the pending intents laid over them (_utility_rules_params).
         ignored_source as (
-          select ignored.library_id, ignored.repair_key, ignored.metadata
+          select ignored.library_id, ignored.repair_key, ignored.metadata, 'rule'::text as source_kind
           from library.ignored_repairs ignored
           where %(keeps_stored)s
             and ignored.repair_key <> all(%(removed_keys)s::text[])
@@ -14110,9 +14128,20 @@ def _utility_rules_sql() -> str:
             bootstrap_context.library_id,
             added.repair_key,
             case when added.album_key = '' then '{}'::jsonb
-                 else jsonb_build_object('album_key', added.album_key) end
+                 else jsonb_build_object('album_key', added.album_key) end,
+            'rule'::text
           from bootstrap_context
           cross join unnest(%(added_keys)s::text[], %(added_album_keys)s::text[]) as added(repair_key, album_key)
+          union all
+          -- Changes the library could not apply: named through the same joins as the rules, never listed as rules.
+          select
+            bootstrap_context.library_id,
+            failed.repair_key,
+            case when failed.album_key = '' then '{}'::jsonb
+                 else jsonb_build_object('album_key', failed.album_key) end,
+            'failed'::text
+          from bootstrap_context
+          cross join unnest(%(failed_keys)s::text[], %(failed_album_keys)s::text[]) as failed(repair_key, album_key)
         ),
         relation_context as (
           -- The whole-library alias map only explains ignored album-artist
@@ -14139,6 +14168,7 @@ def _utility_rules_sql() -> str:
         version_rows as (
           select
             'version'::text as row_kind,
+            null::text as source_kind,
             library.ignored_versions.version_key as ignored_version_key,
             null::text as ignored_repair_key,
             library.local_albums.id as album_id,
@@ -14168,6 +14198,7 @@ def _utility_rules_sql() -> str:
         repair_rows as (
           select
             'problem_ignore'::text as row_kind,
+            ignored_repairs.source_kind,
             null::text as ignored_version_key,
             ignored_repairs.repair_key as ignored_repair_key,
             library.local_albums.id as album_id,

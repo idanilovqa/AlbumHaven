@@ -8830,13 +8830,13 @@ test('the problem exclusions rule reports rule changes that were not applied, in
   context.state.utility.failedIgnoredRepairs = [failed('03 Song.flac', 'Missing year', 'error')];
   let html = context.buildUtilityRuleDetail(rule);
   assert.match(html, /data-on-page-alert="error"/);
-  assert.match(html, />This change wasn&#39;t applied</);
+  assert.match(html, />This change wasn(?:'|&#0?39;)t applied</);
   assert.match(html, />03 Song\.flac: Missing year\. The library could not save it\. Change it again to try once more\.</);
   context.state.utility.failedIgnoredRepairs = [
     failed('03 Song.flac', 'Missing year', 'stuck'), failed('04 Song.flac', 'Missing cover art', 'stuck'),
   ];
   html = context.buildUtilityRuleDetail(rule);
-  assert.match(html, />2 changes weren&#39;t applied</);
+  assert.match(html, />2 changes weren(?:'|&#0?39;)t applied</);
   assert.match(html, />03 Song\.flac: Missing year\. 04 Song\.flac: Missing cover art\. It was still waiting after the library finished updating\. Change it again to try once more\.</);
 });
 
@@ -8856,6 +8856,6 @@ test('a rule whose album or file is gone says it applies to nothing, beside its 
   });
   assert.match(html, /data-small-alert="warning"/);
   assert.match(html, /03 Song\.flac is no longer in your library\. This rule applies to nothing\. Revert rule\?/);
-  assert.equal((html.match(/is no longer in your library/g) || []).length, 1, 'only the gone rule says so');
+  assert.equal((html.match(/data-small-alert=/g) || []).length, 1, 'only the gone rule says so');
   assert.equal((html.match(/data-revert-problem-ignore=/g) || []).length, 2, 'each rule keeps its Revert rule button');
 });

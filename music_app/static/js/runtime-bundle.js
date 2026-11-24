@@ -24772,14 +24772,37 @@ function buildUtilityCompactTable(config) {
 
 // The Ignore and Unignore changes the library could not apply after a publication held them back: never
 // left showing as pending, they are reported here until the same rule is changed again (6.5, 11-24).
+// Owner-approved wording (11-24): one alert per way it failed.
+const FAILED_PROBLEM_IGNORE_EXPLANATIONS = {
+  error: 'The library could not save it.',
+  stuck: 'It was still waiting after the library finished updating.',
+};
+
+function problemIgnoreTargetName(item) {
+  if (item?.scope === 'album') return String(item.album || item.missing_name || item.row_key || '').trim();
+  return String(item?.filename || item?.missing_name || item?.row_key || '').trim();
+}
+
 function buildFailedProblemIgnoresAlert() {
   const failed = Array.isArray(state.utility.failedIgnoredRepairs) ? state.utility.failedIgnoredRepairs : [];
-  if (!failed.length) return '';
-  const rules = failed.map((item) => String(item?.row_key || '')).filter(Boolean);
-  return buildOnPageAlertHtml({
-    severity: 'error',
-    title: failed.length === 1 ? 'A rule change was not applied' : `${failed.length} rule changes were not applied`,
-    message: `${rules.join(', ')}. ${String(failed[0]?.failure || '').trim()} Change the rule again to retry.`,
+  return Object.entries(FAILED_PROBLEM_IGNORE_EXPLANATIONS).map(([kind, explanation]) => {
+    const items = failed.filter((item) => (item?.failure_kind === 'stuck' ? 'stuck' : 'error') === kind);
+    if (!items.length) return '';
+    const named = items.map((item) => `${problemIgnoreTargetName(item)}: ${String(item.problem_reason || '').trim()}.`);
+    return buildOnPageAlertHtml({
+      severity: 'error',
+      title: items.length === 1 ? 'This change wasn\'t applied' : `${items.length} changes weren't applied`,
+      message: `${named.join(' ')} ${explanation} Change it again to try once more.`,
+    });
+  }).join('');
+}
+
+// Owner (11-24): a rule whose album or file is no longer in the library, in the Revert rule button's own words.
+function buildProblemIgnoreTargetGoneAlert(item) {
+  if (item?.target_missing !== true) return '';
+  return buildSmallAlertHtml({
+    severity: 'warning',
+    message: `${problemIgnoreTargetName(item)} is no longer in your library. This rule applies to nothing. Revert rule?`,
   });
 }
 
@@ -24815,7 +24838,7 @@ function buildProblemIgnoresRuleDetail(rule) {
           cells: {
             target: `<div class="utility-rule-album-title">${escapeHtml(
               scope === 'album' ? (albumDisplay || 'Unknown album') : (item.filename || 'Unknown file'),
-            )}</div>${scope === 'file' && item.album ? `<div class="utility-rule-album-meta">${escapeHtml(item.album)}</div>` : ''}`,
+            )}</div>${scope === 'file' && item.album ? `<div class="utility-rule-album-meta">${escapeHtml(item.album)}</div>` : ''}${buildProblemIgnoreTargetGoneAlert(item)}`,
             reason: `<span class="utility-track-problem-chip utility-rule-problem-chip">${escapeHtml(item.problem_reason || item.reason || '')}</span>`,
             action: `<button class="button utility-rule-revert" type="button" data-revert-problem-ignore="${escapeHtml(item.row_key || '')}" ${item.pending ? 'aria-busy="true" disabled' : ''}>Revert rule</button>`,
           },

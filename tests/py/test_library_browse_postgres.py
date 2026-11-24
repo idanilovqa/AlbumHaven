@@ -17241,6 +17241,8 @@ def test_targeted_problem_ignore_projection_returns_full_canonical_item_with_dur
         "year": "1988",
         "problem_reason": "Undecoded characters",
         "album_group_key": "Product Artist :: ?",
+        "target_missing": False,
+        "missing_name": "",
         "album_key": durable_album_key,
         "legacy_row_keys": [f"{track_path}::album"],
     }]

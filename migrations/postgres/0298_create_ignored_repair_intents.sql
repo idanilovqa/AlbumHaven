@@ -19,7 +19,9 @@ create table if not exists library.ignored_repair_intents (
   -- pending, is failed here, logged, and listed in the Rules until the same rule is written again.
   drain_attempts integer not null default 0,
   failed_at timestamptz,
-  failure text
+  failure text,
+  -- 'error' (the library could not save it) or 'stuck' (still waiting past the drain's time bound).
+  failure_kind text check (failure_kind in ('error', 'stuck'))
 );
 create index if not exists ignored_repair_intents_library_order_idx
   on library.ignored_repair_intents (library_id, id);

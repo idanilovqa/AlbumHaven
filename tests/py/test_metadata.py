@@ -912,3 +912,23 @@ def test_a_read_records_the_lost_track_artist_but_never_adds_an_album_artist_tag
 
     assert entry["album_artist"] == "\u00e9milie Simon"
     assert set(entry["text_corrections"]) == {"artist"}
+
+@pytest.mark.parametrize("tags, expected", [
+    ({"tracknumber": ["2/12"]}, 12),
+    ({"tracknumber": ["3"], "TRACKTOTAL": ["9"]}, 9),
+    ({"tracknumber": ["3"], "totaltracks": ["7"]}, 7),
+    ({"tracknumber": ["4/0"]}, None),
+    ({"tracknumber": ["5"]}, None),
+])
+def test_scan_reads_the_album_track_total(monkeypatch, tmp_path, tags, expected):
+    """Owner (2026-11-24): an album is complete when its numbers run 1..N and match the track total where a
+    tag carries one ("n/m", TRACKTOTAL or TOTALTRACKS)."""
+    path = tmp_path / "song.mp3"
+    path.touch()
+    tags = {"album": ["Fixture Album"], "albumartist": ["Fixture Artist"], "title": ["Song"], **tags}
+    monkeypatch.setattr(metadata, "MutagenFile", lambda _path: SimpleNamespace(tags=tags))
+
+    entry = metadata.read_metadata_for_file(path)
+
+    assert entry["total_tracks"] == expected
+    assert entry["track_number"] == int(tags["tracknumber"][0].split("/")[0])

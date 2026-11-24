@@ -274,6 +274,8 @@ const state = {
   },
   player: {
     selectedTrack: null,
+    // What the player shows: the current song once it sounds (resolveShownPlayerTrack).
+    shown: null,
     streaming: {
       mode: 'stopped',
       generation: 0,

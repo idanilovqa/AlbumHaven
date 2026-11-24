@@ -834,3 +834,159 @@ test('references are asked for the started track first, then the ones after it, 
   const refs = fetches.find(({ url }) => String(url) === '/playback/refs');
   assert.deepEqual(refs.body.tracks.map(track => track.path), [tracks[1].path, tracks[2].path, tracks[0].path]);
 });
+
+// Play again while a song is still starting is ignored.
+async function rowPressesInTheApp(options = {}) {
+  const harness = createHarness(options);
+  const { api, context } = harness;
+  let now = 0;
+  context.performance = { now: () => now };
+  for (const file of ['player-loop-playback.js', 'album-track-table.js']) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
+  }
+  Object.assign(context, {
+    getPlayerPlaybackSnapshot: api.snapshot,
+    canStartPlaybackInThisTab: () => true,
+    setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+    renderSelectedTrackState: () => {},
+    beginStreamingPlayerListenSession: () => {},
+    setAlbumPlaybackQueue: () => {},
+    closeListenSegment: () => {},
+    markListenSessionPaused: () => {},
+    maybeScrobbleListenSession: async () => {},
+    persistPausedListenSession: async () => {},
+    releasePlaybackOwnership: async () => {},
+    focusPlayerTimeline: () => {},
+    updatePlayerUi: () => {},
+    triggerAlbumTrackPlayActivation: () => {},
+    usesMobilePageLayout: () => true,
+    document: { getElementById: () => ({ hidden: true }) },
+  });
+  context.window.AlbumHavenCapabilities = { ...context.window.AlbumHavenCapabilities, allows: () => true };
+  await api.connectAndroidBridge();
+  const track = tracks[1];
+  const attributes = { 'data-src': track.src, 'data-track-path': track.path, 'data-track-duration-seconds': '180' };
+  const button = {
+    getAttribute: key => attributes[key] || '',
+    classList: { contains: () => false },
+    click: () => context.activateSharedTrackButton(button),
+  };
+  const row = { dataset: {}, querySelector: () => button, ownerDocument: { getSelection: () => null } };
+  const settled = async () => { for (let turn = 0; turn < 4; turn += 1) await settle(); };
+  return {
+    ...harness,
+    settled,
+    setNow: (value) => { now = value; },
+    async press() {
+      button.click();
+      await settled();
+    },
+    async doubleTap() {
+      for (const detail of [1, 2]) {
+        context.handleAlbumTrackRowClick({
+          detail, currentTarget: row, target: { closest: () => null }, preventDefault() {},
+        });
+        await settled();
+      }
+    },
+  };
+}
+
+for (const waiting of ['references', 'loadQueue answer']) {
+  for (const again of ['presses', 'a double tap']) {
+    test(`${again} on a row waiting for its ${waiting} send one loadQueue`, async () => {
+      let answer;
+      const held = new Promise((resolve) => { answer = resolve; });
+      const app = await rowPressesInTheApp(waiting === 'references' ? {} : {
+        respond: message => (message.name === 'playback.loadQueue'
+          ? held.then(() => ({ ok: true, queueRevision: message.payload.queueRevision })) : null),
+      });
+      if (waiting === 'references') {
+        const answered = app.context.fetch;
+        app.context.fetch = async (...request) => {
+          const response = answered(...request);
+          await held;
+          return response;
+        };
+      }
+      if (again === 'presses') await app.press();
+      else await app.doubleTap();
+      for (let press = 0; press < 3; press += 1) await app.press();
+      answer();
+      await app.settled();
+
+      assert.equal(app.fetches.length, 1, 'the references are asked for once');
+      assert.equal(commands(app.bridge, 'playback.loadQueue').length, 1);
+      assert.equal(commands(app.bridge, 'playback.pause').length, 0);
+    });
+  }
+}
+
+test('a press while Android loads or buffers is ignored, and once it plays the row pauses', async () => {
+  const app = await rowPressesInTheApp();
+  await app.press();
+  const [load] = commands(app.bridge, 'playback.loadQueue');
+  const report = nativeState => app.bridge.event('playback.state',
+    state(load.payload.queueRevision, nativeState, 0, load.payload.currentIndex));
+  for (const starting of ['answered', 'loading', 'buffering']) {
+    if (starting !== 'answered') report(starting);
+    await app.press();
+    await app.doubleTap();
+    assert.equal(commands(app.bridge, 'playback.pause').length, 0, `no pause while ${starting}`);
+    assert.equal(commands(app.bridge, 'playback.loadQueue').length, 1, `no second load while ${starting}`);
+  }
+  report('playing');
+  report('buffering');
+  await app.press();
+  assert.equal(commands(app.bridge, 'playback.pause').length, 1, 'a song that has sounded pauses, buffering or not');
+});
+
+test('a start Android reports failed can be pressed again at once', async () => {
+  const app = await rowPressesInTheApp();
+  await app.press();
+  const [load] = commands(app.bridge, 'playback.loadQueue');
+  app.bridge.event('playback.state', state(load.payload.queueRevision, 'error', 0, load.payload.currentIndex));
+  await app.settled();
+  const before = app.bridge.sent.length;
+  await app.press();
+
+  assert.ok(app.bridge.sent.slice(before).some(({ name }) => name === 'playback.loadQueue' || name === 'playback.play'));
+});
+
+test('a loadQueue the bridge timed out can be pressed again at once', async () => {
+  let unanswered = true;
+  const app = await rowPressesInTheApp({
+    respond: message => (message.name === 'playback.loadQueue' && unanswered ? new Promise(() => {}) : null),
+  });
+  const deadlines = [];
+  app.context.setTimeout = (callback, delay) => {
+    if (delay !== 15_000) return setTimeout(callback, delay);
+    deadlines.push(callback);
+    return 0;
+  };
+  await app.press();
+  assert.equal(commands(app.bridge, 'playback.loadQueue').length, 1);
+  unanswered = false;
+  for (const deadline of deadlines.splice(0)) deadline();
+  await app.settled();
+  await app.press();
+
+  assert.equal(commands(app.bridge, 'playback.loadQueue').length, 2);
+});
+
+test('references that never answer stop holding the row after fifteen seconds', async () => {
+  const app = await rowPressesInTheApp();
+  let asked = 0;
+  app.context.fetch = () => {
+    asked += 1;
+    return new Promise(() => {});
+  };
+  await app.press();
+  app.setNow(14_999);
+  await app.press();
+  assert.equal(asked, 1);
+  app.setNow(15_000);
+  await app.press();
+
+  assert.equal(asked, 2);
+});

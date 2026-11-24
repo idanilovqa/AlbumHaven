@@ -602,6 +602,7 @@ test('FTC-PLAYER-013 immediate Album Details replacement stays audible', async (
         afterDiagnostics: afterReplacement,
         beforeDiagnostics: beforeReplacement,
         events: replacementEvents,
+        priorEvents: playbackEvidence.eventsSince(0).slice(0, eventMark),
         lifecycle: await lifecycle.checkpoint(),
         path: replacementTrack.path,
         socketCount: playbackEvidence.socketCount(),

@@ -48,6 +48,7 @@ function loadQueueController(t, initialIndex = 0) {
   };
   const context = {
     window: { setTimeout, clearTimeout },
+    performance: { now: () => 0 },
     state: { player: { current: tracks[initialIndex], playbackQueue: { tracks, currentIndex: initialIndex } } },
     canStartPlaybackInThisTab: () => true,
     startStreamingTrack: track => new Promise((resolve, reject) => starts.push({ track, resolve, reject })),

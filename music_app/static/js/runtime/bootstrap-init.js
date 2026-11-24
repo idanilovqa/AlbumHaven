@@ -22,11 +22,11 @@ if (typeof initPlaybackOwnershipCoordinator === 'function') {
   if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
-if (typeof prepareStreamingPlaybackEngine === 'function'
+if (typeof prepareIdleStreamingPlayback === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   const prepareIdlePlayback = () => {
     if (idlePlaybackPreparationCancelled) return;
-    void prepareStreamingPlaybackEngine().catch((error) => {
+    void prepareIdleStreamingPlayback().catch((error) => {
       console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
     });
   };

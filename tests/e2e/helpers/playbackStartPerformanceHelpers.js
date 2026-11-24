@@ -194,6 +194,35 @@ export function classifyEagerPlaybackRoles({
     .map((record) => record.role);
 }
 
+/**
+ * Click to sound ends at the pressed song's first rendered frame, on the page clock the click was
+ * marked on, not when the test got round to reading it. It counts only
+ * when the rendered audio is the pressed song's, non-silent and stereo, its first frame came after
+ * the click, and the player showed that song playing.
+ */
+export function clickToSoundTiming({ path, startedAtMs, stateCompletedAtMs, evidence }) {
+  if (!(Number(stateCompletedAtMs) > 0)) {
+    throw new Error('Click to sound: the player never showed the pressed song playing.');
+  }
+  if (!evidence || String(evidence.path || '') !== String(path || '')) {
+    throw new Error(`Click to sound: the rendered audio is not the pressed song's (${JSON.stringify(evidence?.path)}).`);
+  }
+  const frames = Number(evidence.pcmFrames || 0);
+  if (!(frames > 0 && Number(evidence.finiteSamples || 0) >= frames * 2
+      && Number(evidence.nonZeroSamples || 0) > 0 && Number(evidence.peakSample || 0) > 0)) {
+    throw new Error('Click to sound: the pressed song\'s rendered audio is silent or not stereo.');
+  }
+  const firstFrameAtMs = Number(evidence.firstFrameAtMs || 0);
+  if (!(firstFrameAtMs > 0 && firstFrameAtMs >= Number(startedAtMs))) {
+    throw new Error(`Click to sound: no first frame after the click (first frame ${firstFrameAtMs}, click ${startedAtMs}).`);
+  }
+  return {
+    completedAtMs: firstFrameAtMs,
+    elapsedMs: firstFrameAtMs - Number(startedAtMs),
+    observedAtMs: Number(evidence.observedAtMs || 0),
+  };
+}
+
 export async function measureAlbumTrackPlaybackStart({
   page,
   trackModalActions,
@@ -243,10 +272,9 @@ export async function measureAlbumTrackPlaybackStart({
     after: playbackMark,
     path: track.path,
   });
-  const completedAtMs = Math.max(
-    stateCompletedAtMs,
-    Number(playbackEvidence.observedAtMs || 0),
-  );
+  const { completedAtMs, elapsedMs, observedAtMs } = clickToSoundTiming({
+    path: track.path, startedAtMs, stateCompletedAtMs, evidence: playbackEvidence,
+  });
   const pcmControls = traffic.snapshotSince(trafficMark);
   const openControls = pcmControls.filter((record) => record.type === 'open');
   const selectedTrackTraffic = openControls.filter((record) => record.path === track.path);
@@ -263,7 +291,10 @@ export async function measureAlbumTrackPlaybackStart({
     track,
     startedAtMs,
     completedAtMs,
-    elapsedMs: Math.max(0, completedAtMs - startedAtMs),
+    elapsedMs,
+    // When the player showed the pressed song playing, and when this test read the sound: diagnostics only.
+    stateCompletedAtMs,
+    observedAtMs,
     diagnostics,
     pcmControls,
     trackTraffic: pcmControls,

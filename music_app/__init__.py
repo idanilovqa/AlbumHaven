@@ -444,13 +444,12 @@ def _configure_asgi_app(app, runtime) -> None:
             or path.startswith("/static/js/")
             or path.startswith("/static/css/")
         ):
-            requested_versions = request.query_params.getlist("v")
             runtime_asset_version = app.state.runtime_asset_version
             if (
                 response.status_code == 200
                 and is_versioned_live_asset(path)
                 and runtime_asset_version != "missing"
-                and requested_versions == [runtime_asset_version]
+                and request.query_params.multi_items() == [("v", runtime_asset_version)]
             ):
                 response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
             else:

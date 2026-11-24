@@ -25,12 +25,23 @@
   const readSessionCsrfCookie = () => readCookie(csrfCookieName);
   window.readSessionCsrfCookie = readSessionCsrfCookie;
 
+  // The browser finishes an unread body by itself only when the answer may be stored. An unread
+  // no-store one keeps its request open, and a large one its connection, so a copy is read to the
+  // end here, whether or not the caller ever reads its own.
+  const fetchSameOrigin = async (input, init) => {
+    const response = await originalFetch(input, init);
+    if (response?.body && /\bno-store\b/i.test(response.headers.get('Cache-Control') || '')) {
+      response.clone().arrayBuffer().catch(() => {});
+    }
+    return response;
+  };
+
   const fetchSameOriginRead = async (input, init) => {
     try {
-      return await originalFetch(input, init);
+      return await fetchSameOrigin(input, init);
     } catch (error) {
       if (error?.name !== 'TypeError') throw error;
-      return originalFetch(input, init);
+      return fetchSameOrigin(input, init);
     }
   };
 
@@ -51,10 +62,10 @@
     if (url.origin !== window.location.origin) return originalFetch(input, init);
     const send = () => {
       const csrfToken = readSessionCsrfCookie();
-      if (!csrfToken) return originalFetch(input, init);
+      if (!csrfToken) return fetchSameOrigin(input, init);
       const headers = new Headers(requestInit?.headers || input?.headers || undefined);
       headers.set('X-Album-Haven-CSRF', csrfToken);
-      return originalFetch(input, {
+      return fetchSameOrigin(input, {
         ...(requestInit || {}),
         credentials: requestInit?.credentials ?? input?.credentials ?? 'same-origin',
         headers,
@@ -20738,6 +20749,9 @@ const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
 // How often a running scan's progressively published albums refresh the view.
 const LIVE_SCAN_REFRESH_INTERVAL_MS = 5000;
+// Refetches of a view whose gallery projection was stale, after 3, 6, 12, 24, 48 and 96 seconds.
+const STALE_PROJECTION_VIEW_REFRESH_LIMIT = 6;
+const STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS = 3000;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -22333,6 +22347,19 @@ async function fetchAndRender(url, push = true, options = {}) {
         state.ui.pendingInventoryMutationViewRefresh = false;
       }
     }
+    if (responseProjectionIsCurrent) {
+      state.ui.staleProjectionViewRefreshCount = 0;
+      state.ui.staleProjectionViewRefreshDueAt = null;
+    } else {
+      // The library change is not published in the gallery yet, and the status revision has
+      // already moved for it, so nothing else would ask again: an idle poll refetches, backing off.
+      const staleProjectionViewRefreshCount = Number(state.ui.staleProjectionViewRefreshCount || 0);
+      if (staleProjectionViewRefreshCount < STALE_PROJECTION_VIEW_REFRESH_LIMIT) {
+        state.ui.staleProjectionViewRefreshCount = staleProjectionViewRefreshCount + 1;
+        state.ui.staleProjectionViewRefreshDueAt = Date.now()
+          + STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS * (2 ** staleProjectionViewRefreshCount);
+      }
+    }
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
       artistCount: Number(state.view?.artist_count || 0),
@@ -23012,7 +23039,9 @@ async function pollStatus() {
     && !startedDuringPendingStart;
   let nextPollDelay = null;
   const knownStatus = state.status || {};
-  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
+  // Like the inventory revision, the first observed watcher health is a baseline: the loaded lists already reflect it.
+  const knownWatcherHealth = Object.prototype.hasOwnProperty.call(knownStatus, 'watcher_health')
+    ? watcherHealthRefreshSignature(knownStatus) : null;
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -23083,7 +23112,8 @@ async function pollStatus() {
     }
     if (inventoryAdvanced) state.ui.pendingArtistTreeRefresh = true;
     const utility = state.utility;
-    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    const healthChanged = knownWatcherHealth !== null
+      && knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
     if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
       utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
     }
@@ -23242,6 +23272,11 @@ async function pollStatus() {
     if (busyNow && liveScanRefreshDue
       && (state.ui.pendingInventoryMutationViewRefresh || state.ui.pendingArtistTreeRefresh)) {
       state.ui.lastLiveScanRefreshAt = Date.now();
+    }
+    const staleProjectionViewRefreshDueAt = Number(state.ui.staleProjectionViewRefreshDueAt);
+    if (staleProjectionViewRefreshDueAt > 0 && Date.now() >= staleProjectionViewRefreshDueAt) {
+      state.ui.staleProjectionViewRefreshDueAt = null;
+      state.ui.pendingInventoryMutationViewRefresh = true;
     }
     if (
       state.ui.pendingInventoryMutationViewRefresh

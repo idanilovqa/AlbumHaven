@@ -30,6 +30,68 @@ function load(cookie = '__Host-album_haven_csrf=csrf-value', fetchImpl = null) {
   return { window, calls, document: context.document };
 }
 
+// A fetch body the browser would leave waiting until the page reads it.
+function unreadBody(cacheControl) {
+  const state = { finished: false };
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new TextEncoder().encode('{"ok":true}'));
+      controller.close();
+      state.finished = true;
+    },
+  }, { highWaterMark: 0 });
+  state.response = new Response(body, { headers: cacheControl ? { 'Cache-Control': cacheControl } : {} });
+  return state;
+}
+
+for (const [name, url, init] of [
+  ['a read', '/view-data?surface=albums', undefined],
+  ['a write', '/refresh-api', { method: 'POST' }],
+]) {
+  for (const cookie of ['__Host-album_haven_csrf=csrf-value', 'other=value']) {
+    test(`${name} answered no-store finishes though its body is never read (${cookie.split('=')[0]})`, async () => {
+      const sent = unreadBody('private, no-store');
+      const { window } = load(cookie, async () => sent.response);
+
+      const response = await window.fetch(url, init);
+      await new Promise(setImmediate);
+
+      assert.equal(sent.finished, true);
+      assert.equal(await response.text(), '{"ok":true}', 'the caller still reads the whole body');
+    });
+  }
+}
+
+test('a storable answer is left to the browser, which finishes it by itself', async () => {
+  const sent = unreadBody('private, max-age=300');
+  const { window } = load(undefined, async () => sent.response);
+
+  const response = await window.fetch('/cover/AbCdEfGhIjKlMnOpQrStUv');
+  await new Promise(setImmediate);
+
+  assert.equal(sent.finished, false);
+  assert.equal(response, sent.response);
+});
+
+test("another origin's answer is left alone", async () => {
+  const sent = unreadBody('no-store');
+  const { window } = load(undefined, async () => sent.response);
+
+  await window.fetch('https://example.test/data');
+  await new Promise(setImmediate);
+
+  assert.equal(sent.finished, false);
+});
+
+test("a body that fails while it is read to the end is the caller's failure alone", async () => {
+  const body = new ReadableStream({ pull(controller) { controller.error(new TypeError('cut')); } }, { highWaterMark: 0 });
+  const { window } = load(undefined, async () => new Response(body, { headers: { 'Cache-Control': 'no-store' } }));
+
+  const response = await window.fetch('/view-data');
+
+  await assert.rejects(response.json(), { name: 'TypeError' });
+});
+
 test('same-origin reads retry once after a transient network failure', async () => {
   let attempts = 0;
   const { window, calls } = load(undefined, async () => {

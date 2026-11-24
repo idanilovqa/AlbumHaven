@@ -199,7 +199,8 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     ]) {
       expect.soft(
         measurement.maxLongTaskMs,
-        `${label} produced a ${measurement.maxLongTaskMs} ms browser main-thread task.`,
+        `${label} produced a ${measurement.maxLongTaskMs} ms browser main-thread task. `
+          + `Longest frames: ${JSON.stringify(measurement.longFrames)}`,
       ).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
     }
     expect(

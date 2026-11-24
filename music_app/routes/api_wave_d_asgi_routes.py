@@ -2493,7 +2493,7 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
         if preview:
             payload, mime_type = await run_in_threadpool(remote_cover_preview, payload, mime_type)
             remember_remote_cover_image(image_url, payload, mime_type, preview=True)
-    return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
+    return Response(payload, media_type=mime_type, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.post("/utilities/fetch-cover")

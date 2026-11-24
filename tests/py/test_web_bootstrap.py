@@ -96,6 +96,7 @@ def test_asgi_bootstrap_registers_pcm_websocket_and_bounded_registry(asgi_app):
         ("missing", "no-store, max-age=0"),
         ("wrong", "no-store, max-age=0"),
         ("duplicate", "no-store, max-age=0"),
+        ("more than the version", "no-store, max-age=0"),
     ],
 )
 def test_runtime_javascript_cache_policy_requires_exact_current_asset_version(
@@ -110,6 +111,7 @@ def test_runtime_javascript_cache_policy_requires_exact_current_asset_version(
         "missing": None,
         "wrong": {"v": f"{runtime_asset_version}-stale"},
         "duplicate": {"v": [runtime_asset_version, runtime_asset_version]},
+        "more than the version": {"v": runtime_asset_version, "path": "Q:/Made Up/01.flac"},
     }[version_query]
 
     status, headers, _body = run_asgi_request(asgi_app, "GET", path, query=query)

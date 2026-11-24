@@ -234,8 +234,17 @@ export async function measureInteractionToPaint(page, action, readyCheck = null)
       ? new PerformanceObserver((list) => samples.push(...list.getEntries().map((entry) => entry.duration)))
       : null;
     observer?.observe({ type: 'longtask', buffered: false });
+    // Long animation frames name the scripts behind a long task, so an over-budget failure shows its cause.
+    const frames = [];
+    const frameObserver = typeof PerformanceObserver === 'function'
+      && PerformanceObserver.supportedEntryTypes?.includes('long-animation-frame')
+      ? new PerformanceObserver((list) => frames.push(...list.getEntries()))
+      : null;
+    frameObserver?.observe({ type: 'long-animation-frame', buffered: false });
     return {
       observer,
+      frameObserver,
+      frames,
       samples,
       startedAt: performance.now(),
     };
@@ -250,17 +259,34 @@ export async function measureInteractionToPaint(page, action, readyCheck = null)
           ...sample.samples,
           ...(sample.observer?.takeRecords() || []).map(entry => entry.duration),
         ];
+        const frames = [...sample.frames, ...(sample.frameObserver?.takeRecords() || [])];
         resolve({
           durationMs: performance.now() - sample.startedAt,
           longTaskCount: longTasks.length,
           maxLongTaskMs: Math.max(0, ...longTasks),
+          longFrames: frames
+            .sort((a, b) => b.duration - a.duration)
+            .slice(0, 3)
+            .map(frame => ({
+              durationMs: Math.round(frame.duration),
+              renderMs: frame.renderStart ? Math.round(frame.startTime + frame.duration - frame.renderStart) : 0,
+              scripts: [...(frame.scripts || [])]
+                .sort((a, b) => b.duration - a.duration)
+                .slice(0, 5)
+                .map(script => `${Math.round(script.duration)} ms ${script.invokerType} ${script.invoker}`
+                  + ` ${script.sourceFunctionName || '(anonymous)'} ${String(script.sourceURL || '').split('/').pop()}`
+                  + `:${script.sourceCharPosition} forced layout ${Math.round(script.forcedStyleAndLayoutDuration || 0)} ms`),
+            })),
         });
       }));
     }));
   } finally {
     try {
       // parity-check: allow-read-only-measurement-evaluate -- release only this measurement's observer
-      await measurement.evaluate(sample => sample.observer?.disconnect());
+      await measurement.evaluate(sample => {
+        sample.observer?.disconnect();
+        sample.frameObserver?.disconnect();
+      });
     } finally {
       await measurement.dispose();
     }

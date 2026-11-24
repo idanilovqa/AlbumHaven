@@ -5141,6 +5141,28 @@
       "rollback": "Revert the shared pending-projection retry; gallery requests keep their own retry and Album Details, Problematic Files and version marking answer a cold process with the pending error again."
     },
     {
+      "id": "js:runtime/pending-tag-edits.js#readStatuses",
+      "action": "fetch requests installed by readStatuses",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-tag-edits.js#readStatuses:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-tag-edits.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/edit-tags/requests/status"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/pending-tag-edits.js#schedule",
       "action": "setTimeout timers installed by schedule",
       "entrypoints": [
@@ -5189,8 +5211,7 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/utilities/edit-tags",
-          "/utilities/edit-tags/requests/*"
+          "/utilities/edit-tags"
         ],
         "forbidden": []
       }
@@ -10282,6 +10303,22 @@
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_edit_tags_route_contract_reads_only_the_edited_albums_at_production_track_count",
       "testIdentity": "test_edit_tags_route_contract_reads_only_the_edited_albums_at_production_track_count",
       "rollback": "Revert fix(edit-tags) selected-set handler, save-task merge and contract; that restores the whole file-cache copies on the request and in its save task."
+    },
+    {
+      "id": "py:routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_statuses",
+      "action": "Serve POST /utilities/edit-tags/requests/status",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_statuses:route:POST /utilities/edit-tags/requests/status"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_status",

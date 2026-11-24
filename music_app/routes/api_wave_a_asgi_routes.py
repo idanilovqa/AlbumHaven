@@ -1876,6 +1876,31 @@ async def tag_editor_fold_decision(request: Request) -> JSONResponse:
     )
 
 
+_MAX_SAVE_STATUS_IDS = 500
+
+
+@router.post("/utilities/edit-tags/requests/status")
+async def utilities_edit_tags_request_statuses(request: Request) -> JSONResponse:
+    """What happened to each save a page is still waiting on, in one request and one read (6.5, 11-22).
+
+    Answers are keyed by the id as sent; ids that are not save ids come back in ``invalid``."""
+    ids = (await _json_payload(request) or {}).get("ids")
+    if not isinstance(ids, list) or len(ids) > _MAX_SAVE_STATUS_IDS:
+        return JSONResponse({"ok": False, "error": "Send a list of at most 500 save ids."}, status_code=400)
+    sent = {str(raw): normalize_client_request_id(raw) for raw in ids}
+    statuses = await run_in_threadpool(
+        PostgresTagEditIntentRepository(_app_config(request)).request_statuses, [n for n in sent.values() if n],
+    )
+    return JSONResponse({
+        "ok": True,
+        "requests": {
+            raw: {"found": statuses.get(normalized) is not None, "status": statuses.get(normalized)}
+            for raw, normalized in sent.items() if normalized
+        },
+        "invalid": [raw for raw, normalized in sent.items() if not normalized],
+    })
+
+
 @router.get("/utilities/edit-tags/requests/{client_request_id}")
 async def utilities_edit_tags_request_status(request: Request, client_request_id: str) -> JSONResponse:
     """What happened to a save the page sent but got no answer for (owner, 2026-11-17)."""

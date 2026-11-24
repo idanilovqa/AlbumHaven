@@ -14,6 +14,8 @@ const PENDING_TAG_EDIT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // Owner (2026-11-23): a "finishing" save (files written and verified, the library still catching up) stays
 // here so a reload or another tab still shows its values; it is never resent, only checked.
 const PENDING_TAG_EDIT_SHOWN_STATES = new Set(['finishing', 'waiting', 'resending']);
+// 6.5 (11-22): one status request per retry pass, carrying at most this many waiting saves (the server's limit).
+const PENDING_TAG_EDIT_STATUS_BATCH = 500;
 
 // T3: the account and library this page belongs to (an opaque key the page carries); entries of another
 // scope stay in storage for their own pages and are neither shown nor checked here.
@@ -88,13 +90,21 @@ const pendingTagEdits = (() => {
     return response.json().catch(() => ({}));
   }
 
-  // 'saved', 'failed' or 'waiting'; throws when the server cannot be reached.
-  async function settle(entry) {
-    const status = await fetch(`/utilities/edit-tags/requests/${encodeURIComponent(entry.id)}`, {
-      headers: { Accept: 'application/json' },
+  // The server's answer for each waiting save, by id, from one request; throws when it cannot be reached.
+  async function readStatuses(waiting) {
+    const status = await fetch('/utilities/edit-tags/requests/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ ids: waiting.map((entry) => entry.id) }),
     });
-    const known = await readJson(status);
-    if (!status.ok || known.ok !== true) throw new Error(known.error || `Save status answered ${status.status}`);
+    const answer = await readJson(status);
+    if (!status.ok || answer.ok !== true) throw new Error(answer.error || `Save status answered ${status.status}`);
+    return answer.requests || {};
+  }
+
+  // 'saved', 'failed' or 'waiting' from the server's answer for this save; throws when a resend cannot reach it.
+  async function settle(entry, known) {
+    if (!known) throw new Error('The server did not accept this save id.');
     if (known.found && PENDING_TAG_EDIT_SAVED.has(known.status)) return 'saved';
     if (known.found && PENDING_TAG_EDIT_FAILED.has(known.status)) return 'failed';
     // A finishing save is already held by the server: it is only ever checked, never sent again.
@@ -119,20 +129,33 @@ const pendingTagEdits = (() => {
     return !result.save_task_id || taskStatus === 'completed' ? 'saved' : 'waiting';
   }
 
+  // A save with no answer this pass keeps waiting; a finishing one stays finishing, so it is never resent.
+  function keepWaiting(entry, error) {
+    if (entry.state !== 'finishing') entry.state = 'waiting';
+    entry.last_error = String(error?.message || error || '');
+  }
+
   async function run() {
     if (running) return;
     running = true;
     let reachedServer = false;
     let settledAny = false;
     try {
-      for (const entry of entries.filter((item) => item.state !== 'failed')) {
+      const waiting = entries.filter((item) => item.state !== 'failed').slice(0, PENDING_TAG_EDIT_STATUS_BATCH);
+      let statuses;
+      try {
+        statuses = await readStatuses(waiting);
+        reachedServer = true;
+      } catch (error) {
+        waiting.forEach((entry) => keepWaiting(entry, error));
+        return;
+      }
+      for (const entry of waiting) {
         let outcome;
         try {
-          outcome = await settle(entry);
-          reachedServer = true;
+          outcome = await settle(entry, statuses[entry.id]);
         } catch (error) {
-          entry.state = 'waiting';
-          entry.last_error = String(error?.message || error || '');
+          keepWaiting(entry, error);
           continue;
         }
         if (outcome === 'saved') {

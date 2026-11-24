@@ -475,6 +475,17 @@ const DEFECTS = [
     expected: /^rejected BI-15 database-connect-per-request:psycopg\.connect at music_app\/services\/generated_preview_storage_postgres\.py:\d+ from py:music_app\/routes\/admin_asgi\.py#get_preview_storage:route:GET \/admin\/server\/preview-storage via /,
   },
   {
+    // The save's prevalidator reaches its caller inside **options, through a spread and a forwarded
+    // **kwargs. A full preparation there (#65's gallery rebuild before a save) was never reported.
+    id: 'BI-04 tag save prevalidation, passed inside unpacked options, that rebuilds the library',
+    language: 'py',
+    file: 'music_app/services/cache.py',
+    anchor: '    _select_runtime_scan_cache_adapter(config).validate_structural_tag_edit(\n',
+    replacement: '    _seeded_prevalidation_rebuild([], config)\n    _select_runtime_scan_cache_adapter(config).validate_structural_tag_edit(\n',
+    prelude: 'from music_app.services.relations import build_relation_views as _seeded_prevalidation_rebuild\n',
+    expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_wave_a_asgi_routes\.py#utilities_edit_tags:route:POST \/utilities\/edit-tags via .*validate_structural_tag_edit_for_config/,
+  },
+  {
     id: 'BI-04 background reconciler that rebuilds every relation view without a batching contract',
     language: 'py',
     file: 'music_app/services/cover_lookup_tasks.py',

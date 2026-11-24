@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from pathlib import Path
 
-from music_app.services.album_local_membership import rejected_local_album_paths
+from music_app.services.album_local_membership import physical_album_folder, rejected_local_album_paths
 from music_app.services.cover_provider_cache import cover_query_key
 from music_app.services.cover_refresh_provider import local_cover_requires_upgrade_check
 from music_app.services.cover_refresh_policy import automatic_cover_repair_minimum_edge
@@ -217,8 +219,20 @@ def build_cover_refresh_jobs(
         elif job.get("selected_cover_path"):
             job["needs_cover_fetch"] = False
 
+    # A folder planned for several albums is shared; only a real multi-album folder (the owner's strict rule,
+    # 2026-11-24) lets its automatic recovery re-apply the folder's image to each album.
+    from music_app.services.multi_album_folders import strict_multi_album_folders
+
+    albums_per_folder = Counter(folder_key for folder_key, *_identity in jobs_by_folder)
+    strict_folders = (
+        strict_multi_album_folders({**entry, "path": path} for path, entry in file_cache.items())
+        if any(count > 1 for count in albums_per_folder.values()) else set()
+    )
     jobs: list[dict[str, object]] = []
-    for job in jobs_by_folder.values():
+    for (folder_key, *_identity), job in jobs_by_folder.items():
+        track_paths = job.get("track_paths") or []
+        job["shared_album_folder"] = albums_per_folder[folder_key] > 1
+        job["strict_album_folder"] = bool(track_paths) and physical_album_folder(track_paths[0]) in strict_folders
         job.pop("selected_cover_path_conflict", None)
         artist = str(job.get("artist") or "").strip()
         album = str(job.get("album") or "").strip()

@@ -831,6 +831,11 @@ def _run_cover_jobs(
 
     def apply_job_result(index: int, job: dict[str, object], cover_path: Path | None, downloaded: bool, detail: dict[str, object]) -> None:
         nonlocal changed
+        if cover_path and not downloaded and job.get("shared_album_folder") and not job.get("strict_album_folder"):
+            # Several albums share this folder without forming a real multi-album folder (owner, 2026-11-24):
+            # the safeguard drops automatic folder art there, so recovery writes none. The search still ran.
+            detail.update(search_reason=detail.get("reason"), reason="mixed_album_folder", selection_conflict=True)
+            cover_path = None
         folder = job["folder"]
         artist = str(job.get("artist") or "")
         album = str(job.get("album") or "")

@@ -73,6 +73,11 @@ def seeded_app(monkeypatch, tmp_path):
     try:
         yield seed, setup_url
     finally:
+        from music_app.services import ignored_repair_intents
+
+        # A drain this test queued finishes here, not while a later contract is being measured (round 6: its
+        # file checks were counted against news_center).
+        ignored_repair_intents.wait_for_background_work()
         isolatedPostgres.reset_application_tables(setup_url)
 
 

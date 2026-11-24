@@ -912,6 +912,43 @@ test('artist GalleryBar moves controls down before allowing the name to ellipsiz
   assert.equal(classes.has('is-name-wrapping'), false, 'artist names never create a third metadata row');
 });
 
+test('a hidden artist GalleryBar keeps its fitted rows for the frame it is shown again', () => {
+  // FTC-GALLERY-NAV-033: a mobile page hides the gallery bar; measuring it at zero size dropped
+  // the controls row, so on Back the gallery started 42 px higher for a frame.
+  const classes = new Set();
+  const context = loadRuntime({ window: { innerWidth: 390 } });
+  let laidOut = true;
+  const bar = {
+    get clientWidth() { return laidOut ? 390 : 0; },
+    getClientRects: () => (laidOut ? [{}] : []),
+    dataset: { galleryContextKind: 'artist' },
+    classList: {
+      add: value => classes.add(value),
+      remove: value => classes.delete(value),
+    },
+    querySelector: selector => ({
+      '[data-artist-info-trigger]': {},
+      '[data-gallery-context-metadata]': { textContent: '' },
+      '[data-gallery-context-summary]': { textContent: '8 albums' },
+    }[selector] || null),
+  };
+  const name = {
+    textContent: 'Synthetic Scale Artist 0207',
+    get scrollWidth() { return laidOut ? 260 : 0; },
+    get clientWidth() { return laidOut ? 180 : 0; },
+  };
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), true);
+
+  laidOut = false;
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), true, 'a bar without a layout box is not measured');
+
+  laidOut = true;
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), true);
+});
+
 test('GalleryBar name fit cache includes artist metadata that changes available title width', () => {
   const classes = new Set();
   let removals = 0;
@@ -2805,6 +2842,38 @@ test('a source transition keeps its current state when exact totals stay stale',
   assert.equal(context.state.gallery.mainState.sources.main_library, true);
   assert.equal(renders.length, 0);
 });
+test('a hidden gallery keeps its bar context instead of resolving one from scrollTop 0', () => {
+  // FTC-GALLERY-NAV-033: a mobile page hides the gallery, whose scrollTop then reads 0. A chrome
+  // update in that time showed the top of the gallery's context, so Back painted a shorter bar.
+  const name = { textContent: 'Synthetic Scale Artist 0207' };
+  const summary = { textContent: '8 albums' };
+  const bar = { offsetHeight: 98, dataset: { galleryContextKind: 'artist' },
+    querySelector: selector => selector === '[data-gallery-context-name]' ? name
+      : selector === '[data-gallery-context-summary]' ? summary : null };
+  let laidOut = false;
+  const scroll = { scrollTop: 0, getBoundingClientRect: () => ({ top: 0 }),
+    getClientRects: () => (laidOut ? [{}] : []) };
+  const context = loadRuntime({ state: { gallery: {}, view: {
+    artist_count: 2, album_count: 2,
+    artist_groups: [{ artist: 'First Root Artist', albums: [{ key: 'first', source: 'main_library' }] }],
+  } }, document: {
+    querySelectorAll: () => [],
+    querySelector: selector => selector === '[data-gallery-bar-instance="gallery"]' ? bar : null,
+    getElementById: id => id === 'albums-scroll' ? scroll : null,
+  } });
+  context.updateGalleryMainControls = () => {};
+  context.state.gallery.mainState = context.createGalleryMainState();
+
+  context.updateGalleryMainChrome();
+  context.updateGalleryMainScrollContext();
+  assert.equal(name.textContent, 'Synthetic Scale Artist 0207');
+  assert.equal(bar.dataset.galleryContextKind, 'artist');
+
+  laidOut = true;
+  context.updateGalleryMainScrollContext();
+  assert.notEqual(name.textContent, 'Synthetic Scale Artist 0207', 'a shown gallery resolves its context again');
+});
+
 test('partial bootstrap gallery chrome reports empty results after all sources are hidden', () => {
   const name = { textContent: '' };
   const summary = { textContent: '' };

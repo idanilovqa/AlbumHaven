@@ -119,12 +119,11 @@ function showAlbumArtboxContextMenu(x, y, slot) {
   }
   if (!items.length) return false;
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = String(album.key || '');
   menu.dataset.menuKind = 'artbox';
   menu.innerHTML = items.join('');
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
   return true;
 }

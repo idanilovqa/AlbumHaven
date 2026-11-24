@@ -3214,3 +3214,60 @@ test('bounded interaction: an artist availability pass sends one request, keeps 
     growth: { metric: 'requests', largeMinusSmallMax: 0 },
   });
 });
+
+// FTC-GALLERY-NAV-032: a right-click near the bottom edge opened the menu under the persistent player,
+// which then took the click meant for "Scroll to this artist".
+function loadHelperWithPointerMenuGeometry() {
+  const loaded = loadHelper();
+  const { context } = loaded;
+  const menuSize = { width: 200, height: 44 };
+  const createElement = context.document.createElement;
+  context.document.createElement = (tagName) => {
+    const element = createElement(tagName);
+    element.getBoundingClientRect = () => {
+      const left = Number.parseFloat(element.style.left) || 0;
+      const top = Number.parseFloat(element.style.top) || 0;
+      return element.hidden
+        ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+        : { left, top, right: left + menuSize.width, bottom: top + menuSize.height, ...menuSize };
+    };
+    return element;
+  };
+  const playerRect = { left: 0, top: 880, right: 1440, bottom: 960, width: 1440, height: 80 };
+  const player = { getBoundingClientRect: () => playerRect };
+  context.document.querySelector = selector => (
+    selector === '[data-shell-slot="bottom_player"]' ? player : null
+  );
+  context.window = { innerWidth: 1440, innerHeight: 960 };
+  context.getAvailableAlbumMoveActions = () => [];
+  context.getAlbumMoveActionLabel = () => '';
+  return { ...loaded, playerRect };
+}
+
+function assertMenuClearOfPlayer(menu, playerRect, viewport) {
+  const rect = menu.getBoundingClientRect();
+  assert.ok(rect.bottom <= playerRect.top, `menu bottom ${rect.bottom} reaches the player at ${playerRect.top}`);
+  assert.ok(rect.top >= 0 && rect.left >= 0, `menu starts on screen (${rect.left}, ${rect.top})`);
+  assert.ok(rect.right <= viewport.innerWidth, `menu right ${rect.right} stays on screen`);
+}
+
+test('pointer menus near the bottom edge stay above the player bar', () => {
+  const { context, playerRect } = loadHelperWithPointerMenuGeometry();
+
+  context.showArtistTreeContextMenu(120, 863.5, 'Synthetic Artist');
+  const treeMenu = context.document.getElementById('artist-tree-context-menu');
+  assertMenuClearOfPlayer(treeMenu, playerRect, context.window);
+  assert.equal(treeMenu.dataset.artist, 'Synthetic Artist');
+
+  context.showAlbumCardContextMenu(1400, 870, { key: 'synthetic::album', name: 'Synthetic Album' });
+  const albumMenu = context.document.getElementById('album-card-context-menu');
+  assertMenuClearOfPlayer(albumMenu, playerRect, context.window);
+});
+
+test('pointer menus with room below keep opening at the pointer', () => {
+  const { context } = loadHelperWithPointerMenuGeometry();
+  context.showArtistTreeContextMenu(120, 300, 'Synthetic Artist');
+  const menu = context.document.getElementById('artist-tree-context-menu');
+  assert.equal(menu.style.left, '120px');
+  assert.equal(menu.style.top, '300px');
+});

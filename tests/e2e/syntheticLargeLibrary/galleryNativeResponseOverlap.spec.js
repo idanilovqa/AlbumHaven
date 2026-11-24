@@ -14,6 +14,9 @@ import {
 } from '../helpers/failureSafeCleanup.js';
 import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHelpers.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
+import { observeGalleryTraffic, readGalleryRuntimeState } from '../helpers/passiveGalleryDiagnostics.js';
+import { isSearchLooseTracksPrefetchUrl } from '../helpers/productionViewObserver.js';
+import { planHeldDragForObservedHeights } from '../helpers/heldTouchDragPlan.js';
 
 const PREFETCH_VIEWPORTS = 8;
 const FULL_REFRESH_SEARCH_QUERY = 'Neal Morse';
@@ -32,8 +35,10 @@ function isRootContinuation(response) {
 
 function isFullSearchRefreshUrl(candidateUrl, query) {
   const url = new URL(candidateUrl);
+  // The search's Loose Tracks prefetch shares the URL's query but never answers for the gallery.
   return url.pathname.endsWith('/view-data')
     && !url.searchParams.has('gallery_cursor')
+    && !isSearchLooseTracksPrefetchUrl(url)
     && String(url.searchParams.get('q') || '').trim() === query;
 }
 
@@ -62,6 +67,20 @@ async function observeResponseBoundary(cdp, matchesUrl) {
       cdp.off('Network.responseReceived', onResponse);
     },
   };
+}
+
+// Failure-only evidence: what the page asked for and why it did or did not refresh or page.
+async function attachFailureDiagnostics(testInfo, page, traffic, name) {
+  let runtimeState = null;
+  try {
+    runtimeState = await readGalleryRuntimeState(page);
+  } catch (error) {
+    runtimeState = { readError: String(error?.message || error) };
+  }
+  await testInfo.attach(name, {
+    body: JSON.stringify({ runtimeState, traffic: await traffic.finish() }),
+    contentType: 'application/json',
+  });
 }
 
 async function openRootGallery(page, galleryActions, navigationPanelActions, view) {
@@ -166,6 +185,11 @@ async function positionWithWheelBeforeContinuation(ui, page) {
   if (!box) throw new Error('Gallery scroll surface is not visible.');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   for (let step = 0; step < 100; step += 1) {
+    // Measure only between pages: a page landing during this step extends the gallery under it.
+    await expect.poll(
+      async () => (await ui.readContinuationGeometry()).pageRequestInFlight,
+      { intervals: [16, 32, 64], timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
+    ).toBe(false);
     const geometry = await ui.readContinuationGeometry();
     const lower = geometry.viewport * (PREFETCH_VIEWPORTS + 0.15);
     const upper = geometry.viewport * (PREFETCH_VIEWPORTS + 0.35);
@@ -184,10 +208,11 @@ async function positionWithWheelBeforeContinuation(ui, page) {
       continue;
     }
     await page.mouse.wheel(0, Math.min(480, Math.max(32, geometry.remaining - upper)));
+    // The wheel moves the gallery down; a page that lands meanwhile only lengthens what remains.
     await expect.poll(
-      async () => (await ui.readContinuationGeometry()).remaining,
+      async () => (await ui.readContinuationGeometry()).scrollTop,
       { intervals: [0, 8, 16, 32], timeout: 2000 },
-    ).toBeLessThan(geometry.remaining);
+    ).toBeGreaterThan(geometry.scrollTop);
   }
   throw new Error('Desktop preposition did not reach the continuation boundary.');
 }
@@ -215,26 +240,53 @@ async function dispatchTouchSwipe(ui, cdp, point, startY, endY) {
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
 
-async function positionWithTouchBeforeContinuation(ui, page, cdp, point, lowerY) {
-  for (let step = 0; step < 100; step += 1) {
-    const geometry = await ui.readContinuationGeometry();
-    const lower = geometry.viewport * (PREFETCH_VIEWPORTS + 0.1);
-    const upper = geometry.viewport * (PREFETCH_VIEWPORTS + 0.3);
-    if (geometry.remaining >= lower && geometry.remaining <= upper) return;
-    if (geometry.remaining < lower) {
-      throw new Error('Mobile preposition crossed the continuation boundary.');
+// The held drag must cross the continuation threshold while one artist stays at the gallery top:
+// the bar's height follows that artist's name (owner: keep today's bar), so a drag that reaches the
+// next artist resizes the gallery and moves the app's own threshold under the gesture. A plan is made
+// for each gallery height seen so far and holds only if the bar settled at its start gives that height.
+async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY) {
+  const observedHeights = [];
+  const rejected = [];
+  let candidates = [];
+  for (let swipes = 0; swipes < 80;) {
+    const bar = await ui.waitForGalleryBarSettled();
+    const geometry = await ui.readGalleryContextGeometry();
+    observedHeights.push(geometry.clientHeight);
+    const remaining = geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
+    if (remaining <= geometry.clientHeight * PREFETCH_VIEWPORTS) {
+      throw new Error(`Mobile preposition crossed the continuation boundary: ${JSON.stringify({ geometry, bar, rejected })}`);
     }
-    const distance = Math.min(
-      280 + TOUCH_ACTIVATION_DISTANCE,
-      Math.max(40 + TOUCH_ACTIVATION_DISTANCE, geometry.remaining - upper + TOUCH_ACTIVATION_DISTANCE),
+    candidates = planHeldDragForObservedHeights(
+      geometry,
+      observedHeights,
+      rejected.map(entry => entry.clientHeight),
+      { prefetchViewports: PREFETCH_VIEWPORTS, maximumDragRatio: 0.38 },
     );
-    await dispatchTouchSwipe(ui, cdp, point, lowerY, lowerY - distance);
-    await expect.poll(
-      async () => (await ui.readContinuationGeometry()).remaining,
-      { intervals: [0, 8, 16, 32], timeout: 2000 },
-    ).toBeLessThan(geometry.remaining);
+    const current = candidates.find(candidate => candidate.clientHeight === geometry.clientHeight);
+    if (current?.plan.feasible && current.plan.inStartBand && bar.kind === 'artist') {
+      return { bar, plan: current.plan };
+    }
+    const next = candidates.find(candidate => candidate.plan.feasible);
+    if (!next) {
+      throw new Error(`No artist section holds a held drag across the continuation threshold: ${JSON.stringify({
+        scrollTop: geometry.scrollTop, scrollHeight: geometry.scrollHeight, bar, candidates, rejected,
+      })}`);
+    }
+    if (next.plan.inStartBand) {
+      // At this start the settled bar gives another gallery height, so this plan's threshold is wrong.
+      rejected.push({ clientHeight: next.clientHeight, settledClientHeight: geometry.clientHeight, bar, plan: next.plan });
+      continue;
+    }
+    const distance = Math.max(-280, Math.min(280, next.plan.target - geometry.scrollTop));
+    if (distance >= 0) {
+      await dispatchTouchSwipe(ui, cdp, point, lowerY, lowerY - distance - TOUCH_ACTIVATION_DISTANCE);
+    } else {
+      await dispatchTouchSwipe(ui, cdp, point, upperY, upperY - distance + TOUCH_ACTIVATION_DISTANCE);
+    }
+    await ui.waitForNativeScrollSettled();
+    swipes += 1;
   }
-  throw new Error('Mobile preposition did not reach the continuation boundary.');
+  throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify({ candidates, rejected })}`);
 }
 
 test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () => {
@@ -245,22 +297,34 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       galleryActions, navigationPanelActions, page,
     }, testInfo) => {
       const ui = await openRootGallery(page, galleryActions, navigationPanelActions, 'cards');
-      const box = await ui.galleryScroll.boundingBox();
-      if (!box) throw new Error('Gallery scroll surface is not visible.');
+      const traffic = observeGalleryTraffic(page);
+      const initialBox = await ui.galleryScroll.boundingBox();
+      if (!initialBox) throw new Error('Gallery scroll surface is not visible.');
       const cdp = await page.context().newCDPSession(page);
-      const x = Math.round(box.x + box.width / 2);
+      const x = Math.round(initialBox.x + initialBox.width / 2);
       const point = y => ({ x, y, radiusX: 1, radiusY: 1, force: 1, id: 1 });
-      const lowerY = Math.round(box.y + box.height * 0.72);
-      const upperY = Math.round(box.y + box.height * 0.34);
-    const activatedY = lowerY - TOUCH_ACTIVATION_DISTANCE;
-    const touchEndY = upperY - TOUCH_ACTIVATION_DISTANCE;
+      // Drag points come from the gallery as the drag will see it, after the bar settles.
+      let lowerY = Math.round(initialBox.y + initialBox.height * 0.72);
+      let upperY = Math.round(initialBox.y + initialBox.height * 0.34);
+      let activatedY;
+      let touchEndY;
+      let barDuringDrag = null;
+      let dragPlan = null;
     let responseBoundary;
       let touchActive = false;
       let observation;
     let originalFailure = null;
       let samples;
       try {
-        await positionWithTouchBeforeContinuation(ui, page, cdp, point, lowerY);
+        ({ bar: barDuringDrag, plan: dragPlan } = await positionForSingleArtistHeldDrag(
+          ui, cdp, point, lowerY, upperY,
+        ));
+        const box = await ui.galleryScroll.boundingBox();
+        if (!box) throw new Error('Gallery scroll surface is not visible.');
+        lowerY = Math.round(box.y + box.height * 0.72);
+        upperY = lowerY - dragPlan.drag;
+        activatedY = lowerY - TOUCH_ACTIVATION_DISTANCE;
+        touchEndY = upperY - TOUCH_ACTIVATION_DISTANCE;
         const loadedBefore = await readLoadedAlbumCount(page);
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchStart', touchPoints: [point(lowerY)],
@@ -271,11 +335,18 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       });
       await ui.waitForAnimationFrame();
       await ui.waitForNativeScrollSettled();
+      const dragStartTop = (await ui.readGalleryContextGeometry()).scrollTop;
+      expect(
+        dragStartTop >= dragPlan.startLow && dragStartTop <= dragPlan.startHigh,
+        `held drag starts inside its planned single-artist band: ${JSON.stringify({ dragStartTop, dragPlan })}`,
+      ).toBe(true);
       responseBoundary = await observeResponseBoundary(cdp, isRootContinuationUrl);
         const diagnosticSequenceBeforeInput = await readLatestDiagnosticSequence(galleryActions);
         const anchor = await ui.captureMiddleVisibleCard();
         observation = await ui.startNativeScrollFrameObservation(anchor);
-        const responsePromise = page.waitForResponse(isRootContinuation);
+        const responsePromise = page.waitForResponse(isRootContinuation, {
+          timeout: RESPONSE_BOUNDARY_TIMEOUT_MS,
+        });
         const inputStartedAt = await ui.readBrowserEpoch();
         for (let step = 1; step <= 24; step += 1) {
         const y = Math.round(activatedY + ((touchEndY - activatedY) * step) / 24);
@@ -305,6 +376,8 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         touchActive = false;
         const inputEndedAt = await ui.readBrowserEpoch();
+        // The drag was sized for this bar; a bar that changed height under the drag moved the gallery.
+        expect(await ui.waitForGalleryBarSettled()).toEqual(barDuringDrag);
         expect(responseAt).toBeGreaterThanOrEqual(inputStartedAt);
         expect(responseAt).toBeLessThanOrEqual(inputEndedAt);
       expect(Number(deferredEvent.epoch)).toBeGreaterThanOrEqual(responseAt);
@@ -316,6 +389,13 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       originalFailure = error;
       } finally {
       await finalizeResponseOverlapCleanup(originalFailure, [
+        async () => {
+          if (originalFailure) {
+            await attachFailureDiagnostics(testInfo, page, traffic, 'mobile-continuation-failure-diagnostics');
+          } else {
+            await traffic.finish();
+          }
+        },
         async () => {
           if (touchActive) {
             await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
@@ -349,6 +429,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       searchToolbarActions,
     }, testInfo) => {
       const ui = await openRootGallery(page, galleryActions, navigationPanelActions, 'cards');
+      const traffic = observeGalleryTraffic(page);
       const initialResponsePromise = page.waitForResponse(
         response => isFullSearchRefresh(response, FULL_REFRESH_SEARCH_QUERY),
       );
@@ -369,6 +450,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
     let diagnosticSequenceBeforeInput = 0;
     let anchor = null;
       let watcherFixture = null;
+      const watchedAlbum = `Gallery Refresh ${Date.now()}`;
       let originalFailure = null;
       let observation = null;
       let samples;
@@ -385,7 +467,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       watcherFixture = await createWatchedAlbumFixture({
         ownedDirectoryName: 'gallery-native-response-overlap',
         artist: FULL_REFRESH_SEARCH_QUERY,
-        album: `Gallery Refresh ${Date.now()}`,
+        album: watchedAlbum,
         year: 2026,
         createLocalArt: true,
         context,
@@ -411,10 +493,9 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         candidate => isFullSearchRefresh(candidate, FULL_REFRESH_SEARCH_QUERY),
         { timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
       );
-      const fixtureMutation = watcherFixture.renameTrack(
-        0,
-        `Watcher First Signal ${Date.now()}`,
-      );
+      // The watched album's card must change: a refresh that only renames a track leaves every
+      // card as it was, so the gallery rightly keeps its mounted cards and has nothing to defer.
+      const fixtureMutation = Promise.resolve().then(() => watcherFixture.deleteTrack(1));
       activeInput = keepWheelActiveUntilResponseBoundary(
         ui, page,
         deferredUpdateBoundary(galleryActions, diagnosticSequenceBeforeInput, responseBoundary.responseAt),
@@ -451,7 +532,6 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         expect(deferredEvent, 'full refresh must reach the production deferred group-update path').not.toBeNull();
         expect(deferredEvent.touchGestureActive).toBe(false);
         expect(response.ok(), `${response.status()} ${response.url()}`).toBe(true);
-        expect(watcherFixture.tracks).toHaveLength(2);
         const responseUrl = new URL(response.url());
         expect(responseUrl.searchParams.has('gallery_cursor')).toBe(false);
         expect(responseAt).toBeGreaterThanOrEqual(inputStartedAt);
@@ -460,13 +540,18 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         expect(Number(deferredEvent.epoch)).toBeLessThanOrEqual(inputEndedAt);
         await waitForDeferredReplay(galleryActions, deferredEvent);
       // parity-check: allow-read-only-measurement-evaluate -- diagnose authoritative post-scan view ownership
-      stateAfterReplay = await page.evaluate(() => ({
+      stateAfterReplay = await page.evaluate(album => ({
+        watchedAlbumTrackCounts: (state.view?.artist_groups || [])
+          .flatMap(group => group.albums || [])
+          .filter(candidate => candidate.name === album)
+          .map(candidate => getAlbumCardSummary(candidate).trackCount),
         query: state.view?.query || '',
         albumCount: state.view?.album_count ?? null,
         groupAlbumCount: (state.view?.artist_groups || [])
           .reduce((count, group) => count + (group.albums || []).length, 0),
         pendingScanCompletionViewRefresh: Boolean(state.ui?.pendingScanCompletionViewRefresh),
-      }));
+      }), watchedAlbum);
+      expect(stateAfterReplay.watchedAlbumTrackCounts).toEqual([1]);
       await expect.poll(() => readLoadedAlbumCount(page)).toBe(loadedBefore + 1);
         await page.waitForTimeout(300);
       } catch (error) {
@@ -481,6 +566,11 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       }
         let reportingFailure = null;
         try {
+          if (originalFailure) {
+            await attachFailureDiagnostics(testInfo, page, traffic, 'desktop-full-refresh-failure-diagnostics');
+          } else {
+            await traffic.finish();
+          }
           if (observation) {
             samples = await observation.finish();
             await testInfo.attach('desktop-full-refresh-overlap', {

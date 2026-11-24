@@ -20,6 +20,7 @@ function load(overrides = {}) {
     albumHasDisplayCover: (album) => Boolean(album?.cover_ref),
     buildAlbumDisplayCoverUrl: (album) => `/cover/${album.cover_ref || album.remote_cover_url}`,
     ensureAlbumCardContextMenu: () => menu,
+    placePointerMenu: (target, x, y) => { target.style.left = `${x}px`; target.style.top = `${y}px`; },
     hideAlbumCardContextMenu: () => { menu.hidden = true; },
     renderTrackModalRelease: () => { calls.renders += 1; },
     openCoverLookupModal: (album, options) => { calls.lookups.push([album.key, options]); },

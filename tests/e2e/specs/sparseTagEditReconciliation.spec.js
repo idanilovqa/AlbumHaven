@@ -1,5 +1,6 @@
 import { test } from '../support/baseFixtures.js';
 import { runSparseTagEditScenario } from '../helpers/sparseTagEditScenario.js';
+import { readGalleryRuntimeState } from '../helpers/passiveGalleryDiagnostics.js';
 
 test('FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
@@ -147,9 +148,18 @@ test('FTC-TAGS-013 keeps a year-only edit sparse and retains its optimistic spli
 
 
 test.afterEach(async ({ galleryActions, testArtifacts }, testInfo) => {
-  if (!testInfo.title.startsWith('FTC-TAGS-012') || testInfo.status === testInfo.expectedStatus) return;
-  testArtifacts.queueJsonAttachment('tags012-scroll-failure-diagnostics.json', {
-    scrollTop: await galleryActions.galleryPage.readScrollTop(),
-    virtualGrid: await galleryActions.galleryPage.readVirtualGridDiagnostics(),
-  });
+  if (testInfo.status === testInfo.expectedStatus) return;
+  if (testInfo.title.startsWith('FTC-TAGS-012')) {
+    testArtifacts.queueJsonAttachment('tags012-scroll-failure-diagnostics.json', {
+      scrollTop: await galleryActions.galleryPage.readScrollTop(),
+      virtualGrid: await galleryActions.galleryPage.readVirtualGridDiagnostics(),
+    });
+  }
+  // A wheel over the gallery left it unmoved after Album Details closed: record who owned the scroll.
+  if (testInfo.title.startsWith('FTC-TAGS-013')) {
+    testArtifacts.queueJsonAttachment(
+      'tags013-scroll-failure-diagnostics.json',
+      await readGalleryRuntimeState(galleryActions.galleryPage.page),
+    );
+  }
 });

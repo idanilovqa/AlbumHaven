@@ -1735,12 +1735,11 @@ function showVersionContextMenu(albumKey, x, y) {
   const key = String(albumKey || '');
   if (!key || isMobileClient() || usesMobilePageLayout()) return;
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = key;
   menu.dataset.menuKind = 'release';
   menu.innerHTML = `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(key)}">Separate release</button>`;
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
 }
 

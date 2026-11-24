@@ -4940,12 +4940,11 @@ function showAlbumArtboxContextMenu(x, y, slot) {
   }
   if (!items.length) return false;
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = String(album.key || '');
   menu.dataset.menuKind = 'artbox';
   menu.innerHTML = items.join('');
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
   return true;
 }
@@ -8599,10 +8598,16 @@ function findGalleryMainContextSection(threshold) {
   return null;
 }
 
+// A hidden gallery (a mobile page covers it) reads scrollTop 0; its bar keeps the context it had
+// until the gallery shows again and its scroll position resolves the context.
+function isGalleryScrollHidden(scroll) {
+  return scroll.getClientRects?.().length === 0;
+}
+
 function updateGalleryMainScrollContext() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
-  if (!bar || !scroll) return;
+  if (!bar || !scroll || isGalleryScrollHidden(scroll)) return;
   if (!galleryMainChromeInputs || !galleryMainChromeTokenMatches(galleryMainChromeInputs.token)) {
     updateGalleryMainChrome();
     return;
@@ -8654,7 +8659,9 @@ function updateGalleryMainChrome() {
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   };
   galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs, loadedTotals };
-  renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  if (!isGalleryScrollHidden(scroll)) {
+    renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  }
   updateGalleryFamilyPanelChrome(primaryArtist);
 }
 
@@ -9251,6 +9258,9 @@ function syncGalleryBarNameFit(bar, name) {
     const actions = bar.querySelector?.('.gallery-bar__actions');
     if (actions) bar.galleryNameFitObserver.observe(actions);
   }
+  // A hidden bar (a mobile page covers the gallery) has nothing to measure; its fitted rows stay
+  // as they were so the gallery is not shown with a shorter bar for a frame.
+  if (bar.getClientRects?.().length === 0) return;
   const contextKind = String(bar.dataset.galleryContextKind || '');
   const metadata = bar.querySelector?.('[data-gallery-context-metadata]')?.textContent || '';
   const summary = bar.querySelector?.('[data-gallery-context-summary]')?.textContent || '';
@@ -15859,6 +15869,28 @@ function initPlaybackOwnershipCoordinator() {
   return menu;
 }
 
+const POINTER_MENU_EDGE_MARGIN_PX = 8;
+
+// A menu opened at the pointer shows whole inside the area above the persistent player: near the
+// bottom (or right) edge it opens above (or left of) the pointer instead, and is clamped on screen.
+// Call it once the menu is shown with its final items, so its own size is measured.
+function placePointerMenu(menu, x, y) {
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const rect = menu.getBoundingClientRect?.();
+  if (!rect || typeof window === 'undefined') return;
+  const playerTop = document.querySelector?.('[data-shell-slot="bottom_player"]')?.getBoundingClientRect?.().top;
+  const viewportBottom = Number(window.innerHeight) || rect.bottom;
+  const bottomLimit = Math.min(viewportBottom, Number.isFinite(playerTop) && playerTop > 0 ? playerTop : viewportBottom)
+    - POINTER_MENU_EDGE_MARGIN_PX;
+  const rightLimit = (Number(window.innerWidth) || rect.right) - POINTER_MENU_EDGE_MARGIN_PX;
+  const clamp = (value, max) => Math.max(POINTER_MENU_EDGE_MARGIN_PX, Math.min(value, max));
+  const left = x + rect.width > rightLimit ? x - rect.width : x;
+  const top = y + rect.height > bottomLimit ? y - rect.height : y;
+  menu.style.left = `${clamp(left, rightLimit - rect.width)}px`;
+  menu.style.top = `${clamp(top, bottomLimit - rect.height)}px`;
+}
+
 function hideAlbumCardContextMenu() {
   const menu = document.getElementById('album-card-context-menu');
   if (!menu) return;
@@ -15872,8 +15904,6 @@ function hideAlbumCardContextMenu() {
 function showAlbumCardContextMenu(x, y, album) {
   if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
   menu.dataset.menuKind = 'album';
   menu.albumContext = album || null;
@@ -15908,6 +15938,7 @@ function showAlbumCardContextMenu(x, y, album) {
     ...separateItems,
   ].join('');
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
   }
@@ -15948,10 +15979,9 @@ function hideArtistTreeContextMenu() {
 
 function showArtistTreeContextMenu(x, y, artist) {
   const menu = ensureArtistTreeContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.artist = String(artist || '');
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
@@ -44644,12 +44674,11 @@ function showVersionContextMenu(albumKey, x, y) {
   const key = String(albumKey || '');
   if (!key || isMobileClient() || usesMobilePageLayout()) return;
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = key;
   menu.dataset.menuKind = 'release';
   menu.innerHTML = `<button type="button" class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="${escapeHtml(key)}">Separate release</button>`;
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideAlbumCardContextMenu);
 }
 

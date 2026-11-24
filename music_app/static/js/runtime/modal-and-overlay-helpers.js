@@ -10,6 +10,28 @@
   return menu;
 }
 
+const POINTER_MENU_EDGE_MARGIN_PX = 8;
+
+// A menu opened at the pointer shows whole inside the area above the persistent player: near the
+// bottom (or right) edge it opens above (or left of) the pointer instead, and is clamped on screen.
+// Call it once the menu is shown with its final items, so its own size is measured.
+function placePointerMenu(menu, x, y) {
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const rect = menu.getBoundingClientRect?.();
+  if (!rect || typeof window === 'undefined') return;
+  const playerTop = document.querySelector?.('[data-shell-slot="bottom_player"]')?.getBoundingClientRect?.().top;
+  const viewportBottom = Number(window.innerHeight) || rect.bottom;
+  const bottomLimit = Math.min(viewportBottom, Number.isFinite(playerTop) && playerTop > 0 ? playerTop : viewportBottom)
+    - POINTER_MENU_EDGE_MARGIN_PX;
+  const rightLimit = (Number(window.innerWidth) || rect.right) - POINTER_MENU_EDGE_MARGIN_PX;
+  const clamp = (value, max) => Math.max(POINTER_MENU_EDGE_MARGIN_PX, Math.min(value, max));
+  const left = x + rect.width > rightLimit ? x - rect.width : x;
+  const top = y + rect.height > bottomLimit ? y - rect.height : y;
+  menu.style.left = `${clamp(left, rightLimit - rect.width)}px`;
+  menu.style.top = `${clamp(top, bottomLimit - rect.height)}px`;
+}
+
 function hideAlbumCardContextMenu() {
   const menu = document.getElementById('album-card-context-menu');
   if (!menu) return;
@@ -23,8 +45,6 @@ function hideAlbumCardContextMenu() {
 function showAlbumCardContextMenu(x, y, album) {
   if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
   menu.dataset.menuKind = 'album';
   menu.albumContext = album || null;
@@ -59,6 +79,7 @@ function showAlbumCardContextMenu(x, y, album) {
     ...separateItems,
   ].join('');
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
   }
@@ -99,10 +120,9 @@ function hideArtistTreeContextMenu() {
 
 function showArtistTreeContextMenu(x, y, artist) {
   const menu = ensureArtistTreeContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.artist = String(artist || '');
   menu.hidden = false;
+  placePointerMenu(menu, x, y);
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }

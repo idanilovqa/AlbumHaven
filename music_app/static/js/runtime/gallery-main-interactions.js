@@ -974,10 +974,16 @@ function findGalleryMainContextSection(threshold) {
   return null;
 }
 
+// A hidden gallery (a mobile page covers it) reads scrollTop 0; its bar keeps the context it had
+// until the gallery shows again and its scroll position resolves the context.
+function isGalleryScrollHidden(scroll) {
+  return scroll.getClientRects?.().length === 0;
+}
+
 function updateGalleryMainScrollContext() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
-  if (!bar || !scroll) return;
+  if (!bar || !scroll || isGalleryScrollHidden(scroll)) return;
   if (!galleryMainChromeInputs || !galleryMainChromeTokenMatches(galleryMainChromeInputs.token)) {
     updateGalleryMainChrome();
     return;
@@ -1029,7 +1035,9 @@ function updateGalleryMainChrome() {
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   };
   galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs, loadedTotals };
-  renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  if (!isGalleryScrollHidden(scroll)) {
+    renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  }
   updateGalleryFamilyPanelChrome(primaryArtist);
 }
 
@@ -1626,6 +1634,9 @@ function syncGalleryBarNameFit(bar, name) {
     const actions = bar.querySelector?.('.gallery-bar__actions');
     if (actions) bar.galleryNameFitObserver.observe(actions);
   }
+  // A hidden bar (a mobile page covers the gallery) has nothing to measure; its fitted rows stay
+  // as they were so the gallery is not shown with a shorter bar for a frame.
+  if (bar.getClientRects?.().length === 0) return;
   const contextKind = String(bar.dataset.galleryContextKind || '');
   const metadata = bar.querySelector?.('[data-gallery-context-metadata]')?.textContent || '';
   const summary = bar.querySelector?.('[data-gallery-context-summary]')?.textContent || '';

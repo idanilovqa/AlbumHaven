@@ -227,6 +227,40 @@ export class GalleryRegressions {
     // parity-check: allow-read-only-measurement-evaluate -- synchronize one native input per observed frame
     return this.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve())));
   }
+  // The gallery bar's context and height once they stop changing: an artist whose name does not fit
+  // beside the controls takes a second row, which shortens the gallery under it.
+  async waitForGalleryBarSettled({ stableFrames = 2, maximumFrames = 60 } = {}) {
+    // parity-check: allow-read-only-measurement-evaluate -- read the gallery bar's settled layout
+    const read = () => this.galleryBar.evaluate(bar => ({
+      kind: String(bar.dataset.galleryContextKind || ''),
+      height: Math.round(bar.getBoundingClientRect().height),
+    }));
+    let previous = await read();
+    let stable = 0;
+    for (let frame = 0; frame < maximumFrames; frame += 1) {
+      await this.waitForAnimationFrame();
+      const current = await read();
+      stable = current.kind === previous.kind && current.height === previous.height ? stable + 1 : 0;
+      previous = current;
+      if (stable >= stableFrames) return current;
+    }
+    throw new Error(`Gallery bar did not settle: ${JSON.stringify(previous)}`);
+  }
+  // Scroll geometry plus the content positions where the gallery bar's artist context changes:
+  // the bottom of each mounted artist label (the bar names the last label scrolled past the top).
+  async readGalleryContextGeometry() {
+    // parity-check: allow-read-only-measurement-evaluate -- read scroll extent and artist label boundaries
+    return this.galleryScroll.evaluate(scroll => {
+      const viewportTop = scroll.getBoundingClientRect().top;
+      return {
+        scrollTop: scroll.scrollTop,
+        scrollHeight: scroll.scrollHeight,
+        clientHeight: scroll.clientHeight,
+        labelBottoms: [...scroll.querySelectorAll('[data-scroll-artist] .artist-name')]
+          .map(label => label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop),
+      };
+    });
+  }
   async waitForNativeScrollSettled({ stableFrames = 2, maximumFrames = 60 } = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- read native scroll position until it stabilizes
     let previous = await this.galleryScroll.evaluate(scroll => Number(scroll.scrollTop || 0));
@@ -911,6 +945,9 @@ export class GalleryRegressions {
     return this.galleryScroll.evaluate(scroll => ({
       remaining: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
       viewport: scroll.clientHeight,
+      scrollTop: scroll.scrollTop,
+      // A root page still loading will extend the gallery once it lands.
+      pageRequestInFlight: typeof rootGalleryPageRequest !== 'undefined' && Boolean(rootGalleryPageRequest),
     }));
   }
 

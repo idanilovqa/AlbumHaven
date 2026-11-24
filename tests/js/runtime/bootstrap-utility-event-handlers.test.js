@@ -588,6 +588,30 @@ test('applying a problem filter preserves the selected album in the live bootstr
   assert.equal(replacementFocused, true);
 });
 
+test('removing a problem filter preserves the selected album in the live bootstrap handler when it still matches', () => {
+  const { context, calls } = createContext({
+    problematicFiles: [
+      { key: 'album-1', problem_reasons: ['Poor art quality', 'Missing year'] },
+      { key: 'album-2', problem_reasons: ['Missing year'] },
+    ],
+    selectedProblematicKey: 'album-1',
+    selectedProblemFilters: ['Poor art quality', 'Missing year'],
+    problemDropdownOpen: true,
+  });
+  const { event, wasPrevented } = createEvent({
+    '[data-remove-problem-filter]': createElement({ 'data-remove-problem-filter': 'Poor art quality' }),
+  });
+
+  context.handleUtilityBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Missing year']);
+  assert.equal(context.state.utility.deferProblematicAutoSelection, true);
+  assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(calls.renders, 1);
+});
+
 test('applying a problem filter clears the selected album in the live bootstrap handler when it no longer matches', () => {
   const { context } = createContext({
     problematicFiles: [

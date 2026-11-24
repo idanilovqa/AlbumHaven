@@ -148,3 +148,14 @@ def test_bounded_interaction_the_mixed_folder_check_reads_only_the_candidate_fol
     connection = _FolderFiles([])
     assert _narrow_mixed_album_folders(connection, [{"file_private_path": "x", "file_mixed_album_folder": False}])
     assert connection.statements == [], "no candidate folder, no read"
+
+
+def test_albums_known_as_discs_of_one_release_are_not_a_multi_album_folder(monkeypatch):
+    """Owner (2026-11-24): once MusicBrainz knows a folder's albums are discs of one release, the folder is
+    excluded. The seam reads nothing yet; here it says so."""
+    from music_app.services import multi_album_folders
+
+    entries = _album(r"C:\Music\Shared", "First Album", (1, 2)) + _album(r"C:\Music\Shared", "Second Album", (1, 2))
+    assert multi_album_folders.strict_multi_album_folders(entries)
+    monkeypatch.setattr(multi_album_folders, "discs_of_one_release", lambda albums: True)
+    assert multi_album_folders.strict_multi_album_folders(entries) == set()

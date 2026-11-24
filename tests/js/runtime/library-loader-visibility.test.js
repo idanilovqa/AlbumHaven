@@ -935,6 +935,23 @@ test('revealing the gallery recalculates columns after a hidden search render', 
   assert.equal(resized, 1);
 });
 
+// FTC-SEARCH-NAV-031/033: picking an artist in the tree shows the loader, which hides the gallery; the
+// gallery bar skips its context while the gallery has no layout box (1ebfe8824). Revealing the gallery
+// leaves scrollTop unchanged, so no scroll event resolves the bar: the reveal must resolve it.
+test('revealing the gallery resolves the gallery bar context it skipped while hidden', () => {
+  const {context, scroll} = createLoaderRenderFixture();
+  const resolved = [];
+  context.virtualGrid = {onResize(){}};
+  context.updateGalleryMainScrollContext = () => resolved.push(scroll.hidden);
+  scroll.hidden = true;
+  scroll.clientWidth = 1600;
+  context.renderLibraryLoader({});
+  assert.equal(scroll.hidden, false);
+  assert.deepEqual(resolved, [false], 'the bar context resolves once, after the gallery shows');
+  context.renderLibraryLoader({});
+  assert.deepEqual(resolved, [false], 'an already visible gallery does not resolve again');
+});
+
 for (const query of ['', 'Scan Artist 00']) {
   for (const phase of ['indexing', 'finalizing']) {
     test(`dedicated Scan Page exposes retained browsing during ${phase} with ${query ? 'a saved query' : 'the root gallery'}`, () => {

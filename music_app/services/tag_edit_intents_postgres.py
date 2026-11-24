@@ -56,15 +56,23 @@ class PostgresTagEditIntentRepository:
 
     def request_status(self, request_id: str) -> str | None:
         """The journal status of a page's save, or None when the server never received it."""
-        normalized = normalize_client_request_id(request_id)
-        if not normalized:
-            return None
+        return self.request_statuses([request_id]).get(normalize_client_request_id(request_id))
+
+    def request_statuses(self, request_ids: list[str]) -> dict[str, str | None]:
+        """Each valid save id's journal status (None: never received), read in one statement.
+
+        A retry pass asks about all its waiting saves at once (6.5, 11-22); ids that are not
+        UUIDs are left out, so the rows read never exceed the distinct ids sent."""
+        intent_ids = list(dict.fromkeys(filter(None, map(normalize_client_request_id, request_ids))))
+        if not intent_ids:
+            return {}
         with self._connect_to_database() as connection:
-            row = _first_row(connection.execute(
-                "select status from library.tag_edit_intents where id = %(intent_id)s::uuid",
-                {"intent_id": normalized},
-            ))
-        return str(_row_mapping(row).get("status") or "") or None if row is not None else None
+            rows = connection.execute(
+                "select id::text as id, status from library.tag_edit_intents where id = any(%(intent_ids)s::uuid[])",
+                {"intent_ids": intent_ids},
+            ).fetchall()
+        statuses = {str(_row_mapping(row).get("id")): str(_row_mapping(row).get("status") or "") or None for row in rows}
+        return {intent_id: statuses.get(intent_id) for intent_id in intent_ids}
 
     @contextmanager
     def claim_unfinished_intent(self, intent_id: str, *, library_root_identity: str):

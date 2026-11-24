@@ -7,6 +7,12 @@ const test = require('node:test');
 const modulePath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'pending-tag-edits.js');
 const moduleSource = fs.readFileSync(modulePath, 'utf8');
 const SAVE_ID = '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b';
+const STATUS_URL = '/utilities/edit-tags/requests/status';
+
+// One retry pass asks about every waiting save in one request (6.5, 11-22); this is its answer for one save.
+function known(found, status, id = SAVE_ID) {
+  return { status: 200, body: { ok: true, requests: { [id]: { found, status } }, invalid: [] } };
+}
 
 // Owner (2026-11-17): a save without a server answer is never rolled back or lost; it waits in the Edit Queue.
 function loadPendingTagEdits({ answers, stored = null }) {
@@ -29,7 +35,7 @@ function loadPendingTagEdits({ answers, stored = null }) {
     refreshCurrentViewAfterBackgroundCompletion: async () => { calls.refreshes += 1; },
     fetch: async (url, options = {}) => {
       requests.push([options.method || 'GET', String(url), options.body ? JSON.parse(options.body) : null]);
-      const answer = answers.shift();
+      const answer = typeof answers === 'function' ? answers(JSON.parse(options.body)) : answers.shift();
       if (answer instanceof Error) throw answer;
       return { ok: answer.status < 400, status: answer.status, json: async () => answer.body };
     },
@@ -51,7 +57,7 @@ const payload = { confirmed: true, client_request_id: SAVE_ID, album: { name: 'A
 test('a save the server never received is sent again under the same id and leaves the queue once saved', async () => {
   const { api, storage, requests, calls, runNext } = loadPendingTagEdits({
     answers: [
-      { status: 200, body: { ok: true, found: false, status: null } },
+      known(false, null),
       { status: 200, body: { ok: true, save_task_id: 't1', save_task_status: 'completed' } },
     ],
   });
@@ -60,9 +66,10 @@ test('a save the server never received is sent again under the same id and leave
   assert.equal(api.list()[0].payload, undefined, 'listeners never see the raw payload');
   await runNext();
   assert.deepEqual(requests.map(([method, url]) => [method, url]), [
-    ['GET', `/utilities/edit-tags/requests/${SAVE_ID}`],
+    ['POST', STATUS_URL],
     ['POST', '/utilities/edit-tags'],
   ]);
+  assert.deepEqual(requests[0][2], { ids: [SAVE_ID] });
   assert.equal(requests[1][2].client_request_id, SAVE_ID, 'the resend carries the same id');
   assert.equal(api.list().length, 0);
   assert.equal(JSON.parse(storage.get('albumHaven.pendingTagEdits')).length, 0);
@@ -71,7 +78,7 @@ test('a save the server never received is sent again under the same id and leave
 
 test('a save the server reports as rolled back stays in the queue as failed and is not resent', async () => {
   const { api, requests, calls, runNext, timers } = loadPendingTagEdits({
-    answers: [{ status: 200, body: { ok: true, found: true, status: 'rolled_back' } }],
+    answers: [known(true, 'rolled_back')],
   });
   api.add({ id: SAVE_ID, payload, album: { name: 'Album' } });
   await runNext();
@@ -84,9 +91,9 @@ test('a save the server reports as rolled back stays in the queue as failed and 
 test('a save still running or already received keeps waiting; no answer keeps it and backs off', async () => {
   const { api, requests, runNext } = loadPendingTagEdits({
     answers: [
-      { status: 200, body: { ok: true, found: true, status: 'files_verified' } },
+      known(true, 'files_verified'),
       new Error('network down'),
-      { status: 200, body: { ok: true, found: false, status: null } },
+      known(false, null),
       { status: 409, body: { ok: false, code: 'duplicate_request', intent_status: 'prepared' } },
     ],
   });
@@ -99,7 +106,7 @@ test('a save still running or already received keeps waiting; no answer keeps it
   assert.equal(api.list().length, 1, 'nothing is dropped while the server is unreachable');
   await runNext();
   assert.equal(api.list()[0].state, 'waiting', 'a duplicate means the first copy is being saved');
-  assert.equal(requests.filter(([method]) => method === 'POST').length, 1);
+  assert.equal(requests.filter(([, url]) => url === '/utilities/edit-tags').length, 1);
 });
 
 test('a page load resumes saves that were waiting and keeps failed ones for the Edit Queue', async () => {
@@ -116,7 +123,7 @@ test('a page load resumes saves that were waiting and keeps failed ones for the 
   assert.deepEqual(api.list().map((entry) => entry.id), [SAVE_ID]);
 });
 
-test('bounded interaction: a retry pass keeps one retry timer and refreshes the view once however many saves it settles', async () => {
+test('bounded interaction: a retry pass sends one status request per 500 waiting saves, keeps one retry timer and refreshes the view once however many saves it settles', async () => {
   const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
   const retryPass = async (pendingSaves) => {
     const counter = createInteractionCounter();
@@ -136,7 +143,12 @@ test('bounded interaction: a retry pass keeps one retry timer and refreshes the 
       showToast() {},
       refreshCurrentViewAfterBackgroundCompletion: async () => { counter.count('renderCommits'); passEnded(); },
       // Every waiting save is confirmed by the server: each is settled in this one pass.
-      fetch: async () => { counter.count('requests'); return { ok: true, status: 200, json: async () => ({ ok: true, found: true, status: 'completed' }) }; },
+      fetch: async (_url, options = {}) => {
+        counter.count('requests');
+        const ids = JSON.parse(options.body || '{"ids":[]}').ids || [];
+        const requests = Object.fromEntries(ids.map((id) => [id, { found: true, status: 'completed' }]));
+        return { ok: true, status: 200, json: async () => ({ ok: true, requests, invalid: [] }) };
+      },
     };
     vm.createContext(context);
     vm.runInContext(moduleSource, context, { filename: modulePath });
@@ -158,11 +170,12 @@ test('bounded interaction: a retry pass keeps one retry timer and refreshes the 
   };
   await measureScalePair({
     id: 'js:runtime/pending-tag-edits.js#schedule',
+    // Above the route's 500-id cap: a pass asks in chunks of 500, so 1,200 saves take 3 requests.
     small: 1,
-    large: 200,
+    large: 1200,
     run: retryPass,
-    budgets: { timers: 1, renderCommits: 1 },
-    growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
+    budgets: { requests: 3, timers: 1, renderCommits: 1 },
+    growth: { metric: 'requests', largeMinusSmallMax: 2 },
   });
 });
 
@@ -198,7 +211,10 @@ function loadWithOverlay({ answers = [], stored = null, scope = 'scope-a', now =
     renderView: () => { calls.renders += 1; },
     fetch: async (url, options = {}) => {
       requests.push([options.method || 'GET', String(url)]);
-      const answer = answers.shift() || { status: 200, body: { ok: true, found: true, status: 'files_verified' } };
+      const ids = JSON.parse(options.body || '{"ids":[]}').ids || [];
+      const answer = answers.shift() || { status: 200, body: {
+        ok: true, requests: Object.fromEntries(ids.map((id) => [id, { found: true, status: 'files_verified' }])), invalid: [],
+      } };
       return { ok: answer.status < 400, status: answer.status, json: async () => answer.body };
     },
   };
@@ -220,12 +236,12 @@ const finishingPayload = { confirmed: true, client_request_id: SAVE_ID, album: {
 
 test('a finishing save is only checked, never resent, and leaves storage once the library holds it', async () => {
   const { api, requests, calls, runNext } = loadWithOverlay({
-    answers: [{ status: 200, body: { ok: true, found: true, status: 'completed' } }],
+    answers: [known(true, 'completed')],
   });
   api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
   assert.equal(api.list()[0].state, 'finishing');
   await runNext();
-  assert.deepEqual(requests, [['GET', `/utilities/edit-tags/requests/${SAVE_ID}`]], 'a finishing save is never resent');
+  assert.deepEqual(requests, [['POST', STATUS_URL]], 'a finishing save is never resent');
   assert.equal(api.list().length, 0);
   assert.equal(calls.refreshes, 1, 'the view re-reads what the library now holds');
 });
@@ -298,4 +314,32 @@ test('the values of a finishing save replace the stored ones in fetched album de
   api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
   const shown = api.overlayAlbumDetails({ key: 'artist::album', tracks: [{ path: 'a.mp3', title: 'Old' }, { path: 'c.mp3', title: 'C' }] });
   assert.deepEqual(shown.tracks.map((track) => track.title), ['New', 'C']);
+});
+
+test('a status answer that rejects a save id keeps that save waiting and settles the others', async () => {
+  const OTHER_ID = '0b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b';
+  const { api, requests, runNext } = loadPendingTagEdits({
+    answers: [{ status: 200, body: { ok: true, requests: { [OTHER_ID]: { found: true, status: 'completed' } }, invalid: [SAVE_ID] } }],
+  });
+  api.add({ id: SAVE_ID, payload, album: { name: 'Album' } });
+  api.add({ id: OTHER_ID, payload: { ...payload, client_request_id: OTHER_ID }, album: { name: 'Other' } });
+  await runNext();
+  assert.deepEqual(requests, [['POST', STATUS_URL, { ids: [SAVE_ID, OTHER_ID] }]], 'one request, never a resend of a rejected id');
+  assert.deepEqual(api.list().map((entry) => [entry.id, entry.state]), [[SAVE_ID, 'waiting']]);
+});
+
+test('more waiting saves than one status request may carry all settle in the same pass (6.5, 11-23)', async () => {
+  const ids = Array.from({ length: 501 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+  // Each status request is answered for exactly the ids it carried.
+  const { api, requests, runNext } = loadPendingTagEdits({
+    answers: (body) => ({ status: 200, body: {
+      ok: true, requests: Object.fromEntries(body.ids.map((id) => [id, { found: true, status: 'completed' }])), invalid: [],
+    } }),
+  });
+  ids.forEach((id) => api.add({ id, payload: { ...payload, client_request_id: id }, album: { name: id } }));
+  await runNext();
+  assert.deepEqual(requests.map(([method, url, body]) => [method, url, body.ids.length]), [
+    ['POST', STATUS_URL, 500], ['POST', STATUS_URL, 1],
+  ], 'one request per 500 ids, each within the route cap');
+  assert.deepEqual(api.list(), [], 'the 501st save settled in the same pass');
 });

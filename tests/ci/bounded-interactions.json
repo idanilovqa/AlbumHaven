@@ -5160,6 +5160,28 @@
       "rollback": "Revert the shared pending-projection retry; gallery requests keep their own retry and Album Details, Problematic Files and version marking answer a cold process with the pending error again."
     },
     {
+      "id": "js:runtime/pending-tag-edits.js#readStatuses",
+      "action": "fetch requests installed by readStatuses",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-tag-edits.js#readStatuses:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-tag-edits.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "affected-set",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/edit-tags/requests/status"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/pending-tag-edits.js#schedule",
       "action": "setTimeout timers installed by schedule",
       "entrypoints": [
@@ -5175,20 +5197,21 @@
       "proof": "contract",
       "cardinalities": {
         "small": 1,
-        "production": 200
+        "production": 1200
       },
       "budgets": {
+        "requests": 3,
         "timers": 1,
         "renderCommits": 1
       },
       "growth": {
-        "metric": "renderCommits",
-        "largeMinusSmallMax": 0
+        "metric": "requests",
+        "largeMinusSmallMax": 2
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/pending-tag-edits.test.js",
-      "testIdentity": "bounded interaction: a retry pass keeps one retry timer and refreshes the view once however many saves it settles",
+      "testIdentity": "bounded interaction: a retry pass sends one status request per 500 waiting saves, keeps one retry timer and refreshes the view once however many saves it settles",
       "performanceTargets": [],
-      "rollback": "Test-only contract; a retry pass already asks about each waiting save (the user's own queue), keeps at most one retry timer and refreshes the view once."
+      "rollback": "Revert the batched status request; a retry pass asks about each waiting save with its own GET again, still with one retry timer and one view refresh."
     },
     {
       "id": "js:runtime/pending-tag-edits.js#settle",
@@ -5207,8 +5230,7 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/utilities/edit-tags",
-          "/utilities/edit-tags/requests/*"
+          "/utilities/edit-tags"
         ],
         "forbidden": []
       }
@@ -10307,10 +10329,10 @@
       "rollback": "Revert fix(edit-tags) selected-set handler, save-task merge and contract; that restores the whole file-cache copies on the request and in its save task."
     },
     {
-      "id": "py:routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_status",
-      "action": "Serve GET /utilities/edit-tags/requests/{client_request_id}",
+      "id": "py:routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_statuses",
+      "action": "Serve POST /utilities/edit-tags/requests/status",
       "entrypoints": [
-        "py:music_app/routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_status:route:GET /utilities/edit-tags/requests/{client_request_id}"
+        "py:music_app/routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_statuses:route:POST /utilities/edit-tags/requests/status"
       ],
       "owners": [
         "music_app/routes/api_wave_a_asgi_routes.py"

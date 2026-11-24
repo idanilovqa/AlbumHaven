@@ -1753,3 +1753,44 @@ test('a tab with its own state but no live hand-over opens paused', async () => 
   assert.deepEqual(tab.claimed, []);
   assert.equal(tab.starts[0][2], false);
 });
+
+function accountRestore({ saved, page }) {
+  const shown = [];
+  const removed = [];
+  const track = { src: '/track?ref=r', path: 'Artist/Album/01.flac', title: 'Song' };
+  const context = loadHelper({
+    pageAccountKey: () => page,
+    canThisTabResumePlayback: () => false,
+    getSessionStorageItem: () => '',
+    getLocalStorageItem: () => JSON.stringify({ track, currentTime: 18, paused: true,
+      ...(saved === undefined ? {} : { account: saved }) }),
+    removeLocalStorageItem: key => { removed.push(key); return true; },
+    setCurrentPlayerTrack: restored => { shown.push(restored.title); },
+  });
+  context.restorePlayerState();
+  return { shown, removed };
+}
+
+test('the saved player opens only for the account that saved it', async () => {
+  const same = accountRestore({ saved: 'acct-a', page: 'acct-a' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(same.shown, ['Song']);
+
+  for (const [name, saved] of [['another account', 'acct-b'], ['no account, saved before accounts were named', undefined]]) {
+    const other = accountRestore({ saved, page: 'acct-a' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual([other.shown, other.removed], [[], ['albumhaven.playerState.v1']], name);
+  }
+});
+
+test('the saved player names the account it is saved for', () => {
+  const saved = [];
+  const context = loadHelper({
+    pageAccountKey: () => 'acct-a',
+    getPlayerPlaybackSnapshot: () => ({ src: '/track?ref=r', paused: true, ended: false, currentTime: 3, duration: 9 }),
+    setLocalStorageItem: (_key, value) => { saved.push(JSON.parse(value)); return true; },
+  });
+  context.state.player.current = { src: '/track?ref=r', path: 'Artist/Album/01.flac', title: 'Song' };
+  context.persistPlayerState(true);
+  assert.equal(saved.at(-1).account, 'acct-a');
+});

@@ -1,3 +1,9 @@
+// The signed-in account this page was rendered for: what it saves for that account is read back only for it.
+function pageAccountKey() {
+  if (typeof document === 'undefined') return '';
+  return document.querySelector?.('meta[name="album-haven-account"]')?.getAttribute('content') || '';
+}
+
 function getBrowserLocalStorage() {
   try {
     return window.localStorage || null;

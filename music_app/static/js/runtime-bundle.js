@@ -2694,6 +2694,12 @@ function dropViewFromHistoryState() {
 
 // BEGIN js/runtime/browser-storage-helpers.js
 
+// The signed-in account this page was rendered for: what it saves for that account is read back only for it.
+function pageAccountKey() {
+  if (typeof document === 'undefined') return '';
+  return document.querySelector?.('meta[name="album-haven-account"]')?.getAttribute('content') || '';
+}
+
 function getBrowserLocalStorage() {
   try {
     return window.localStorage || null;
@@ -14934,7 +14940,9 @@ function androidNativeStoredTrack(track) {
 // document of this origin can name the tracks Android is still playing.
 function saveAndroidNativeAttachment(revision, items) {
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  const account = typeof pageAccountKey === 'function' ? pageAccountKey() : '';
   setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
+    ...(account ? { account } : {}),
     clientId: getAndroidNativePlaybackClientId(),
     queueRevision: revision,
     tracks: items.map(androidNativeStoredTrack),
@@ -14950,6 +14958,8 @@ function readAndroidNativeAttachment(live) {
   } catch (_error) {
     return null;
   }
+  // Another account's queue is never adopted.
+  if ((record?.account || '') !== (typeof pageAccountKey === 'function' ? pageAccountKey() : '')) return null;
   const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
   if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
   if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
@@ -42841,6 +42851,11 @@ function resetPlayerUnloadPersistence() {
   return playbackSnapshot;
 }
 
+// The signed-in account the saved player belongs to; '' where the page names none.
+function pagePlaybackAccount() {
+  return typeof pageAccountKey === 'function' ? pageAccountKey() : '';
+}
+
 function persistPlayerState(force = false, options = {}) {
   if (playerUnloadStatePersisted && !options.allowAfterUnload) return;
   let snapshot = '';
@@ -42851,7 +42866,8 @@ function persistPlayerState(force = false, options = {}) {
       state.player.lastPersistedSnapshot = '';
       return;
     }
-    snapshot = JSON.stringify(payload);
+    const account = pagePlaybackAccount();
+    snapshot = JSON.stringify(account ? { ...payload, account } : payload);
     if (!force && snapshot === state.player.lastPersistedSnapshot) return;
     setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
     if (options.allowAfterUnload && typeof setSessionStorageItem === 'function') {
@@ -42900,6 +42916,11 @@ function restorePlayerState() {
     } catch (_error) {
       return;
     }
+  }
+  // Another account's player, or one saved before players named their account, is never shown.
+  if ((parsed?.account || '') !== pagePlaybackAccount()) {
+    if (!resumesThisTab) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+    return;
   }
   const track = parsed?.track;
   if (!track || !track.src) return;

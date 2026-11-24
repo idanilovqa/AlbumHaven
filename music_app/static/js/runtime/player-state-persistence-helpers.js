@@ -212,6 +212,11 @@ function resetPlayerUnloadPersistence() {
   return playbackSnapshot;
 }
 
+// The signed-in account the saved player belongs to; '' where the page names none.
+function pagePlaybackAccount() {
+  return typeof pageAccountKey === 'function' ? pageAccountKey() : '';
+}
+
 function persistPlayerState(force = false, options = {}) {
   if (playerUnloadStatePersisted && !options.allowAfterUnload) return;
   let snapshot = '';
@@ -222,7 +227,8 @@ function persistPlayerState(force = false, options = {}) {
       state.player.lastPersistedSnapshot = '';
       return;
     }
-    snapshot = JSON.stringify(payload);
+    const account = pagePlaybackAccount();
+    snapshot = JSON.stringify(account ? { ...payload, account } : payload);
     if (!force && snapshot === state.player.lastPersistedSnapshot) return;
     setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
     if (options.allowAfterUnload && typeof setSessionStorageItem === 'function') {
@@ -271,6 +277,11 @@ function restorePlayerState() {
     } catch (_error) {
       return;
     }
+  }
+  // Another account's player, or one saved before players named their account, is never shown.
+  if ((parsed?.account || '') !== pagePlaybackAccount()) {
+    if (!resumesThisTab) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+    return;
   }
   const track = parsed?.track;
   if (!track || !track.src) return;

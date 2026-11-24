@@ -572,7 +572,9 @@ function androidNativeStoredTrack(track) {
 // document of this origin can name the tracks Android is still playing.
 function saveAndroidNativeAttachment(revision, items) {
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  const account = typeof pageAccountKey === 'function' ? pageAccountKey() : '';
   setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
+    ...(account ? { account } : {}),
     clientId: getAndroidNativePlaybackClientId(),
     queueRevision: revision,
     tracks: items.map(androidNativeStoredTrack),
@@ -588,6 +590,8 @@ function readAndroidNativeAttachment(live) {
   } catch (_error) {
     return null;
   }
+  // Another account's queue is never adopted.
+  if ((record?.account || '') !== (typeof pageAccountKey === 'function' ? pageAccountKey() : '')) return null;
   const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
   if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
   if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]

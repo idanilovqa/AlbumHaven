@@ -335,16 +335,31 @@ for (const [name, options] of [
   });
 }
 
-test('IAR-W27: the sign-in page takes the places Back would return to', () => {
-  const removed = [];
-  const source = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, '../../../music_app/static/js/login.js'), 'utf8',
-  );
-  require('node:vm').runInNewContext(source, {
-    window: { localStorage: { removeItem: key => removed.push(key) }, addEventListener() {}, navigator: {} },
+test('the sign-in page takes what the device kept of the account, but not songs kept for offline play', () => {
+  const removed = { local: [], session: [] };
+  const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/login.js'), 'utf8');
+  vm.runInNewContext(source, {
+    window: {
+      localStorage: { removeItem: key => removed.local.push(key) },
+      sessionStorage: { removeItem: key => removed.session.push(key) },
+      addEventListener() {}, navigator: {},
+    },
     document: { querySelector: () => null },
   });
+  const runtime = path.join(__dirname, '../../../music_app/static/js/runtime');
+  const named = (file, constant) => {
+    const match = fs.readFileSync(path.join(runtime, file), 'utf8').match(new RegExp(`const ${constant} = '([^']+)'`));
+    assert.ok(match, `${constant} in ${file}`);
+    return match[1];
+  };
   const { STORAGE_KEY } = require('../../../music_app/static/js/return-place.js');
 
-  require('node:assert/strict').deepEqual(removed, [STORAGE_KEY]);
+  assert.deepEqual(removed.local, [STORAGE_KEY,
+    named('core-state-and-helpers.js', 'PLAYER_STATE_STORAGE_KEY'),
+    named('android-bridge-client.js', 'ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY')]);
+  assert.deepEqual(removed.session, [
+    named('player-state-persistence-helpers.js', 'PLAYER_TAB_STATE_STORAGE_KEY'),
+    named('bootstrap-gallery-event-handlers.js', 'RECENT_SEARCH_STORAGE_KEY'),
+    named('playback-ownership-helpers.js', 'PLAYBACK_HANDOFF_STORAGE_KEY'),
+    named('playback-ownership-helpers.js', 'PLAYBACK_SAME_TAB_STORAGE_KEY')]);
 });

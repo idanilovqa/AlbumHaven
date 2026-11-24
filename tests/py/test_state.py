@@ -4188,18 +4188,17 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
 
 
 @pytest.mark.parametrize("album_ids", [(12, 13), (12, 12), (None, None)], ids=["mixed", "same", "missing"])
-def test_recovered_cover_planned_folder_requires_album_identity_agreement(
+def test_recovered_cover_planned_folder_recovers_only_outside_a_folder_of_several_albums(
     recovered_cover_case, monkeypatch, album_ids,
 ):
+    """Each album keeps its own search (eea310882: the suggestion it shows). A folder of several partial albums
+    is no real multi-album folder (the owner's strict rule, 2026-11-24), so recovery writes nothing there."""
     from music_app.services import cover_refresh_planning
 
     case = recovered_cover_case
     mixed = album_ids == (12, 13)
     for path, album_id in zip(case.tracks, album_ids, strict=True):
-        case.entries[path].update(
-            album_id=album_id,
-            selected_cover_path=str(case.cover.parent / "old-cover.jpg"),
-        )
+        case.entries[path].update(album_id=album_id, selected_cover_path=str(case.cover.parent / "old-cover.jpg"))
     baseline = {path: dict(entry) for path, entry in case.entries.items()}
     next_folder = case.cover.parent.parent / "Following"
     next_folder.mkdir()
@@ -4207,32 +4206,24 @@ def test_recovered_cover_planned_folder_requires_album_identity_agreement(
     next_cover.write_bytes(b"independent-cover-bytes")
     next_track = str(next_folder / "01.mp3")
     case.entries[next_track] = {
-        **baseline[case.tracks[0]], "path": next_track, "album": "Following",
-        "album_id": 25, "selected_cover_path": None,
+        **baseline[case.tracks[0]], "path": next_track, "album": "Following", "album_id": 25, "selected_cover_path": None,
     }
     monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: False)
     jobs = cover_refresh_planning.build_cover_refresh_jobs(case.entries)
-    assert len(jobs) == 2
-    assert jobs[0]["track_paths"] == case.tracks
-    assert jobs[0]["selected_cover_path"] == (
-        str(case.cover.parent / "old-cover.jpg") if album_ids == (12, 12) else None
-    )
+    folder_jobs = [[path] for path in case.tracks] if mixed else [case.tracks]
+    assert [job["track_paths"] for job in jobs] == [*folder_jobs, [next_track]]
     case.kwargs["jobs"] = jobs
     monkeypatch.setattr(
         cover_refresh_execution, "AlbumCoverCandidatePublisher",
         lambda *_args, **_kwargs: SimpleNamespace(begin_candidate_generation=lambda: None),
     )
-    processed = []
-    persisted = []
-    events = []
+    processed, persisted, events = [], [], []
 
     def execute(**kwargs):
         processed.append(kwargs["job"]["folder"])
         return kwargs["job"]["folder"] / "cover.jpg", False, {"reason": "satisfactory_local_cover_present"}
 
     def persist(_config, paths, selected, **options):
-        if mixed:
-            assert paths == {next_track}, "Mixed persisted album identities must not reach persistence"
         persisted.append((set(paths), selected))
         options["commit_guard"](lambda: None)
         return {"album_rows_updated": 1, "track_file_rows_updated": len(paths)}
@@ -4242,28 +4233,18 @@ def test_recovered_cover_planned_folder_requires_album_identity_agreement(
     monkeypatch.setattr(cover_refresh_execution, "log_job_event", lambda _config, _logger, action, **fields: events.append((action, fields)))
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
-    assert processed == ([next_folder] if mixed else [case.cover.parent, next_folder])
-    assert result["processed"] == 2
-    assert result["downloaded"] == 0
-    assert case.state["covers_downloaded"] == 0
+    assert processed == [case.cover.parent] * len(folder_jobs) + [next_folder], "every album keeps its own search"
+    assert result["processed"] == len(folder_jobs) + 1
     assert persisted == ([] if mixed else [(set(case.tracks), case.cover)]) + [({next_track}, next_cover)]
     assert case.entries[next_track]["cover_path"] == str(next_cover)
     assert case.cover.read_bytes() == b"recovered-cover-bytes"
-    assert next_cover.read_bytes() == b"independent-cover-bytes"
     outcomes = [fields for action, fields in events if action == "Cover fetch outcome"]
-    assert len(outcomes) == 2
-    assert outcomes[0]["downloaded"] is False
-    assert outcomes[0]["terminal_category"] == ("failed" if mixed else "skipped")
     if mixed:
-        assert {path: case.entries[path] for path in case.tracks} == baseline
-        assert {path: case.state["file_cache"][path] for path in case.tracks} == baseline
-        assert result["job_results"][0]["selection_conflict"] is True
-        assert result["job_results"][0]["reason"] == "mixed_album_folder"
-        assert outcomes[0]["reason"] == "mixed_album_folder"
+        assert {path: case.entries[path] for path in case.tracks} == {path: baseline[path] for path in case.tracks}
+        assert [item["reason"] for item in result["job_results"][:2]] == ["mixed_album_folder"] * 2
+        assert [item["terminal_category"] for item in outcomes[:2]] == ["skipped"] * 2
     else:
-        assert not result["job_results"][0].get("recovery_conflict", False)
         assert all(case.entries[path]["cover_path"] == str(case.cover) for path in case.tracks)
-        assert outcomes[0]["reason"] == "satisfactory_local_cover_present"
 
 
 def test_mixed_cover_folder_does_not_suppress_independent_missing_cover_report(recovered_cover_case, monkeypatch):
@@ -4280,10 +4261,7 @@ def test_mixed_cover_folder_does_not_suppress_independent_missing_cover_report(r
     }
     worker_entries = {path: dict(entry) for path, entry in case.entries.items()}
     monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: True)
-    case.kwargs.update(
-        file_cache=worker_entries,
-        jobs=cover_refresh_planning.build_cover_refresh_jobs(worker_entries),
-    )
+    case.kwargs.update(file_cache=worker_entries, jobs=cover_refresh_planning.build_cover_refresh_jobs(worker_entries))
     monkeypatch.setattr(
         cover_refresh_execution, "execute_cover_job",
         lambda **_kwargs: (None, False, {"reason": "remote_search_returned_no_candidate"}),
@@ -4292,13 +4270,59 @@ def test_mixed_cover_folder_does_not_suppress_independent_missing_cover_report(r
 
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
-    assert sorted(item["reason"] for item in result["job_results"]) == [
-        "mixed_album_folder", "selected_cover_file_missing",
-    ], "the unrelated album still reports its missing file"
+    # Each album of the folder is searched on its own; a search that finds nothing keeps every saved cover,
+    # and the unrelated album still reports its missing file.
+    assert [item["reason"] for item in result["job_results"]] == ["selected_cover_file_missing"] * 3
     assert case.entries[independent_path]["cover_path"] == "missing-cover.jpg"
-    assert {path: case.entries[path] for path in case.tracks} == mixed_baseline
+    assert {path: case.entries[path] for path in case.tracks} == {path: mixed_baseline[path] for path in case.tracks}
     assert case.cover.read_bytes() == b"recovered-cover-bytes"
-    assert result["processed"] == 2
+    assert result["processed"] == 3
+
+
+def test_a_real_multi_album_folder_recovers_the_folder_image_per_album(recovered_cover_case, monkeypatch):
+    """Owner (11-22; strict rule 11-24): two complete albums alone in one folder each show the folder's one
+    image. Recovery re-applies it per album; each album still keeps its own search."""
+    from music_app.services import cover_refresh_planning
+
+    case = recovered_cover_case
+    folder = case.cover.parent
+    template = dict(case.entries[case.tracks[0]])
+    entries = {}
+    for album_id, album in ((12, "First"), (13, "Second")):
+        for number in (1, 2):
+            path = str(folder / f"{album}-{number:02d}.mp3")
+            entries[path] = {**template, "path": path, "album": album, "album_id": album_id,
+                             "track_number": number, "disc_number": 1, "cover_path": None}
+    case.entries.clear()
+    case.entries.update(entries)
+    monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: False)
+    case.kwargs["jobs"] = cover_refresh_planning.build_cover_refresh_jobs(case.entries)
+    monkeypatch.setattr(
+        cover_refresh_execution, "AlbumCoverCandidatePublisher",
+        lambda *_args, **_kwargs: SimpleNamespace(begin_candidate_generation=lambda: None),
+    )
+    searched, persisted = [], []
+
+    def execute(**kwargs):
+        searched.append(kwargs["job"]["album"])
+        return case.cover, False, {"reason": "satisfactory_local_cover_present"}
+
+    def persist(_config, paths, selected, **options):
+        persisted.append((set(paths), selected))
+        options["commit_guard"](lambda: None)
+        return {"album_rows_updated": 1, "track_file_rows_updated": len(paths)}
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
+
+    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert sorted(searched) == ["First", "Second"]
+    assert sorted(persisted, key=lambda item: sorted(item[0])) == [
+        ({path for path in entries if "First" in path}, case.cover),
+        ({path for path in entries if "Second" in path}, case.cover),
+    ]
+    assert {entry["cover_path"] for entry in case.entries.values()} == {str(case.cover)}
 
 
 def test_recovered_cover_direct_guard_rejects_mixed_album_ids(recovered_cover_case, monkeypatch):

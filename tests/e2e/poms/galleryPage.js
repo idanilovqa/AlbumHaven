@@ -942,10 +942,11 @@ export class GalleryPage extends BasePage {
       ? this.albumCard.cardByIdentity(artistName, albumName, year)
       : this.albumCard.cardsByArtistAndAlbum(artistName, albumName);
     const detailsAction = options.detailsAction === true;
+    const titleSelector = options.exposure === true ? this.albumCard.titleButtonSelector : '';
     const targets = detailsAction ? cards.locator(this.albumCard.detailsButtonWithinCardSelector) : cards;
     // parity-check: allow-read-only-measurement-evaluate -- atomically measure the exact virtual card or intended details action against its gallery viewport
     return targets.evaluateAll(
-      (cards, { galleryScrollSelector, detailsAction }) => {
+      (cards, { galleryScrollSelector, detailsAction, titleSelector }) => {
         if (cards.length === 0) {
           return {
             attached: false,
@@ -983,15 +984,24 @@ export class GalleryPage extends BasePage {
           : (detailsAction ? cardBounds.bottom > galleryBounds.bottom : cardBounds.top >= galleryBounds.bottom)
             ? 1
             : 0;
+        // Unobscured (on request): the topmost element at the centre of the card's title belongs to the card.
+        const title = titleSelector && !detailsAction && intersects ? cards[0].querySelector(titleSelector) : null;
+        const titleBounds = title instanceof HTMLElement ? title.getBoundingClientRect() : null;
+        const exposed = Boolean(intersects && titleBounds && titleBounds.width > 0 && titleBounds.height > 0
+          && cards[0].contains(document.elementFromPoint(
+            (titleBounds.left + titleBounds.right) / 2,
+            (titleBounds.top + titleBounds.bottom) / 2,
+          )));
         return {
           attached: true,
           detached: false,
+          ...(titleSelector ? { exposed } : {}),
           intersects,
           offscreen: !intersects,
           scrollDirection,
         };
       },
-      { galleryScrollSelector: this.galleryScrollSelector, detailsAction },
+      { galleryScrollSelector: this.galleryScrollSelector, detailsAction, titleSelector },
     );
   }
 

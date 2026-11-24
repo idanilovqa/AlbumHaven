@@ -194,6 +194,7 @@ const pendingTagEdits = (() => {
   }
 
   // The Save's own optimistic path lays each shown save's values over the loaded view (every display site).
+  // Each update commits the patched view as already laid, so the commit never calls back in here.
   function overlayCurrentView() {
     let laid = 0;
     for (const entry of entries) {

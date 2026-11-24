@@ -4,6 +4,9 @@ import {
   temporarilyMakeGeneratedMp3Unavailable,
 } from '../helpers/physicalTagHelpers.js';
 import { holdStructuralSavePersistence } from '../helpers/structuralSavePollWindowHelpers.js';
+import { getProductionViewObserver } from '../helpers/productionViewObserver.js';
+import { GalleryActions } from '../actions/galleryActions.js';
+import { GalleryPage } from '../poms/galleryPage.js';
 
 // Owner (2026-11-23): once a save's files are written and verified, it has succeeded. While the library
 // catches up ("finishing"), a reload or another tab still shows the new values until the library holds them;
@@ -24,7 +27,44 @@ const HOLD_INVENTORY_PUBLICATION = "SELECT pg_advisory_xact_lock(hashtext('album
 const FINISHING_ANSWER_TIMEOUT_MS = 90000;
 const albumDetailsTitle = (albumName, year = FINISHING_YEAR) => `${FIXTURE_ARTIST} • ${albumName} • ${year}`;
 
+// A second tab of the same browser (same storage): its own production-view observer, so the canonical
+// assertions can read what its gallery holds.
+async function openTabOfTheSameBrowser(page, testInfo) {
+  const tab = await page.context().newPage();
+  const observer = getProductionViewObserver(tab);
+  await observer.initialize();
+  return {
+    page: tab,
+    galleryActions: new GalleryActions(new GalleryPage(tab, testInfo)),
+    async close() {
+      try { await observer.dispose(); } finally { await tab.close(); }
+    },
+  };
+}
+
+// From the release until a tab's gallery holds the library's result, its old-name card count is sampled every
+// 50 ms through the gallery's own reads; it must never come back.
+function sampleOldNameCards(actions) {
+  const state = { done: false, samples: 0, mostShown: 0 };
+  const sampling = (async () => {
+    while (!state.done) {
+      const shown = await actions.readAlbumIdentityCardCount({ artist: FIXTURE_ARTIST, album: FINISHING_ALBUM, year: FINISHING_YEAR });
+      state.samples += 1;
+      state.mostShown = Math.max(state.mostShown, shown);
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+    }
+  })();
+  return {
+    async stop() {
+      state.done = true;
+      await sampling;
+      return { samples: state.samples, mostShown: state.mostShown };
+    },
+  };
+}
+
 async function pendingTagEditIds(page) {
+  // parity-check: allow-read-only-measurement-evaluate -- read the kept pending edits' ids from storage
   return page.evaluate((key) => {
     try { return (JSON.parse(window.localStorage.getItem(key) || '[]') || []).map((entry) => entry.id); } catch { return []; }
   }, PENDING_TAG_EDITS_KEY);
@@ -36,7 +76,7 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
   stepLogger,
   tagEditorActions,
   trackModalActions,
-}) => {
+}, testInfo) => {
   const gate = await holdStructuralSavePersistence({ lockSql: HOLD_INVENTORY_PUBLICATION });
   let secondTab = null;
   try {
@@ -52,8 +92,13 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
       // Owner (2026-11-23): the new name shows at the Save, on the saving page, before the server answers.
       const accepted = await tagEditorActions.applyAndReturnFinishingEdit({
         timeout: FINISHING_ANSWER_TIMEOUT_MS,
+        // While the save is held no server response names the album yet, so this proves what is on screen:
+        // Album Details' title, then (Album Details closed, as it covers the gallery) the exact card,
+        // unobscured under its heading.
         onBeforeResponse: async () => {
-          await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
+          await trackModalActions.waitForTitle(albumDetailsTitle(FINISHING_RENAMED_ALBUM));
+          await trackModalActions.close();
+          await galleryActions.waitForAlbumCardShownUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM, { year: FINISHING_YEAR });
           await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
         },
       });
@@ -61,15 +106,35 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
       const physicalTags = await readGeneratedMp3AlbumTags({ artist: FIXTURE_ARTIST, album: FINISHING_ALBUM });
       expect(physicalTags).toHaveLength(FINISHING_TRACK_COUNT);
       for (const track of physicalTags) expect(track.albumValues).toEqual([FINISHING_RENAMED_ALBUM]);
-      await trackModalActions.waitForTitle(albumDetailsTitle(FINISHING_RENAMED_ALBUM));
-      await trackModalActions.close();
+      // The save has answered: the gallery's result names the new album.
+      await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
+      await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
     });
 
     await stepLogger.step('A reload shows the new album name on the card and in Album Details', async () => {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await galleryActions.waitForGalleryReady();
-      await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
-      await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
+      // 6.5 (11-24): laying the finishing save over the reloaded view once overflowed the stack; the gallery
+      // never loaded.
+      const pageErrors = [];
+      const collect = (text) => { if (/Maximum call stack/u.test(text)) pageErrors.push(text); };
+      const onPageError = (error) => collect(String(error?.stack || error?.message || error));
+      const onConsole = (message) => { if (message.type() === 'error') collect(message.text()); };
+      page.on('pageerror', onPageError);
+      page.on('console', onConsole);
+      try {
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await galleryActions.waitForGalleryReady();
+        // The same artist page, at the position the reload opened it: laying the save moved nothing.
+        expect(new URL(page.url()).searchParams.get('artist')).toBe(FIXTURE_ARTIST);
+        expect((await galleryActions.readGalleryScrollState()).scrollTop).toBe(0);
+        // What is on screen: the saved identity's card, exact title, unobscured under its heading.
+        await galleryActions.waitForAlbumCardShownUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM, { year: FINISHING_YEAR });
+        await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
+      } finally {
+        page.off('pageerror', onPageError);
+        page.off('console', onConsole);
+      }
+      expect(pageErrors).toEqual([]);
+      // Album Details shows the new name too (the save is still held: what is on screen).
       await galleryActions.selectAlbumDetailsByIdentity({ artist: FIXTURE_ARTIST, album: FINISHING_RENAMED_ALBUM, year: FINISHING_YEAR });
       const summary = await trackModalActions.waitForInteractiveSummary();
       await trackModalActions.waitForTitle(albumDetailsTitle(FINISHING_RENAMED_ALBUM));
@@ -78,15 +143,41 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
     });
 
     await stepLogger.step('A second tab of the same browser shows the new album name too', async () => {
-      secondTab = await page.context().newPage();
-      await secondTab.goto(ARTIST_VIEW_URL, { waitUntil: 'domcontentloaded' });
-      await expect(secondTab.getByText(FINISHING_RENAMED_ALBUM, { exact: true }).first()).toBeVisible({ timeout: 30000 });
-      await expect(secondTab.getByText(FINISHING_ALBUM, { exact: true })).toHaveCount(0);
+      secondTab = await openTabOfTheSameBrowser(page, testInfo);
+      await secondTab.galleryActions.goto(ARTIST_VIEW_URL);
+      await secondTab.galleryActions.waitForGalleryReady();
+      expect(new URL(secondTab.page.url()).searchParams.get('artist')).toBe(FIXTURE_ARTIST);
+      await secondTab.galleryActions.waitForAlbumCardShownUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM, { year: FINISHING_YEAR });
+      await secondTab.galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
     });
 
-    await stepLogger.step('Once the publication ends, the library holds the save and the kept edit is dropped', async () => {
+    await stepLogger.step('Once the publication ends, every surface shows the name the library holds, never the old one', async () => {
+      // 6.5 (11-24): from the release until the library's own result names the album, the old name never
+      // comes back, in either tab.
+      const reloadedTabSampling = sampleOldNameCards(galleryActions);
+      const secondTabSampling = sampleOldNameCards(secondTab.galleryActions);
       await gate.release();
+      // The reloaded tab, then the second tab: the server's full view names the renamed album.
+      await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
+      await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
+      const reloadedTab = await reloadedTabSampling.stop();
+      await secondTab.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
+      await secondTab.galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
+      const otherTab = await secondTabSampling.stop();
+      for (const sampled of [reloadedTab, otherTab]) {
+        expect(sampled.samples).toBeGreaterThan(0);
+        expect(sampled.mostShown).toBe(0);
+      }
+      // The library holds the save: the kept edit is dropped, so Album Details reads the library's own values.
       await expect.poll(() => pendingTagEditIds(page), { timeout: 120000 }).toEqual([]);
+      await galleryActions.selectAlbumDetailsByIdentity({ artist: FIXTURE_ARTIST, album: FINISHING_RENAMED_ALBUM, year: FINISHING_YEAR });
+      const summary = await trackModalActions.waitForInteractiveSummary();
+      await trackModalActions.waitForTitle(albumDetailsTitle(FINISHING_RENAMED_ALBUM));
+      expect(summary.trackRows).toBe(FINISHING_TRACK_COUNT);
+      await trackModalActions.close();
+    });
+
+    await stepLogger.step('A reload shows the album once, as the library holds it', async () => {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await galleryActions.waitForGalleryReady();
       await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);

@@ -1948,8 +1948,11 @@ function applyViewPayload(payload, options = {}) {
   }
   const committed = commitViewPayload(previousView, nextView, options);
   // Owner (2026-11-23): saves still finishing (files written, the library catching up) keep showing their
-  // values after any load, as at the Save.
-  if (typeof window !== 'undefined') window.AlbumHavenPendingTagEdits?.overlayCurrentView?.();
+  // values after any load, as at the Save. A commit of a view they are already laid over says so
+  // (`overlayPendingTagEdits: false`): laying them again would re-enter the overlay that made it.
+  if (options.overlayPendingTagEdits !== false && typeof window !== 'undefined') {
+    window.AlbumHavenPendingTagEdits?.overlayCurrentView?.();
+  }
   return committed;
 }
 
@@ -26219,6 +26222,10 @@ function synchronizeCurrentViewAlbumIndex() {
   });
 }
 
+// The patched view is the current view, finishing saves already laid over it, plus these albums: its commit
+// never lays them again (the overlay itself commits through here; FTC-TAGS-043's reload recursion).
+const UPDATED_ALBUMS_COMMIT_OPTIONS = Object.freeze({ trackSidebarReveal: false, overlayPendingTagEdits: false });
+
 function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
   const incomingCandidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
   const originalAlbum = options.originalAlbum || null;
@@ -26358,13 +26365,13 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
       album_count: (nextPrimaryGroups.reduce((sum, group) => sum + (group.albums || []).length, 0)
         + visibleFamilyGroups.reduce((sum, group) => sum + (group.albums || []).length, 0)),
       artist_count: (nextPrimaryGroups.length + visibleFamilyGroups.length),
-    }, { trackSidebarReveal: false });
+    }, UPDATED_ALBUMS_COMMIT_OPTIONS);
   } else {
     mergeViewPayload({
       artist_groups: grouped,
       album_count: grouped.reduce((sum, group) => sum + (group.albums || []).length, 0),
       artist_count: grouped.length,
-    }, { trackSidebarReveal: false });
+    }, UPDATED_ALBUMS_COMMIT_OPTIONS);
   }
   if (options.skipRender) synchronizeCurrentViewAlbumIndex();
   if (!options.skipRender) {
@@ -42440,6 +42447,7 @@ const pendingTagEdits = (() => {
   }
 
   // The Save's own optimistic path lays each shown save's values over the loaded view (every display site).
+  // Each update commits the patched view as already laid, so the commit never calls back in here.
   function overlayCurrentView() {
     let laid = 0;
     for (const entry of entries) {

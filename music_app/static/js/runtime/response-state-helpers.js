@@ -1574,8 +1574,11 @@ function applyViewPayload(payload, options = {}) {
   }
   const committed = commitViewPayload(previousView, nextView, options);
   // Owner (2026-11-23): saves still finishing (files written, the library catching up) keep showing their
-  // values after any load, as at the Save.
-  if (typeof window !== 'undefined') window.AlbumHavenPendingTagEdits?.overlayCurrentView?.();
+  // values after any load, as at the Save. A commit of a view they are already laid over says so
+  // (`overlayPendingTagEdits: false`): laying them again would re-enter the overlay that made it.
+  if (options.overlayPendingTagEdits !== false && typeof window !== 'undefined') {
+    window.AlbumHavenPendingTagEdits?.overlayCurrentView?.();
+  }
   return committed;
 }
 

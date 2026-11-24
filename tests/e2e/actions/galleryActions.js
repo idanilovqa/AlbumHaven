@@ -263,6 +263,15 @@ export function planGalleryScrollAway(scrollState) {
   };
 }
 
+// What is on screen, not what the server has answered: an optimistic card (a save still held) is shown once
+// it is attached, inside the gallery viewport and unobscured.
+export function classifyShownAlbumCard(viewportState = {}) {
+  if (!viewportState.attached) return { status: 'retryable', reason: 'card not attached' };
+  if (!viewportState.intersects) return { status: 'retryable', reason: 'card outside the gallery viewport' };
+  if (!viewportState.exposed) return { status: 'retryable', reason: 'card obscured' };
+  return { status: 'ready', reason: 'card shown' };
+}
+
 export function classifyGalleryAlbumTargetState(snapshot = {}) {
   const expectedArtist = String(snapshot.expectedArtist || '').trim();
   const expectedAlbum = String(snapshot.expectedAlbum || '').trim();
@@ -1149,6 +1158,31 @@ export class GalleryActions {
     throw new Error(
       `Timed out after ${timeout} ms waiting for album "${albumName}" under heading "${artistName}". `
       + `Last observed state: ${JSON.stringify(lastSnapshot)}`,
+    );
+  }
+
+  // The exact card (artist heading, title and year) is on screen and unobscured. Proves an optimistic state
+  // before the server answers; waitForAlbumVisibleUnderHeading proves the server's result afterwards.
+  async waitForAlbumCardShownUnderHeading(artistName, albumName, options = {}) {
+    const timeout = Number(options.timeout || 30000);
+    const deadline = Date.now() + timeout;
+    const year = String(options.year || '').trim();
+    let lastState = null;
+    while (Date.now() <= deadline) {
+      lastState = await this.readAlbumGalleryViewportState(artistName, albumName, { year, exposure: true });
+      const classification = classifyShownAlbumCard(lastState);
+      if (classification.status === 'ready') return;
+      if (classification.reason === 'card outside the gallery viewport') {
+        await this.scrollToAlbumUnderHeading(artistName, albumName, {
+          year, timeout: Math.max(1, deadline - Date.now()), deadline,
+        });
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(
+      `Timed out after ${timeout} ms waiting for album card "${albumName}" shown under heading "${artistName}". `
+      + `Last viewport state: ${JSON.stringify(lastState)}`,
     );
   }
 

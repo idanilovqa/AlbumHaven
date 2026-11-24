@@ -227,7 +227,7 @@ def _signed_in_since(asgi_app, authenticated_at):
                 state=ActorState.ACTIVE,
                 account_id=1,
                 session_id=1,
-                username_display="Rendref",
+                username_display="Test Listener",
                 authenticated_at=authenticated_at,
                 is_bootstrap_owner=True,
                 current_library_id=1,

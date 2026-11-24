@@ -12215,10 +12215,11 @@ def test_problematic_loose_public_key_preserves_projected_identity_bytes():
 
 
 class _NoLooseRulesConnection:
-    """The loose loader reads its groups' exclusion rules over the connection; these cases have none."""
+    """The loose loader reads its groups' exclusion rules, then the pending ones, over the connection; these
+    cases have none."""
 
     def execute(self, sql, params=None):
-        assert "library.ignored_repairs" in sql, "The loose loader reads only its rules over the connection."
+        assert "library.ignored_repair" in sql, "The loose loader reads only its rules over the connection."
         return self
 
     def fetchall(self):
@@ -16858,6 +16859,10 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
     assert detail_payload is not None
     assert detail_payload["key"] == "product-album"
     assert detail_payload["detail_loaded"] is True
+    # Each album read also reads the pending ignored-repair intents laid over its rows (deadlock part 3).
+    pending_reads = [sql for sql, _params in executed if "library.ignored_repair_intents" in sql]
+    assert len(pending_reads) == 2
+    executed[:] = [entry for entry in executed if "library.ignored_repair_intents" not in entry[0]]
     assert len(executed) == 7
     assert all(
         "library.local_track_files" in sql
@@ -16882,6 +16887,11 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
         and params == {"album_ids": [101]}
         for sql, params in executed
     )
+
+
+class _NoPendingIntentsCursor:
+    def fetchall(self):
+        return []
 
 
 def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
@@ -16988,6 +16998,9 @@ def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
             return False
 
         def execute(self, sql, params=None):
+            if "library.ignored_repair_intents" in sql:
+                # No Ignore is pending (deadlock part 3's intents, read first).
+                return _NoPendingIntentsCursor()
             executed.append(sql)
             executed.append(dict(params or {}))
             return FakeCursor()
@@ -17583,7 +17596,10 @@ def test_postgres_library_browse_caches_utility_rules_payload_per_database_url()
         def __exit__(self, exc_type, exc, traceback):
             return False
 
-        def execute(self, _sql, _params=None):
+        def execute(self, sql, _params=None):
+            if "library.ignored_repair_intents" in sql:
+                # No Ignore is pending (deadlock part 3's intents, read first).
+                return _NoPendingIntentsCursor()
             executed["count"] += 1
             return FakeCursor()
 

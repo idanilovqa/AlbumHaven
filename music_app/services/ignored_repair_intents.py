@@ -25,11 +25,18 @@ def drain(config: Mapping[str, object]) -> int:
     from music_app.services.relation_projection_postgres import inventory_publication_advisory_lock_sql
     from music_app.services.rule_state_postgres import apply_pending_ignored_repair_intents
 
+    from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
+
+    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
     # A publication can hold the lock for minutes: this waits on a connection no request will reuse.
-    with session_connection(str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")) as connection:
+    with session_connection(database_url) as connection:
         with connection.transaction():
             connection.execute(inventory_publication_advisory_lock_sql())
-            return apply_pending_ignored_repair_intents(connection)
+            applied = apply_pending_ignored_repair_intents(connection)
+    if applied:
+        # The Rules projection showed these as pending; now they are stored (as after a direct write).
+        invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=("rules",))
+    return applied
 
 
 def queue_drain(config: Mapping[str, object]) -> None:

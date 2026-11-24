@@ -59,7 +59,8 @@ def test_separate_release_summary_key_resolves_composite_persisted_credit(monkey
 
         def execute(self, sql, params=None):
             sql = " ".join(sql.split())
-            if sql == "SET LOCAL enable_seqscan = off":
+            if sql == "SET LOCAL enable_seqscan = off" or "library.ignored_repair_intents" in sql:
+                # No Ignore is pending (deadlock part 3's intents).
                 self.result = []
                 return self
             if "album_ids" in (params or {}):

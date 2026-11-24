@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from music_app.services.metadata import normalize_exception_value
@@ -51,20 +52,17 @@ class RuleStatePostgresAdapter:
         self._replace_key_table_rows("ignored_versions", "version_key", normalized)
 
     def load_ignored_repair_keys(self) -> set[str]:
-        """The stored ignored repairs with the pending intents laid over them in order, read in one
-        statement (one snapshot): a reload shows an Ignore that a publication still holds back."""
-        keys: set[str] = set()
+        """The stored ignored repairs with the pending intents laid over them, read in one statement (one
+        snapshot): a reload shows an Ignore that a publication still holds back."""
+        stored: set[str] = set()
+        intents: list[Mapping[str, object]] = []
         for row in self._load_rows(_load_ignored_repairs_with_intents_sql()):
             intent = _row_mapping(row, _INTENT_FIELDS)
-            repair_keys = _normalize_keys(intent.get("repair_keys"))
-            action = intent.get("action")
-            if action == "replace":
-                keys = set(repair_keys)
-            elif action == "delete":
-                keys = keys.difference(repair_keys)
+            if intent.get("id") is None:
+                stored |= _normalize_keys(intent.get("repair_keys"))
             else:
-                keys = keys.difference(_normalize_keys(intent.get("remove_keys"))) | repair_keys
-        return keys
+                intents.append(intent)
+        return PendingIgnoredRepairs.fold(intents).apply(stored)
 
     def load_complete_legacy_album_exclusion_groups(self) -> list[dict[str, object]]:
         groups: list[dict[str, object]] = []
@@ -272,6 +270,52 @@ def _inventory_publication_lock_sql() -> str:
     from music_app.services.relation_projection_postgres import inventory_publication_advisory_lock_sql
 
     return inventory_publication_advisory_lock_sql()
+
+
+@dataclass(frozen=True)
+class PendingIgnoredRepairs:
+    """The kept intents folded in order into one change to the stored ignored repairs: whether the stored
+    keys still count (a pending replacing write drops them), the keys removed, and the keys added with the
+    album each names ("" for a file's key). Reads lay it over what they load (6.5: overlay at read time)."""
+
+    keeps_stored: bool = True
+    removed: frozenset[str] = frozenset()
+    added: Mapping[str, str] = field(default_factory=dict)
+
+    def __bool__(self) -> bool:
+        return not self.keeps_stored or bool(self.removed) or bool(self.added)
+
+    def apply(self, stored: Iterable[object]) -> set[str]:
+        keys = _normalize_keys(stored) if self.keeps_stored else set()
+        return keys.difference(self.removed) | set(self.added)
+
+    @classmethod
+    def fold(cls, intents: Iterable[Mapping[str, object]]) -> "PendingIgnoredRepairs":
+        keeps_stored, removed, added = True, set(), {}
+        for intent in intents:
+            repair_keys = _normalize_keys(intent.get("repair_keys"))
+            album_keys = {_text(key): _text(value) for key, value in dict(intent.get("album_keys") or {}).items()}
+            action = intent.get("action")
+            if action == "replace":
+                keeps_stored, removed, added = False, set(), {key: album_keys.get(key, "") for key in repair_keys}
+                continue
+            dropped = repair_keys if action == "delete" else _normalize_keys(intent.get("remove_keys"))
+            for key in dropped:
+                added.pop(key, None)
+                removed.add(key)
+            if action != "delete":
+                for key in repair_keys:
+                    removed.discard(key)
+                    added[key] = album_keys.get(key, "")
+        return cls(keeps_stored, frozenset(removed), added)
+
+
+def pending_ignored_repairs(connection: Any) -> PendingIgnoredRepairs:
+    """The kept intents, folded; one indexed read of a table that is empty unless a publication held an Ignore."""
+    return PendingIgnoredRepairs.fold(
+        _row_mapping(row, _INTENT_FIELDS)
+        for row in connection.execute(_load_ignored_repair_intents_sql()).fetchall()
+    )
 
 
 def apply_pending_ignored_repair_intents(connection: Any) -> int:

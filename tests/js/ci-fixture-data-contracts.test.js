@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 29) errors.push('default performance group must expose all 29 targets');
+  if (defaults.length !== 31) errors.push('default performance group must expose all 31 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -392,7 +392,7 @@ test('problematic-files cases exclusively use the dedicated fixture surface whil
   const problematicCases = matrix.filter((entry) =>
     /FTC-UTIL-PROBLEMS-(009|010)/.test(entry.case));
 
-  assert.equal(problematicCases.length, 2);
+  assert.equal(problematicCases.length, 3);
   assert.deepEqual(
     new Set(problematicCases.map((entry) => entry.case.match(/FTC-UTIL-PROBLEMS-(?:009|010)/)[0])),
     new Set(['FTC-UTIL-PROBLEMS-009', 'FTC-UTIL-PROBLEMS-010']),
@@ -432,7 +432,7 @@ test('problematic-files performance targets use only the dedicated profile and s
     assert.ok(target, name);
     assert.equal(target.fixtureProfile, 'utility-problematic-files', name);
     assert.equal(target.workers, 1, name);
-    assert.equal(target.cases.length, 1, name);
+    assert.equal(target.cases.length, name === 'problematic-files-focused' ? 2 : 1, name);
     assert.equal(target.cases[0].config, 'playwright.utility-problematic-files.config.cjs', name);
     assert.equal(target.cases[0].project, 'utility-problematic-files', name);
     assert.match(target.cases[0].test, /^tests\/e2e\/utilityProblematicFiles\//, name);
@@ -581,6 +581,8 @@ test('performance target contract owns every performance case across the approve
     'scan-metadata',
     'scan-page',
     'scan-health', 'scan-error',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive',
   ]);
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);

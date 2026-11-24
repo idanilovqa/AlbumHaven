@@ -52,6 +52,8 @@ function loadRuntime({ bridge } = {}) {
   vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js'), 'utf8'), context);
   for (const file of ['alert-components.js', 'android-bridge-client.js', 'android-settings.js']) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
+    // SmallAlert badges own their document listeners (INT-040); only the Settings modules' count here.
+    if (file === 'alert-components.js') listeners.length = 0;
   }
   vm.runInContext(`globalThis.api = { androidBridge, androidSettings, buildAndroidSettingsHtml, connectAndroidBridge,
     handleAndroidSettingsClick, initAndroidSettings, renderUtilityAndroid };`, context);

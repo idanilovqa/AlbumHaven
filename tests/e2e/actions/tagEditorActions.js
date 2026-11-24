@@ -4,6 +4,41 @@ import { acknowledgeSavedNotification, deliverSavedNotificationThroughStatus } f
 const TAG_EDIT_RUNNING_MESSAGE = /^Updating \d+ tracks? in “.+”\.$/u;
 const TAG_EDIT_SAVED_MESSAGE = /^Saved changes to \d+ tracks? in “.+”\.$/u;
 
+// Page-clock timeline from the Edit Tags POST response to the visible saved notification.
+function buildPostSaveTimeline(requestTimeline, notificationSamples, viewDataResponses) {
+  const post = requestTimeline.find((entry) => (
+    new URL(entry.url).pathname === '/utilities/edit-tags'
+  ));
+  if (!post) return null;
+  // A previous save's notice can still be showing when this save is sent.
+  const saved = notificationSamples.find((sample) => (
+    sample.visible && sample.atMs > post.startMs && TAG_EDIT_SAVED_MESSAGE.test(sample.text)
+  ));
+  if (!saved) return null;
+  const viewData = [...viewDataResponses];
+  return {
+    responseToSavedMs: saved.atMs - post.endMs,
+    requests: requestTimeline
+      .filter((entry) => entry.endMs >= post.endMs && entry.startMs <= saved.atMs)
+      .map((entry) => {
+        const { pathname, search } = new URL(entry.url);
+        const index = viewData.findIndex((response) => response.url === entry.url);
+        const freshness = pathname === '/view-data' && index >= 0
+          ? viewData.splice(index, 1)[0]
+          : null;
+        return {
+          path: `${pathname}${search}`,
+          startMs: Math.round(entry.startMs - post.endMs),
+          durationMs: Math.round(entry.endMs - entry.startMs),
+          ...(freshness ? {
+            inventoryMutationRevision: freshness.inventoryMutationRevision,
+            projectionStale: freshness.projectionStale,
+          } : {}),
+        };
+      }),
+  };
+}
+
 export class TagEditorActions {
   constructor(tagEditor) {
     this.tagEditor = tagEditor;
@@ -204,17 +239,24 @@ export class TagEditorActions {
   }
 
   async loadAllFilesFromFolder({ expectedTrackCount, timeout = 30000 } = {}) {
-    await expect(this.tagEditor.folderLoadButton).toBeVisible();
-    await expect(this.tagEditor.folderLoadButton).toHaveAttribute(
-      'aria-label',
-      'Load all files from this folder',
-    );
-    await expect(this.tagEditor.folderLoadButtonIcon).toHaveCount(1);
+    // INT-011: a text button directly under the folder path, shown only while folder tracks are missing.
+    await expect(this.tagEditor.folderLoadButton).toBeVisible({ timeout });
+    const [pathBox, buttonBox] = await Promise.all([
+      this.tagEditor.folderPath.boundingBox(),
+      this.tagEditor.folderLoadButton.boundingBox(),
+    ]);
+    expect(buttonBox.y).toBeGreaterThanOrEqual(pathBox.y + pathBox.height - 1);
+    expect(Math.abs(buttonBox.x - pathBox.x)).toBeLessThanOrEqual(1);
     await this.tagEditor.folderLoadButton.click();
     if (expectedTrackCount !== undefined) {
       await expect(this.tagEditor.trackButtons).toHaveCount(Number(expectedTrackCount), { timeout });
     }
-    await expect(this.tagEditor.folderLoadButton).not.toHaveAttribute('aria-busy', 'true');
+    await expect(this.tagEditor.folderLoadButton).toBeHidden({ timeout });
+  }
+
+  async expectFolderFullyLoaded({ timeout = 30000 } = {}) {
+    await expect(this.tagEditor.folderPath).toBeVisible({ timeout });
+    await expect(this.tagEditor.folderLoadButton).toBeHidden({ timeout });
   }
 
   async selectTrackWithModifier(filename, modifier) {
@@ -538,10 +580,17 @@ export class TagEditorActions {
     };
   }
 
+  // The Exception field is a read-only dropdown: open it and pick the option, as clearException does.
   async setException(exceptionType) {
-    await this.tagEditor.exceptionSelect.fill(exceptionType);
-    await this.tagEditor.exceptionSelect.blur();
-    await expect(this.tagEditor.exceptionSelect).toHaveValue(exceptionType);
+    const label = String(exceptionType || '').trim();
+    await this.tagEditor.exceptionSelect.click();
+    await expect(this.tagEditor.exceptionMenu).toBeVisible();
+    const option = this.tagEditor.exceptionMenu.locator('[data-tag-editor-exception-option]').filter({
+      hasText: new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
+    });
+    await expect(option).toHaveCount(1);
+    await option.click();
+    await expect(this.tagEditor.exceptionSelect).toHaveValue(label);
   }
 
   async clearException() {
@@ -771,13 +820,8 @@ export class TagEditorActions {
         `Tag edit was not terminally failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
       );
     }
-    const preservesDraft = payload.failure_stage === 'persistence'
-      && payload.edit_outcome === 'failed_rolled_back';
-    if (preservesDraft) {
-      await expect(this.tagEditor.overlay).toBeVisible({ timeout });
-    } else {
-      await expect(this.tagEditor.overlay).toBeHidden({ timeout });
-    }
+    // Owner decision (2026-11-15): a failed save keeps the editor closed, even when fully rolled back.
+    await expect(this.tagEditor.overlay).toBeHidden({ timeout });
     await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
     await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
     await expect(this.tagEditor.repairAlertMessage).toContainText(
@@ -1000,6 +1044,31 @@ export class TagEditorActions {
     };
   }
 
+  // Owner (2026-11-23): the files are written, so the save has succeeded; the library is still catching up.
+  async applyAndReturnFinishingEdit(options = {}) {
+    const timeout = options.timeout || 90000;
+    const editResponsePromise = this.tagEditor.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/edit-tags'
+    ), { timeout });
+    await this.tagEditor.applyButton.click();
+    await expect(this.tagEditor.confirmDialog).toBeVisible({ timeout });
+    const confirmClick = this.tagEditor.confirmButton.click();
+    const beforeResponse = typeof options.onBeforeResponse === 'function'
+      ? (async () => { await confirmClick; await options.onBeforeResponse(); })()
+      : confirmClick;
+    await confirmClick;
+    await beforeResponse;
+    const response = await editResponsePromise;
+    const payload = await response.json();
+    expect(response.status(), JSON.stringify(payload)).toBe(202);
+    expect(payload.ok).toBe(true);
+    expect(payload.save_task_status).toBe('finishing');
+    await expect(this.tagEditor.overlay).toBeHidden({ timeout });
+    await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
+    return { payload, saveTaskId: String(payload.save_task_id || '').trim() };
+  }
+
   async applyAndWaitForTerminalSavedResponse(options = {}) {
     const timeout = options.timeout || 35000;
     let saveTaskPollCount = 0;
@@ -1018,7 +1087,18 @@ export class TagEditorActions {
         saveTaskPollCount += 1;
       }
     };
+    const viewDataResponses = [];
+    const observeViewDataResponse = (response) => {
+      if (new URL(response.url()).pathname !== '/view-data') return;
+      viewDataResponses.push(response.json().then((data) => ({
+        url: response.url(),
+        inventoryMutationRevision: data?.inventory_mutation_revision ?? null,
+        projectionStale: data?.gallery_page?.projection_stale === true,
+      }), () => ({ url: response.url(), unreadable: true })));
+    };
+    const requestTimelineObservation = await this.tagEditor.startRequestTimelineObservation();
     this.tagEditor.page.on('request', observeSaveTaskPoll);
+    this.tagEditor.page.on('response', observeViewDataResponse);
     try {
       const editResponsePromise = this.tagEditor.page.waitForResponse((response) => (
         response.request().method() === 'POST'
@@ -1051,8 +1131,14 @@ export class TagEditorActions {
       await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
       await expect(this.tagEditor.repairAlertMessage).toHaveText(TAG_EDIT_SAVED_MESSAGE, { timeout });
       await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
+      const requestTimeline = await requestTimelineObservation.finish();
       const notificationSamples = await notificationObservation.finish();
       notificationObservation = null;
+      const postSaveTimeline = buildPostSaveTimeline(
+        requestTimeline,
+        notificationSamples,
+        await Promise.all(viewDataResponses),
+      );
       const visibleSamples = notificationSamples.filter((sample) => sample.visible);
       expect(visibleSamples.some((sample) => (
       TAG_EDIT_RUNNING_MESSAGE.test(sample.text)
@@ -1064,9 +1150,11 @@ export class TagEditorActions {
       ))).toBe(false);
       expect(visibleSamples.some((sample) => TAG_EDIT_SAVED_MESSAGE.test(sample.text))).toBe(true);
       expect(saveTaskPollCount).toBe(0);
-      return { notificationSamples, payload, saveTaskId };
+      return { notificationSamples, payload, postSaveTimeline, saveTaskId };
     } finally {
       this.tagEditor.page.off('request', observeSaveTaskPoll);
+      this.tagEditor.page.off('response', observeViewDataResponse);
+      await requestTimelineObservation.finish();
       if (notificationObservation) await notificationObservation.finish();
     }
   }
@@ -1146,10 +1234,13 @@ export class TagEditorActions {
       const requestBody = request.postDataJSON();
       expect(Object.keys(requestBody || {}).sort()).toEqual([
         'album',
+        'client_request_id',
         'confirmed',
         'updates',
       ]);
       expect(requestBody.confirmed).toBe(true);
+      // Owner (2026-11-17): every save carries its own id so a save without an answer can be sent again safely.
+      expect(requestBody.client_request_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       const updateEntries = Object.entries(requestBody.updates || {});
       expect(updateEntries).toHaveLength(expectedFilenames.length);
       const expectedFilenameSet = new Set(expectedFilenames);

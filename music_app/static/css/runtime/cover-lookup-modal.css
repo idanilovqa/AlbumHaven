@@ -47,23 +47,9 @@
 }
 .cover-lookup-modal-album-link {
   min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
   text-align: left;
-  text-decoration-line: underline;
-  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
-  cursor: pointer;
 }
-.cover-lookup-modal-album-link:hover,
-.cover-lookup-modal-album-link:focus-visible {
-  color: var(--text);
-  text-decoration-color: currentColor;
-}
+.cover-lookup-modal-subtitle-separator { white-space: pre; }
 .cover-lookup-search-action {
   display: grid;
   gap: 5px;
@@ -98,17 +84,18 @@
   font-size: 0.84rem;
 }
 
-.cover-lookup-inline-notice {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
 
-.cover-lookup-inline-notice .icon-button {
-  width: 24px;
-  height: 24px;
-}
 @media (max-width: 900px) {
+  .cover-lookup-modal-header { flex-shrink: 0; }
+  .cover-lookup-modal-header > div { flex: 1; overflow: hidden; }
+  .cover-lookup-modal-subtitle { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
+  .cover-lookup-modal-subtitle > :not(.cover-lookup-modal-subtitle-separator) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cover-lookup-modal-subtitle-separator { flex-shrink: 0; }
   .cover-lookup-modal.is-mobile-sheet {
     align-items: flex-end;
     bottom: 0;
@@ -177,10 +164,6 @@
   display: grid;
   gap: 8px;
 }
-.cover-lookup-current-release-choice > .cover-lookup-section-title {
-  letter-spacing: normal;
-  text-transform: none;
-}
 .cover-lookup-current-release {
   display: flex;
   align-items: center;
@@ -212,8 +195,8 @@
 .cover-lookup-section-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
+  gap: 10px;
 }
 .cover-lookup-section-title,
 .cover-lookup-subsection-title {
@@ -365,9 +348,12 @@
   overflow-wrap: anywhere;
 }
 .cover-lookup-manual-status.is-error { color: var(--appearance-error, #df8f96); }
+.cover-lookup-section-heading + .cover-lookup-manual-add {
+  margin-top: -12px;
+}
 .cover-lookup-manual-divider {
   height: 1px;
-  margin-top: 6px;
+  margin-top: 0;
   background: var(--border);
 }
 .cover-lookup-manual-attachments {
@@ -377,35 +363,19 @@
 }
 .cover-lookup-manual-attachments[hidden] { display: none; }
 .cover-lookup-manual-attachment {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--panel);
 }
 .cover-lookup-manual-attachment img {
-  width: 100%;
-  height: 100%;
+  width: 32px;
+  height: 32px;
   display: block;
   object-fit: var(--album-art-fit);
-}
-.cover-lookup-manual-attachment button {
-  position: absolute;
-  top: -1px;
-  right: -1px;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 0;
-  border-radius: 0 0 0 5px;
-  background: rgba(8, 14, 24, 0.88);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 16px;
-  cursor: pointer;
 }
 .cover-lookup-manual-open {
   align-self: flex-start;
@@ -466,17 +436,6 @@
   width: 48%;
   margin-bottom: 4px;
 }
-.cover-lookup-gallery-resolving {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-.cover-lookup-gallery-resolving .cover-lookup-task-loading-line {
-  width: min(180px, 55%);
-  margin: 0;
-}
 .cover-lookup-art-card-shell {
   position: relative;
 }
@@ -530,6 +489,9 @@
   outline-offset: -2px;
   box-shadow: none;
 }
+/* Owner (2026-11-09, reconfirmed 2026-11-15): the suggested cover glows with a steady green pulse
+   (Small bug fixes' version). A suggested cover the user selects keeps the blue selection frame
+   with the pulsing green ring outside it (INT-028). Reduced motion keeps the frames still. */
 .cover-lookup-art-card.is-suggested {
   border-color: var(--appearance-success, var(--success, #52d7aa));
   outline-color: var(--appearance-success, var(--success, #52d7aa));
@@ -538,8 +500,17 @@
 @keyframes cover-lookup-suggested-pulse {
   50% { box-shadow: 0 0 16px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 58%, transparent); }
 }
+.cover-lookup-art-card.is-suggested.is-active {
+  border-color: #60a5fa;
+  outline-color: #60a5fa;
+  box-shadow: 0 0 0 3px var(--appearance-success, var(--success, #52d7aa));
+  animation: cover-lookup-suggested-active-pulse 1.8s ease-in-out infinite;
+}
+@keyframes cover-lookup-suggested-active-pulse {
+  50% { box-shadow: 0 0 0 3px var(--appearance-success, var(--success, #52d7aa)), 0 0 16px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 58%, transparent); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .cover-lookup-art-card.is-suggested { animation: none; }
+  .cover-lookup-art-card.is-suggested, .cover-lookup-art-card.is-suggested.is-active { animation: none; }
 }
 .cover-lookup-art-preview {
   position: relative;
@@ -691,25 +662,37 @@
   color: white;
   z-index: 2;
 }
+/* Delete reads like the app's destructive buttons (owner, 11-16): a hollow red ring and glyph on a dark
+   backing, solid red under the pointer. The glyph is an SVG so it takes the colour (an emoji stays grey). */
 .cover-lookup-art-delete {
   top: 8px;
   right: 8px;
   padding: 0;
-  border: 1px solid rgba(239,68,68,0.34);
-  background: rgba(127,29,29,0.92);
-  color: #fecaca;
+  border: 1.5px solid var(--appearance-error, #ef5350);
+  background: rgba(8, 10, 14, 0.62);
+  color: var(--appearance-error, #ef5350);
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity 140ms ease, background-color 120ms ease, color 120ms ease;
   cursor: pointer;
   z-index: 2;
+}
+.cover-lookup-art-delete svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .cover-lookup-art-card:hover .cover-lookup-art-delete,
 .cover-lookup-art-card:focus-within .cover-lookup-art-delete {
   opacity: 1;
 }
-.cover-lookup-art-delete:hover:not(:disabled) {
-  border-color: rgba(252,165,165,0.72);
-  color: #fff1f2;
+#cover-lookup-modal .cover-lookup-art-delete:is(:hover, :focus-visible):not(:disabled) {
+  border-color: var(--appearance-error, #ef5350);
+  background: var(--appearance-error, #ef5350);
+  color: #fff;
 }
 .cover-lookup-art-card .cover-lookup-art-delete:disabled {
   opacity: 0.55;
@@ -789,141 +772,8 @@
   font: inherit;
 }
 
-.album-card-context-menu-item:hover {
+.album-card-context-menu-item:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
-}
-
-.version-picker-card {
-  width: min(720px, calc(100vw - 32px));
-  max-height: min(80vh, 760px);
-  position: relative;
-  padding-top: 22px;
-}
-
-.version-picker-header {
-  position: relative;
-  min-height: 34px;
-  padding-right: 48px;
-}
-
-.version-picker-header h3 {
-  margin: 0;
-  font-size: 1.05rem;
-}
-
-.version-picker-close {
-  position: absolute;
-  top: -2px;
-  right: 0;
-}
-
-.version-picker-actions .button {
-  min-width: 96px;
-  font-weight: 700;
-}
-
-.version-picker-cancel {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.version-picker-save {
-  border-color: rgba(96, 165, 250, 0.42);
-  background: rgba(96, 165, 250, 0.18);
-  color: #eff6ff;
-}
-
-.version-picker-save:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: rgba(96, 165, 250, 0.28);
-}
-
-.version-picker-save:disabled {
-  opacity: 0.45;
-  cursor: default;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(245, 247, 250, 0.56);
-}
-
-.version-picker-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.version-picker-description {
-  margin: 0;
-  color: rgba(245, 247, 250, 0.82);
-}
-
-.version-picker-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.version-picker-option {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--text, #f5f7fa);
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-}
-
-.version-picker-option:hover,
-.version-picker-option.is-active {
-  border-color: rgba(138, 180, 255, 0.6);
-  background: rgba(138, 180, 255, 0.12);
-}
-
-.version-picker-option-cover {
-  width: 48px;
-  height: 48px;
-  flex: 0 0 48px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.version-picker-option-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: var(--album-art-fit);
-}
-
-.version-picker-option-cover-placeholder {
-  font-size: 11px;
-  color: rgba(245, 247, 250, 0.65);
-  text-align: center;
-  padding: 4px;
-}
-
-.version-picker-option-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.version-picker-option-name {
-  font-weight: 600;
-}
-
-.version-picker-option-subtitle {
-  color: rgba(245, 247, 250, 0.68);
-  font-size: 13px;
 }
 
 .version-picker-empty {
@@ -967,3 +817,10 @@
     box-shadow: none; border-color: Highlight;
   }
 }
+/* Split-release chooser: a compact NavigationTree list inside the shared dialog. */
+/* Second-artbox mode: the first artbox's art is shown but cannot be chosen again. */
+.cover-lookup-art-card.is-disabled { opacity: .38; filter: grayscale(1); cursor: not-allowed; }
+.cover-lookup-art-card.is-disabled .cover-lookup-art-delete { display: none; }
+
+/* UI-5 (owner): a notification-opened lookup stays invisible until its album identity is known (no flash before the split chooser). */
+#cover-lookup-modal[data-awaiting-identity] { visibility: hidden; }

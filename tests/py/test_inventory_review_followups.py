@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.support import isolatedPostgres
-from tests.py.test_isolated_postgres_live import watcher_repair_inventory
+from tests.py.test_isolated_postgres_live import _finish_live_startup, watcher_repair_inventory
 
 
 @pytest.mark.parametrize("retag", ["edition", "separated_year", "ordinary_year"])
@@ -31,6 +31,7 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
         Path("unused-watcher-identity.json"), previous, "watcher-identity", 1.0,
         separate_release_keys=separate_keys, observed_library_root_ids={"repair-main"},
     )
+    _finish_live_startup(fixture.config)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         established_album_id = connection.execute(
             "select id from library.local_albums where album_key = %s",
@@ -160,6 +161,7 @@ def test_targeted_additions_publish_tagged_or_inferred_album_artist_identity(
     stage_first_track,
 ):
     fixture = watcher_repair_inventory
+    fixture.seed()  # an empty library after startup
     additions = [
         (
             "Various Artists/Rain Man",
@@ -303,6 +305,7 @@ def test_watcher_cleanup_removes_all_owned_albums_or_refuses_mixed_ownership(
 @pytest.mark.parametrize("owned_directory_name", [
     "watcher-reconciliation", "gallery-native-response-overlap",
     "watcher-grouped-feature-credit", "generated-preview-storage",
+    "watcher-artist-collation-curly",
 ])
 def test_watcher_cleanup_accepts_exact_response_overlap_owner_before_database_access(monkeypatch, tmp_path, owned_directory_name):
     from tests.e2e.support import watcherFixture

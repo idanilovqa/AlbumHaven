@@ -32,6 +32,9 @@ OUTBOUND_FIELDS: Mapping[str, tuple[str, str]] = {
     "coverPath": ("coverRef", COVER),
     "candidate_cover_path": ("candidate_cover_ref", CANDIDATE),
     "selected_source_cover_path": ("selected_source_cover_ref", CANDIDATE),
+    # Cover Look Up's pending-save prediction: the album folder's cover.jpg and the backup a save makes of it.
+    "cover_jpg_cover_path": ("cover_jpg_ref", CANDIDATE),
+    "cover_backup_cover_path": ("cover_backup_ref", CANDIDATE),
 }
 # Client field -> server field. `source_cover_ref` is the image a cover lookup action names.
 INBOUND_FIELDS: Mapping[str, str] = {

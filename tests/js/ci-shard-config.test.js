@@ -29,7 +29,7 @@ test('performance shard resolver preserves the existing fixture and target mappi
     basePort: 4213,
     targets: ['playback-start', 'gapless-playback'],
   });
-  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 17);
+  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 19);
   assert.deepEqual(resolvePerformanceShard('gallery-artwork-diversity'), {
     shard: 'gallery-artwork-diversity',
     fixtureProfile: 'synthetic-large-library',
@@ -39,7 +39,7 @@ test('performance shard resolver preserves the existing fixture and target mappi
     basePort: 4333,
     targets: ['gallery-artwork-diversity'],
     generatorRepository: 'idanilovqa/album-haven-test-data',
-    generatorCommit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11',
+    generatorCommit: '38aa02ef034c6235362950946fdf15a4a9a65dc4',
     variantCount: 512,
     sourceMaxEdge: 960,
   });
@@ -79,4 +79,5 @@ test('CLI writes scalar and ten-slot target outputs for GitHub Actions', () => {
   assert.match(output, /target11=none/);
   assert.match(output, /target16=none/);
   assert.match(output, /target17=none/);
+  assert.match(output, /target19=none/);
 });

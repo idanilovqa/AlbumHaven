@@ -218,7 +218,7 @@ def test_concurrent_exception_override_updates_preserve_both_paths(monkeypatch):
     }
 
 
-def test_exception_override_mutation_invalidates_and_refetches_scoped_problematic_projection(monkeypatch):
+def test_exception_override_mutation_invalidates_derived_projections(monkeypatch):
     from music_app.services import exception_overrides as exception_overrides_module
     from music_app.services import library_browse_postgres as library_browse_postgres_module
 
@@ -227,7 +227,7 @@ def test_exception_override_mutation_invalidates_and_refetches_scoped_problemati
         "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
         "PERSISTENCE_BACKENDS": {"exception_overrides": "postgres"},
     }
-    cache_key = (database_url, "problematic-files")
+    loose_track_cache_key = (database_url, "loose-tracks")
     current_projection_key = "before-override"
     build_count = 0
 
@@ -264,19 +264,24 @@ def test_exception_override_mutation_invalidates_and_refetches_scoped_problemati
         build_payload,
     )
     with library_browse_postgres_module._UTILITY_PROJECTION_CACHE_LOCK:
-        library_browse_postgres_module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
-        library_browse_postgres_module._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
+        library_browse_postgres_module._UTILITY_PROJECTION_CACHE.pop(loose_track_cache_key, None)
+        library_browse_postgres_module._UTILITY_PROJECTION_GENERATIONS.pop(loose_track_cache_key, None)
 
+    # Problematic Files is never cached: each read evaluates (or reads the index, which the
+    # override's trigger marks); only the Loose Tracks projection is dropped.
     assert repository.build_problematic_files_payload()["items"][0]["key"] == "before-override"
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "before-override"
-    assert build_count == 1
+    with library_browse_postgres_module._UTILITY_PROJECTION_CACHE_LOCK:
+        library_browse_postgres_module._UTILITY_PROJECTION_CACHE[loose_track_cache_key] = {
+            "ready": True,
+        }
 
     save_exception_overrides(config, {"C:/Music/a.mp3": "Interview"})
 
     assert repository.build_problematic_files_payload()["items"][0]["key"] == "after-override"
     assert build_count == 2
     with library_browse_postgres_module._UTILITY_PROJECTION_CACHE_LOCK:
-        assert library_browse_postgres_module._UTILITY_PROJECTION_GENERATIONS[cache_key] == 1
+        assert loose_track_cache_key not in library_browse_postgres_module._UTILITY_PROJECTION_CACHE
+        assert library_browse_postgres_module._UTILITY_PROJECTION_GENERATIONS[loose_track_cache_key] == 1
 
 
 def test_apply_exception_override_replaces_entry_value():

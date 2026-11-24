@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '../../..');
 const template = fs.readFileSync(path.join(root, 'music_app/templates/index.html'), 'utf8');
 const runtime = fs.readFileSync(path.join(root, 'music_app/static/js/runtime/core-state-and-helpers.js'), 'utf8');
+const galleryComponents = fs.readFileSync(path.join(root, 'music_app/static/js/runtime/gallery-main-components.js'), 'utf8');
 const navigation = fs.readFileSync(path.join(root, 'music_app/static/js/runtime/status-ui-helpers.js'), 'utf8');
 const warning = fs.readFileSync(path.join(root, 'music_app/static/js/runtime/library-warning-ui.js'), 'utf8');
 const galleryRefresh = fs.readFileSync(path.join(root, 'music_app/static/js/runtime/gallery-refresh-and-status.js'), 'utf8');
@@ -44,6 +45,7 @@ test('mount and unmount replace the GalleryBar and restore the same node', () =>
   anchor.parentNode = parent;
   const context = {
     appBootstrap: { getInitialView: () => ({}) },
+    escapeHtml: value => String(value ?? ''),
     window: { location: { href: 'http://localhost/', origin: 'http://localhost' } },
     document: {
       querySelector: selector => selector.includes('data-gallery-bar-instance="gallery"') && gallery.parentNode ? gallery : null,
@@ -62,6 +64,7 @@ test('mount and unmount replace the GalleryBar and restore the same node', () =>
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/button-component.js'), 'utf8'), context);
   context.ButtonComponent = context.window.ButtonComponent;
+  vm.runInContext(galleryComponents, context);
   vm.runInContext(runtime, context);
 
   const mounted = context.mountLibraryStatusBar();
@@ -79,9 +82,10 @@ test('runtime Library Status bar uses shared GalleryBar structure and exact labe
   assert.match(runtime, /data-gallery-bar-instance="library-status"/);
   assert.match(runtime, /aria-label="Library Status Page controls"/);
   assert.match(runtime, />Library State</);
-  const context = vm.createContext({ window: {}, appBootstrap: { getInitialView: () => ({}) } });
+  const context = vm.createContext({ window: {}, appBootstrap: { getInitialView: () => ({}) }, escapeHtml: value => String(value ?? '') });
   vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/button-component.js'), 'utf8'), context);
   context.ButtonComponent = context.window.ButtonComponent;
+  vm.runInContext(galleryComponents, context);
   vm.runInContext(runtime, context);
   const html = context.buildLibraryStatusBarHtml();
   assert.match(html, /data-close-scan-page="1"/);

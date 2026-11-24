@@ -244,8 +244,12 @@ function createGalleryRefreshContext() {
     },
     startupMetrics: {
       completed: 0,
+      progress: [],
       visibleCompleted: 0,
       visibleCompletions: [],
+      advanceInitialRefresh(value) {
+        this.progress.push(value);
+      },
       markOnce(name, detail) {
         calls.startupMarks.push({ name, detail });
       },

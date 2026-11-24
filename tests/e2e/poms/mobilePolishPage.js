@@ -331,10 +331,13 @@ export class MobilePolishPage extends MobileLayoutPage {
     await expect.poll(() => this.familyBody.evaluate(body => body.scrollTop)).toBeGreaterThan(0);
   }
 
-  async expectArtistDialogCentered() {
+  async expectArtistInfoBottomSheet() {
     const box = await this.artistDialog.boundingBox(), viewport = this.page.viewportSize();
     expect(box.x + box.width / 2).toBeCloseTo(viewport.width / 2, 0);
-    expect(box.y + box.height / 2).toBeCloseTo(viewport.height / 2, 0);
+    expect(box.y + box.height).toBeCloseTo(viewport.height, 0);
+    expect(box.width).toBeCloseTo(viewport.width, 0);
+    await expect(this.artistInfo).toHaveCSS('box-shadow', 'none');
+    await expect(this.artistInfo).toHaveCSS('outline-style', 'none');
     await expect(this.artistDialog.getByRole('button', { name: 'Close artist information' })).toBeVisible();
   }
 

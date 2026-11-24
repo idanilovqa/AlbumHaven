@@ -18,6 +18,7 @@ function loadUtilityLoaders(capture, state, overrides = {}) {
     fetch: capture.fetch,
     FormData: class FormData { append() {} },
     renderUtilityModalContent() {},
+    renderProblematicFilesTab() {},
     scheduleBrowserAnimationFrame(callback) { callback(); return 1; },
     showToast() {},
     ...overrides,
@@ -48,7 +49,12 @@ test('request capture: Problematic Files loads one bounded page and one complete
       const capture = createRequestCapture(url => jsonResponse(url.endsWith('?limit=50')
         ? { complete: false, items: items.slice(0, 50) }
         : { complete: true, items }));
-      return { capture, context: loadUtilityLoaders(capture, utilityState()), problematicAlbums };
+      return { capture, context: loadUtilityLoaders(capture, utilityState(), {
+        // Only an open Settings modal reconciles with the complete list (e01d0d613).
+        getUtilityModalElements: () => ({ overlay: { hidden: false } }),
+        scheduleBrowserTimeout: () => 0,
+        clearBrowserTimeout() {},
+      }), problematicAlbums };
     },
     async act({ capture, context, problematicAlbums }) {
       const before = capture.requests.length;

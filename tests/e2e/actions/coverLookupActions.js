@@ -53,7 +53,10 @@ export async function waitForDisplayedImageDecode(element) {
       };
       element.addEventListener('load', onLoad, { once: true });
       element.addEventListener('error', onError, { once: true });
-      if (element.complete && !element.hasAttribute('data-cover-lookup-deferred-src')) {
+      // An image whose source is still being fetched has no src yet, which the browser also reports as complete.
+      const pending = element.hasAttribute('data-cover-lookup-deferred-src')
+        || (element.hasAttribute('data-gallery-cover-src') && !element.getAttribute('src'));
+      if (element.complete && !pending) {
         if (element.naturalWidth > 0) onLoad();
         else onError();
       }
@@ -74,11 +77,12 @@ export async function waitForDisplayedImageDecode(element) {
   };
 }
 
-// Runs in the browser as a read-only observation of the exact displayed Blob.
+// Runs in the browser as a read-only observation of exact browser-owned image bytes.
 export async function readDisplayedBlobBytes(element, expected) {
   const sourceUrl = new URL(expected.currentSrc);
-  if (sourceUrl.protocol !== 'blob:' || sourceUrl.origin !== location.origin) {
-    throw new Error('Displayed blob evidence requires a same-origin blob URL.');
+  if (sourceUrl.protocol !== 'data:'
+      && (sourceUrl.protocol !== 'blob:' || sourceUrl.origin !== location.origin)) {
+    throw new Error('Displayed browser-owned evidence requires a data URL or same-origin blob URL.');
   }
   const matches = () => element instanceof HTMLImageElement
     && element.isConnected
@@ -89,12 +93,12 @@ export async function readDisplayedBlobBytes(element, expected) {
     && element.hasAttribute('data-cover-visual-state') === expected.hasVisualState
     && (!expected.hasVisualState || element.getAttribute('data-cover-visual-state') === 'ready')
     && element.complete && element.naturalWidth > 0;
-  if (!matches()) throw new Error('Displayed blob source changed before observation.');
-  // A blob URL reads browser-owned bytes; it never requests the production /cover route.
+  if (!matches()) throw new Error('Displayed browser-owned source changed before observation.');
+  // Browser-owned URLs never request the production /cover route.
   const response = await fetch(expected.currentSrc, { mode: 'same-origin' });
   if (!response.ok) throw new Error('Displayed blob bytes could not be read.');
   const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!matches()) throw new Error('Displayed blob source changed during observation.');
+  if (!matches()) throw new Error('Displayed browser-owned source changed during observation.');
   if (!bytes.length) throw new Error('Displayed blob evidence is empty.');
   return Array.from(bytes);
 }
@@ -568,7 +572,12 @@ export class CoverLookupActions {
       && new URL(response.url()).pathname === '/utilities/cover-lookup/save-remote'
     ), { timeout });
     await expect(this.coverLookup.saveRemoteButton).toBeEnabled({ timeout });
+    const mobileCoverLookup = await this.coverLookup.mobilePage.isVisible()
+      || await this.coverLookup.mobileSheet.isVisible();
     await this.coverLookup.saveRemoteButton.click();
+    if (mobileCoverLookup) {
+      await expect(this.coverLookup.modal).toBeHidden();
+    }
     const response = await responsePromise;
     const payload = await response.json();
     if (!response.ok() || payload?.ok !== true) {
@@ -690,6 +699,12 @@ export class CoverLookupActions {
     ).toBeVisible({ timeout: options.timeout || 30000 });
     // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered candidate image to decode
     return image.evaluate(waitForDisplayedImageDecode);
+  }
+
+  async readRemoteCardOriginalEvidence(card, label) {
+    // The card shows a 480 px preview; its full-size button opens the original in the lightbox.
+    await this.coverLookup.openLightboxButtonWithin(card).click();
+    return this.readDisplayedImageEvidence(this.coverLookup.lightboxImage, `full-size ${label}`);
   }
 
   async readRemoteCandidateEvidence(candidateId, options = {}) {
@@ -1190,6 +1205,27 @@ export class CoverLookupActions {
     return drawerScrollTop;
   }
 
+  async waitForCurrentReleaseChoices(albumNames) {
+    await expect(this.coverLookup.splitChoiceDialog.getByRole('heading', {
+      name: 'Choose the current release', exact: true,
+    })).toBeVisible();
+    await expect(this.coverLookup.openChosenReleaseButton).toBeDisabled();
+    await expect(this.coverLookup.currentReleaseChoices).toHaveCount(albumNames.length);
+    for (const album of albumNames) {
+      await expect(this.coverLookup.currentReleaseChoices.filter({ hasText: album })).toHaveCount(1);
+    }
+  }
+
+  async chooseCurrentRelease(albumName) {
+    const choice = this.coverLookup.currentReleaseChoices.filter({ hasText: albumName });
+    await expect(choice).toHaveCount(1);
+    await choice.click();
+    await expect(this.coverLookup.openChosenReleaseButton).toBeEnabled();
+    await this.coverLookup.openChosenReleaseButton.click();
+    await expect(this.coverLookup.splitChoiceDialog).toBeHidden();
+    await this.waitForModalResultsReady();
+  }
+
   async scrollDrawerAwayFromEdges() {
     await this.coverLookup.drawerBody.hover();
     await this.coverLookup.page.mouse.wheel(0, 100000);
@@ -1215,8 +1251,9 @@ export class CoverLookupActions {
     await expect(this.coverLookup.mobileSheet).toBeVisible();
     await expect(this.coverLookup.mobilePage).toHaveCount(0);
     await expect(this.coverLookup.drawer).toBeVisible();
+    // INT-023: the sheet slides up over 320 ms; measure where it settles.
+    await expect.poll(async () => (await this.coverLookup.readMobileSheetStacking()).bottomGap).toBeLessThanOrEqual(1);
     const stacking = await this.coverLookup.readMobileSheetStacking();
-    expect(stacking.bottomGap).toBeLessThanOrEqual(1);
     expect(stacking.sheetZ).toBeGreaterThan(stacking.drawerZ);
   }
 
@@ -1242,6 +1279,8 @@ export class CoverLookupActions {
 
   async openTaskWithKeyboard(taskTitle, key = 'Enter') {
     const opener = this.coverLookup.taskOpenButtonByTitle(taskTitle);
+    // A keyboard user works in the focused window; another session's page may hold window focus.
+    await opener.page().bringToFront();
     await opener.focus();
     await expect(opener).toBeFocused();
     await opener.press(key);
@@ -1345,7 +1384,9 @@ export class CoverLookupActions {
         return false;
       }
       let byteEvidence;
-      if (new URL(displayedState.currentSrc, this.coverLookup.page.url()).protocol === 'blob:') {
+      if (['blob:', 'data:'].includes(
+        new URL(displayedState.currentSrc, this.coverLookup.page.url()).protocol,
+      )) {
         // parity-check: allow-read-only-measurement-evaluate -- exact decoded displayed blob bytes, without a network request or cache mutation
         const bytes = await image.evaluate(readDisplayedBlobBytes, displayedState);
         byteEvidence = {
@@ -1453,6 +1494,18 @@ export class CoverLookupActions {
     return candidates;
   }
 
+  async readLocalSectionCoverCandidates() {
+    const candidates = [];
+    const count = await this.coverLookup.localSectionCoverCards.count();
+    for (let index = 0; index < count; index += 1) {
+      candidates.push(await this.readLocalCoverCardEvidence(
+        this.coverLookup.localSectionCoverCards.nth(index),
+        `LOCAL section cover candidate ${index + 1}`,
+      ));
+    }
+    return candidates;
+  }
+
   async readActiveLocalCoverEvidence(options = {}) {
     const timeout = options.timeout || 30000;
     await expect(this.coverLookup.activeLocalCoverCard).toHaveCount(1, { timeout });
@@ -1551,8 +1604,9 @@ export class CoverLookupActions {
   async selectFirstInactiveLocalCoverAndSave(options = {}) {
     const timeout = options.timeout || 30000;
     await expect(this.coverLookup.inactiveLocalCoverCards.first()).toBeVisible({ timeout });
-    const candidateCard = this.coverLookup.inactiveLocalCoverCards.first();
-    return this.selectLocalCoverCardAndSave(candidateCard, options);
+    const sourcePath = await this.coverLookup.inactiveLocalCoverCards.first()
+      .getAttribute('data-select-local-cover');
+    return this.selectLocalCoverBySourcePathAndSave(sourcePath, options);
   }
 
   async selectLocalCoverByNameAndSave(name, options = {}) {
@@ -1561,6 +1615,20 @@ export class CoverLookupActions {
     await expect(candidateCard).toHaveCount(1, { timeout });
     await expect(candidateCard).toBeVisible({ timeout });
     return this.selectLocalCoverCardAndSave(candidateCard, options);
+  }
+
+  async selectLocalCoverBySourcePathAndSave(sourcePath, options = {}) {
+    const timeout = options.timeout || 30000;
+    const expectedPath = String(sourcePath || '').trim();
+    await expect(this.coverLookup.localCoverCards.first()).toBeVisible({ timeout });
+    const count = await this.coverLookup.localCoverCards.count();
+    for (let index = 0; index < count; index += 1) {
+      const candidateCard = this.coverLookup.localCoverCards.nth(index);
+      if (String(await candidateCard.getAttribute('data-select-local-cover') || '').trim() === expectedPath) {
+        return this.selectLocalCoverCardAndSave(candidateCard, options);
+      }
+    }
+    throw new Error(`Local cover candidate was not found: ${expectedPath}`);
   }
 
   async selectLocalCoverCardAndSave(candidateCard, options = {}) {
@@ -1582,7 +1650,12 @@ export class CoverLookupActions {
     await this.coverLookup.localCoverActionWithin(candidateCard).click();
     await expect(candidateCard).toHaveClass(/\bis-active\b/, { timeout });
     await expect(this.coverLookup.saveRemoteButton).toBeEnabled({ timeout });
+    const mobileCoverLookup = await this.coverLookup.mobilePage.isVisible()
+      || await this.coverLookup.mobileSheet.isVisible();
     await this.coverLookup.saveRemoteButton.click();
+    if (mobileCoverLookup) {
+      await expect(this.coverLookup.modal).toBeHidden();
+    }
     let immediateCoverState = null;
     if (stableCoverLocator) {
       // parity-check: allow-read-only-measurement-evaluate -- immediate cover readiness telemetry only

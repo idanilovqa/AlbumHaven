@@ -100,6 +100,8 @@ function createPlaywrightResultNonce() {
   return randomBytes(32).toString('hex');
 }
 
+const ownedCleanupDiagnostics = new WeakMap();
+
 function safeErrorSummary(error) {
   if (!error) {
     return null;
@@ -113,6 +115,11 @@ function safeErrorSummary(error) {
   }
   if (safeTokenPattern.test(code)) {
     summary.code = code;
+  }
+  const cleanup = ownedCleanupDiagnostics.get(error);
+  if (cleanup) {
+    summary.cleanup = cleanup;
+    ownedCleanupDiagnostics.set(summary, cleanup);
   }
   return Object.keys(summary).length > 0 ? summary : null;
 }
@@ -748,6 +755,25 @@ function buildIsolatedLibraryCleanupEnv(childEnv = {}) {
   };
 }
 
+function sanitizeOwnedCleanupText(value, childEnv = {}) {
+  let text = String(value || '');
+  for (const [key, secret] of Object.entries({ ...process.env, ...childEnv })) {
+    if (secret && /password|passwd|token|secret|credential|database.*url|dsn/i.test(key)) {
+      text = text.split(String(secret)).join('[redacted secret]');
+    }
+  }
+  return text
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, '[redacted URL]')
+    .replace(/\b(?:password|passwd|pwd|token|secret|credential|PGPASSWORD)["']?\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, '[redacted secret]')
+    .replace(/\bAuthorization["']?\s*[=:]\s*["']?(?:Bearer|Basic)\s+[^\s"',;}]+/gi, '[redacted authorization]')
+    .replace(/[A-Za-z]:[\\/][^\r\n]*/g, '[redacted path]')
+    .replace(/\\\\[^\r\n]*/g, '[redacted path]')
+    .replace(/\/(?:[^\s/"'<>]+\/)*[^\s"'<>]+/g, '[redacted path]')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    .trim().slice(0, 2048);
+}
+
 function cleanupIsolatedLibraryDatabase(childEnv = {}, options = {}) {
   const runCommandFn = options.runCommandFn || runCommand;
   const timeoutMs = Number(options.timeoutMs || ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS);
@@ -762,15 +788,17 @@ function cleanupIsolatedLibraryDatabase(childEnv = {}, options = {}) {
       timeout: timeoutMs,
     },
   );
-  if (result.error) {
-    throw new Error(`Isolated library database cleanup failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const detail = String(result.stderr || result.stdout || '').trim();
-    throw new Error(
-      `Isolated library database cleanup exited with status ${String(result.status)}`
-      + (detail ? `: ${detail}` : '.'),
-    );
+  if (result.error || result.status !== 0) {
+    const error = new Error('Isolated library database cleanup failed.');
+    ownedCleanupDiagnostics.set(error, {
+      exitCode: Number.isInteger(result.status) ? result.status : null,
+      signal: /^[A-Z][A-Z0-9]{0,31}$/.test(result.signal || '') ? result.signal : null,
+      spawnError: safeErrorSummary(result.error),
+      message: sanitizeOwnedCleanupText(result.error?.message, childEnv),
+      stderr: sanitizeOwnedCleanupText(result.stderr, childEnv),
+      stdout: sanitizeOwnedCleanupText(result.stdout, childEnv),
+    });
+    throw error;
   }
 }
 
@@ -1134,7 +1162,7 @@ function collectLocalCoverPreviewUrls(value, baseUrl, found = new Set()) {
 
 async function prewarmFunctionalFixture(port, options = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
-  const indexUrl = `${baseUrl}/?surface=albums`;
+  const indexUrl = `${baseUrl}/albums`;
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;
@@ -1268,6 +1296,8 @@ async function waitForFunctionalFixtureBackgroundIdle(child, port, options = {})
       && lastStatus.relations_in_progress === false
       && lastStatus.covers_in_progress === false
       && lastStatus.pending_cover_refresh_after_scan === false
+      // Absent on an app without the Problematic Files index (older fixtures).
+      && lastStatus.problematic_index_in_progress !== true
     );
     consecutiveIdlePolls = idle ? consecutiveIdlePolls + 1 : 0;
     if (consecutiveIdlePolls >= stablePollCount) return;
@@ -1276,6 +1306,41 @@ async function waitForFunctionalFixtureBackgroundIdle(child, port, options = {})
   throw new Error(
     `Timed out after ${timeoutMs} ms waiting for functional fixture background work to become idle at `
     + `${statusUrl}. Last status: ${JSON.stringify(lastStatus)}`,
+  );
+}
+
+// A restored fixture database fills the Problematic Files index once after startup (about
+// 3.5 min on a real library); tests start once it is ready, outside their own time limits.
+const MANAGED_PROBLEMATIC_INDEX_TIMEOUT_MS = 15 * 60 * 1000;
+
+async function waitForProblematicIndexReady(child, port, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || MANAGED_PROBLEMATIC_INDEX_TIMEOUT_MS);
+  const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn || fetchHttpResponseComplete;
+  const sleepFn = options.sleepFn || sleep;
+  const nowFn = options.nowFn || Date.now;
+  const statusUrl = `http://127.0.0.1:${port}/status`;
+  const deadline = nowFn() + timeoutMs;
+  let lastStatus = null;
+  while (nowFn() <= deadline) {
+    if (child.exitCode !== null && child.exitCode !== undefined) {
+      throw new Error(`Managed app exited before its Problematic Files index was ready (code ${String(child.exitCode)}).`);
+    }
+    const response = await fetchHttpResponseCompleteFn(statusUrl, {
+      requestTimeoutMs: 5000,
+      headers: { ...(options.requestHeaders || {}) },
+    });
+    try {
+      lastStatus = response?.ok ? JSON.parse(String(response.body || '')) : null;
+    } catch {
+      lastStatus = null;
+    }
+    // An app without the index omits the flag.
+    if (lastStatus && lastStatus.problematic_index_in_progress !== true) return;
+    await sleepFn(1000);
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs} ms waiting for the Problematic Files index at ${statusUrl}. `
+    + `Last status: ${JSON.stringify(lastStatus?.problematic_index_in_progress)}`,
   );
 }
 
@@ -1421,6 +1486,21 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
         requestHeaders,
       });
+    } else if (options.waitForProblematicIndex !== false && childEnv.ALBUM_HAVEN_FIXTURE_PROFILE) {
+      const authenticateFn = options.authenticateFunctionalFixtureFn || authenticateFunctionalFixture;
+      let requestHeaders = {};
+      try {
+        requestHeaders = await authenticateFn(port, {
+          fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+        });
+      } catch (error) {
+        // A profile without the fixture login keeps the specs' own wait.
+        stderr.write(`[run-playwright] Problematic Files index wait skipped: ${error.message}\n`);
+      }
+      if (Object.keys(requestHeaders || {}).length) await (options.waitForProblematicIndexReadyFn || waitForProblematicIndexReady)(child, port, {
+        fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+        requestHeaders,
+      });
     }
     return child;
   } catch (error) {
@@ -1490,11 +1570,11 @@ function writeJsonAtomically(targetPath, value) {
 async function cleanupManagedWatcherFixture(childEnv, options = {}) {
   const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
   const ownedDirectoryName = String(options.ownedDirectoryName || 'watcher-reconciliation').trim();
-  if (!['watcher-reconciliation', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+  if (!['watcher-reconciliation', 'watcher-artist-collation-curly', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage', 'problematic-files-missing-album', 'watcher-problematic-live', 'auto-apply-first-cover'].includes(ownedDirectoryName)) {
     throw new Error('Watcher cleanup requires a runner-owned directory identity.');
   }
   const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
-    allowedProfiles: ['functional-core', 'synthetic-large-library'],
+    allowedProfiles: ['functional-core', 'synthetic-large-library', 'utility-problematic-files'],
   });
   const ownedRoot = path.join(mediaRoot, 'cases', ownedDirectoryName);
   const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
@@ -1652,7 +1732,7 @@ function createManagedIsolatedAppRestartController(options = {}) {
       ? String(request.ownedDirectoryName || 'watcher-reconciliation').trim()
       : null;
     if (operation === 'watcher-cleanup'
-        && !['watcher-reconciliation', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage'].includes(ownedDirectoryName)) {
+        && !['watcher-reconciliation', 'watcher-artist-collation-curly', 'watcher-grouped-feature-credit', 'gallery-native-response-overlap', 'generated-preview-storage', 'problematic-files-missing-album', 'watcher-problematic-live', 'auto-apply-first-cover'].includes(ownedDirectoryName)) {
       throw new Error('Watcher cleanup requires a runner-owned directory identity.');
     }
     return { nonce, operation, ownedDirectoryName };
@@ -1905,6 +1985,14 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
     const managedLaunchRootsByPid = new Map();
     const reclaimedProcessOwners = [];
     const portReclaimErrors = [];
+    const recordPortReclaimError = (error, phase, port, pid = null) => {
+      ownedCleanupDiagnostics.set(error, {
+        phase, port, pid,
+        error: safeErrorSummary(error),
+        message: sanitizeOwnedCleanupText(error?.message, childEnv),
+      });
+      portReclaimErrors.push(error);
+    };
     const lifecycle = {
       authoritativeResult: null,
       listOnly: isListOnlyCommand(passthroughArgv),
@@ -2098,10 +2186,15 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         && cleanupIsolatedLibraryDatabaseFn
       ) {
         if (portReclaimErrors.length > 0) {
-          throw attachLifecycle(new Error(
+          const cleanupError = new Error(
             'Could not safely snapshot and reclaim all isolated Playwright port owners: '
-            + portReclaimErrors.map((error) => String(error?.message || error)).join('; '),
-          ), 'owned-process-cleanup-error');
+            + portReclaimErrors.map((error) => sanitizeOwnedCleanupText(error?.message, childEnv)).join('; '),
+          );
+          ownedCleanupDiagnostics.set(cleanupError, {
+            phase: 'port-reclaim',
+            failures: portReclaimErrors.slice(0, 16).map((error) => safeErrorSummary(error)),
+          });
+          throw attachLifecycle(cleanupError, 'owned-process-cleanup-error');
         }
         lifecycle.fakeDatabaseCleanup.status = 'running';
         try {
@@ -2229,7 +2322,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
               reclaimedProcessOwners.push(...reclaimedOwners);
             }
           } catch (portCleanupError) {
-            portReclaimErrors.push(portCleanupError);
+            recordPortReclaimError(portCleanupError, 'reclaim-port', managedPort);
           }
         }
         if (reclaimedProcessOwners.length > 0) {
@@ -2304,7 +2397,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         try {
           portOwners = readPortOwningProcessIdentitiesFn(managedPort);
         } catch (error) {
-          portReclaimErrors.push(error);
+          recordPortReclaimError(error, 'capture-port-owner', managedPort);
           continue;
         }
         for (const owner of Array.isArray(portOwners) ? portOwners : []) {
@@ -2326,9 +2419,9 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
           const existingRoot = managedLaunchRootsByPid.get(launchRoot.pid);
           if (existingRoot && existingRoot.creationIdentity !== launchRoot.creationIdentity) {
             managedLaunchRootsByPid.delete(launchRoot.pid);
-            portReclaimErrors.push(new Error(
+            recordPortReclaimError(new Error(
               `Managed launch-root PID ${launchRoot.pid} changed identity while port ownership was captured.`,
-            ));
+            ), 'launch-root-identity', managedPort, launchRoot.pid);
             continue;
           }
           managedLaunchRootsByPid.set(launchRoot.pid, {

@@ -168,6 +168,46 @@ test('scroll schedules one range update and keeps mounted rows bounded', () => {
   assert.ok(Number(list.dataset.problematicVirtualStart) > 0);
 });
 
+test('near-end scrolling requests another page while keeping mounted rows bounded', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  let pageRequests = 0;
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+    onNearEnd() { pageRequests += 1; },
+  });
+  virtualList.render(makeItems(50), 'album-0');
+  assert.equal(pageRequests, 0);
+
+  list.scrollTop = 50 * 68;
+  list.emit('scroll');
+  frames.shift()();
+
+  assert.equal(pageRequests, 1);
+  assert.ok(Number(list.dataset.problematicMountedCount) <= 17);
+});
+
+test('pagination prefetches several viewports before the visible list end', () => {
+  const { api, frames } = loadVirtualList();
+  const list = createList();
+  let pageRequests = 0;
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+    onNearEnd() { pageRequests += 1; },
+  });
+  virtualList.render(makeItems(50), 'album-0');
+  assert.equal(pageRequests, 0);
+
+  list.scrollTop = 25 * 68;
+  list.emit('scroll');
+  frames.shift()();
+
+  assert.equal(pageRequests, 1);
+  assert.ok(Number(list.dataset.problematicVirtualEnd) < 50, 'prefetch happens before the user reaches the temporary end');
+});
+
 test('reveal scrolls an offscreen selected row into the mounted range', () => {
   const { api, frames } = loadVirtualList();
   const list = createList();

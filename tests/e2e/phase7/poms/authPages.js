@@ -240,7 +240,7 @@ export class AccountPage {
     this.myAccountLink = this.navigation.getByRole('link', { name: 'My account', exact: true });
     this.usersLink = this.navigation.getByRole('link', { name: 'Users', exact: true });
     this.heading = page.getByRole('heading', { name: 'Password', exact: true });
-    this.signedInIdentity = page.locator('.account-main [data-gallery-bar-instance="page"] .gallery-bar__summary');
+    this.signedInIdentity = page.locator('[data-settings-outlet]:has(> .account-main) > [data-gallery-bar-instance="page"] .gallery-bar__summary');
     this.currentPassword = page.getByLabel(/^\s*Current password/);
     this.newPassword = page.getByLabel(/^\s*New password/);
     this.confirmPassword = page.getByLabel(/^\s*Confirm new password/);

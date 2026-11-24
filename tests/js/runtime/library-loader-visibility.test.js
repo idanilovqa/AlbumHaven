@@ -779,7 +779,7 @@ test('renderLibraryLoader keeps the Browse Library label while a browse request 
 test('Library Status Page GalleryBar keeps neutral browsing before separate destructive cancellation', () => {
   const runtime = fs.readFileSync(helperPaths[1], 'utf8');
   const actionsMatch = runtime.match(
-    /<section class="gallery-bar gallery-bar--scan"[\s\S]*?<div class="gallery-bar__actions library-loader-actions"[\s\S]*?<\/div>[\s\S]*?<\/section>/,
+    /actionsHtml:\s*`[\s\S]*?id="library-loader-browse-button"[\s\S]*?id="library-loader-cancel-button"[\s\S]*?`/,
   );
 
   assert.ok(actionsMatch, 'Expected one Scan Page action group');
@@ -966,7 +966,16 @@ for (const query of ['', 'Scan Artist 00']) {
 }
 
 test('searching loader hides previous gallery until the search settles', () => {
-  const { context, loader, spinner, title, scroll } = createLoaderRenderFixture();
+  const { context, elements, loader, spinner, title, scroll } = createLoaderRenderFixture();
+  const railAttributes = new Map();
+  elements['shell-navigation-rail'] = {
+    hasAttribute(name) { return railAttributes.has(name); },
+    removeAttribute(name) { railAttributes.delete(name); },
+    setAttribute(name, value) { railAttributes.set(name, value); },
+  };
+  const timers = [];
+  context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+  context.clearTimeout = () => {};
   vm.runInContext(`
     state.ui.pendingViewTransition = true;
     state.ui.pendingGallerySearch = true;
@@ -977,6 +986,9 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(title.textContent, 'Searching');
   assert.equal(scroll.hidden, true, 'previous results must not remain visible during submitted search');
   assert.equal(loader.classList.contains('is-searching'), true);
+  // NEW-005 (owner): the side panel's previous tree is hidden while the search runs.
+  assert.equal(railAttributes.has('data-search-pending'), true);
+  assert.equal(railAttributes.get('aria-busy'), 'true');
   vm.runInContext(`
     state.ui.pendingViewTransition = false;
     state.ui.pendingGallerySearch = false;
@@ -985,4 +997,10 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(loader.hidden, true);
   assert.equal(scroll.hidden, false);
   assert.equal(loader.classList.contains('is-searching'), false);
+  // The loader ends a frame before the tree re-renders; the tree stays hidden until it renders the new results.
+  assert.equal(railAttributes.has('data-search-pending'), true, 'the old tree is not revealed with the loader');
+  vm.runInContext('releaseSearchPendingRail();', context);
+  assert.equal(railAttributes.has('data-search-pending'), false, 'the new tree shows with the results');
+  assert.equal(railAttributes.get('aria-busy'), 'false');
+  assert.equal(timers.length, 1, 'a search whose tree needs no re-render still releases it');
 });

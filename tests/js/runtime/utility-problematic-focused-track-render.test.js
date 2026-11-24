@@ -42,6 +42,24 @@ const listBuildersPath = path.join(
 );
 const listBuildersSource = fs.readFileSync(listBuildersPath, 'utf8');
 
+// The renderer resolves rows through getAllProblematicItems() and its key indexes (utility-list-builders.js).
+// Contexts that do not load that file get the same album + Artist owner union, indexed on each call.
+function runProblematicRenderer(context) {
+  if (typeof context.getAllProblematicItems !== 'function') {
+    context.getAllProblematicItems = () => [
+      ...(context.state?.utility?.problematicFiles || []),
+      ...(context.state?.utility?.problematicArtistItems || []),
+    ];
+  }
+  if (typeof context.getProblematicItemsByKey !== 'function') {
+    context.getProblematicItemsByKey = () => new Map(context.getAllProblematicItems().map(album => [String(album.key), album]));
+  }
+  if (typeof context.getProblematicListIndex !== 'function') {
+    context.getProblematicListIndex = items => new Map(items.map(item => [item.key, item]));
+  }
+  vm.runInContext(rendererSource, context, { filename: rendererPath });
+}
+
 function createDeferred() {
   let resolve;
   const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
@@ -73,6 +91,10 @@ function loadProblematicLoader(fetch) {
     },
     renderUtilityModalContent() {
       renders.push(context.state.utility.selectedProblematicKey);
+    },
+    // The loaders draw their own tab; here every draw is recorded the same way.
+    renderProblematicFilesTab() {
+      context.renderUtilityModalContent();
     },
     scheduleBrowserAnimationFrame(callback) {
       callback();
@@ -116,6 +138,7 @@ test('problematic-file render scrolls the focused track row into view determinis
       return { top: 40, bottom: 200 };
     },
     querySelector(selector) {
+      if (selector === 'img[data-gallery-cover-src]') return null;
       selectorCalls.push(selector);
       return selector === `[data-problematic-track-path="${escapedTrackPath}"]`
         ? focusedTrackMatch
@@ -177,7 +200,7 @@ test('problematic-file render scrolls the focused track row into view determinis
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -233,7 +256,7 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
   context.escapeHtml = value => String(value || '');
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), 'alert-components.js'), 'utf8'), context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
   context.renderProblematicFiles();
@@ -289,7 +312,7 @@ test('focused-track navigation keeps the matching album selected during a summar
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -323,6 +346,7 @@ test('incomplete problematic summary does not replace a missing existing selecti
       },
     },
     getUtilityModalElements() { return elements; },
+    getAllProblematicItems() { return [boundedAlbum]; },
     getFilteredProblematicAlbums() { return [boundedAlbum]; },
     renderProblemFilterControls() {},
     getSelectedProblematicAlbumFrom() { return null; },
@@ -332,13 +356,18 @@ test('incomplete problematic summary does not replace a missing existing selecti
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
   assert.equal(context.state.utility.selectedProblematicKey, 'edited-source');
   assert.deepEqual(loadCalls, []);
   assert.match(elements.detail.innerHTML, /Loading problematic albums/);
+
+  context.state.utility.searchQuery = 'art zoyd';
+  context.renderProblematicFiles();
+  assert.match(elements.detail.innerHTML, /Select an entry from the list to see the details/);
+  assert.doesNotMatch(elements.detail.innerHTML, /Loading/);
 });
 
 test('optimistic problematic detail shell defers the ordinary loader to its targeted hydration owner', () => {
@@ -383,7 +412,7 @@ test('optimistic problematic detail shell defers the ordinary loader to its targ
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -462,7 +491,7 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
     buildProblematicAlbumDetail() { return '<div>normal detail</div>'; },
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderUtilityModalContent();
   context.renderUtilityModalContent();
@@ -557,7 +586,7 @@ test('removed mutation owner keeps its scrim until the nearest previous survivor
     initializeRepairSelections() {},
     buildProblematicAlbumDetail(album) { return `<div>Hydrated ${album.name}</div>`; },
   });
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
   assert.match(detail.innerHTML, /Hold on\. Your changes are being applied/);
@@ -786,7 +815,7 @@ function renderFocusedAlbumWithGeometry({
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -1015,7 +1044,7 @@ test(`problematic-file render preserves owned mutation scroll geometry across a 
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   if (withLoadingRefresh) {
     context.state.utility.loading = true;
@@ -1070,7 +1099,7 @@ test('empty scoped log history renders its captured console and keeps export exp
   for (const file of ['utility-log-history-query.js', 'utility-log-history-ui.js']) {
     vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), file), 'utf8'), context);
   }
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
   context.renderUtilityLogHistory();
   assert.match(elements.detail.innerHTML, /No events in this snapshot/);
   assert.match(elements.detail.innerHTML, /Recent activity/);
@@ -1085,3 +1114,60 @@ test('empty scoped log history renders its captured console and keeps export exp
   assert.ok(exportCurrent);
   assert.match(exportCurrent, /\bdisabled(?:="[^"]*")?(?:\s|>)/);
 });
+
+for (const focused of [true, false]) {
+  test(`a summary refresh that moves the selected album ${focused ? 'reveals it during track navigation' : 'keeps the user scroll position'}`, () => {
+    const trackPath = 'C:\Music\DDT\Studio Records\01 Track.flac';
+    const target = { key: 'studio', name: 'Studio Records', detail_loaded: true, track_paths: [trackPath] };
+    const others = Array.from({ length: 60 }, (_, index) => ({ key: `album-${index}`, name: `Album ${index}` }));
+    let items = [...others.slice(0, 50), target];
+    const reveals = [];
+    const elements = {
+      overlay: {},
+      list: { innerHTML: '', querySelector() { return null; } },
+      detail: { innerHTML: '', removeAttribute() {}, querySelector() { return null; } },
+      count: { textContent: '' },
+      search: { disabled: false, placeholder: '', value: '' },
+      problemFilterButton: { disabled: false, hidden: false },
+      tabs: [],
+    };
+    const context = {
+      window: { ProblematicFilesVirtualList: { create() {
+        return { render() {}, reveal(key) { reveals.push(key); }, dispose() {} };
+      } } },
+      state: {
+        utility: {
+          activeTab: 'problematic-files',
+          focusedTrackPath: focused ? trackPath : '',
+          loading: false,
+          problemDropdownOpen: false,
+          problematicFiles: items,
+          searchQuery: '',
+          selectedProblematicKey: 'studio',
+          selectedProblemFilters: [],
+          showRepairedDisplay: true,
+        },
+      },
+      getUtilityModalElements() { return elements; },
+      getFilteredProblematicAlbums() { return items; },
+      renderProblemFilterControls() {},
+      getSelectedProblematicAlbumFrom(list) { return list.find((item) => item.key === 'studio') || null; },
+      buildProblematicAlbumListItem(album) { return `<button>${album.name}</button>`; },
+      initializeRepairSelections() {},
+      buildProblematicAlbumDetail(album) { return `<h2>${album.name}</h2>`; },
+      cssEscape(value) { return value; },
+      async loadProblematicAlbumDetail() {},
+    };
+    vm.createContext(context);
+    runProblematicRenderer(context);
+
+    context.renderProblematicFiles();
+    reveals.length = 0;
+    // The complete list moves the pinned target from the page tail to its sorted place.
+    items = [...others.slice(0, 30), target, ...others.slice(30)];
+    context.state.utility.problematicFiles = items;
+    context.renderProblematicFiles();
+
+    assert.deepEqual(reveals, focused ? ['studio'] : []);
+  });
+}

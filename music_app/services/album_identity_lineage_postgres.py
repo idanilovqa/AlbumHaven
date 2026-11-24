@@ -29,6 +29,7 @@ _FIELDS = (
     "track_count",
     "matched_by_id",
     "matched_by_key",
+    "path_set_complete",
 )
 
 
@@ -84,6 +85,31 @@ class AlbumIdentityLineageRepository:
         if not live:
             return _result("unresolved")
 
+        identity_matches = [
+            candidate for candidate in live
+            if candidate.get("matched_by_id") or candidate.get("matched_by_key")
+        ]
+        path_owners = [
+            candidate for candidate in live
+            if candidate.get("path_set_complete")
+            and int(candidate.get("matched_path_count") or 0) > 0
+        ]
+        # Owner (BUGFIX-05, 2026-11-18): the card's tracks decide a split, not its saved id. A split may keep
+        # the original album row for the half that keeps the name; matching that id first opened that half's
+        # lookup instead of the chooser. Two or more albums holding only the card's tracks, and together all of
+        # them, are its split releases. A chosen release's card carries only that release's tracks.
+        requested_path_count = len(normalized_paths)
+        if (
+            requested_path_count
+            and len(path_owners) >= 2
+            and sum(int(candidate.get("matched_path_count") or 0) for candidate in path_owners)
+            == requested_path_count
+        ):
+            choices = sorted((_album(candidate) for candidate in path_owners), key=lambda item: item["album_id"])
+            return {"status": "split", "album": None, "choices": choices}
+        if not identity_matches:
+            live = path_owners
+
         complete_path_matches = [
             candidate
             for candidate in live
@@ -92,7 +118,7 @@ class AlbumIdentityLineageRepository:
             == int(candidate.get("requested_path_count") or 0)
         ]
 
-        if album_id is not None and normalized_key is not None:
+        if album_id is not None and normalized_key is not None and identity_matches:
             agreed = [
                 candidate
                 for candidate in live
@@ -101,6 +127,8 @@ class AlbumIdentityLineageRepository:
             ]
             if agreed:
                 live = agreed
+            elif path_owners:
+                live = path_owners
             else:
                 id_matches = [candidate for candidate in live if candidate.get("matched_by_id")]
                 key_matches = [candidate for candidate in live if candidate.get("matched_by_key")]
@@ -110,6 +138,9 @@ class AlbumIdentityLineageRepository:
                     live = complete_path_matches
                 else:
                     live = id_matches or key_matches
+
+        elif identity_matches:
+            live = identity_matches
 
         if not live:
             return _result("unresolved")
@@ -124,7 +155,9 @@ class AlbumIdentityLineageRepository:
         if len(albums) > 1:
             return {"status": "split", "album": None, "choices": albums}
 
-        status = "current" if int(live[0].get("depth") or 0) == 0 else "resolved"
+        status = "current" if int(live[0].get("depth") or 0) == 0 and (
+            live[0].get("matched_by_id") or live[0].get("matched_by_key")
+        ) else "resolved"
         return {"status": status, "album": albums[0], "choices": []}
 
     def _connect_to_database(self) -> Any:
@@ -176,8 +209,30 @@ def _is_synthetic_unknown_album(candidate: Mapping[str, object]) -> bool:
     )
 
 
+def album_path_ownership_sql(library_id_sql: str, paths_sql: str) -> str:
+    unknown = ", ".join(repr(value) for value in sorted(_UNKNOWN_IDENTITY_VALUES))
+    return f"""
+        select tracks.album_id,
+               count(distinct requested_path)::integer as matched_path_count
+        from unnest({paths_sql}) as requested_path
+        join library.local_track_files as files
+          on files.private_path = requested_path
+         and files.scan_cache_stale is false
+        join library.local_tracks as tracks on tracks.id = files.track_id
+        join library.local_albums as albums
+          on albums.id = tracks.album_id and albums.library_id = tracks.library_id
+        left join library.local_artists as artists on artists.id = albums.artist_id
+        where tracks.library_id = {library_id_sql}
+          and not (
+            lower(btrim(coalesce(albums.title, ''))) in ({unknown})
+            and lower(btrim(coalesce(artists.name, ''))) in ({unknown})
+          )
+        group by tracks.album_id
+    """
+
+
 def _resolution_sql() -> str:
-    return """
+    return f"""
         /* album_identity_lineage_resolution_v1 */
         with recursive active_library as (
           select libraries.id as library_id
@@ -234,6 +289,18 @@ def _resolution_sql() -> str:
           where lineage.depth < 16
             and lineage.cycle_detected is false
         ),
+        path_matches as (
+          {album_path_ownership_sql('(select library_id from active_library)', '%(track_paths)s::text[]')}
+        ),
+        path_identity as (
+          select albums.library_id, albums.id as album_id, albums.album_key, 0 as depth,
+                 false as cycle_detected, false as matched_by_id, false as matched_by_key
+          from path_matches
+          join library.local_albums as albums on albums.id = path_matches.album_id
+          where cardinality(%(track_paths)s::text[]) > 0
+            and (select sum(matched_path_count) from path_matches)
+                = cardinality(%(track_paths)s::text[])
+        ),
         current_identity as (
           select albums.library_id, albums.id as album_id, albums.album_key, 0 as depth,
                  false as cycle_detected,
@@ -265,6 +332,8 @@ def _resolution_sql() -> str:
             select library_id, album_id, album_key, depth, cycle_detected,
                    matched_by_id, matched_by_key
             from lineage
+            union all
+            select * from path_identity
           ) as identities
           join library.local_albums as albums
             on albums.library_id = identities.library_id
@@ -283,20 +352,6 @@ def _resolution_sql() -> str:
           where active_tracks.track_count > 0
           group by albums.library_id, albums.id, albums.album_key, albums.title,
                    artists.name, albums.release_year, active_tracks.track_count
-        ),
-        requested_paths as (
-          select distinct requested_path as private_path
-          from unnest(%(track_paths)s::text[]) as requested_path
-        ),
-        path_matches as (
-          select tracks.album_id, count(distinct requested_paths.private_path) as matched_path_count
-          from requested_paths
-          join library.local_track_files as files
-            on files.private_path = requested_paths.private_path
-           and files.scan_cache_stale is false
-          join library.local_tracks as tracks on tracks.id = files.track_id
-          join active_library on active_library.library_id = tracks.library_id
-          group by tracks.album_id
         ),
         invalid_lineage as (
           select coalesce(bool_or(lineage.cycle_detected), false)
@@ -324,7 +379,10 @@ def _resolution_sql() -> str:
           cardinality(%(track_paths)s::text[]) as requested_path_count,
           live_candidates.track_count,
           live_candidates.matched_by_id,
-          live_candidates.matched_by_key
+          live_candidates.matched_by_key,
+          (cardinality(%(track_paths)s::text[]) > 0
+           and (select sum(matched_path_count) from path_matches)
+               = cardinality(%(track_paths)s::text[])) as path_set_complete
         from live_candidates
         cross join invalid_lineage
         left join path_matches on path_matches.album_id = live_candidates.album_id
@@ -332,7 +390,7 @@ def _resolution_sql() -> str:
         union all
 
         select null, null, null, null, null, 16, true, 0,
-               cardinality(%(track_paths)s::text[]), null, false, false
+               cardinality(%(track_paths)s::text[]), null, false, false, false
         from invalid_lineage
         where invalid_lineage.invalid is true;
     """

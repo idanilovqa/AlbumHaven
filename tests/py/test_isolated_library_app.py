@@ -4964,6 +4964,20 @@ def test_provider_fixture_automatic_coverless_primes_fixture09_without_improving
         with Image.open(io.BytesIO(watcher_payload)) as watcher_image:
             assert watcher_image.size == (2000, 2000)
 
+        # FTC-COVERS-018: the new album the watcher finds has its own first acceptable candidate.
+        first_acceptable_specs = handler._matching_specs(
+            "Watcher First Acceptable Artist Watcher First Acceptable Album"
+        )
+        assert [spec["cover_id"] for spec in first_acceptable_specs] == [
+            "watcher-first-acceptable-primary",
+        ]
+        first_acceptable_payload = service._server.apple_artwork_payload(
+            "watcher-first-acceptable-primary"
+        )
+        assert first_acceptable_payload
+        with Image.open(io.BytesIO(first_acceptable_payload)) as first_acceptable_image:
+            assert first_acceptable_image.size == (1800, 1800)
+
         fixture09_specs = handler._matching_specs(
             "Mastodon Crack The Skye Fixture 09",
         )

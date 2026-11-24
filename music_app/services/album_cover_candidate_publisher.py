@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 _MAX_CANDIDATES = 24
+_MAX_PROGRESSIVE_CANDIDATES = 64
 _SEARCH_KINDS = frozenset({"automatic", "manual"})
 _TEXT_FIELDS = (
     "source",
@@ -77,6 +78,7 @@ class AlbumCoverCandidatePublisher:
         self._search_kind = normalized_kind
         self._search_started_at: str | None = None
         self._published_candidates: list[dict[str, object]] = []
+        self._retained_urls: set[str] = set()
         self._has_published = False
         self._automatic_improvement_marked = False
 
@@ -90,6 +92,7 @@ class AlbumCoverCandidatePublisher:
         candidates: Iterable[Mapping[str, object]],
         *,
         automatic_improvement: bool = False,
+        preserve_order: bool = False,
     ) -> bool:
         started_at = self.begin_candidate_generation()
         incoming = [
@@ -113,15 +116,21 @@ class AlbumCoverCandidatePublisher:
             if incumbent is None or _quality_key(candidate) > _quality_key(incumbent):
                 strongest_by_url[url] = candidate
 
-        ranked = sorted(strongest_by_url.values(), key=_ranking_key)[:_MAX_CANDIDATES]
-        if self._has_published:
-            retained_urls = {str(candidate["url"]) for candidate in ranked}
+        if preserve_order and not self._has_published:
+            # Retry seeds are known inventory, not new provider admissions.
+            self._retained_urls.update(display_order)
+        if self._has_published or preserve_order:
+            # A late provider must not evict cards already visible in this generation.
+            # Bound new admissions independently of already known retained inventory.
+            admitted_urls = set(
+                [url for url in display_order if url not in self._retained_urls][:_MAX_PROGRESSIVE_CANDIDATES]
+            ) | self._retained_urls
             self._published_candidates = [
-                strongest_by_url[url] for url in display_order if url in retained_urls
+                strongest_by_url[url] for url in display_order if url in admitted_urls
             ]
         else:
-            self._published_candidates = ranked
-        best_candidate_id = str(ranked[0]["id"])
+            self._published_candidates = sorted(strongest_by_url.values(), key=_ranking_key)[:_MAX_CANDIDATES]
+        best_candidate_id = str(min(self._published_candidates, key=_ranking_key)["id"])
         accepted = bool(
             self._repository.publish_generation(
                 album_id=self._album_id,
@@ -139,8 +148,37 @@ class AlbumCoverCandidatePublisher:
             self._has_published = True
         return accepted
 
-    def complete(self) -> bool:
-        return self._finish("completed")
+    def complete(self, *, final_candidates: Iterable[Mapping[str, object]] | None = None) -> bool:
+        if final_candidates is None:
+            return self._finish("completed")
+        if not self._has_published:
+            return False
+        strongest_by_url: dict[str, dict[str, object]] = {}
+        for candidate in final_candidates:
+            sanitized = _sanitize_candidate(candidate) if isinstance(candidate, Mapping) else None
+            if sanitized is None:
+                continue
+            url = str(sanitized["url"])
+            incumbent = strongest_by_url.get(url)
+            if incumbent is None or _quality_key(sanitized) > _quality_key(incumbent):
+                strongest_by_url[url] = sanitized
+        ranked = sorted(strongest_by_url.values(), key=_ranking_key)
+        retained_urls = {str(candidate["url"]) for candidate in ranked}
+        published_urls = [str(candidate["url"]) for candidate in self._published_candidates]
+        final = [strongest_by_url[url] for url in published_urls if url in retained_urls]
+        final.extend(
+            [candidate for candidate in ranked if str(candidate["url"]) not in published_urls][:_MAX_CANDIDATES]
+        )
+        accepted = bool(self._repository.finish_generation(
+            album_id=self._album_id,
+            search_generation=self._search_generation,
+            status="completed",
+            candidates=final,
+            best_candidate_id=str(ranked[0]["id"]) if ranked else None,
+        ))
+        if accepted:
+            self._published_candidates = final
+        return accepted
 
     @property
     def best_candidate_id(self) -> str | None:

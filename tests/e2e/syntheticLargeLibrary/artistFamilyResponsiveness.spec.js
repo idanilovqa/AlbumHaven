@@ -124,7 +124,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       expect(structure.primaryDraggable).toBe('false');
       expect(structure.anchorEnvelope).toBe('right');
       expect(structure.anchorWidth).toMatch(/^\d+px$/);
-      expect(structure.anchorHeight).toMatch(/^\d+px$/);
+      expect(structure.anchorGap).toMatch(/^\d+px$/);
       expect(structure.total).toMatch(/^\d+ albums?$/);
       expect(structure.title).toBe(EXPECTED_FAMILY.primary + ' Family');
       expect(structure.totalLeft).toBeGreaterThan(structure.titleRight);

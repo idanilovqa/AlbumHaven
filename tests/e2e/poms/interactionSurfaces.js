@@ -1,5 +1,4 @@
 import { readNavigationSelectionPaint } from './components/navigationTree.js';
-import { readThemeColorChannels } from './settingsModalAppBar.js';
 import { expect } from '@playwright/test';
 
 // All evaluations below observe rendered state; interactions use native Playwright input.
@@ -169,15 +168,7 @@ export class InteractionSurfaces {
         expectedFillRole: style.getPropertyValue('--selection-body-background').trim(),
       };
     });
-    let expectedFill = reference.fill;
-    if (index % 2 === 1) {
-      // Owner feedback item 3 preserves alternating selected rows: 7% ink over
-      // the independently rendered navigation fill, serialized to CSS's 6 significant digits.
-      const base = readThemeColorChannels(reference.fill);
-      const ink = readThemeColorChannels(paint.ink);
-      expectedFill = `color(srgb ${base.map((channel, i) =>
-        Number(((channel * 0.93 + ink[i] * 0.07) / 255).toPrecision(6))).join(' ')})`;
-    }
+    const expectedFill = reference.fill;
     return { ...paint, expectedFill, expectedAccent: edge.backgroundColor };
   }
 }

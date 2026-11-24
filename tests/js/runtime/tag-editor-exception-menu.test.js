@@ -23,17 +23,57 @@ function loadHelpers() {
   return context;
 }
 
-test('exception editor uses an owned anchored listbox and keeps custom values editable', () => {
+test('exception editor uses a predefined-only anchored listbox without a text caret', () => {
   const template = fs.readFileSync(
     path.join(root, 'music_app', 'templates', 'partials', 'primary-modals.html'),
     'utf8',
   );
+  const componentCss = fs.readFileSync(
+    path.join(root, 'music_app', 'static', 'css', 'button-component.css'),
+    'utf8',
+  );
 
   assert.match(template, /data-tag-editor-exception-anchor/);
-  assert.match(template, /role="combobox"/);
+  assert.match(template, /class="ui-dropdown-control"/);
+  assert.match(template, /data-tag-field="exception_type"[^>]+role="combobox"[^>]+readonly[^>]+placeholder="None"/);
   assert.match(template, /aria-controls="tag-editor-exception-menu"/);
   assert.match(template, /id="tag-editor-exception-menu"[^>]+role="listbox"[^>]+hidden/);
   assert.doesNotMatch(template, /<datalist id="tag-editor-exception-types"/);
+  assert.match(
+    componentCss,
+    /\.ui-dropdown-control::after\s*\{[^}]*top:\s*50%[^}]*width:\s*5px[^}]*height:\s*5px[^}]*border-right:\s*1\.5px solid var\(--muted,[^}]*transform:\s*translateY\(-70%\) rotate\(45deg\)/s,
+  );
+  assert.match(
+    componentCss,
+    /\.ui-dropdown-control\s*\{[^}]*cursor:\s*pointer/s,
+    'the shared dropdown envelope owns the pointer cursor under its chevron',
+  );
+  assert.match(
+    componentCss,
+    /\.ui-dropdown-control\s*>\s*input\[readonly\]:not\(:disabled\)\s*\{[^}]*cursor:\s*pointer[^}]*caret-color:\s*transparent/s,
+    'readonly dropdowns remain clickable without displaying a text caret',
+  );
+});
+
+test('exception dropdown activation toggles the same menu for pointer and keyboard use', () => {
+  const context = loadHelpers();
+  const input = {
+    expanded: 'false',
+    getAttribute(name) { return name === 'aria-expanded' ? this.expanded : ''; },
+  };
+  let opens = 0;
+  let closes = 0;
+  context.openTagEditorExceptionMenu = () => { opens += 1; return true; };
+  context.closeTagEditorExceptionMenu = () => { closes += 1; };
+
+  assert.equal(context.toggleTagEditorExceptionMenu(input), true);
+  assert.equal(opens, 1);
+  assert.equal(closes, 0);
+
+  input.expanded = 'true';
+  assert.equal(context.toggleTagEditorExceptionMenu(input), false);
+  assert.equal(opens, 1);
+  assert.equal(closes, 1);
 });
 
 test('custom collection name is hidden at the form boundary unless selected', () => {
@@ -48,10 +88,7 @@ test('custom collection name is hidden at the form boundary unless selected', ()
   assert.match(css, /\.tag-editor-form\s+label\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /label\[data-custom-collection-name-field\]\[hidden\]\s*\{[^}]*display:\s*flex[^}]*visibility:\s*hidden/s);
   assert.match(css, /\.tag-editor-exception-menu\s*\{[^}]*position:\s*fixed/s);
-  assert.match(
-    css,
-    /\.tag-editor-exception-field::after\s*\{[^}]*border-right:\s*2px solid var\(--appearance-interaction-outline, #93c5fd\)[^}]*border-bottom:\s*2px solid var\(--appearance-interaction-outline, #93c5fd\)[^}]*transform:\s*rotate\(45deg\)[^}]*pointer-events:\s*none/s,
-  );
+  assert.doesNotMatch(css, /\.tag-editor-exception-field::after/);
   assert.match(css, /#tag-editor-modal \.tag-editor-exception-field input[^}]*padding-right:\s*34px/s);
   assert.match(css, /#tag-editor-modal \.tag-editor-exception-field input:focus\s*\{[^}]*transition:\s*none/s);
   assert.match(css, /\.tag-editor-exception-menu\s+\[role="option"\]\[aria-selected="true"\]\s*\{[^}]*color:\s*var\(--text\)/s);
@@ -142,6 +179,40 @@ test('exception listbox renders every library-scoped choice as a selectable opti
   assert.match(html, /data-tag-editor-exception-option="Custom Collection"/);
   assert.match(html, /aria-selected="true"[^>]+data-tag-editor-exception-option="Custom Collection"/);
   assert.match(html, /Archive &amp; outtake/);
+});
+
+test('selecting None preserves an empty exception value and reports the change', () => {
+  const context = loadHelpers();
+  const inputEvents = [];
+  const input = {
+    value: 'Interview',
+    dispatchEvent(event) { inputEvents.push(event.type); },
+  };
+  let closeOptions = null;
+  context.Event = class Event {
+    constructor(type) { this.type = type; }
+  };
+  context.getTagEditorElements = () => ({
+    form: {
+      querySelector(selector) {
+        return selector === '[data-tag-field="exception_type"]' ? input : null;
+      },
+    },
+  });
+  context.closeTagEditorExceptionMenu = (options) => { closeOptions = options; };
+
+  context.selectTagEditorExceptionOption('');
+
+  assert.equal(input.value, '');
+  assert.deepEqual(inputEvents, ['input']);
+  assert.equal(closeOptions?.restoreFocus, true);
+});
+
+test('tag editor rendering keeps None visible for an empty exception', () => {
+  assert.match(
+    helperSource,
+    /input\.placeholder\s*=\s*displayValue\.mixed\s*\?\s*'Mixed values'\s*:\s*\(field === 'exception_type' \? 'None' : ''\)/,
+  );
 });
 
 test('exception listbox supports selection, dismissal, and keyboard navigation', () => {

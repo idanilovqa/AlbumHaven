@@ -93,6 +93,30 @@ def test_load_returns_the_singleton_storage_state():
     assert "inventory_count" in connection.calls[0][0]
     assert "inventory_bytes" in connection.calls[0][0]
     assert connection.calls[0][0].count("from app.generated_preview_inventory") == 1
+    # UI-8: the summary separates re-checked previews and previews left to be regenerated.
+    assert "as rechecked_count" in connection.calls[0][0]
+    assert "item.status = 'skipped' and item.actual_sha256 is not null" in connection.calls[0][0]
+
+
+def test_polled_state_reads_lease_the_shared_pool_while_the_move_lock_keeps_its_own_connection(monkeypatch):
+    # Every library page and the Server page poll load(); a fresh connection per poll costs 100+ ms.
+    # The move's session advisory lock must never sit on a pooled connection.
+    from music_app.services import generated_preview_storage_postgres as module
+
+    leased, opened = [], []
+    read = FakeConnection([FakeCursor(row=storage_row())])
+    lock = FakeConnection([FakeCursor(row={"acquired": True}), FakeCursor(row={"unlocked": True})])
+    monkeypatch.setattr(module, "pooled_connection", lambda url: leased.append(url) or nullcontext(read))
+    monkeypatch.setattr(module, "_connect", lambda url: opened.append(url) or nullcontext(lock))
+    repository = PostgresGeneratedPreviewStorageRepository({"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL})
+
+    assert repository.load()["mode"] == "album_folders"
+    with repository.operation_lock() as acquired:
+        assert acquired is True
+
+    assert leased == [DATABASE_URL]
+    assert opened == [DATABASE_URL]
+    assert "pg_advisory_unlock" in lock.calls[-1][0]
 
 
 def test_request_location_is_revision_guarded_and_records_requested_target():
@@ -303,6 +327,11 @@ def test_complete_item_records_one_terminal_checkpoint(status):
     sql, params = connection.calls[0]
     assert "update app.generated_preview_relocation_items" in sql
     assert "finished_at = now()" in sql
+    assert "set current_path = finished.target_path" in sql
+    assert "and %(status)s <> 'failed'" in sql
+    # UI-8: a preview re-checked during the move records the checksum it moved with, and the planned bytes follow.
+    assert "sha256 = case when %(status)s = 'completed' then finished.actual_sha256" in sql
+    assert "total_bytes = total_bytes + case when %(status)s <> 'failed' then %(byte_count)s - finished.expected_bytes" in sql
     assert params["status"] == status
 
 
@@ -393,3 +422,15 @@ def test_non_owner_serialization_never_exposes_server_paths():
     assert "requested_root" not in public
     assert owner["active_root"] == "C:/private/previews"
     assert owner["requested_root"] == "D:/private/previews"
+
+
+def test_covered_source_paths_lists_where_the_moves_previews_came_from():
+    """Owner (11-09): the move cleans the album folders its previews came from."""
+    connection = FakeConnection([FakeCursor(rows=[{"source_path": "N:/Music/Album/.album-haven/cover_variants/ab/1.jpg"}])])
+
+    paths = repository_for(connection).covered_source_paths(operation_id="10e2fc89-439a-4f74-a508-97596cf20771")
+
+    assert paths == ["N:/Music/Album/.album-haven/cover_variants/ab/1.jpg"]
+    sql, params = connection.calls[0]
+    assert "select distinct source_path from app.generated_preview_relocation_items" in sql
+    assert params == {"operation_id": "10e2fc89-439a-4f74-a508-97596cf20771"}

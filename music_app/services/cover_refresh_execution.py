@@ -38,6 +38,7 @@ from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_roots import configured_library_root_paths_snapshot, library_category_label
 from music_app.services.scan_cache_persistence import shared_scan_cache_connection
+from music_app.services.user_cover_choice import write_back_sequence, written_back_since
 
 StateGetter = Callable[[], dict[str, object]]
 
@@ -278,12 +279,15 @@ def _build_automatic_cover_write_guard(
             ):
                 return False
             current_cover = folder / "cover.jpg"
+            # Decoded here, under the folder lock only: nothing decodes under the publication lock.
+            same_art = isinstance(prepared_cover_bytes, bytes) and images_are_visually_similar(
+                current_cover, prepared_cover_bytes
+            )
             if preserve_user_ownership and (
-                not current_cover.is_file()
-                or cover_revision_for_path(current_cover) != expected_cover_revision
-                or not images_are_visually_similar(current_cover, prepared_cover_bytes)
+                not same_art or cover_revision_for_path(current_cover) != expected_cover_revision
             ):
                 return False
+            replaced_cover_paths = tuple({str(current_cover), str(current_cover.resolve())})
             written_holder: dict[str, Path] = {}
 
             def commit_after_write(commit_action: Callable[[], object]) -> object:
@@ -326,6 +330,9 @@ def _build_automatic_cover_write_guard(
                 local_cover_width=getattr(write_action, "local_cover_width", None),
                 local_cover_height=getattr(write_action, "local_cover_height", None),
                 reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
+                reject_if_mixed_album_folder=True,
+                replaced_cover_paths=replaced_cover_paths,
+                replacement_is_same_art=same_art,
                 reject_if_explicit_selection=replace_legacy_user,
                 expected_cover_state=("user", legacy_revision) if replace_legacy_user else None,
                 expected_cover_selection_origin=(
@@ -336,7 +343,11 @@ def _build_automatic_cover_write_guard(
                 ),
                 expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 commit_guard=commit_after_write,
+                automatic_file_write=True,
             )
+            if persistence_result.get("blocked_by_mixed_album_folder"):
+                write_action.blocked_reason = "mixed_album_folder"
+                return False
             if bool(
                 persistence_result.get("blocked_by_user_selection")
                 or persistence_result.get("blocked_by_expected_cover_state")
@@ -354,6 +365,7 @@ def _build_automatic_cover_write_guard(
                     written_path,
                     cover_revision=exact_revision,
                     cover_selection_origin=persistence_origin,
+                    automatic_file_write=True,
                     reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
                     reject_if_explicit_selection=replace_legacy_user,
                     expected_cover_state=("automatic", provisional_revision) if replace_legacy_user else None,
@@ -503,18 +515,29 @@ def run_cover_jobs(
 ) -> dict[str, object]:
     # Every album's cover commit in this run, from any job worker, shares one
     # Postgres connection (one transaction each), not one connection per album.
-    with shared_scan_cache_connection(config):
-        return _run_cover_jobs(
-            get_state=get_state, config=config, logger=logger, cache_lock=cache_lock, jobs=jobs,
-            file_cache=file_cache, separate_release_keys=separate_release_keys,
-            image_extensions=image_extensions, user_agent=user_agent, cover_cache=cover_cache,
-            scan_generation=scan_generation, cover_generation=cover_generation,
-            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
-            force_search=force_search, allow_apple_web_fallback=allow_apple_web_fallback,
-            allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
-            negative_cache_ttl_seconds=negative_cache_ttl_seconds, job_workers=job_workers,
-            republish_changed_albums_only=republish_changed_albums_only,
-        )
+    processed = True  # a failed run may already have committed albums
+    try:
+        with shared_scan_cache_connection(config):
+            result = _run_cover_jobs(
+                get_state=get_state, config=config, logger=logger, cache_lock=cache_lock, jobs=jobs,
+                file_cache=file_cache, separate_release_keys=separate_release_keys,
+                image_extensions=image_extensions, user_agent=user_agent, cover_cache=cover_cache,
+                scan_generation=scan_generation, cover_generation=cover_generation,
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                force_search=force_search, allow_apple_web_fallback=allow_apple_web_fallback,
+                allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
+                negative_cache_ttl_seconds=negative_cache_ttl_seconds, job_workers=job_workers,
+                republish_changed_albums_only=republish_changed_albums_only,
+            )
+        # Not "changed": a run aborted by a newer scan or cover generation reports False after committing albums.
+        processed = bool(result.get("processed"))
+        return result
+    finally:
+        if processed:
+            # The run's committed albums are journaled for relations (migration 0108): one keyed drain per run.
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+            queue_journaled_relation_drain(config)
 
 
 def _run_cover_jobs(
@@ -542,6 +565,7 @@ def _run_cover_jobs(
     library_state = get_state()
     changed = False
     runtime_cover_updates: dict[str, tuple[tuple[object, ...], dict[str, object]]] = {}
+    write_backs_before_run = write_back_sequence(library_state)
     failed = 0
     skipped = 0
     downloaded_count = 0
@@ -761,9 +785,15 @@ def _run_cover_jobs(
         reason = str(detail.get("reason") or "")
         detail.update(downloaded=downloaded, has_cover=has_cover, cover_path=cover_value)
         job_results.append(detail)
-        if reason in {"remote_provider_group_disabled", "library_root_unavailable"}:
+        if reason in {"remote_provider_group_disabled", "library_root_unavailable"} or (
+            # Also when the album's missing-file flag took the reason's place: a refusal is not a failure.
+            {"mixed_album_folder", "automatic_write_blocked_by_user_selection"} & {reason, detail.get("search_reason")}
+        ):
             terminal_category = "skipped"
             skipped += 1
+        elif reason == "cover_selection_recovery_failed":
+            terminal_category = "failed"
+            failed += 1
         elif downloaded:
             terminal_category = "downloaded"
             downloaded_count += 1
@@ -801,6 +831,11 @@ def _run_cover_jobs(
 
     def apply_job_result(index: int, job: dict[str, object], cover_path: Path | None, downloaded: bool, detail: dict[str, object]) -> None:
         nonlocal changed
+        if cover_path and not downloaded and job.get("shared_album_folder") and not job.get("strict_album_folder"):
+            # Several albums share this folder without forming a real multi-album folder (owner, 2026-11-24):
+            # the safeguard drops automatic folder art there, so recovery writes none. The search still ran.
+            detail.update(search_reason=detail.get("reason"), reason="mixed_album_folder", selection_conflict=True)
+            cover_path = None
         folder = job["folder"]
         artist = str(job.get("artist") or "")
         album = str(job.get("album") or "")
@@ -918,11 +953,15 @@ def _run_cover_jobs(
                         "line": origin.tb_lineno,
                     },
                 )
-                raise
+                detail["reason"] = "cover_selection_recovery_failed"
+                detail["error_type"] = type(exc).__name__
+                record_job_outcome(index, job, cover_path, False, detail)
+                return
             changed = changed or recovered
             if conflict:
                 detail["recovery_conflict"] = True
-                detail["reason"] = "recovered_cover_selection_conflict"
+                # As for a missing selected file below, the reason it replaces stays as the search's.
+                detail.update(search_reason=reason, reason="recovered_cover_selection_conflict")
                 log_job_event(
                     config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
                     "Existing cover metadata recovery skipped because selection could not be verified",
@@ -947,7 +986,7 @@ def _run_cover_jobs(
             entry = file_cache.get(str(track_path))
             if not isinstance(entry, dict):
                 continue
-            if reason == "automatic_write_blocked_by_user_selection":
+            if reason in {"automatic_write_blocked_by_user_selection", "mixed_album_folder"}:
                 continue
             if not downloaded and (
                 str(job.get("cover_selection_origin") or "").strip().casefold() == "user"
@@ -1214,6 +1253,9 @@ def _run_cover_jobs(
                 current_entries = library_state.get("file_cache") or {}
                 for path, (baseline, selection) in runtime_cover_updates.items():
                     entry = current_entries.get(path)
+                    # A user's write-back can leave the entry equal to this run's baseline, so that alone proves nothing.
+                    if written_back_since(library_state, path, write_backs_before_run):
+                        continue
                     # An entry another writer changed meanwhile keeps that change.
                     if isinstance(entry, dict) and _cover_selection_values(entry) == baseline and selection.get("cover_path") is not None:
                         entry.update(selection)

@@ -50,7 +50,7 @@ test('Tag selection keeps independently observed row and NavigationTree paint se
     selectedTreeItem: selectedItem(), tagRows: { nth: index => { assert.equal(index, 1); return tagRow('rgb(1, 2, 3)', 'rgb(4, 5, 6)'); } },
   }, 1);
   assert.equal(paint.fill, 'rgb(1, 2, 3)');
-  assert.equal(paint.expectedFill, 'color(srgb 0.225176 0.225451 0.225725)');
+  assert.equal(paint.expectedFill, 'rgb(43, 43, 43)');
   assert.equal(paint.accent, 'rgb(4, 5, 6)');
   assert.equal(paint.expectedAccent, 'rgb(161, 178, 195)');
 });
@@ -69,22 +69,22 @@ test('Tag selection rejects a missing or unpainted NavigationTree accent without
   }
 });
 
-test('Tag selected fill preserves exact navigation paint on odd rows and the approved stripe on even rows', async () => {
+test('Tag selected fill uses identical navigation paint on odd and even rows', async () => {
   const { InteractionSurfaces } = await load('interactionSurfaces.js');
   const context = { selectedTreeItem: selectedItem(), tagRows: { nth: () => tagRow() } };
   const odd = await InteractionSurfaces.prototype.readTagSelectionPaint.call(context, 0);
   const even = await InteractionSurfaces.prototype.readTagSelectionPaint.call(context, 1);
   assert.equal(odd.expectedFill, 'rgb(43, 43, 43)');
-  assert.equal(even.expectedFill, 'color(srgb 0.225176 0.225451 0.225725)');
-  assert.notEqual(even.fill, even.expectedFill, 'the oracle must expose an incorrectly uniform selected row');
+  assert.equal(even.expectedFill, 'rgb(43, 43, 43)');
+  assert.equal(even.fill, even.expectedFill);
 });
 
-test('striped Tag selection uses local content ink independently of the NavigationTree panel ink', async () => {
+test('Tag selection rejects striped fill regardless of local content ink', async () => {
   const { InteractionSurfaces } = await load('interactionSurfaces.js');
   const paint = await InteractionSurfaces.prototype.readTagSelectionPaint.call({
     selectedTreeItem: selectedItem(),
     tagRows: { nth: () => tagRow('color(srgb 0.225176 0.225451 0.225725)', 'rgb(161, 178, 195)', '#202124') },
   }, 1);
-  assert.equal(paint.expectedFill, 'color(srgb 0.165608 0.165882 0.166706)');
+  assert.equal(paint.expectedFill, 'rgb(43, 43, 43)');
   assert.notEqual(paint.fill, paint.expectedFill, 'a stripe painted with the other surface ink must be rejected');
 });

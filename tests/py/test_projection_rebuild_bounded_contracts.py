@@ -164,7 +164,8 @@ class _GalleryConnection:
 
 
 @pytest.mark.parametrize("interaction_id", [
-    "py:services/gallery_projection_postgres.py#ensure_gallery_projection_ready",
+    # The executor entrypoint ensure_gallery_projection_ready once had is now schedule_gallery_projection_refresh's
+    # refresh (case 60's contract); a5f110ace's sync dropped that stale entry, so this one id carries it.
     "py:services/gallery_projection_postgres.py#publish_gallery_projection",
 ])
 def test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count(

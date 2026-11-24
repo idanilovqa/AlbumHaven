@@ -635,17 +635,22 @@ export class GalleryActions {
       const hasArtistParam = location.search.includes(`artist=${encodeURIComponent(selectors.expectedArtist)}`);
       const hasMatchingSidebarSelection = activeText.includes(selectors.expectedArtist);
       const hasDerivedSearchSelection = Boolean(location.search.includes(`q=${encodeURIComponent(selectors.queryValue)}`) && hasMatchingHeading);
+      // A deferred artist page shows its heading before its albums; the gallery is shown once cards render.
+      const hasAlbumCards = Boolean(document.querySelector(selectors.albumCardSelector));
       if (selectors.requireExclusiveView) {
-        return headings.length === 1 && headings[0] === selectors.expectedArtist && (hasArtistParam || hasMatchingSidebarSelection);
+        return hasAlbumCards && headings.length === 1 && headings[0] === selectors.expectedArtist
+          && (hasArtistParam || hasMatchingSidebarSelection);
       }
       if (selectors.requireArtistQuery) {
-        return hasMatchingHeading && hasArtistParam;
+        return hasAlbumCards && hasMatchingHeading && hasArtistParam;
       }
-      return hasMatchingHeading && (hasArtistParam || hasMatchingSidebarSelection || hasDerivedSearchSelection);
+      return hasAlbumCards && hasMatchingHeading
+        && (hasArtistParam || hasMatchingSidebarSelection || hasDerivedSearchSelection);
     }, {
       timeout: options.timeout || 30000,
     }, {
       artistHeadingSelector: this.galleryPage.artistHeadingSelector,
+      albumCardSelector: '#artist-groups .album-card',
       expectedArtist: artistName,
       activeSidebarLinkSelector: '#sidebar-list .artist-link.active',
       queryValue: String(options.queryValue || artistName),
@@ -888,6 +893,38 @@ export class GalleryActions {
 
   readAlbumSubsectionTitle(artistName, albumName) {
     return this.galleryPage.readAlbumSubsectionTitle(artistName, albumName);
+  }
+
+  readArtistDiscographySections(artistName) {
+    return this.galleryPage.readArtistDiscographySections(artistName);
+  }
+
+  // expectedCounts maps each album title to its card's track count, or null for no card.
+  // finish() reports, on the page clock from the click on startButtonText, when the cards first
+  // showed expectedCounts and whether any later render changed them again.
+  async startAlbumCardTrackCountTimeline({ startButtonText, expectedCounts }) {
+    const observation = await this.galleryPage.startAlbumCardTrackCountObservation({
+      albums: Object.keys(expectedCounts),
+      startButtonText,
+    });
+    const matches = (counts) => Object.entries(expectedCounts)
+      .every(([album, count]) => counts[album] === count);
+    return {
+      async finish() {
+        const { startMs, changes } = await observation.finish();
+        const firstIndex = changes.findIndex((change) => change.atMs >= startMs && matches(change.counts));
+        const relative = changes.map((change) => ({
+          atMs: startMs === null ? null : Math.round(change.atMs - startMs),
+          counts: change.counts,
+        }));
+        return {
+          expectedCardsMs: startMs === null || firstIndex < 0 ? null : relative[firstIndex].atMs,
+          changedAfterExpected: firstIndex >= 0 && changes.slice(firstIndex + 1).some((change) => !matches(change.counts)),
+          clickedAtPageMs: startMs,
+          changes: relative,
+        };
+      },
+    };
   }
 
   async waitForPositiveRenderedAlbumCardTrackCounts(expected, options = {}) {
@@ -1537,8 +1574,8 @@ export class GalleryActions {
     page.on('request', record);
     return {
       stop: () => page.off('request', record),
-      // A card whose view already carries its tracks opens without a request; any request made
-      // must still name the card's own album and never ask for the split chooser.
+      // A card whose album the gallery already holds opens without a request; callers assert the
+      // opened title and year. Every request a card does send must name its release exactly.
       expectExactCardOpens: () => {
         for (const url of urls) {
           expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
@@ -1546,6 +1583,15 @@ export class GalleryActions {
         }
       },
     };
+  }
+
+  // An offline page's status poll fails, and the app schedules the next one 3 s later
+  // (pollStatus). A step that reconnects right after that failure acts before any poll can land.
+  async waitForFailedStatusPoll(options = {}) {
+    await this.galleryPage.page.waitForEvent('requestfailed', {
+      predicate: (request) => new URL(request.url()).pathname === '/status',
+      timeout: options.timeout || 15000,
+    });
   }
 
   async selectAlbumDetailsByIdentity(expected, options = {}) {
@@ -2196,7 +2242,7 @@ export class GalleryActions {
   async expectAlbumAbsentFromSettledGallery(expected) {
     const deadline = Date.now() + 30000;
     await expect.poll(async () => {
-      const snapshot = await this.galleryPage.readAlbumTargetState(expected);
+      const snapshot = await this.galleryPage.readAlbumTargetState(expected, { fullProjection: true });
       const settled = !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
         && !snapshot.startupHydrating && snapshot.canonicalApplied
         && snapshot.inputQuery === snapshot.expectedQuery

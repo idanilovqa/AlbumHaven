@@ -30,8 +30,8 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
     from music_app.services.metadata import NON_ALBUM_EXCEPTION_VALUES, normalize_exception_value
 
     physical_sources: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
-    physical_folders: dict[tuple[str, str, str], list[Mapping[str, object]]] = defaultdict(list)
     physical_roots_by_folder: dict[tuple[str, str, str], str] = {}
+    untagged: dict[str, str] = {}
     for entry in entries:
         if (
             normalize_exception_value(entry.get("exception_type"))
@@ -40,6 +40,11 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
         ):
             continue
         path = str(entry.get("path") or "")
+        missing_tags = missing_album_identity_tags(entry)
+        if missing_tags:
+            if path:
+                untagged[path] = missing_tags
+            continue
         if path:
             normalized_path = path.strip()
             folder_identity = None
@@ -66,8 +71,6 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
                 if folder_identity is not None:
                     physical_roots_by_folder[folder_identity] = physical_root
             physical_sources[(str(entry.get("library_root_id") or ""), physical_root)].append(entry)
-            if folder_identity is not None:
-                physical_folders[folder_identity].append(entry)
     rejected: dict[str, str] = {}
     sources: dict[tuple[str, str, str, str], list[list[Mapping[str, object]]]] = defaultdict(list)
 
@@ -90,17 +93,36 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
             })
             for group in source_groups
         ]
+        # A proven copy stays a duplicate wherever it sits: a folder of copied songs holds several
+        # album names, and that never turns a copy into a mixed-folder problem (owner, 2026-11-24).
         for files, signatures in copies:
             if signatures and any(signatures < other for _files, other in copies):
                 rejected.update((str(entry["path"]), "Duplicate track outside album folder") for entry in files)
-    for files in physical_folders.values():
-        album_names = {_text(entry.get("album")) for entry in files} - {""}
-        if len(album_names) > 1 and any(str(entry["path"]) in rejected for entry in files):
-            for entry in files:
-                path = str(entry["path"])
-                if path in rejected:
-                    rejected[path] = "Mixed album metadata in one folder"
+    rejected.update(untagged)
     return rejected
+
+
+_PLACEHOLDER_ARTISTS = frozenset({"", "unknown artist"})
+_PLACEHOLDER_ALBUMS = frozenset({"", "unknown album"})
+
+
+def missing_album_identity_tags(entry: Mapping[str, object]) -> str | None:
+    """Name the absent tags that keep a file out of every album.
+
+    Blank or placeholder artist and album values mean the tags are absent, so
+    the file is a loose track, never an "Unknown Artist" or "Unknown Album".
+    """
+    artist_missing = all(
+        _text(entry.get(field)) in _PLACEHOLDER_ARTISTS for field in ("album_artist", "artist")
+    )
+    album_missing = _text(entry.get("album")) in _PLACEHOLDER_ALBUMS
+    if artist_missing and album_missing:
+        return "Missing artist and album"
+    if artist_missing:
+        return "Missing artist"
+    if album_missing:
+        return "Missing album"
+    return None
 
 
 def _text(value: object) -> str:
@@ -128,7 +150,7 @@ def physical_album_root_sql(path_expression: str) -> str:
       then regexp_replace({parent}, '/[^/]*$', '') else {parent} end"""
 
 
-def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
+def local_album_membership_ctes_sql(*, scope_album_key: bool = False, scope_file_ids: bool = False) -> str:
     """Classify existing inventory without changing tags or deleting files."""
     if not scope_album_key:
         # Scan publication owns full physical classification. Browse reads its
@@ -146,10 +168,11 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
               and nullif(metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
             offset 0
           ) files
+          __FILE_SCOPE__
           join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
           join bootstrap_context on bootstrap_context.library_id = roots.library_id
         )
-        """
+        """.replace("__FILE_SCOPE__", "join physical_scope_file_ids on physical_scope_file_ids.id = files.id" if scope_file_ids else "")
     seeds = ""
     scope_join = ""
     if scope_album_key:
@@ -246,14 +269,12 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
           group by library_id, library_root_id, physical_folder
           having count(distinct nullif(album_name, '')) > 1
         ),
+        -- A folder of copied songs holds several album names; its copies are still compared (owner, 2026-11-24).
         local_membership_sources as materialized (
           select files.library_id, files.library_root_id, files.physical_root,
             files.album_name, files.album_artist, files.edition, files.release_year,
             coalesce(array_agg(distinct files.track_signature) filter (where files.track_signature is not null), array[]::text[]) as signatures
           from local_membership_files files
-          where not exists (select 1 from local_membership_mixed_roots mixed
-            where mixed.library_id = files.library_id and mixed.library_root_id = files.library_root_id
-              and mixed.physical_folder = files.physical_folder)
           group by files.library_id, files.library_root_id, files.physical_root,
             files.album_name, files.album_artist, files.edition, files.release_year
         ),
@@ -270,9 +291,8 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
         ),
         local_album_membership as materialized (
           select files.file_id, files.track_id, files.private_path,
-            case when mixed.library_id is not null then 'Mixed album metadata in one folder'
-              when source.library_id is not null
-              then 'Duplicate track outside album folder' else null end as problem
+            case when source.library_id is not null then 'Duplicate track outside album folder'
+              when mixed.library_id is not null then 'Mixed album metadata in one folder' else null end as problem
           from local_membership_files files
           left join local_membership_mixed_roots mixed
             on mixed.library_id = files.library_id and mixed.library_root_id = files.library_root_id

@@ -462,13 +462,23 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.lower() == ".sql"
     )
-    migration_numbers = [int(name[:4]) for name in migration_names]
+    migration_numbers = [
+        int(name[:4])
+        for name in migration_names
+        if name != "0117b_define_fold_search_accents.sql"
+    ]
 
-    assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
+    # 0117b is the immutable compatibility bridge required before applied migration 0118.
+    assert all(
+        re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name)
+        or name == "0117b_define_fold_search_accents.sql"
+        for name in migration_names
+    )
     # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
     # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-78:] == [
+    assert migration_names[-112:] == [
+        "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -535,7 +545,25 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0105_add_playback_claim_handoffs.sql",
         "0106_create_android_artifact_access.sql",
         "0107_add_android_device_key_signer.sql",
+        "0108_add_scoped_relation_projection.sql",
+        "0109_add_incremental_gallery_membership.sql",
+        "0110_journal_gallery_metadata_changes.sql",
+        "0111_add_relation_projection_compatibility.sql",
         "0112_add_problematic_file_path_projection.sql",
+        "0113_create_local_album_additional_artworks.sql",
+        "0114_album_details_art_quality_alert.sql",
+        "0115_aggregate_gallery_membership_per_artist.sql",
+        "0116_add_problematic_text_corrections.sql",
+        "0117_create_problematic_files_snapshots.sql",
+        "0117b_define_fold_search_accents.sql",
+        "0118_fold_accents_in_duplicate_identity.sql",
+        "0119_create_cover_mutation_revisions.sql",
+        "0120_create_deleted_loose_track_removal_function.sql",
+        "0121_create_non_album_track_snapshots.sql",
+        "0122_preserve_cover_notification_order.sql",
+        "0123_index_cover_notification_track_sets.sql",
+        "0124_index_accent_insensitive_artist_search.sql",
+        "0125_add_local_cover_inventory.sql",
         "0171_create_musicbrainz_artist_enrichment.sql",
         "0172_add_musicbrainz_artist_discogs_link.sql",
         "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql",
@@ -544,10 +572,72 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
         "0178_add_musicbrainz_associated_artists.sql",
+        "0179_add_ordered_cover_metadata_constraint.sql",
+        "0180_add_confirmed_copy_retirement.sql",
+        "0181_add_cue_virtual_tracks.sql",
+        "0182_create_custom_collection_artwork.sql",
+        "0186_keep_tag_saves_scoped.sql",
+        "0187_index_physical_album_root.sql",
+        "0188_create_problematic_files_index.sql",
         "0200_create_cover_references.sql",
         "0201_backfill_cover_references.sql",
         "0210_create_schema_migration_attestations.sql",
+        "0266_mark_problematic_albums_named_by_rule_keys.sql",
+        "0267_trust_relation_publication_marker.sql",
+        "0268_create_album_duplicate_results.sql",
+        "0269_index_stray_decision_lookups.sql",
+        "0290_index_user_cover_choices.sql",
+        "0292_index_local_cover_inventory_roots.sql",
+        "0294_mark_loose_groups_for_problematic_index.sql",
+        "0295_keep_loose_track_rows.sql",
     ]
+
+
+def test_user_cover_choice_migration_adds_three_checked_partial_indexes_and_documents_its_restore_order():
+    source = (MIGRATIONS_DIR / "0290_index_user_cover_choices.sql").read_text(encoding="utf-8")
+    sql = _normalized_sql(source)
+
+    assert sql.count("create index if not exists") == 3
+    for name in (
+        "local_albums_user_cover_path_idx", "local_albums_user_cover_source_idx",
+        "local_album_additional_artworks_local_path_idx",
+    ):
+        assert f"create index if not exists {name} " in sql
+        assert f"'{name}'," in sql, f"{name} is checked against its definition"
+    assert sql.count("where metadata ->> 'cover_selection_origin' = 'user';") == 2
+    assert "where source_kind = 'local';" in sql
+    assert "indisvalid and indisready and indislive" in sql
+    assert "raise exception" in sql
+    # A plain pg_restore builds these before it grants schema use: the file says how to restore instead.
+    assert "--section=pre-data" in source and "--section=data --section=post-data" in source
+    for forbidden in ("concurrently", "create table", "alter table", "insert into", "update library", "delete from", "drop "):
+        assert forbidden not in sql
+
+
+def test_local_cover_inventory_root_index_migration_adds_exactly_two_checked_c_collated_indexes():
+    source = (MIGRATIONS_DIR / "0292_index_local_cover_inventory_roots.sql").read_text(encoding="utf-8")
+    sql = _normalized_sql(source)
+
+    assert source.startswith("-- depends on: 0125_add_local_cover_inventory.sql")
+    assert sql.count("create index") == 4, "two builds and the two definitions they are checked against"
+    assert (
+        "create index if not exists local_cover_inventories_root_path_c_idx "
+        'on library.local_cover_inventories (library_id, (root_path collate "c"));'
+    ) in sql
+    assert (
+        "create index if not exists local_cover_inventory_contexts_root_path_c_idx "
+        'on library.local_cover_inventory_contexts (library_id, (root_path collate "c")) '
+        "where root_path is not null;"
+    ) in sql
+    assert 'root_path collate "C"' in source, 'the "C" collation name is case-sensitive'
+    assert "indisvalid and indisready and indislive" in sql
+    assert "pg_get_indexdef(indexrelid)" in sql
+    assert "raise exception" in sql
+    for forbidden in (
+        "concurrently", "create function", "create or replace", "using gin", "create table", "alter table",
+        "grant ", "insert into", "update library", "delete from", "drop ",
+    ):
+        assert forbidden not in sql
 
 
 def test_gallery_projection_artist_lookup_migration_indexes_anchor_and_boundary_queries():
@@ -3354,6 +3444,76 @@ def test_missing_album_candidate_index_matches_generated_stale_predicate():
     assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
     assert "update " not in sql and "delete " not in sql
     assert "grant " not in sql
+
+
+def test_relation_compatibility_migration_is_additive_and_has_no_backfill():
+    sql = _normalized_sql((Path(__file__).parents[2] / 'migrations' / 'postgres' / '0111_add_relation_projection_compatibility.sql').read_text(encoding='utf-8'))
+    assert 'create table library.local_relation_compatibility_entries' in sql
+    assert 'like library.local_relation_projection_entries including all' in sql
+    assert 'create table library.local_relation_compatibility_state' in sql
+    assert "legacy_semantics = 'legacy-v11-broad-aliases'" in sql
+    assert "current_semantics = 'current-v11-explicit-collaboration'" in sql
+    assert 'last_publication_xid xid8 not null' in sql
+    assert 'revoke all on function library.local_relation_compatibility_views(bigint) from public' in sql
+    import re
+    ddl = re.sub(r'create(?: or replace)? function.*?\$\$;', '', sql, flags=re.S)
+    assert 'create view library.local_artist_search_projection_current' in sql
+    assert 'create table library.local_artist_search_projection_current_entries' in sql
+    assert 'insert into' not in ddl
+    assert 'update library.' not in ddl
+    assert 'delete from' not in ddl
+    assert 'drop table' not in sql
+
+
+def test_cover_mutation_revisions_migration_starts_empty_and_leaves_the_library_row_alone():
+    # Owner UI-14: the counter's own table keeps cover saves from rewriting the library row.
+    sql = _normalized_sql((Path(__file__).parents[2] / "migrations" / "postgres" / "0119_create_cover_mutation_revisions.sql").read_text(encoding="utf-8"))
+    assert "create table if not exists library.cover_mutation_revisions" in sql
+    assert "update library.libraries" not in sql
+    assert "insert into" not in sql, "rows start when the first cover is saved; nothing is copied or inferred"
+    assert "grant delete" not in sql and "select, insert, update on library.cover_mutation_revisions to album_haven_app" in sql
+
+
+def test_non_album_track_snapshot_migration_is_empty_and_library_scoped():
+    sql = _normalized_sql(
+        (
+            Path(__file__).parents[2]
+            / "migrations"
+            / "postgres"
+            / "0121_create_non_album_track_snapshots.sql"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert "create table if not exists library.non_album_track_snapshots" in sql
+    assert "library_id bigint primary key references library.libraries(id) on delete cascade" in sql
+    assert "payload jsonb not null" in sql
+    assert "insert into" not in sql
+    assert "update library." not in sql
+    assert "select, insert, update, delete on library.non_album_track_snapshots" in sql
+
+
+def test_loose_track_removal_function_rechecks_deleted_files_and_root_health():
+    # Owner 2026-11-08: only untouched files that were truly deleted leave no trace.
+    sql = _normalized_sql((Path(__file__).parents[2] / "migrations" / "postgres" / "0120_create_deleted_loose_track_removal_function.sql").read_text(encoding="utf-8"))
+    assert "create or replace function library.remove_deleted_loose_track(target_track_id bigint)" in sql
+    assert "security definer" in sql and "set search_path = pg_catalog" in sql
+    assert "library.local_tracks.album_id is null" in sql, "albums go through confirm_missing_album_removal"
+    assert "missing_reason is distinct from 'deleted'" in sql, "an unreachable file never removes a track"
+    assert "root_unhealthy" in sql and "pg_advisory_xact_lock" in sql
+    assert "revoke all on function library.remove_deleted_loose_track(bigint) from public" in sql
+    assert "grant execute on function library.remove_deleted_loose_track(bigint) to album_haven_app" in sql
+
+
+def test_text_corrections_migration_never_rewrites_local_track_files():
+    # local_track_files is large on real libraries: no column, default or
+    # backfill on it, only a side table that a write trigger keeps current.
+    sql = _normalized_sql((Path(__file__).parents[2] / "migrations" / "postgres" / "0116_add_problematic_text_corrections.sql").read_text(encoding="utf-8"))
+    assert "alter table library.local_track_files" not in sql
+    assert "generated always" not in sql
+    assert "update library.local_track_files" not in sql
+    assert "from library.local_track_files" not in sql
+    assert "create table if not exists library.local_track_file_text_corrections" in sql
+    assert "after insert or update of metadata on library.local_track_files" in sql
 
 SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION = (
     MIGRATIONS_DIR / "0210_create_schema_migration_attestations.sql"

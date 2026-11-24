@@ -151,6 +151,7 @@ function loadHelpers(overrides = {}) {
   context.window = context;
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../path-input.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-main-components.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
@@ -388,6 +389,38 @@ test('saveUtilityLibrarySettings posts draft, clears stale problematic state, an
   assert.deepEqual(calls.toasts.at(-1), ['Library settings saved. Scan started.', 'success', 3200]);
   assert.ok(calls.scheduledPolls.includes('pollStatus'));
 });
+
+for (const refreshQueued of [true, false]) {
+  test(`a save during a scan never says a scan started (queued: ${refreshQueued})`, async () => {
+    const settings = {
+      version: 1,
+      main_library_roots: [{ id: 'main-1', path: 'C:\\Music', layout_mode: 'artist' }],
+      hoarding_library_roots: [],
+      new_arrivals_roots: [],
+      move_policy: {},
+    };
+    const { context, calls } = loadHelpers({
+      fetch: async () => ({
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            settings,
+            status: { scan_in_progress: true, relations_in_progress: false, covers_in_progress: false },
+            refresh_started: false,
+            refresh_queued: refreshQueued,
+          };
+        },
+      }),
+    });
+    context.state.utility.librarySettings.loaded = true;
+    context.state.utility.librarySettings.draft = settings;
+
+    assert.equal(await context.saveUtilityLibrarySettings(), true);
+
+    assert.deepEqual(calls.toasts.at(-1), ['Library settings saved.', 'success', 3200]);
+  });
+}
 
 test('handleLibrarySettingsIntegrationSelection loads the library settings detail when the library integration is selected', async () => {
   const { context, calls } = loadHelpers();
@@ -801,4 +834,38 @@ test('mobile Library path actions remain read-only despite server manage permiss
   assert.equal(context.librarySettingsReadOnlyClient(), true);
   context.isMobileClient = () => false;
   assert.equal(context.librarySettingsReadOnlyClient(), false);
+});
+
+test('Library Data Corrections sits above Album ratings, defaults to Display only, and saves the chosen mode', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  context.state.utility.librarySettings.allowedActions['library.files.edit_tags'] = true;
+  const markup = context.buildUtilityLibrarySettingsDetail();
+  const corrections = markup.indexOf('Library Data Corrections');
+  assert.ok(corrections > 0 && corrections < markup.indexOf('Album ratings'));
+  assert.ok(markup.indexOf('Album ratings') < markup.indexOf('data-save-library-settings'));
+  assert.match(markup, /<p>Corrects text metadata across your whole library\.<\/p>/);
+  assert.match(markup, /value="display_only" data-library-metadata-corrections="display_only"\s+checked[^>]*><span>Display only<\/span>/);
+  assert.match(markup, /value="write_tags" data-library-metadata-corrections="write_tags"\s+ ><span>Write in tags<\/span>/);
+  // The shared radio component owns the hand cursor; radios themselves show no hover outline.
+  assert.equal((markup.match(/<label class="appearance-option ui-radio-option">/g) || []).length, 2);
+  const radio = { disabled: false, getAttribute: () => 'write_tags', closest: selector => (selector.includes('data-library-metadata-corrections') ? radio : null) };
+  assert.equal(context.handleLibrarySettingsClick({ target: radio, preventDefault() {} }), true);
+  assert.equal(context.serializeLibrarySettingsDraft(context.getLibrarySettingsDraft()).metadata_corrections, 'write_tags');
+});
+
+test('Library Data Corrections is visibly disabled without the manage permission', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  context.state.utility.librarySettings.allowedActions = {};
+  const markup = context.buildLibraryDataCorrectionsSection(context.getLibrarySettingsDraft());
+  assert.equal((markup.match(/type="radio"[^>]*\sdisabled>/g) || []).length, 2);
+});
+
+test('Write in tags is visibly disabled for a manager who cannot edit tags', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  const markup = context.buildLibraryDataCorrectionsSection(context.getLibrarySettingsDraft());
+  assert.match(markup, /data-library-metadata-corrections="display_only"\s+checked\s+>/);
+  assert.match(markup, /data-library-metadata-corrections="write_tags"\s+\s*disabled>/);
 });

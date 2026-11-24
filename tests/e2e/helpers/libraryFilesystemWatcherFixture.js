@@ -9,12 +9,16 @@ import { resolveWritableFixtureMediaRoot } from './fixtureMediaRoot.js';
 const require = createRequire(import.meta.url);
 const { resolvePlaywrightPython } = require('../../../scripts/playwright-python.cjs');
 const execFileAsync = promisify(execFile);
-const WATCHER_FIXTURE_PROFILES = ['functional-core', 'synthetic-large-library'];
+const WATCHER_FIXTURE_PROFILES = ['functional-core', 'synthetic-large-library', 'utility-problematic-files'];
 const WATCHER_FIXTURE_DIRECTORIES = [
   'watcher-reconciliation',
+  'watcher-artist-collation-curly',
   'watcher-grouped-feature-credit',
   'gallery-native-response-overlap',
   'generated-preview-storage',
+  'problematic-files-missing-album',
+  'watcher-problematic-live',
+  'auto-apply-first-cover',
 ];
 
 function resolveWatcherFixtureMediaRoot(environment = process.env) {
@@ -24,14 +28,14 @@ function resolveWatcherFixtureMediaRoot(environment = process.env) {
 const RETAG_SCRIPT = `
 import sys
 from pathlib import Path
-from mutagen.id3 import ID3, ID3NoHeaderError, TALB, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK
+from mutagen.id3 import ID3, ID3NoHeaderError, TALB, TCMP, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK, TSST
 
 track = Path(sys.argv[1])
 try:
     tags = ID3(track)
 except ID3NoHeaderError:
     tags = ID3()
-for frame in ("TALB", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK"):
+for frame in ("TALB", "TCMP", "TDRC", "TIT2", "TPE1", "TPE2", "TPOS", "TRCK", "TSST"):
     tags.delall(frame)
 if sys.argv[8] == "1":
     tags.delall("APIC")
@@ -42,6 +46,10 @@ tags.add(TDRC(encoding=3, text=[sys.argv[5]]))
 tags.add(TIT2(encoding=3, text=[sys.argv[6]]))
 tags.add(TRCK(encoding=3, text=[sys.argv[7]]))
 tags.add(TPOS(encoding=3, text=[sys.argv[9]]))
+if sys.argv[10] == "1":
+    tags.add(TCMP(encoding=3, text=["1"]))
+if sys.argv[11]:
+    tags.add(TSST(encoding=3, text=[sys.argv[11]]))
 tags.save(track)
 if sys.argv[8] == "1" and ID3(track).getall("APIC"):
     raise RuntimeError("Watcher cover fixture still contains embedded artwork")
@@ -128,7 +136,8 @@ export async function cleanupWatchedAlbumFixture({
   const cleanupFailures = [];
   try { await context.close(); } catch (error) { cleanupFailures.push(error); }
   try {
-    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true });
+    // On Windows the running app can still hold or write files here for a moment.
+    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true, maxRetries: 10, retryDelay: 200 });
   } catch (error) {
     cleanupFailures.push(error);
   }
@@ -140,6 +149,10 @@ export async function cleanupWatchedAlbumFixture({
     cleanupFailures.push(error);
   }
   if (cleanupFailures.length) {
+    // Error codes only: messages here carry private fixture paths.
+    console.error(`[watcher-fixture-cleanup] ${JSON.stringify(cleanupFailures.map((error) => ({
+      name: error?.name, code: error?.code, syscall: error?.syscall,
+    })))}`);
     const failures = [...(originalFailure ? [originalFailure] : []), ...cleanupFailures];
     try { await managedAppLifecycle.reportFailure(); } catch (reportFailure) { failures.push(reportFailure); }
     if (failures.length > 1) throw new AggregateError(failures, 'Watcher scenario and fixture cleanup failed.');
@@ -150,13 +163,15 @@ export async function cleanupWatchedAlbumFixture({
 
 async function retag(trackPath, {
   trackArtist, albumArtist, album, year, title, trackNumber,
-  discTag = '1/1', removeEmbeddedArtwork = false,
+  discTag = '1/1', removeEmbeddedArtwork = false, isCompilation = false, discSubtitle = '',
 }) {
   await execFileAsync(resolvePlaywrightPython(process.env), [
     '-c', RETAG_SCRIPT, trackPath, trackArtist, albumArtist, album, String(year), title,
     String(trackNumber),
     removeEmbeddedArtwork ? '1' : '0',
     discTag,
+    isCompilation ? '1' : '0',
+    discSubtitle,
   ], { encoding: 'utf8', windowsHide: true });
 }
 
@@ -236,6 +251,8 @@ async function buildWatchedAlbumFixture({
   trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
   trackArtists = null,
   discNumbers = null,
+  discSubtitles = null,
+  isCompilation = false,
   removeEmbeddedArtwork = false,
   createLocalArt = false,
   ownedDirectoryName = 'watcher-reconciliation',
@@ -257,6 +274,12 @@ async function buildWatchedAlbumFixture({
     trackArtists: albumTrackArtists = null,
     albumArtist: albumOwner = albumArtist,
     discNumbers: albumDiscNumbers = discNumbers,
+    discSubtitles: albumDiscSubtitles = discSubtitles,
+    // Per-track album tags: a disc folder can belong to another album (an album holding only some discs).
+    trackAlbums: albumTrackAlbums = null,
+    // Disc folders are "CD1", "CD2"... unless an album names them otherwise ("Часть 1", "Part 2").
+    discFolderPrefix = 'CD',
+    isCompilation: albumCompilation = false,
   }) => {
     const directory = assertOwnedPath(
       mediaRoot,
@@ -283,7 +306,7 @@ async function buildWatchedAlbumFixture({
             const discNumber = normalizedDiscNumbers[index];
             const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
             const relativePath = discTotal > 1
-              ? path.join(`CD${discNumber}`, filename)
+              ? path.join(`${discFolderPrefix}${discNumber}`, filename)
               : filename;
             const destination = assertOwnedPath(
               mediaRoot,
@@ -298,15 +321,20 @@ async function buildWatchedAlbumFixture({
               metadata: {
                 trackArtist: albumTrackArtists?.[index] || defaultTrackArtist,
                 albumArtist: albumOwner,
-                album: albumName,
+                album: albumTrackAlbums?.[index] || albumName,
                 year: albumYear,
                 title,
                 trackNumber: index + 1,
                 discTag: `${discNumber}/${discTotal}`,
+                discSubtitle: albumDiscSubtitles?.[index] || '',
                 removeEmbeddedArtwork,
+                isCompilation: albumCompilation,
               },
             });
-            createdTracks.push({ filename, title, path: destination, discNumber, discTotal });
+            createdTracks.push({
+              filename, title, path: destination, discNumber, discTotal,
+              discSubtitle: albumDiscSubtitles?.[index] || '',
+            });
           }
         },
       });
@@ -322,6 +350,8 @@ async function buildWatchedAlbumFixture({
     trackTitles,
     trackArtists,
     discNumbers,
+    discSubtitles,
+    isCompilation,
   });
   const albumDirectory = target.albumDirectory;
   const tracks = target.tracks;
@@ -337,9 +367,21 @@ async function buildWatchedAlbumFixture({
       await retag(track.path, {
         trackArtist, albumArtist, album, year, title, trackNumber: index + 1,
         discTag: `${track.discNumber}/${track.discTotal}`,
+        discSubtitle: track.discSubtitle,
         removeEmbeddedArtwork,
+        isCompilation,
       });
       track.title = title;
+    },
+    // Moves one track into another album on disk (the watcher then reports the album as split).
+    async retagTrackAlbum(index, albumName) {
+      const track = tracks[index];
+      await retag(track.path, {
+        trackArtist, albumArtist, album: albumName, year, title: track.title, trackNumber: index + 1,
+        discTag: `${track.discNumber}/${track.discTotal}`,
+        removeEmbeddedArtwork,
+        isCompilation,
+      });
     },
     createSiblingAlbum(options) {
       return createAlbum(options);

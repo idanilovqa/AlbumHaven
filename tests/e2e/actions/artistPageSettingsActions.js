@@ -52,6 +52,11 @@ export class ArtistPageSettingsActions {
 
   async openLibraryWideNonAlbumTracks(options = {}) {
     const timeout = options.timeout || 10000;
+    // On web, library-wide Loose Tracks is the side-bar button under Artist Tree (shown while the tree is folded).
+    const foldTree = this.artistPageSettings.page.getByRole('button', { name: 'Collapse Artist Tree', exact: true });
+    if (!(await this.artistPageSettings.libraryWideNonAlbumTracksButton.count()) && await foldTree.isVisible()) {
+      await foldTree.click();
+    }
     await expect(this.artistPageSettings.libraryWideNonAlbumTracksButton).toBeEnabled({ timeout });
     await this.artistPageSettings.libraryWideNonAlbumTracksButton.click({ noWaitAfter: true });
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeVisible({ timeout });
@@ -89,13 +94,19 @@ export class ArtistPageSettingsActions {
 
   async expectNoNonAlbumTracks() {
     await this.open();
+    const initialUrl = this.artistPageSettings.page.url();
+    await expect(this.artistPageSettings.nonAlbumTracksButton).toBeDisabled();
+    await this.artistPageSettings.nonAlbumTracksButton.click({ force: true, noWaitAfter: true });
+    expect(this.artistPageSettings.page.url()).toBe(initialUrl);
+    await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden();
     await this.artistPageSettings.waitForNonAlbumTracksHydrated();
     await expect(this.artistPageSettings.nonAlbumTracksButton).toBeDisabled();
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden();
   }
 
   async closeNonAlbumTracks(options = {}) {
-    await this.artistPageSettings.nonAlbumTracksCloseButton.click();
+    // The Loose Tracks page has no close button; Escape leaves it like any open surface.
+    await this.artistPageSettings.page.keyboard.press('Escape');
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden({
       timeout: options.timeout || 10000,
     });
@@ -116,15 +127,17 @@ export class ArtistPageSettingsActions {
     await expect(this.artistPageSettings.nonAlbumTrackTotal).toHaveCount(1);
     await expect(this.artistPageSettings.nonAlbumTrackTotal).toContainText('Total Length:');
     await expect(this.artistPageSettings.nonAlbumHeader).toHaveCount(1);
-    await expect(this.artistPageSettings.nonAlbumHeaderActions).toHaveCount(2);
+    await expect(this.artistPageSettings.nonAlbumHeaderActions).toHaveCount(1);
     await expect(this.artistPageSettings.nonAlbumHeader.getByRole('button', { name: 'Edit tags', exact: true })).toBeVisible();
-    await expect(this.artistPageSettings.nonAlbumHeader.getByRole('button', { name: 'Close loose tracks', exact: true })).toBeVisible();
+    await expect(this.artistPageSettings.nonAlbumTracksModal).toHaveClass(/non-album-modal--page/);
     await expect(this.artistPageSettings.nonAlbumHeaderFolderActions).toHaveCount(0);
     await expect(this.artistPageSettings.nonAlbumPlayCells).toHaveCount(tracks.length);
     await expect(this.artistPageSettings.nonAlbumNumberCells).toHaveCount(tracks.length);
     await expect(this.artistPageSettings.nonAlbumTrackCells).toHaveCount(tracks.length);
     await expect(this.artistPageSettings.nonAlbumPathCells).toHaveCount(tracks.length);
-    await expect(this.artistPageSettings.nonAlbumProblemCells).toHaveCount(tracks.length);
+    // Owner rule: the Problematic Files slot exists only when a listed loose track is problematic.
+    await expect(this.artistPageSettings.nonAlbumProblemCells)
+      .toHaveCount(tracks.some((track) => track.problematic) ? tracks.length : 0);
     await expect(this.artistPageSettings.nonAlbumDurationCells).toHaveCount(tracks.length);
 
     for (const track of tracks) {
@@ -132,7 +145,8 @@ export class ArtistPageSettingsActions {
       await expect(row).toHaveCount(1);
       await row.hover();
       await expect(row.getByRole('button', { name: 'Play track', exact: true })).toHaveCSS('opacity', '1');
-      await expect(this.artistPageSettings.nonAlbumTrackArtistByTitle(track.title)).toHaveText(track.artist);
+      // Rows read "Artist / Title": the artist is the title's prefix.
+      await expect(this.artistPageSettings.nonAlbumTrackTitleByTitle(track.title)).toHaveAttribute('data-title-prefix', `${track.artist} / `);
       await expect(this.artistPageSettings.nonAlbumTrackPathByTitle(track.title)).toContainText(track.pathSuffix);
       await expect(this.artistPageSettings.nonAlbumTrackNumberByTitle(track.title)).toHaveText(String(track.number));
     }

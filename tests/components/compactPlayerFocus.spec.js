@@ -22,7 +22,7 @@ test.beforeEach(async ({ page }) => {
     </body></html>`,
   }));
   await page.goto('http://player-component.test/');
-  for (const filename of ['compact-player-helpers.js', 'playback-control-cluster.js', 'compact-player-controller.js']) {
+  for (const filename of ['running-line.js', 'compact-player-helpers.js', 'playback-control-cluster.js', 'compact-player-controller.js']) {
     await page.addScriptTag({ path: path.join(runtimeRoot, filename) });
   }
   await page.evaluate(() => {

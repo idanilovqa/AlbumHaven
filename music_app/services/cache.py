@@ -82,8 +82,15 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
     }
     if "metadata_schema_version" in entry:
         serialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "compilation_tag" in entry:
+        serialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         serialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if "total_tracks" in entry:
+        serialized["total_tracks"] = entry.get("total_tracks")
+    if "text_corrections" in entry:
+        # Kept even when null, so a merge into the stored entry clears it.
+        serialized["text_corrections"] = entry.get("text_corrections") or None
     return serialized
 
 def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
@@ -117,15 +124,21 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         deserialized["release_date"] = entry.get("release_date")
     if "metadata_schema_version" in entry:
         deserialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "compilation_tag" in entry:
+        deserialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         deserialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if "total_tracks" in entry:
+        deserialized["total_tracks"] = entry.get("total_tracks")
+    if entry.get("text_corrections"):
+        deserialized["text_corrections"] = entry["text_corrections"]
     return deserialized
 
 
 def _sorted_text_values(values) -> list[str]:
     return sorted(
         [str(value or "").strip() for value in (values or []) if str(value or "").strip()],
-        key=lambda value: value.casefold(),
+        key=lambda value: (value.casefold(), value),
     )
 
 
@@ -304,6 +317,9 @@ def save_cache_to_disk_for_config(
     expected_inventory_mutation_revision: int | None = None,
     rebuild_relation_projection: bool = False,
     observed_library_root_ids: set[str] | None = None,
+    unreachable_scope: dict[str, object] | None = None,
+    cover_inventory_checked_at: dict[str, float] | None = None,
+    completes_root_change: bool = False,
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -333,6 +349,12 @@ def save_cache_to_disk_for_config(
             for root_id in observed_library_root_ids
             if str(root_id).strip()
         }
+    if unreachable_scope is not None:
+        snapshot_options["unreachable_scope"] = unreachable_scope
+    if cover_inventory_checked_at:
+        snapshot_options["cover_inventory_checked_at"] = cover_inventory_checked_at
+    if completes_root_change:
+        snapshot_options["completes_root_change"] = True
     adapter = _select_runtime_scan_cache_adapter(config)
     result = adapter.save_snapshot(
         cache_path,
@@ -378,15 +400,14 @@ def _persist_cache_updates(
     updates: tuple[_CacheUpdate, ...],
 ) -> dict[str, object] | None:
     """Publish the albums of the changed tracks only, rebased onto their latest
-    persisted entries, in one revision-guarded targeted inventory mutation.
+    persisted entries, in one targeted inventory mutation.
 
     The mutation marks the relation projection stale; the queued gallery
-    refresh rebuilds it in the background. A cover or inventory commit between
-    loading the latest entries and publishing supersedes the attempt, which is
-    retried once against freshly loaded entries.
+    refresh rebuilds it in the background. The rebase runs under the inventory
+    lock every cover and inventory writer takes, so a commit landing while the
+    update was prepared is rebased over instead of superseding it: the edit is
+    never lost (edits always save, row A11).
     """
-    from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
-
     paths = {str(path) for update in updates for path in update.changed_entries}
     if not paths:
         return None
@@ -397,16 +418,14 @@ def _persist_cache_updates(
         for hook in hooks:
             hook(connection)
 
-    intent_baselines: list[dict[str, dict[str, object]]] = []
-    for attempt in (1, 2):
-        expected_cover_mutation_revision = int(adapter.load_cover_mutation_revision())
-        expected_inventory_mutation_revision = int(adapter.load_inventory_mutation_revision())
-        latest_file_cache = adapter.load_file_entries(paths)
-        if not intent_baselines:
-            intent_baselines = [
-                latest_file_cache if update.baseline_file_cache is None else update.baseline_file_cache
-                for update in updates
-            ]
+    # Each update's own baseline, or the entries as they are now when it has none.
+    current_file_cache = adapter.load_file_entries(paths)
+    intent_baselines = [
+        current_file_cache if update.baseline_file_cache is None else update.baseline_file_cache
+        for update in updates
+    ]
+
+    def rebased(latest_file_cache: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
         # Later updates apply on top of earlier ones, exactly as if each had
         # been published in order.
         rebased_file_cache = latest_file_cache
@@ -416,18 +435,15 @@ def _persist_cache_updates(
                 changed_entries=update.changed_entries,
                 latest_file_cache=rebased_file_cache,
             )
-        try:
-            result = adapter.persist_targeted_inventory_mutation(
-                root_id=_publication_root_id(config, rebased_file_cache),
-                active_file_entries=rebased_file_cache,
-                expected_cover_mutation_revision=expected_cover_mutation_revision,
-                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
-                before_commit=complete_in_transaction if hooks else None,
-            )
-            break
-        except ScanCachePublicationSuperseded:
-            if attempt == 2:
-                raise
+        return rebased_file_cache
+
+    prepared_file_cache = rebased(current_file_cache)
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id=_publication_root_id(config, prepared_file_cache),
+        active_file_entries=prepared_file_cache,
+        before_commit=complete_in_transaction if hooks else None,
+        rebase_under_lock=rebased,
+    )
     from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
 
     schedule_gallery_projection_refresh(config, connect=getattr(adapter, "_connect", None))
@@ -526,11 +542,19 @@ def persist_cover_selection_for_tracks_for_config(
 ) -> dict[str, object]:
     """Commit one album's cover selection over its own connection."""
     try:
-        return _select_runtime_scan_cache_adapter(config).persist_cover_selection(
+        result = _select_runtime_scan_cache_adapter(config).persist_cover_selection(
             track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
         )
     finally:
         _record_cover_change(config, track_paths)
+    _refresh_local_cover_inventory_after_selection(config, track_paths, options)
+    if any(int(result.get(field) or 0) for field in ("album_rows_updated", "track_rows_updated", "track_file_rows_updated")):
+        # The commit journaled the album for relations (migration 0108); its owner drains just those
+        # albums, queued off the response path.
+        from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+
+        schedule_gallery_projection_refresh(config, incremental_membership=True)
+    return result
 
 
 def persist_cover_selection_in_shared_transaction(
@@ -542,11 +566,13 @@ def persist_cover_selection_in_shared_transaction(
     """Commit one album's cover selection on the cover run's shared connection,
     so a batch of albums costs one connection."""
     try:
-        return _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
+        result = _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
             track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
         )
     finally:
         _record_cover_change(config, track_paths)
+    _refresh_local_cover_inventory_after_selection(config, track_paths, options)
+    return result
 
 
 def _record_cover_change(config: dict[str, object], track_paths: set[str]) -> None:
@@ -560,8 +586,24 @@ def _record_cover_change(config: dict[str, object], track_paths: set[str]) -> No
     )
 
 
+def _refresh_local_cover_inventory_after_selection(
+    config: dict[str, object],
+    track_paths: set[str],
+    options: dict[str, object],
+) -> None:
+    """A committed local selection changes the album's artwork listing; a remote one does not."""
+    inventory = config.get("_LOCAL_COVER_INVENTORY")
+    if inventory is None or options.get("remote_cover_url"):
+        return
+    try:
+        inventory.invalidate_paths(track_paths)
+    except Exception:
+        _LOGGER.exception("Could not refresh local artwork inventory after the committed cover selection.")
+
+
 def _cover_selection_options(
     *,
+    selected_local_cover_source_path: Path | None = None,
     cover_revision: str | None = None,
     remote_cover_url: str | None = None,
     remote_cover_thumbnail_url: str | None = None,
@@ -576,18 +618,25 @@ def _cover_selection_options(
     local_cover_width: int | None = None,
     local_cover_height: int | None = None,
     reject_if_user_controlled: bool = False,
+    reject_if_mixed_album_folder: bool = False,
+    replaced_cover_paths: tuple[str, ...] = (),
+    replacement_is_same_art: bool = False,
     clear_selection: bool = False,
     expected_cover_selection_origin: str | None = None,
     expected_cover_revision: str | None = None,
     expected_cover_state: tuple[str | None, str | None] | None = None,
     expected_inventory_mutation_revision: int | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
+    prepare_selection: Callable[[object], object] | None = None,
+    automatic_file_write: bool = False,
     logger=None,
 ) -> dict[str, object]:
     del logger
     persistence_options: dict[str, object] = {}
     if cover_revision:
         persistence_options["cover_revision"] = cover_revision
+    if selected_local_cover_source_path is not None:
+        persistence_options["selected_local_cover_source_path"] = selected_local_cover_source_path
     if remote_cover_url:
         persistence_options.update(
             remote_cover_url=remote_cover_url,
@@ -605,6 +654,11 @@ def _cover_selection_options(
         persistence_options["explicit_selection"] = True
     if reject_if_explicit_selection:
         persistence_options["reject_if_explicit_selection"] = True
+    if reject_if_mixed_album_folder:
+        persistence_options["reject_if_mixed_album_folder"] = True
+    if replaced_cover_paths:
+        persistence_options["replaced_cover_paths"] = replaced_cover_paths
+        persistence_options["replacement_is_same_art"] = replacement_is_same_art
     if local_cover_width is not None or local_cover_height is not None:
         persistence_options.update(local_cover_width=local_cover_width, local_cover_height=local_cover_height)
     if clear_selection:
@@ -620,6 +674,10 @@ def _cover_selection_options(
         )
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
+    if prepare_selection is not None:
+        persistence_options["prepare_selection"] = prepare_selection
+    if automatic_file_write:
+        persistence_options["automatic_file_write"] = True
     return persistence_options
 
 
@@ -653,13 +711,31 @@ def persist_structural_tag_edit_for_config(
         **persistence_options,
     )
     from music_app.services.library_browse_postgres import (
-        invalidate_postgres_utility_projection_cache,
+        refresh_postgres_utility_projections_after_edit,
     )
 
-    invalidate_postgres_utility_projection_cache(
-        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-    )
+    from music_app.services.edit_tag_timings import persistence_stage
+
+    with persistence_stage("problematic_files_patch"):
+        refresh_postgres_utility_projections_after_edit(
+            config,
+            track_paths=_edited_track_paths(changed_paths, updated_file_entries),
+            previous_entries=[
+                entry for path in changed_paths
+                if isinstance(entry := previous_file_entries.get(path), Mapping)
+            ],
+        )
     return result
+
+
+def _edited_track_paths(changed_paths, updated_file_entries) -> set[str]:
+    """Selected paths plus any new path a rename wrote."""
+    paths = {str(path) for path in changed_paths}
+    paths.update(
+        str(entry.get("path")) for path in changed_paths
+        if isinstance(entry := updated_file_entries.get(path), Mapping) and entry.get("path")
+    )
+    return paths
 
 
 def persist_moved_album_inventory_for_config(

@@ -37,7 +37,7 @@ $gates = @{
                 'tests/py/test_problematic_file_projection_migration_postgres.py')
         )
         Node = @('tests/js/runtime/utility-problematic-load-diagnostics.test.js',
-            'tests/js/runtime/utility-problematic-tab.test.js', 'tests/js/runtime/problematic-files-virtual-list.test.js',
+            'tests/js/runtime/problematic-files-virtual-list.test.js',
             'tests/js/runtime/utility-problematic-focused-track-render.test.js',
             'tests/js/runtime/problem-exclusion-mutations.test.js', 'tests/js/problematic-payload-evidence.test.js',
             'tests/js/performance-change-impact.test.js', 'tests/js/e2e-performance-helper-guards.test.js')
@@ -86,12 +86,22 @@ if ($Gate -eq 'focused') {
     }
     $registry = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $dataRoot 'tests\ci\performance-targets.json') | ConvertFrom-Json
     $targetProfiles = [ordered]@{}
+    $targetModes = [ordered]@{}
+    # As in PR Gates, a generated-isolated target seeds its covers from its shard's download profile.
+    $seedByTarget = @{}
+    $shardScript = Join-Path $dataRoot 'scripts\ci\resolve-ci-shard.cjs'
+    $seedJson = & node -e "const s=require(process.argv[1]).PERFORMANCE_SHARDS;const o={};for(const c of Object.values(s))for(const t of c.targets)o[t]=c.fixtureDownloadProfile||c.fixtureProfile;process.stdout.write(JSON.stringify(o))" $shardScript
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read the performance shard seed profiles.' }
+    ($seedJson | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $seedByTarget[$_.Name] = [string]$_.Value }
+    $targetSeedProfiles = [ordered]@{}
     foreach ($targetName in $focusedTargets) {
         $target = @($registry.targets | Where-Object { $_.name -ceq $targetName })
         if ($target.Count -ne 1) { throw "Unknown measured target: $targetName" }
         $targetProfiles[$targetName] = [string]$target[0].fixtureProfile
+        $targetModes[$targetName] = [string]$target[0].fixtureMode
+        $targetSeedProfiles[$targetName] = if ($targetModes[$targetName] -eq 'generated-isolated') { $seedByTarget[$targetName] } else { '' }
     }
-    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) |
+    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) + @($targetSeedProfiles.Values) |
         Where-Object { $_ } | Select-Object -Unique)
 }
 
@@ -206,17 +216,30 @@ $functionalCommon = @{
     PostgresMajor = $PostgresMajor
     Pgbin = $Pgbin
 }
-function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName) {
+function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName, [string]$FixtureMode = 'preloaded-release', [string]$SeedProfile = '') {
     $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-$ShardName-performance-$PID"
     New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
-    $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
-    $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
+    if ($FixtureMode -eq 'generated-isolated') {
+        # As in PR Gates: a generated-isolated target builds its own library from the released profile's approved
+        # covers and refuses inherited fixture paths.
+        $seed = if ($SeedProfile) { $SeedProfile } else { $FixtureProfile }
+        $approvedCoverRoot = Join-Path (Get-ProfileRoot $seed) 'media\covers\approved'
+        if (-not (Test-Path -LiteralPath $approvedCoverRoot -PathType Container)) {
+            throw "Generated performance targets require the verified released approved-cover seed ($seed)."
+        }
+        $env:ALBUM_HAVEN_APPROVED_COVER_ROOT = $approvedCoverRoot
+        Remove-Item Env:ALBUM_HAVEN_FIXTURE_ROOT, Env:ALBUM_HAVEN_MEDIA_ROOT -ErrorAction SilentlyContinue
+    } else {
+        Remove-Item Env:ALBUM_HAVEN_APPROVED_COVER_ROOT -ErrorAction SilentlyContinue
+        $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
+        $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
+    }
     Invoke-Checked {
         & (Join-Path $PSScriptRoot 'ci\run-performance-shard.ps1') `
             -Targets $TargetList `
             -FixtureProfile $FixtureProfile `
-            -FixtureMode preloaded-release `
+            -FixtureMode $FixtureMode `
             -BasePort $PerformanceBasePort `
             -DatabaseSuffixBase "$($ShardName.Replace('-', '_'))_$PID" `
             -ExpectedPostgresMajor $PostgresMajor `
@@ -247,8 +270,12 @@ if ($Gate -eq 'focused') {
         $titles = @($group.Group | ForEach-Object { $_.Title } | Select-Object -Unique)
         Invoke-Checked { & $functionalRunner -Shard $group.Name -Cases $titles @functionalCommon } "Functional cases in $($group.Name)"
     }
-    foreach ($group in @($focusedTargets | Group-Object { $targetProfiles[$_] })) {
-        Invoke-MeasuredTargets ($group.Group -join ',') $group.Name "focused-$($group.Name)"
+    # One performance shard per fixture profile and mode, each run the way PR Gates runs that kind of target.
+    # Shard names are numbered: they also name the shard's databases, whose suffix is capped at 39 characters.
+    $targetGroups = @($focusedTargets | Group-Object { "$($targetProfiles[$_])|$($targetModes[$_])|$($targetSeedProfiles[$_])" })
+    for ($index = 0; $index -lt $targetGroups.Count; $index++) {
+        $groupProfile, $groupMode, $groupSeed = $targetGroups[$index].Name.Split('|')
+        Invoke-MeasuredTargets ($targetGroups[$index].Group -join ',') $groupProfile "focused-$($index + 1)" $groupMode $groupSeed
     }
     Complete-Gate
 }

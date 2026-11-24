@@ -34,13 +34,25 @@ function buildSmallAlertHtml(config = {}) {
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
   const interactive = config.interactive === true;
-  const classes = `small-alert small-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
+  // A tone recolors the edge for a domain meaning while preserving the shared alert behavior.
+  const tone = ['hoard', 'new_arrivals'].includes(String(config.tone || '')) ? String(config.tone) : '';
+  const toneClass = `${tone ? ` small-alert--tone-${tone}` : ''}${config.presentation === 'badge' ? ' small-alert--badge' : ''}`;
+  const classes = `small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
   const attributes = buildSmallAlertAttributes(config.attributes);
-  const content = `<span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
+  const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
+  // dismiss: { ariaLabel, attributes } — owner (2026-11-17): the alert's own close X, inside it and shown only
+  // while it is expanded. A button alert cannot hold another button, so only a plain alert can be dismissed.
+  const dismissHtml = config.dismiss && !interactive && typeof ButtonComponent !== 'undefined'
+    ? ButtonComponent.renderActionButton({
+      icon: 'close', presentation: 'bare', className: 'small-alert__dismiss',
+      ariaLabel: String(config.dismiss.ariaLabel || 'Dismiss'), attributes: config.dismiss.attributes || {},
+    })
+    : '';
+  const content = `<span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>${dismissHtml}`;
   if (interactive) {
     return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
   }
-  const focusable = config.focusable === true ? ' tabindex="0"' : '';
+  const focusable = config.focusable === true || dismissHtml ? ' tabindex="0"' : '';
   return `<span class="${classes}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}>${content}</span>`;
 }
 
@@ -85,7 +97,12 @@ function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
-  const className = String(config.className || '').trim();
+  const className = [
+    config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '',
+    config.flat === true ? 'on-page-alert--flat' : '',
+    String(config.className || '').trim(),
+  ]
+    .filter(Boolean).join(' ');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
@@ -106,4 +123,17 @@ if (typeof window !== 'undefined') {
 }
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml, buildStatusBadgeHtml };
+}
+
+function toggleSmallAlertBadge(event) {
+  if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+  const badge = event.target?.closest?.('.small-alert--badge');
+  document.querySelectorAll('.small-alert--badge.is-expanded').forEach((node) => { if (node !== badge) node.classList.remove('is-expanded'); });
+  if (!badge || badge.closest('[data-badges-fixed]')) return;
+  if (event.type === 'keydown') event.preventDefault();
+  badge.classList.toggle('is-expanded');
+}
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', toggleSmallAlertBadge);
+  document.addEventListener('keydown', toggleSmallAlertBadge);
 }

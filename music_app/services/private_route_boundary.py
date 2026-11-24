@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import hmac
+import logging
+import re
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -21,6 +24,7 @@ from music_app.services.auth_session_csrf import issue_session_csrf, matches_ses
 _PUBLIC_AUTH_PATHS = frozenset(
     {"/login", "/forgot-password", "/reset-password", "/accept-invitation"}
 )
+_LOGGER = logging.getLogger(__name__)
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
@@ -54,6 +58,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/password"): "account.self.password.change",
     ("POST", "/account/password-suggestion/dismiss"): "account.self.password_suggestion.dismiss",
     ("GET", "/"): "app.shell.read",
+    # Same app shell as "/"; reloading a gallery or Loose Tracks address must not need more.
+    ("GET", "/albums"): "app.shell.read",
+    ("GET", "/loose-tracks"): "app.shell.read",
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
     ("GET", "/app-copy/account"): "app.shell.read",
@@ -61,6 +68,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/status"): "app.status.read",
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
+    ("GET", "/library/loose-tracks"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
     ("GET", "/home/recent-albums"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",
@@ -140,6 +148,9 @@ _PRIVATE_ROUTE_ACTIONS = {
         "POST",
         "/api/library/albums/{album_key:path}/confirm-removal",
     ): "library.inventory.manage",
+    ("POST", "/api/library/albums/{album_key:path}/rescan"): "library.inventory.manage",
+    ("GET", "/api/library/albums/{album_key:path}/rescan"): "library.inventory.manage",
+    ("POST", "/api/library/albums/{album_key:path}/keep-missing"): "library.inventory.manage",
     ("POST", "/cancel-refresh-api"): "library.refresh.cancel",
     ("GET", "/refresh"): "library.refresh.read",
     ("GET", "/library-settings"): "library.settings.read",
@@ -157,7 +168,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/open-album-location"): "library.files.open_location",
     ("POST", "/utilities/repair-album"): "library.files.repair",
     ("POST", "/utilities/edit-tags"): "library.files.edit_tags",
+    ("POST", "/utilities/edit-tags/requests/status"): "library.files.edit_tags",
     ("POST", "/utilities/tag-editor/folder-files"): "library.files.edit_tags",
+    ("POST", "/utilities/tag-editor/fold-decision"): "library.files.edit_tags",
     ("GET", "/utilities/cover-lookup/tasks"): "library.covers.tasks.read",
     ("GET", "/utilities/cover-lookup/tasks/counts"): "library.covers.tasks.read",
     ("POST", "/utilities/cover-lookup/tasks/clear-completed"): "library.covers.tasks.manage",
@@ -171,6 +184,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/utilities/cover-lookup/local-delete"): "library.covers.delete",
     ("POST", "/utilities/cover-lookup/pasted-image-save"): "library.covers.upload",
     ("POST", "/utilities/cover-lookup/save-remote"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/additional-artwork"): "library.covers.write",
+    ("POST", "/utilities/cover-lookup/additional-artwork/remove"): "library.covers.write",
     ("POST", "/utilities/cover-lookup/add-remote"): "library.covers.link",
     ("POST", "/utilities/fetch-cover"): "library.covers.fetch",
     ("POST", "/utilities/fetch-covers-unsuccessful"): "library.covers.fetch",
@@ -215,6 +230,51 @@ _PRIVATE_ROUTE_ACTIONS = {
 }
 
 
+# An address naming a file path: by the parameter's name, or a value that is an absolute path.
+_PATH_PARAMS = frozenset({"path", "track_path"})
+_ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/](?!/)|\\\\[^\\]|/[^/]+/)")
+_PRIVATE_CACHE_CONTROL = b"private, no-store"
+
+
+def _names_file_path(query_string: bytes) -> bool:
+    return any(
+        name in _PATH_PARAMS or _ABSOLUTE_PATH.match(value)
+        for name, value in parse_qsl(query_string.decode("latin-1"))
+    )
+
+
+class _PrivateCachePolicy:
+    """No HTTP cache stores a private answer unless its route deliberately says it may.
+
+    An answer to an address that names a file path is never stored, whatever its route says: the
+    address is the cache's key. Outside the boundary, so its refusals and failures follow this too.
+    Headers only, so streamed bodies pass through untouched.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        names_path = _names_file_path(scope.get("query_string", b""))
+        if not names_path and _is_public(scope["method"], scope["path"]):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_policy(message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                if names_path or not any(key.lower() == b"cache-control" for key, _value in headers):
+                    headers = [(key, value) for key, value in headers if key.lower() != b"cache-control"]
+                    headers.append((b"cache-control", _PRIVATE_CACHE_CONTROL))
+                    message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_policy)
+
+
 def install_private_route_boundary(app: FastAPI) -> None:
     """Install the public health endpoint and default-private request boundary."""
 
@@ -253,6 +313,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
                     _refresh_session_csrf_cookie(request, artwork)
                     return artwork
         except HTTPException as exc:
+            if exc.status_code == 403 and request.method.upper() not in _READ_METHODS:
+                _LOGGER.warning("Write refused: %s %s needs %s.", request.method, route_path, action)
             if (
                 exc.status_code == 401
                 and request.method.upper() in _READ_METHODS
@@ -283,15 +345,34 @@ def install_private_route_boundary(app: FastAPI) -> None:
             )
         csrf_mode = csrf_mode_for_route(request.method, route_path)
         if csrf_mode == "session_header" and not _valid_session_csrf(request):
-            return JSONResponse(
+            # Owner (11-09): writes failed now and then with a stale or missing page token. The refusal carries the
+            # session's current token, so the page can retry once; the reason is logged for diagnosis.
+            _LOGGER.warning(
+                "Write refused: CSRF validation failed for %s %s (same origin %s, token cookie %s, token header %s).",
+                request.method, route_path, _same_origin(request),
+                bool(request.cookies.get(_SESSION_CSRF_COOKIE)), bool(request.headers.get(_SESSION_CSRF_HEADER)),
+            )
+            rejected = JSONResponse(
                 {"detail": "CSRF validation failed."},
                 status_code=403,
                 headers=preference_headers,
             )
+            if _same_origin(request):
+                _refresh_session_csrf_cookie(request, rejected)
+            return rejected
         response = await call_next(request)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)
         return response
+
+    app.add_middleware(_PrivateCachePolicy)
+
+    # Sent outside every middleware; the failure itself is still raised and logged.
+    @app.exception_handler(Exception)
+    async def failed(_request: Request, _error: Exception) -> PlainTextResponse:
+        return PlainTextResponse(
+            "Internal Server Error", status_code=500, headers={"Cache-Control": _PRIVATE_CACHE_CONTROL.decode()},
+        )
 
 
 def _refresh_session_csrf_cookie(request: Request, response: Response) -> None:

@@ -62,7 +62,7 @@
   color: var(--ink); background: var(--surface-2); font-family: ui-monospace, "Cascadia Code", monospace;
 }
 .settings-host .invitation-copy-fallback .ui-button { margin-top: 10px; }
-.settings-host .detail-main { width: min(970px, 100%); }
+.settings-host .detail-main > * { box-sizing: border-box; max-width: 970px; }
 .settings-host .detail-heading { margin-bottom: 25px; }
 .settings-host .roles-only-action { display: grid; justify-items: start; gap: 8px; margin-bottom: 18px; }
 .settings-host .roles-only-action p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }

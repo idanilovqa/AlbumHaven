@@ -348,6 +348,42 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 }
 
 {
+  const { context, navigationButton, drawerRail } = loadHelper({ isMobile: false, artistTreeFolded: true });
+  context.state.view.shell_layout.slots.navigation_rail.content_kind = 'custom_collections';
+  let navigationMode = null;
+  context.syncLibraryNavigationMode = mode => {
+    navigationMode = mode;
+    drawerRail.setAttribute('data-library-navigation-mode', mode);
+  };
+  navigationButton.closest = selector => (
+    selector === '[data-toggle-artist-tree-fold="1"]' ? navigationButton : null
+  );
+
+  const handled = context.handleArtistsDrawerClick({
+    target: navigationButton,
+    preventDefault() {},
+  });
+
+  assert.equal(handled, true);
+  assert.equal(navigationMode, 'artists');
+  assert.equal(context.state.ui.artistTreeFolded, false);
+}
+
+{
+  const { context, navigationButton, drawerRail } = loadHelper({ isMobile: false, artistTreeFolded: true });
+  context.state.view.shell_layout.slots.navigation_rail.content_kind = 'playlist_sidebar';
+  drawerRail.setAttribute('data-library-navigation-mode', 'artists');
+  context.syncLibraryNavigationMode = () => {};
+  navigationButton.closest = selector => (
+    selector === '[data-toggle-artist-tree-fold="1"]' ? navigationButton : null
+  );
+
+  context.handleArtistsDrawerClick({ target: navigationButton, preventDefault() {} });
+
+  assert.equal(context.state.ui.artistTreeFolded, true);
+}
+
+{
   const { context, foldButton, artistList, appShell } = loadHelper({ isMobile: true });
   context.state.ui.artistTreeFolded = true;
 

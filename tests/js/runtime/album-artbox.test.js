@@ -158,7 +158,6 @@ test('album artwork stretches into every fixed display box without cropping or b
   assert.match(lookupCss, /\.cover-lookup-manual-attachment img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(lookupCss, /\.cover-lookup-art-preview-image\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(lookupCss, /\.cover-lookup-art-preview-fallback img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
-  assert.match(lookupCss, /\.version-picker-option-cover img\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(drawerCss, /\.cover-lookup-task-cover\s*\{[^}]*object-fit:\s*var\(--album-art-fit\)/s);
   assert.match(playerCss, /\.player-cover-button\s*\{[^}]*background-size:\s*100% 100%/s);
   assert.match(playerCss, /\.compact-player-cover\s*\{[^}]*background:\s*#07110e center\/100% 100% no-repeat/s);

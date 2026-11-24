@@ -29,11 +29,12 @@
   <main class="settings-host settings-shell" data-settings-host>
     {% from "partials/app-bar.html" import app_bar with context %}
     {{ app_bar() }}
+    {% set settings_section = 'users' %}
     {% include "partials/admin-settings-nav.html" %}
-    <div class="settings-outlet" data-settings-outlet>
+    <div class="settings-outlet shell-main-surface" data-settings-outlet>
     <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
-    <section class="settings-main detail-main">
-      {{ page_gallery_bar('Edit user' if member else 'Add user', member.username if member else '', back_href='/admin/members', back_label='Back to users', settings_navigation=true) }}
+    {{ page_gallery_bar('Edit user' if member else 'Add user', member.username if member else '', back_href='/admin/members', back_label='Back to users', settings_navigation=true) }}
+    <section class="albums-scroll settings-main detail-main">
 
       {{ on_page_alert(severity='error', hidden=true, class_name='admin-form-error', attributes={'data-admin-form-error': ''}) }}
       {{ on_page_alert(role='status', hidden=true, class_name='admin-form-status', attributes={'data-admin-form-status': ''}) }}
@@ -89,5 +90,6 @@
     </section>
     </div>
   </main>
+  {% include "partials/app-form-modal.html" %}
 </body>
 </html>

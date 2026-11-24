@@ -56,6 +56,15 @@ const CONCURRENT_PROBE_BUDGET = defineTimingBudget({
   targetMaximum: 800,
   graceMs: 400,
 });
+// Page clock, from the save response to the visible saved notification. Owner (2026-11-19):
+// "Saved" shows once the server accepts the save, without waiting for the Gallery refetch.
+const RESPONSE_TO_SAVED_BUDGET = defineTimingBudget({
+  targetMaximum: 100,
+  graceMs: 200,
+});
+// Server-side stages of the typo-artist save (5 files); measured 442 ms and 71 ms.
+const SAVE_COMMIT_BUDGET = defineTimingBudget({ targetMaximum: 600, graceMs: 300 });
+const SAVE_GALLERY_PATCH_BUDGET = defineTimingBudget({ targetMaximum: 200, graceMs: 200 });
 const BUDGETS = Object.freeze(Object.fromEntries([
   'tagEditorOpenMs',
   'searchGalleryReadyMs',
@@ -236,6 +245,9 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       });
 
       await stepLogger.step('Correct the final typo artist and reconcile to its destination', async () => {
+        // The fixture restore restarted the app: time the save, not the startup warm-up
+        // or background cover work.
+        await appBarActions.waitForScanAndCoverRefreshIdle({ includeStartupAndLookups: true });
         const typoSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
         expect(typoSummary.trackRows).toBe(TYPO_TRACK_FILENAMES.length);
         const editOpenStartedAt = performance.now();
@@ -270,6 +282,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           timingMs: metrics.exactIncidentProbeMaxMs,
           details: {
             phaseTimingsMs: result.payload.phase_timings_ms,
+            postgresCommitStagesMs: result.payload.postgres_commit_stages_ms,
             poolLeaseTimingsMs: result.payload.pool_lease_timings_ms,
             poolLeaseCounts: result.payload.pool_lease_counts,
             posts: exactIncident.posts,
@@ -288,7 +301,29 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             `${probe.name} during Edit Tags`,
           );
         }
-        const reconciledView = await readRuntimeView(page);
+        // A save costs its albums, not the library: the gallery patch once rewrote
+        // every scope's whole membership copy (706 ms here, minutes on a real library).
+        const commitStages = result.payload.postgres_commit_stages_ms;
+        expect(commitStages, 'The save task must report its Postgres stages.').toBeTruthy();
+        expectTimingBudget(
+          expect,
+          result.payload.phase_timings_ms?.postgres_commit,
+          SAVE_COMMIT_BUDGET,
+          'Edit Tags Postgres commit',
+        );
+        expectTimingBudget(
+          expect,
+          commitStages['relation_publication.gallery_membership'],
+          SAVE_GALLERY_PATCH_BUDGET,
+          'Edit Tags gallery membership patch',
+        );
+        // Owner (2026-11-19): "Saved" shows once the server accepts the save; the destination
+        // artist opens with the Gallery refetch that follows it.
+        let reconciledView = null;
+        await expect.poll(async () => {
+          reconciledView = await readRuntimeView(page);
+          return reconciledView.selected_artist;
+        }, { timeout: 10000 }).toBe(CORRECTED_ARTIST);
         const [sourceIdentity, destinationIdentity] = await Promise.all([
           queryPersistedAlbumIdentity({
             artist: TYPO_ARTIST,
@@ -307,6 +342,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         timingMs: saveTimingMs,
         details: {
           browserArtist: new URL(page.url()).searchParams.get('artist'),
+          postSaveTimeline: result.postSaveTimeline,
           terminalPayload: result.payload,
           sourceIdentity,
           destinationIdentity,
@@ -332,6 +368,13 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           },
         },
       });
+        expect(result.postSaveTimeline, 'Save response and saved notification timeline').not.toBeNull();
+        expectTimingBudget(
+          expect,
+          result.postSaveTimeline.responseToSavedMs,
+          RESPONSE_TO_SAVED_BUDGET,
+          'Typo-artist save response to saved notification',
+        );
         expect({
           browserArtist: new URL(page.url()).searchParams.get('artist'),
           destinationAlbumKey: result.payload.destination_album_key,
@@ -413,6 +456,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         ORIGINAL_ALBUM,
       ].entries()) {
         await stepLogger.step(`Save Edit Tags transition ${index + 1}`, async () => {
+          await appBarActions.waitForScanAndCoverRefreshIdle({ includeStartupAndLookups: true });
           const editOpenStartedAt = performance.now();
           await trackModalActions.openTagEditor();
           await tagEditorActions.waitForOpen();
@@ -439,8 +483,19 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             key: `edit-tags-save-${index + 1}`,
             label: `Edit Tags terminal save ${index + 1}`,
             timingMs: saveTimingMs,
-            details: { destinationAlbum, saveTaskId: result.saveTaskId },
+            details: {
+              destinationAlbum,
+              postSaveTimeline: result.postSaveTimeline,
+              saveTaskId: result.saveTaskId,
+            },
           });
+          expect(result.postSaveTimeline, 'Save response and saved notification timeline').not.toBeNull();
+          expectTimingBudget(
+            expect,
+            result.postSaveTimeline.responseToSavedMs,
+            RESPONSE_TO_SAVED_BUDGET,
+            `Save ${index + 1} response to saved notification`,
+          );
           await trackModalActions.close();
         });
 

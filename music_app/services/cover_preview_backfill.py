@@ -107,12 +107,7 @@ class CoverPreviewBackfill:
         generated = 0
         listed: set[tuple[Path, str | None, Path]] = set()
         for source_path, cover_revision in self._load_cover_paths():
-            # Only a revisioned preview follows the storage policy; any other stays in app data.
-            storage_policy = (
-                self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
-                if cover_revision or not self._data_dir
-                else None
-            )
+            storage_policy = self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
             cache_root = display_cover_variant_cache_root(
                 source_path,
                 data_dir=self._data_dir,

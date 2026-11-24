@@ -77,6 +77,22 @@ def mark_manual_version_link(
     return links, ""
 
 
+def clear_version_exceptions(
+    config: ConfigDict,
+    album_keys: list[str],
+    *,
+    load_keys,
+    save_keys,
+) -> set[str]:
+    """Owner (11-09): albums the user marks as versions again are no longer excluded from version tabs, so their
+    Separate release exceptions are removed (and leave Settings > Rules) instead of silently outliving the link."""
+    ignored = set(load_keys(config))
+    remaining = ignored - {key for key in album_keys if key}
+    if remaining != ignored:
+        save_keys(config, remaining)
+    return remaining
+
+
 def unmark_manual_version_link(
     config: ConfigDict,
     album_key: object,

@@ -17,6 +17,7 @@ from music_app.services.library import (
     build_albums_from_file_cache,
 )
 from music_app.services.library_album_index import LibraryAlbumIndex, library_album_index, replace_library_albums
+from music_app.services.library_watch_suppression import suppress_library_watch_events
 from music_app.services.metadata import apply_text_repairs_to_file, normalize_exception_value
 from music_app.services.non_album_view_payloads import is_loose_track_album_value
 from music_app.services.relations import build_relation_views
@@ -52,6 +53,11 @@ def update_cache_entry_after_repairs(
         updated_entry[field] = normalize_exception_value(value) if field == "exception_type" else value
         if field == "year":
             updated_entry["release_date"] = value
+    corrections = updated_entry.get("text_corrections")
+    if isinstance(corrections, dict):
+        # A written field now holds what the tags say; nothing is left to correct.
+        remaining = {field: correction for field, correction in corrections.items() if field not in repairs}
+        updated_entry["text_corrections"] = remaining or None
     try:
         stat = path.stat()
         updated_entry["mtime"] = stat.st_mtime
@@ -203,7 +209,10 @@ def build_affected_album_dicts(
 
 
 def apply_repairs_worker(raw_path: str, repairs: dict[str, str]) -> tuple[str, bool, list[str]]:
-    changed, changed_fields = apply_text_repairs_to_file(Path(raw_path), repairs)
+    # The save task persists this app-owned write. A watcher reconcile of its folder republished
+    # the album and rebuilt the Gallery while the user browsed on (FTC-TAGS-015).
+    with suppress_library_watch_events((raw_path,)):
+        changed, changed_fields = apply_text_repairs_to_file(Path(raw_path), repairs)
     return raw_path, changed, changed_fields
 
 

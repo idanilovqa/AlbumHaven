@@ -1002,6 +1002,59 @@ test('production view observer ignores sidebar payloads and retains the latest f
   assert.equal(observer.read().pendingPayloadReadCount, 0);
 });
 
+test('a live artist-tree read keeps the artist gallery payload authoritative', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const artistRequest = request('http://127.0.0.1/view-data?surface=albums&artist=Ben&payload_tier=gallery_summary');
+  const treeRequest = {
+    ...request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar'),
+    headers: () => ({ 'x-album-haven-view-purpose': 'artist-tree' }),
+  };
+
+  page.emit('request', artistRequest);
+  page.emit('response', response(artistRequest, { payload_tier: 'full', selected_artist: 'Ben' }));
+  page.emit('requestfinished', artistRequest);
+  await flushPromises();
+  page.emit('request', treeRequest);
+  page.emit('response', response(treeRequest, { payload_tier: 'sidebar', artists_sidebar: [] }));
+  page.emit('requestfinished', treeRequest);
+  await flushPromises();
+
+  assert.equal(observer.read().latestFullPayload.selected_artist, 'Ben');
+  assert.equal(observer.read().activeRequestCount, 0);
+});
+
+test('a search Loose Tracks prefetch keeps the search gallery payload authoritative', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const searchRequest = request('http://127.0.0.1/view-data?surface=albums&q=Ben&category=main_library');
+  const looseTracksRequest = request(
+    'http://127.0.0.1/view-data?surface=albums&q=Ben&category=main_library'
+    + '&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1',
+  );
+
+  page.emit('request', searchRequest);
+  page.emit('request', looseTracksRequest);
+  page.emit('response', response(searchRequest, {
+    payload_tier: 'full',
+    query: 'Ben',
+    selected_artist: 'Ben',
+    primary_artist_groups: [{ artist: 'Ben', albums: [{ key: 'ben-1', name: 'First' }] }],
+  }));
+  page.emit('requestfinished', searchRequest);
+  await flushPromises();
+  page.emit('response', response(looseTracksRequest, { non_album_tracks: [] }));
+  page.emit('requestfinished', looseTracksRequest);
+  await flushPromises();
+
+  const result = observer.read();
+  assert.equal(result.latestFullPayload.query, 'Ben');
+  assert.equal(result.activeRequestCount, 0);
+  assert.equal(result.pendingPayloadReadCount, 0);
+});
+
 test('production view observer exposes the in-flight latest full payload read for POM synchronization', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
@@ -2168,3 +2221,102 @@ test('browse telemetry accepts the actual SSR first-paint payload without a redu
   owner.readProductionBootstrapPayload = async () => null;
   await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /Expected an observed production view/);
 });
+
+test('the search Loose Tracks prefetch never stands in for the gallery view-data answer', async () => {
+  const { isSearchLooseTracksPrefetchUrl } = await import(observerUrl);
+  const base = 'http://127.0.0.1/view-data?surface=albums&q=%D0%94%D0%94%D0%A2&gallery_scope=all';
+  // The request FTC-TAGS-026P and FTC-ALBUM-TASTE-013 mistook for the gallery's answer.
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1`), true);
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&omit_sidebar=1&include_non_album=1`), false);
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&payload_tier=sidebar&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1`), false);
+  assert.equal(isSearchLooseTracksPrefetchUrl('http://127.0.0.1/view-data?surface=albums&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1'), false);
+});
+
+// gallery-main-interactions.js: the first /home-data?source_totals=1 read plus at most one retry per delay.
+function sourceTotalsRetryLimit() {
+  const runtime = require('node:fs').readFileSync(path.join(
+    __dirname, '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js',
+  ), 'utf8');
+  const delays = runtime.match(/const PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS = \[([^\]]*)\]/u);
+  assert.ok(delays, 'the runtime declares its source-totals retry delays');
+  return 1 + delays[1].split(',').filter(value => value.trim()).length;
+}
+
+function sourceTotalsPayload(revision, pending = ['hoard']) {
+  return {
+    source_totals_by_scope: { '': { artist_count: 0, album_count: 0 }, main_library: { artist_count: 2, album_count: 3 } },
+    pending_source_scopes: pending,
+    inventory_mutation_revision: revision,
+  };
+}
+
+test('a source-totals retry keeps the gallery payload and its request as the view authority', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const gallery = request('http://127.0.0.1/view-data?surface=albums&category=main_library');
+  page.emit('request', gallery);
+  page.emit('response', response(gallery, {
+    payload_tier: 'full', query: '',
+    artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }],
+  }));
+  page.emit('requestfinished', gallery);
+  await flushPromises();
+  for (let attempt = 0; attempt < sourceTotalsRetryLimit(); attempt += 1) {
+    const totals = request('http://127.0.0.1/home-data?source_totals=1');
+    page.emit('request', totals);
+    page.emit('response', response(totals, sourceTotalsPayload(7)));
+    page.emit('requestfinished', totals);
+    await flushPromises();
+  }
+  const result = observer.read();
+  assert.equal(result.latestFullRequestUrl, gallery.url());
+  assert.equal(result.latestFullPayload.artist_groups[0].albums[0].name, 'Album');
+  assert.equal(result.latestFullPayloadError, null);
+  assert.deepEqual(result.sourceTotalsReadsByRevision, { 7: sourceTotalsRetryLimit() });
+});
+
+test('a source-totals read beyond the runtime retry limit at one revision fails the observation', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  for (let attempt = 0; attempt <= sourceTotalsRetryLimit(); attempt += 1) {
+    const totals = request('http://127.0.0.1/home-data?source_totals=1');
+    page.emit('request', totals);
+    page.emit('response', response(totals, sourceTotalsPayload(7)));
+    await flushPromises();
+  }
+  assert.throws(() => observer.read(), /source-totals reads at inventory revision 7 exceed the retry limit/u);
+});
+
+test('a new inventory revision starts the bounded source-totals wait again', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  for (const revision of [7, 8]) {
+    for (let attempt = 0; attempt < sourceTotalsRetryLimit(); attempt += 1) {
+      const totals = request('http://127.0.0.1/home-data?source_totals=1');
+      page.emit('request', totals);
+      page.emit('response', response(totals, sourceTotalsPayload(revision)));
+      await flushPromises();
+    }
+  }
+  assert.deepEqual(observer.read().sourceTotalsReadsByRevision, { 7: sourceTotalsRetryLimit(), 8: sourceTotalsRetryLimit() });
+});
+
+for (const [label, extra] of [
+  ['album rows', { artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }] }],
+  ['a gallery page', { gallery_page: { offset: 0, next_offset: 6 } }],
+  ['an unknown field', { surface: { kind: 'home' } }],
+]) {
+  test(`a source-totals response carrying ${label} fails the observation`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const totals = request('http://127.0.0.1/home-data?source_totals=1');
+    page.emit('request', totals);
+    page.emit('response', response(totals, { ...sourceTotalsPayload(7), ...extra }));
+    await flushPromises();
+    assert.throws(() => observer.read(), /source-totals response carries more than totals/u);
+  });
+}

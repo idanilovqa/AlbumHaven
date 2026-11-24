@@ -8,6 +8,12 @@ test('phones share one profile; wide mobile tablets keep mobile preferences, not
   assert.equal(classifyProfile({ viewportWidth: 1280, userAgent: 'Android Tablet' }), 'mobile');
   assert.equal(classifyProfile({ viewportWidth: 1024, platform: 'MacIntel', maxTouchPoints: 5 }), 'mobile');
   assert.equal(classifyProfile({ viewportWidth: 1920, clientSurfaceClass: 'tv' }), 'tv');
+  // Owner (11-08): after Chrome's device toolbar switches back to the web layout the phone user agent can
+  // linger; a wide browser with no touch input is the web layout whatever its user agent or server hint says.
+  assert.equal(classifyProfile({ viewportWidth: 1440, userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile', maxTouchPoints: 0 }), 'web_desktop');
+  assert.equal(classifyProfile({ viewportWidth: 1440, clientSurfaceClass: 'mobile', maxTouchPoints: 0 }), 'web_desktop');
+  assert.equal(classifyProfile({ viewportWidth: 1440, userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile', maxTouchPoints: 5 }), 'mobile');
+  assert.equal(classifyProfile({ viewportWidth: 390, maxTouchPoints: 0 }), 'mobile');
 });
 
 test('phone geometry is two or three columns; rows fill the width and covers stay square', () => {

@@ -27,8 +27,70 @@ function load(cookie = '__Host-album_haven_csrf=csrf-value', fetchImpl = null) {
   const context = { window, document: { cookie }, URL, Headers };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
-  return { window, calls };
+  return { window, calls, document: context.document };
 }
+
+// A fetch body the browser would leave waiting until the page reads it.
+function unreadBody(cacheControl) {
+  const state = { finished: false };
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new TextEncoder().encode('{"ok":true}'));
+      controller.close();
+      state.finished = true;
+    },
+  }, { highWaterMark: 0 });
+  state.response = new Response(body, { headers: cacheControl ? { 'Cache-Control': cacheControl } : {} });
+  return state;
+}
+
+for (const [name, url, init] of [
+  ['a read', '/view-data?surface=albums', undefined],
+  ['a write', '/refresh-api', { method: 'POST' }],
+]) {
+  for (const cookie of ['__Host-album_haven_csrf=csrf-value', 'other=value']) {
+    test(`${name} answered no-store finishes though its body is never read (${cookie.split('=')[0]})`, async () => {
+      const sent = unreadBody('private, no-store');
+      const { window } = load(cookie, async () => sent.response);
+
+      const response = await window.fetch(url, init);
+      await new Promise(setImmediate);
+
+      assert.equal(sent.finished, true);
+      assert.equal(await response.text(), '{"ok":true}', 'the caller still reads the whole body');
+    });
+  }
+}
+
+test('a storable answer is left to the browser, which finishes it by itself', async () => {
+  const sent = unreadBody('private, max-age=300');
+  const { window } = load(undefined, async () => sent.response);
+
+  const response = await window.fetch('/cover/AbCdEfGhIjKlMnOpQrStUv');
+  await new Promise(setImmediate);
+
+  assert.equal(sent.finished, false);
+  assert.equal(response, sent.response);
+});
+
+test("another origin's answer is left alone", async () => {
+  const sent = unreadBody('no-store');
+  const { window } = load(undefined, async () => sent.response);
+
+  await window.fetch('https://example.test/data');
+  await new Promise(setImmediate);
+
+  assert.equal(sent.finished, false);
+});
+
+test("a body that fails while it is read to the end is the caller's failure alone", async () => {
+  const body = new ReadableStream({ pull(controller) { controller.error(new TypeError('cut')); } }, { highWaterMark: 0 });
+  const { window } = load(undefined, async () => new Response(body, { headers: { 'Cache-Control': 'no-store' } }));
+
+  const response = await window.fetch('/view-data');
+
+  await assert.rejects(response.json(), { name: 'TypeError' });
+});
 
 test('same-origin reads retry once after a transient network failure', async () => {
   let attempts = 0;
@@ -126,4 +188,29 @@ test('external Request preserves all original credentials and headers', async ()
   assert.equal(calls[0][0], request);
   assert.equal(calls[0][1], undefined);
   assert.equal(request.headers.has('X-Album-Haven-CSRF'), false);
+});
+
+// Owner (11-09): "failed to load cover art gallery" and "the artbox could not be removed" appeared now and then.
+test('a write refused for a stale token is retried once with the token the refusal set', async () => {
+  const refused = (detail) => ({ status: 403, ok: false, clone: () => ({ json: async () => ({ detail }) }) });
+  let attempts = 0;
+  const loaded = load('__Host-album_haven_csrf=stale', async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      loaded.document.cookie = '__Host-album_haven_csrf=fresh';
+      return refused('CSRF validation failed.');
+    }
+    return { status: 200, ok: true };
+  });
+  const response = await loaded.window.fetch('/utilities/cover-lookup/gallery', { method: 'POST', body: '{}' });
+  assert.equal(response.ok, true);
+  assert.deepEqual(loaded.calls.map((call) => call[1].headers.get('X-Album-Haven-CSRF')), ['stale', 'fresh']);
+
+  const denied = load(undefined, async () => refused('Action not permitted.'));
+  assert.equal((await denied.window.fetch('/x', { method: 'POST' })).status, 403);
+  assert.equal(denied.calls.length, 1, 'a permission refusal is not retried');
+
+  const still = load(undefined, async () => refused('CSRF validation failed.'));
+  assert.equal((await still.window.fetch('/x', { method: 'POST' })).status, 403);
+  assert.equal(still.calls.length, 2, 'retried once, never more');
 });

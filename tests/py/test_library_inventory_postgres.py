@@ -167,6 +167,17 @@ def test_candidate_query_pushes_artist_and_text_scope_into_postgres():
     assert "{scan_cache,file_entry,artists}" in normalized_sql
     assert "lower(active_track_files.private_path) like any(%(artist_path_patterns)s::text[])" in normalized_sql
     assert "unnest(%(query_patterns)s::text[])" in normalized_sql
+    assert "regexp_replace(" in normalized_sql
+    assert (
+        "coalesce(library.local_track_files.relative_path, "
+        "active_track_files.private_path, '')"
+    ) in normalized_sql
+    assert "'^.*[\\\\/]'" in normalized_sql
+    assert "library.local_track_files.relative_path, library.local_track_files.metadata" not in normalized_sql
+    assert (
+        "library.local_track_files.metadata #> '{scan_cache,file_entry,artists}', "
+        "active_track_files.private_path"
+    ) not in normalized_sql
     assert params["artist_names"] == ["radiohead", "thom yorke"]
     assert params["artist_path_patterns"] == ["%radiohead%", "%thom yorke%"]
     assert params["query_patterns"] == ["%a%", "%kid%"]
@@ -202,12 +213,27 @@ def test_candidate_filters_are_batched_deduplicated_bounded_and_parameterized(
         "track_id_count": 2,
         "private_paths": [r"D:\\a.flac", r"D:\\b.flac"],
         "private_path_count": 2,
+        # The membership-problem group filter (eea310882, Problematic Files groups) is always passed, empty
+        # when no group is asked for; the query only reads it for a group request.
+        "membership_group_ids": [],
         "limit": expected_limit,
     }
+    assert "%(membership_group_ids)s" not in sql, "no group filter without groups"
     assert "%(track_ids)s::bigint[]" in sql
     assert "%(private_paths)s::text[]" in sql
     assert "limit %(limit)s" in sql.lower()
     assert r"D:\\a.flac" not in sql
+
+
+# Case 64: the loader's qualifying predicate moved, verbatim, into library.loose_track_qualifies (the case 64
+# migration), which the Loose Tracks store's triggers call too. Its arguments carry the effective album in the
+# shaper's order (the file's scanned album, then the track's, then the album title) and the ranked override
+# (its exception type, then its payload), so an override's exception type still qualifies an album track.
+_QUALIFIES_CALL = (
+    "library.loose_track_qualifies( library.local_track_files.scan_file_album, "
+    "library.local_tracks.metadata ->> 'album', library.local_albums.title, library.local_track_files.metadata, "
+    "exception_override.exception_type, exception_override.override_payload )"
+)
 
 
 def test_candidate_query_includes_only_loose_tracks_or_meaningfully_overridden_album_tracks():
@@ -226,11 +252,7 @@ def test_candidate_query_includes_only_loose_tracks_or_meaningfully_overridden_a
         eligible_track_file_scope,
     )
     assert " ~ " in eligible_track_file_scope
-    assert (
-        "coalesce( library.local_track_files.scan_file_album, "
-        "library.local_tracks.metadata ->> 'album', library.local_albums.title, '' )"
-    ) in normalized_sql
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in normalized_sql
     assert "nullif(btrim(ranked_exception_overrides.override_payload ->> 'exception_type'), '')" in sql
     assert "jsonb_typeof(ranked_exception_overrides.override_payload) = 'string'" in sql
     assert "then nullif(btrim(ranked_exception_overrides.override_payload #>> '{}'), '')" in sql
@@ -257,7 +279,7 @@ def test_candidate_query_does_not_treat_a_detached_track_with_a_real_album_as_no
         normalized_sql,
     )
     assert " ~ " in normalized_sql
-    assert "exception_override.exception_type is not null" in normalized_sql
+    assert _QUALIFIES_CALL in normalized_sql
 
 
 def test_candidate_query_excludes_stale_files_and_files_belonging_to_inactive_roots():
@@ -312,7 +334,7 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_requi
     assert "library.local_track_files.scan_file_album" in sql
     assert "library.local_tracks.metadata ->> 'album'" in sql
     assert "library.local_albums.title" in sql
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in " ".join(sql.split())
     assert "active_track_files.private_path," in sql
     assert "active_track_files.id\n        limit %(limit)s" in sql
 
@@ -392,7 +414,7 @@ def test_candidate_query_prefilters_active_files_through_four_indexed_eligibilit
     assert "where ranked_exception_overrides.match_rank = 1" in sql
     assert "library.local_tracks.album_id is null" not in sql
     assert "library.local_track_files.scan_file_album" in loose_track_path
-    assert "or exception_override.exception_type is not null" in sql
+    assert _QUALIFIES_CALL in " ".join(sql.split())
 
 
 def test_candidate_query_selects_private_path_override_before_track_id_then_newest_and_id():
@@ -414,6 +436,111 @@ def test_candidate_query_selects_private_path_override_before_track_id_then_newe
     assert "on exception_override.track_file_id = active_track_files.id" in sql
 
 
+def test_non_album_membership_only_scope_filters_before_the_row_limit():
+    sql = " ".join(
+        inventory_module._non_album_candidates_sql(
+            unassigned_only=True,
+            membership_problems_only=True,
+        ).lower().split()
+    )
+
+    tail = sql.rsplit(" where ", 1)[1]
+    membership = "metadata #>> '{scan_cache,file_entry,local_album_membership_problem}'"
+    assert membership in tail
+    assert tail.index(membership) < tail.index("limit %(limit)s")
+    assert "exception_override.exception_type is not null" not in tail
+    eligible = sql.split("eligible_track_file_ids as (", 1)[1].split("active_track_files as (", 1)[0]
+    assert " union " not in eligible
+    assert "join library.local_tracks membership_tracks" in eligible
+    assert "membership_tracks.album_id is null" in eligible
+
+
+def test_membership_group_hydration_is_unbounded_and_pushed_into_eligibility():
+    sql = " ".join(
+        inventory_module._non_album_candidates_sql(
+            unassigned_only=True,
+            membership_problems_only=True,
+            membership_groups=True,
+        ).lower().split()
+    )
+
+    eligible = sql.split("eligible_track_file_ids as (", 1)[1].split("active_track_files as (", 1)[0]
+    assert "%(membership_group_ids)s::text[]" in eligible
+    assert "btrim(roots.id::text) || chr(1)" in eligible
+    assert "library.local_path_style(files.private_path)" in eligible
+    assert "limit %(limit)s" not in sql
+
+
+def test_membership_group_filter_preserves_projected_identity_bytes():
+    connection = FakeConnection([FakeCursor(rows=[])])
+    repository_for(connection).load_non_album_candidates(
+        membership_problems_only=True,
+        membership_group_ids=["root\x01Music/Album ", "root\x01Music/Album"],
+    )
+
+    _sql, params = connection.calls[0]
+    assert params["membership_group_ids"] == [
+        "root\x01Music/Album",
+        "root\x01Music/Album ",
+    ]
+
+
+def test_membership_group_headers_group_before_the_limit():
+    sql = " ".join(
+        inventory_module._membership_problem_group_headers_sql(bounded=True).lower().split()
+    )
+
+    assert "tracks.album_id is null" in sql
+    assert "local_album_membership_problem" in sql
+    assert "group by btrim(roots.id::text) || chr(1)" in sql
+    assert "fetch first %(limit)s rows with ties" in sql
+    assert "root_id || '/' || folder_path" not in sql
+    assert "overrides.updated_at desc" in sql
+    assert "overrides.id desc" in sql
+    assert sql.index("case when overrides.track_key = files.private_path") < sql.index(
+        "overrides.updated_at desc"
+    ) < sql.index("overrides.id desc")
+    assert "case when exception_override.override_payload ? 'exception_type'" in sql
+    assert "else files.metadata #>> '{scan_cache,file_entry,exception_type}'" in sql
+    assert "local_album_membership_problem" in sql
+    assert "))) = ''" in sql
+    assert sql.index("))) = ''") < sql.index("group by btrim(roots.id::text)")
+    assert (
+        'lower(coalesce(album_artist, \'\') collate "und-x-icu") collate "c"'
+        in sql
+    )
+
+
+def test_membership_group_header_and_hydration_share_physical_folder_identity():
+    header_sql = " ".join(
+        inventory_module._membership_problem_group_headers_sql(bounded=True).lower().split()
+    )
+    hydration_sql = " ".join(
+        inventory_module._non_album_candidates_sql(
+            unassigned_only=True,
+            membership_problems_only=True,
+            membership_groups=True,
+        ).lower().split()
+    )
+
+    identity = "btrim(roots.id::text) || chr(1) || regexp_replace(case"
+    assert identity in header_sql
+    assert identity in hydration_sql
+    assert "library.local_path_style(files.private_path)" in header_sql
+    assert "library.local_path_style(files.private_path)" in hydration_sql
+    assert "as membership_group_id" in hydration_sql
+    assert "as membership_group_folder" in hydration_sql
+
+
+def test_complete_membership_group_headers_are_not_clamped():
+    sql = " ".join(
+        inventory_module._membership_problem_group_headers_sql(bounded=False).lower().split()
+    )
+
+    assert "fetch first" not in sql
+    assert "limit %(limit)s" not in sql
+
+
 def test_inventory_sql_has_no_musicbrainz_or_lastfm_authority_selectors():
     sql = "\n".join(
         (
@@ -424,6 +551,13 @@ def test_inventory_sql_has_no_musicbrainz_or_lastfm_authority_selectors():
 
     for forbidden in ("mbid", "musicbrainz", "lastfm", "last.fm", "integration."):
         assert forbidden not in sql
+
+
+def test_non_album_candidates_read_stored_membership_without_per_row_cte_scans():
+    sql = " ".join(inventory_module._non_album_candidates_sql().lower().split())
+    assert "(select problem from local_album_membership" not in sql
+    assert "exists (select 1 from local_album_membership" not in sql
+    assert "library.local_track_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}'" in sql
 
 
 def test_non_album_candidate_query_projects_custom_collection_name():
@@ -498,3 +632,38 @@ def test_inventory_repository_rejects_missing_database_url_before_connecting():
 
     with pytest.raises(RuntimeError, match="ALBUM_HAVEN_APP_DATABASE_URL is required"):
         repository.load_support_state()
+
+
+def _cte_body(sql: str, name: str) -> tuple[str, str]:
+    """(the keyword after AS, the body) of CTE ``name``: the text up to the next top-level CTE or SELECT."""
+    match = re.search(rf"\s{name} as (materialized )?\(", sql)
+    assert match, f"no CTE {name}"
+    depth, start = 1, match.end()
+    for index in range(start, len(sql)):
+        depth += {"(": 1, ")": -1}.get(sql[index], 0)
+        if depth == 0:
+            return (match.group(1) or "").strip(), sql[start:index]
+    raise AssertionError(f"CTE {name} is not closed")
+
+
+def test_a_drain_batch_reads_overrides_in_materialized_steps_that_no_outer_row_can_rerun():
+    """Case 55: a folder batch's overrides are read once per statement. batch_keys, override_hits,
+    exception_candidates and their ranking are each AS MATERIALIZED; exception_overrides is read only inside
+    override_hits, one scan per branch keyed by the batch's keys as an array (no join to the keys and no lateral,
+    so nothing re-scans the table per key), referring to nothing but batch_keys and bootstrap_context; nothing
+    after it reads exception_overrides again."""
+    sql = " ".join(inventory_module._non_album_candidates_sql(
+        unassigned_only=True, membership_problems_only=True, all_roots=True, membership_folders=True,
+    ).lower().split()).replace(" ( ", " (").replace(" )", ")")
+    sql = "\n " + sql.replace(", ", ",\n ")
+    for name in ("batch_keys", "override_hits", "exception_candidates", "ranked_exception_overrides"):
+        keyword, _body = _cte_body(sql, name)
+        assert keyword == "materialized", f"{name} must be AS MATERIALIZED"
+    _keyword, hits = _cte_body(sql, "override_hits")
+    assert hits.count("from library.exception_overrides overrides") == 2, "one scan per branch"
+    assert hits.count("= any(array(select batch_keys.") == 2, "each branch keyed by the batch's array"
+    assert sql.count("library.exception_overrides") == hits.count("library.exception_overrides"), (
+        "exception_overrides is read only inside override_hits")
+    outer = set(re.findall(r"\b([a-z_]+)\.(?:private_path|track_id|library_id)\b", hits)) - {"overrides"}
+    assert outer <= {"batch_keys", "bootstrap_context"}, f"override_hits refers to an outer row: {outer}"
+    assert "lateral" not in hits, "a set join of the batch keys, never a per-key lateral"

@@ -6,6 +6,51 @@ from tests.e2e.support import isolatedPostgres
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory
 
 
+@pytest.mark.parametrize("field,value,query,found", [
+    ("year", 2001, "2001", True),
+    ("artist", "Scan Artist", "Scan Artist", True),
+    ("album_artist", "Scan Owner", "Scan Owner", True),
+    ("album", "Scan Release", "Scan Release", True),
+    ("album_artist", "Raw Artist", "Canonical Artist", True),
+    # Loose search also matches an exact year, exception type or collection name.
+    # A stored "non album rarity" is the "Non-album rarity" type; case does not matter.
+    ("exception_type", "non album rarity", "non-album rarity", True),
+    ("override", "Custom Collection", "Custom Collection", True),
+    # Literal search: no typo matching.
+    ("title", "Morning", "Mornng", False),
+    ("exception_type", "non album rarity", "Non-album rarty", False),
+])
+def test_global_loose_track_search_keeps_persisted_field_matches(
+    watcher_repair_inventory, field, value, query, found,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    track = fixture.entry("Generic/Folder/audio.flac", album="", exception="Interview")
+    unrelated = fixture.entry("Generic/Other/unrelated.flac", album="", exception="Interview")
+    fixture.seed(track, unrelated)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        if field == "override":
+            connection.execute("""
+                insert into library.exception_overrides(library_id, track_key, override_payload)
+                select library_id, track_key, %s::jsonb from library.local_tracks where track_key = %s
+            """, (Jsonb({"exception_type": value}), track["path"]))
+        else:
+            connection.execute("""
+                update library.local_track_files set metadata = jsonb_set(
+                  metadata, array['scan_cache','file_entry',%s], %s::jsonb)
+                where private_path = %s
+            """, (field, Jsonb(value), track["path"]))
+    repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    _, entries = repository._load_non_album_entries(
+        view_state={"visible_library_categories": ["main_library"]},
+        alias_to_canonical={"Raw Artist": "Canonical Artist"},
+        canonical_to_aliases={"Canonical Artist": ["Raw Artist"]}, query=query,
+        include_library_wide=True,
+    )
+    assert [entry["path"] for entry in entries] == ([track["path"]] if found else [])
+
+
 @pytest.mark.parametrize("source, exception", [
     ("stored", "Interview"), ("stored", " non album rarity "),
     ("path_override", "INTERVIEW"), ("track_override", "Interview"),
@@ -36,7 +81,9 @@ def test_live_album_projections_keep_exceptions_only_in_loose_tracks(watcher_rep
     ordinary_exception = source in {"clear_null", "clear_empty"} or exception == "Unknown exception"
     expected = {"owner::normal album", "owner::mixed album"} | ({"owner::interview album"} if ordinary_exception else set())
     startup_sidebar, startup_rows = repository._load_root_startup_rows(state, {})
-    for rows in (startup_sidebar, repository._load_root_sidebar_rows(state)):
+    with repository._connect_to_database() as connection:
+        sidebar_rows = repository._load_root_sidebar_rows(state, connection=connection)
+    for rows in (startup_sidebar, sidebar_rows):
         assert sum(row["album_count"] for row in rows) == len(expected)
     surfaces = {
         "root": repository._load_root_album_browse_rows(state),

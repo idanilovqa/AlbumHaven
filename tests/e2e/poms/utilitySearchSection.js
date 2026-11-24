@@ -19,11 +19,11 @@ export class UtilitySearchSection extends BasePage {
     return this.page.locator(`[data-problem-filter-value="${problemType}"]`).first();
   }
 
-  filterChipByValue(problemType) {
-    return this.page.locator(this.filterChipSelector(problemType)).first();
+  selectedFilterOptionByValue(problemType) {
+    return this.page.locator(this.selectedFilterOptionSelector(problemType)).first();
   }
 
-  filterChipSelector(problemType) {
-    return `[data-remove-problem-filter="${problemType}"]`;
+  selectedFilterOptionSelector(problemType) {
+    return `[data-problem-filter-value="${problemType}"][aria-selected="true"]`;
   }
 }

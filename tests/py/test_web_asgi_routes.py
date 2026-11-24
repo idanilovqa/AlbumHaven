@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import threading
 from types import SimpleNamespace
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from music_app.services import startup_bootstrap
@@ -141,7 +141,7 @@ def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> 
     )
 
 
-@pytest.mark.parametrize("path", ["/", "/bootstrap-data"])
+@pytest.mark.parametrize("path", ["/albums", "/bootstrap-data"])
 @pytest.mark.parametrize("all_artists", ["1", "true", "0", ""])
 def test_asgi_search_reload_preserves_all_artists_hydration(app, monkeypatch, path, all_artists):
     from music_app.routes import web_asgi
@@ -457,6 +457,65 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
     assert news_status == 200
     assert b'data-shell-content-kind="discovery_center_page"' in news_body
     assert b"Discovery Center" in news_body
+
+
+def test_selected_artist_search_reload_requests_lightweight_summary(monkeypatch):
+    from starlette.datastructures import QueryParams
+    from music_app.routes import web_asgi
+
+    captured = []
+
+    class SummaryRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_selected_artist_payload(self, *, query_params, library_state):
+            captured.append(query_params)
+            return {"selected_artist": "Hans Zimmer", "artist_groups": [], "artists_sidebar": []}
+
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", SummaryRepository)
+    web_asgi._build_postgres_selected_artist_startup_view(
+        config={}, library_state={},
+        query_args=QueryParams("artist=Hans+Zimmer&q=hans+zimmer&category=hoard&category=main_library"),
+    )
+    assert captured[0].get("payload_tier") == "gallery_summary"
+    assert captured[0].get("q") == "hans zimmer"
+    assert captured[0].getlist("category") == ["hoard", "main_library"]
+    assert captured[0].get("root_sidebar") is None
+
+
+def test_index_bootstrap_defers_selected_artist_gallery_until_runtime_hydration(monkeypatch):
+    from starlette.datastructures import QueryParams
+
+    from music_app.routes import web_asgi
+
+    monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    monkeypatch.setattr(
+        web_asgi,
+        "_build_postgres_selected_artist_startup_view",
+        lambda **_kwargs: pytest.fail("index bootstrap must not build the selected-artist gallery"),
+    )
+
+    payload, _, startup_preview = web_asgi._build_bootstrap_payload(
+        query_args=QueryParams("surface=albums&artist=Broadcast"),
+        config={"MUSIC_DIR": "C:/Music", "APP_NAME": "Album Haven"},
+        logger=None,
+        library_state={},
+        query_raw="",
+        selected_artist="Broadcast",
+        refreshed=False,
+        request_started_epoch_ms=1,
+        defer_selected_artist_startup=True,
+    )
+
+    assert payload["initial_view"]["selected_artist"] == "Broadcast"
+    assert payload["initial_view"]["artist_groups"] == []
+    assert payload["bootstrap"]["startupHydration"]["required"] is True
+    assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
+        "/view-data?surface=albums&root_sidebar=1&artist=Broadcast"
+    )
+    assert payload["bootstrap"]["startupPreview"]["renderedGalleryMarkup"] is False
+    assert startup_preview["gallery_html"] == ""
 
 
 @pytest.mark.parametrize("requested_tier, expected_tier", [(None, "gallery_summary"), ("full", "full")])
@@ -1616,10 +1675,10 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
 
     assert track_status == 200
     assert track_body == b"track-bytes"
-    assert track_headers.get("cache-control") == "no-cache"
+    assert track_headers.get("cache-control") == "private, no-store"
     assert track_headers.get("content-disposition") == 'inline; filename="song.mp3"'
     assert revalidated_track_status == 304
-    assert revalidated_track_headers.get("cache-control") == "no-cache"
+    assert revalidated_track_headers.get("cache-control") == "private, no-store"
     assert revalidated_track_body == b""
     assert rejected_track_status == 404
     _assert_flask_like_private_media_not_found(_rejected_track_headers, _rejected_track_body)
@@ -1637,20 +1696,20 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
     assert revalidated_cover_mtime_body == b""
     assert loop_status == 200
     assert loop_body == b"loop-bytes"
-    assert loop_headers.get("cache-control") == "no-cache"
+    assert loop_headers.get("cache-control") == "private, no-store"
     assert loop_headers.get("content-disposition") == 'inline; filename="loop-1.mp3"'
     assert revalidated_loop_status == 304
-    assert revalidated_loop_headers.get("cache-control") == "no-cache"
+    assert revalidated_loop_headers.get("cache-control") == "private, no-store"
     assert revalidated_loop_headers.get("content-disposition") == 'inline; filename="loop-1.mp3"'
     assert revalidated_loop_body == b""
     assert rejected_loop_status == 404
     _assert_flask_like_private_media_not_found(rejected_loop_headers, rejected_loop_body)
     assert preview_status == 200
     assert preview_body == b"preview-bytes"
-    assert preview_headers.get("cache-control") == "no-cache"
+    assert preview_headers.get("cache-control") == "private, no-store"
     assert preview_headers.get("content-disposition") == 'inline; filename="loop-1_pplus1.mp3"'
     assert revalidated_preview_status == 304
-    assert revalidated_preview_headers.get("cache-control") == "no-cache"
+    assert revalidated_preview_headers.get("cache-control") == "private, no-store"
     assert revalidated_preview_headers.get("content-disposition") == 'inline; filename="loop-1_pplus1.mp3"'
     assert revalidated_preview_body == b""
     assert missing_preview_status == 404
@@ -1712,7 +1771,7 @@ def test_asgi_saved_loop_media_uses_owned_stored_legacy_artifact(
 
     assert status == 200
     assert body == b"canonical-loop-bytes"
-    assert headers.get("cache-control") == "no-cache"
+    assert headers.get("cache-control") == "private, no-store"
 
 
 def test_asgi_cover_uses_dedicated_capacity_instead_of_the_shared_request_worker(
@@ -1758,7 +1817,7 @@ def test_asgi_cover_uses_dedicated_capacity_instead_of_the_shared_request_worker
         "Нил Морс - Джозеф, часть первая.png",
     ],
 )
-def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_unicode(
+def test_asgi_cover_names_no_library_file_in_content_disposition(
     app,
     filename,
     monkeypatch,
@@ -1775,7 +1834,8 @@ def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_u
         cover_reference_url(asgi_app, cover_path),
         query={},
     )
-    expected_disposition = f"inline; filename*=utf-8''{quote(filename)}"
+    # A cover may be stored, and a cache keeps the headers with the image.
+    expected_disposition = 'inline; filename="cover.png"'
 
     assert status == 200
     assert body == b"cover-bytes"
@@ -2276,3 +2336,19 @@ def test_pending_gallery_bootstrap_renders_bounded_preview_and_hydrates_without_
     assert "gallery_page_size=50" in hydration["followupEndpoint"]
     assert asgi_app.state.library_state["cold_scan_pending"] is False
     assert asgi_app.state.library_state["cold_scan_handoff_status"] == "idle"
+
+
+def test_pending_edit_scope_is_per_account_and_library_and_empty_when_signed_out():
+    """T3 (owner's overlay rule, 2026-11-23): a page's pending tag edits are kept per account and library."""
+    from types import SimpleNamespace
+
+    from music_app.routes.web_asgi import _pending_edit_scope
+
+    def actor(account_id, library_id):
+        return SimpleNamespace(is_authenticated=True, account_id=account_id, current_library_id=library_id)
+
+    scopes = {_pending_edit_scope(actor(1, 10)), _pending_edit_scope(actor(2, 10)), _pending_edit_scope(actor(1, 11))}
+    assert len(scopes) == 3 and all(scopes)
+    assert _pending_edit_scope(actor(1, 10)) == _pending_edit_scope(actor(1, 10))
+    assert _pending_edit_scope(SimpleNamespace(is_authenticated=False, account_id=None)) == ""
+    assert _pending_edit_scope(None) == ""

@@ -76,6 +76,17 @@ for (const [width, palette] of [[390, 'black'], [320, 'parchment-pine']]) {
     await phone.searchButton.tap();
     await expect(phone.searchInput).toBeFocused();
     await expect(phone.searchInput).toHaveValue('Sixteen Horizons');
+    for (let reopen = 0; reopen < 3; reopen += 1) {
+      await phone.searchInput.press('Home');
+      await phone.searchInput.press('Escape');
+      await phone.expectSearchCollapsed('Sixteen Horizons');
+      await phone.searchButton.tap();
+      await expect(phone.searchInput).toBeFocused();
+      await phone.searchInput.press('!');
+      await expect(phone.searchInput).toHaveValue('Sixteen Horizons!');
+      await phone.searchInput.press('Backspace');
+      await expect(phone.searchInput).toHaveValue('Sixteen Horizons');
+    }
     await phone.expectExpandedSearchLeavesSettings();
     await snapshot(`117-search-reserves-settings-${width}`);
     await phone.settingsButton.tap();

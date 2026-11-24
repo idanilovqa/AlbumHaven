@@ -19,6 +19,14 @@ from music_app.services.library_event_coordinator import (
 from music_app.services.runtime_shutdown import create_daemon_executor
 
 
+class LibraryRootUnavailableError(OSError):
+    """A catch-up could not access one configured library root."""
+
+    def __init__(self, root_id: str) -> None:
+        self.root_id = str(root_id or "").strip()
+        super().__init__(f"Library watcher catch-up root is unavailable: {self.root_id}")
+
+
 @dataclass(frozen=True, slots=True)
 class _CatchUpBatch:
     root_ids: frozenset[str]
@@ -94,6 +102,23 @@ class TargetedReconciliationScheduler:
                     self._record_problems("overflow", overflow_roots)
         if dispatch is not None:
             self._dispatch_request(dispatch)
+        return True
+
+    def request_catch_up(self, root_ids: frozenset[str]) -> bool:
+        """Admit already-recorded watcher failures to the serial recovery lane."""
+        roots = {str(root_id).strip() for root_id in root_ids if str(root_id).strip()}
+        dispatch = False
+        with self._lock:
+            if self._stopped or not roots:
+                return False
+            self._failed_catch_up_roots.difference_update(roots)
+            self._catch_up_roots.update(roots)
+            if not self._active:
+                self._active = True
+                self._idle.clear()
+                dispatch = True
+        if dispatch:
+            self._advance()
         return True
 
     def wait_for_idle(self, *, timeout: float | None = None) -> bool:
@@ -175,11 +200,14 @@ class TargetedReconciliationScheduler:
     def _complete_catch_up(self, completed: Future, batch: _CatchUpBatch) -> None:
         try:
             completed.result()
-        except Exception:
+        except Exception as error:
             self._logger.exception("Library watcher catch-up failed.")
             with self._lock:
                 self._failed_catch_up_roots.update(batch.root_ids)
-            self._record_problems("reconciliation_failed", batch.root_ids)
+            if isinstance(error, LibraryRootUnavailableError) and error.root_id in batch.root_ids:
+                self._record_problems("root_unavailable", frozenset({error.root_id}))
+            else:
+                self._record_problems("reconciliation_failed", batch.root_ids)
         else:
             try:
                 self._clear_recovered(batch.root_ids)

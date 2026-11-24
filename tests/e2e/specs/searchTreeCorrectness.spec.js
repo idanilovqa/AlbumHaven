@@ -34,10 +34,12 @@ const EXPECTED_COMPLETE_NEAL_GALLERY = [
 ];
 const FLOWER_KINGS_QUERY = 'flower kings';
 const FLOWER_KINGS_ARTIST = 'The Flower Kings';
+// The search tree keeps the library's alphabetical order; the best match is
+// selected, not moved to the top.
 const EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS = [
-  FLOWER_KINGS_ARTIST,
   'Agents Of Mercy',
   'Roine Stolt',
+  FLOWER_KINGS_ARTIST,
 ];
 const UNRELATED_ARTIST = 'Album Haven Last.fm Fixture';
 const RECENT_SEARCH_QUERY = 'Joseph';
@@ -181,8 +183,11 @@ test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a n
       numeric: true,
       sensitivity: 'base',
     })));
-    expect(await navigationPanelActions.readSidebarArtistNames())
-      .toEqual(await galleryActions.readArtistHeadings());
+    // Same artists as the gallery; the tree lists them alphabetically while the
+    // gallery leads with the selected best match.
+    const treeNames = await navigationPanelActions.readSidebarArtistNames();
+    expect([...treeNames].sort()).toEqual([...(await galleryActions.readArtistHeadings())].sort());
+    expect(treeNames).toEqual(EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS);
     expect(await galleryActions.readAlbumNamesByHeading(FLOWER_KINGS_ARTIST))
       .not.toHaveLength(0);
   });
@@ -198,6 +203,7 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     'Capture the complete Transatlantic artist-name gallery',
     async () => {
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TRANSATLANTIC_ARTIST)}`);
+      await galleryActions.waitForGalleryReady();
       await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST);
       const albums = await galleryActions.readAppliedPrimaryArtistAlbumNames(TRANSATLANTIC_ARTIST);
       expect(albums.length).toBeGreaterThan(1);
@@ -212,6 +218,7 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
   let completeNealView;
   await stepLogger.step('Search for Transatlantic from Neal Morse', async () => {
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}`);
+    await galleryActions.waitForGalleryReady();
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
     completeNealView = {
       albums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
@@ -740,9 +747,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
     await navigationPanelActions.waitForSidebarArtistNames(directUrlTrees.rootNames);
     await navigationPanelActions.waitForSidebarSelection(FAMILY_ARTIST);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
-    expect(await searchToolbarActions.readCanonicalSearchState({
-      source: 'bootstrap',
-    })).toEqual(
+    expect(await searchToolbarActions.readCanonicalSearchState()).toEqual(
       expect.objectContaining({
         query: '',
         searchContext: null,
@@ -759,9 +764,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
       queryValue: DEEP_LINK_QUERY,
     });
-    const canonicalState = await searchToolbarActions.readCanonicalSearchState({
-      source: 'bootstrap',
-    });
+    const canonicalState = await searchToolbarActions.readCanonicalSearchState();
     expect(canonicalState.query).toBe(DEEP_LINK_QUERY);
     expect(canonicalState.selectedArtist).toBe(FAMILY_ARTIST);
     expect(canonicalState.searchContext).toEqual(expect.objectContaining({
@@ -778,6 +781,33 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
     );
     expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(FAMILY_ARTIST);
   });
+});
+
+test('FTC-SEARCH-NAV-003 finds accented artist names through visible search and direct links', { tag: '@area:gallery-search' }, async ({
+  galleryActions,
+  navigationPanelActions,
+  searchToolbarActions,
+  stepLogger,
+}) => {
+  const artist = 'Onségen Ensemble';
+  await galleryActions.goto('/');
+  await galleryActions.waitForGalleryReady();
+  for (const query of ['Onsegen', 'Onségen', 'Onse\u0301gen']) {
+    await stepLogger.step(`Search ${query} and retain the accented artist display name`, async () => {
+      await searchToolbarActions.search(query, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(query);
+      await navigationPanelActions.waitForSidebarArtistNames([artist]);
+      await navigationPanelActions.waitForSidebarSelection(artist);
+      await galleryActions.waitForSelectedArtistGallery(artist, { queryValue: query });
+      expect(await galleryActions.readAlbumNamesByHeading(artist)).toEqual(['Awalaï']);
+    });
+    await stepLogger.step(`Reload ${query} directly with the same artist and album`, async () => {
+      await galleryActions.goto(`/?surface=albums&q=${encodeURIComponent(query)}`);
+      await navigationPanelActions.waitForSidebarArtistNames([artist]);
+      await galleryActions.waitForSelectedArtistGallery(artist, { queryValue: query });
+      expect(await galleryActions.readAlbumNamesByHeading(artist)).toEqual(['Awalaï']);
+    });
+  }
 });
 
 test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist', { tag: '@area:gallery-search' }, async ({
@@ -882,17 +912,26 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
   });
 
   await stepLogger.step('Hide the Neal-family panel immediately when an unrelated artist starts loading', async () => {
-    await navigationPanelActions.selectSidebarArtistByName(UNRELATED_ARTIST);
-    expect(await artistFamilyActions.readPanelState()).toEqual({
-      visible: false,
-      chipTexts: [],
-    });
+    await navigationPanelActions.openArtistTree();
+    await artistFamilyActions.startPanelStateObservation();
+    await navigationPanelActions.clickVisibleSidebarArtistByName(UNRELATED_ARTIST);
+    await artistFamilyActions.recordPanelState();
+    // The unrelated artist may finish loading before this read, so its own chip may already be there.
+    const panelState = await artistFamilyActions.readPanelState();
+    expect(panelState.visible).toBe(false);
+    expect(panelState.chipTexts.every(text => text === UNRELATED_ARTIST)).toBe(true);
   });
 
   await stepLogger.step('Settle on the unrelated artist without restoring the stale family panel', async () => {
     await navigationPanelActions.waitForSidebarSelection(UNRELATED_ARTIST);
     await galleryActions.waitForOnlyArtistHeadings([UNRELATED_ARTIST]);
     await artistFamilyActions.waitForHidden();
+    // From the press to here the panel never showed. Just after the press the hidden panel may still
+    // hold the Neal chips until it re-renders; hidden, they are not on screen, and the read after the
+    // click (previous step) proves they are gone by then.
+    const states = await artistFamilyActions.finishPanelStateObservation();
+    expect(states.length).toBeGreaterThan(0);
+    expect(states.filter(state => state.visible)).toEqual([]);
     expect(await artistFamilyActions.readPanelState()).toEqual({
       visible: false,
       chipTexts: [UNRELATED_ARTIST],

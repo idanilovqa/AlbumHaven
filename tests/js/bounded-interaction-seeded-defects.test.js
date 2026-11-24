@@ -373,6 +373,17 @@ const DEFECTS = [
     expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#status:route:GET \/status via build_relation_views$/,
   },
   {
+    // 6.5 (11-23): the component builder has its own affected-set name; the library-scale one stays protected.
+    id: 'BI-04 status request that builds relation views from every source row',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    // The BI-H05/H06/H14 case above already seeds the same line, so this one anchors on the comment alone.
+    anchor: '    # Status is observational',
+    replacement: '    build_postgres_relation_views([])\n    # Status is observational',
+    prelude: 'from music_app.services.relation_projection_builder import build_postgres_relation_views\n',
+    expected: /^rejected BI-04 library-scale:py:music_app\/services\/relation_projection_builder\.py#build_postgres_relation_views at music_app\/services\/relation_projection_builder\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#status:route:GET \/status via build_postgres_relation_views$/,
+  },
+  {
     id: 'BI-06 read request that walks the music root',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
@@ -475,6 +486,17 @@ const DEFECTS = [
     expected: /^rejected BI-15 database-connect-per-request:psycopg\.connect at music_app\/services\/generated_preview_storage_postgres\.py:\d+ from py:music_app\/routes\/admin_asgi\.py#get_preview_storage:route:GET \/admin\/server\/preview-storage via /,
   },
   {
+    // The save's prevalidator reaches its caller inside **options, through a spread and a forwarded
+    // **kwargs. A full preparation there (#65's gallery rebuild before a save) was never reported.
+    id: 'BI-04 tag save prevalidation, passed inside unpacked options, that rebuilds the library',
+    language: 'py',
+    file: 'music_app/services/cache.py',
+    anchor: '    _select_runtime_scan_cache_adapter(config).validate_structural_tag_edit(\n',
+    replacement: '    _seeded_prevalidation_rebuild([], config)\n    _select_runtime_scan_cache_adapter(config).validate_structural_tag_edit(\n',
+    prelude: 'from music_app.services.relations import build_relation_views as _seeded_prevalidation_rebuild\n',
+    expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_wave_a_asgi_routes\.py#utilities_edit_tags:route:POST \/utilities\/edit-tags via .*validate_structural_tag_edit_for_config/,
+  },
+  {
     id: 'BI-04 background reconciler that rebuilds every relation view without a batching contract',
     language: 'py',
     file: 'music_app/services/cover_lookup_tasks.py',
@@ -504,13 +526,14 @@ const DEFECTS = [
   },
   {
     // An async route that runs the file-backed Home build on the event loop
-    // serves no other request until the build finishes.
+    // serves no other request until the build finishes. home_data is already
+    // async and hands its build to the thread pool; the defect calls it inline.
     id: 'BI-08 Home builder called directly inside async def home_data',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
-    anchor: '@router.get("/home-data")\ndef home_data(request: Request) -> JSONResponse:',
-    replacement: '@router.get("/home-data")\nasync def home_data(request: Request) -> JSONResponse:',
-    expected: /^rejected BI-08 event-loop-blocking:\w+:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#home_data:route:GET \/home-data via build_home_payload > /,
+    anchor: '        payload = await run_in_threadpool(_build_home_data_payload, request, request_started_at)\n',
+    replacement: '        payload = _build_home_data_payload(request, request_started_at)\n',
+    expected: /^rejected BI-08 event-loop-blocking:\w+:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#home_data:route:GET \/home-data via _build_home_data_payload > /,
   },
   {
     id: 'BI-08 async route that builds the Home payload directly on the event loop',
@@ -687,7 +710,7 @@ const DEFECTS = [
       + '                            st,\n'
       + '                            previous_file_cache,\n'
       + '                            current_file_cache,\n'
-      + '                            changed_paths,\n'
+      + '                            inherited_paths,\n'
       + '                            current_separate_release_keys,\n'
       + '                        ),\n',
     replacement: '                        candidate_paths=st.get("file_cache", {}) or {},\n',

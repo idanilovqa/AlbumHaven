@@ -237,6 +237,13 @@ def test_runtime_app_scaffold_does_not_fabricate_flask_context_methods():
     assert "test_request_context=" not in scaffold_source
 
 
+@pytest.fixture
+def migrated_empty_library(monkeypatch):
+    from tests.py.runtime_testing import stub_migrated_empty_library
+
+    stub_migrated_empty_library(monkeypatch)
+
+
 def _run_asgi_http_get(app, path: str) -> tuple[int, dict[str, str], bytes]:
     return run_asgi_request(app, "GET", path)
 
@@ -899,6 +906,7 @@ def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
         asyncio.run(handle.stop())
 
 
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
@@ -946,6 +954,7 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     assert retry_calls == ["started"]
 
 
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
     monkeypatch, unreachable_postgres_pool,
 ):
@@ -1055,6 +1064,7 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
     ]
 
 
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch,
     caplog,
@@ -1196,6 +1206,7 @@ def test_create_asgi_app_lifespan_schedules_only_incomplete_hydrated_metadata_re
 
 
 @pytest.mark.parametrize("root_query", [{}, {"surface": "albums"}], ids=["home", "albums"])
+@pytest.mark.usefixtures("migrated_empty_library")
 def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch, root_query):
     from config import Config
     from music_app import create_asgi_app
@@ -1301,7 +1312,11 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     ]
     assert submissions == []
     assert asgi_app.state.library_state["cold_scan_pending"] is False
-    root_status, _root_headers, root_body = run_asgi_request(asgi_app, "GET", "/", query=root_query)
+    root_status, _root_headers, root_body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/albums" if root_query else "/",
+    )
     status_status, _status_headers, status_body = _run_asgi_http_get(asgi_app, "/status")
 
     assert root_status == 200
@@ -1732,6 +1747,89 @@ def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration(mo
     handle._worker.join(timeout=2)
     assert not handle._worker.is_alive()
     assert calls == ["prewarm", "recovery", "metadata", "relations"]
+
+
+@pytest.mark.parametrize("outdated", [True, False])
+def test_postgres_warmup_rereads_files_stored_by_an_older_metadata_reader(monkeypatch, outdated):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from music_app import _start_library_warmup
+
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
+    calls = []
+    runtime = SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"},
+        logger=Mock(), library_state={},
+    )
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: calls.append("full_hydrate"),
+        lambda _runtime, **_kwargs: calls.append("relations"),
+        lambda _state, _config, _logger, **kwargs: calls.append(("scan", kwargs)),
+        lambda _url: None,
+        metadata_repair_required=lambda _runtime: calls.append("check") or outdated,
+    )
+    handle._worker.join(timeout=2)
+    assert not handle._worker.is_alive()
+    expected_scan = [("scan", {"force": True, "scan_mode": "background"})] if outdated else []
+    assert calls == ["relations", "check", *expected_scan]
+
+
+def test_postgres_warmup_still_repairs_metadata_when_the_relation_journal_is_retained(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from music_app import _start_library_warmup
+
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
+    calls = []
+
+    def retained_journal(_runtime, **_kwargs):
+        calls.append("relations")
+        raise RuntimeError("Legacy publication differs from the scoped source rebuild; journal retained.")
+
+    runtime = SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"},
+        logger=Mock(), library_state={},
+    )
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: None,
+        retained_journal,
+        lambda _state, _config, _logger, **kwargs: calls.append(("scan", kwargs)),
+        lambda _url: None,
+        metadata_repair_required=lambda _runtime: calls.append("check") or True,
+    )
+    handle._worker.join(timeout=2)
+    assert not handle._worker.is_alive()
+    assert calls == ["relations", "check", ("scan", {"force": True, "scan_mode": "background"})]
+    runtime.logger.exception.assert_called_once_with("Postgres relation warm-up failed.")
+
+@pytest.mark.parametrize("lease_held_elsewhere", [True, False])
+def test_postgres_metadata_repair_scan_runs_once_across_instances_sharing_a_database(monkeypatch, lease_held_elsewhere):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from music_app import _start_library_warmup
+
+    monkeypatch.setattr("music_app._POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
+    calls = []
+    lease = SimpleNamespace(release=lambda: calls.append("release"))
+    runtime = SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"},
+        logger=Mock(), library_state={},
+    )
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: None,
+        lambda _runtime, **_kwargs: None,
+        lambda _state, _config, _logger, **_kwargs: calls.append("scan"),
+        lambda _url: None,
+        metadata_repair_required=lambda _runtime: True,
+        acquire_metadata_repair_lease=lambda _runtime: None if lease_held_elsewhere else lease,
+    )
+    handle._worker.join(timeout=2)
+    assert not handle._worker.is_alive()
+    assert calls == ([] if lease_held_elsewhere else ["scan", "release"])
+
 
 def test_lifespan_compiles_templates_without_rendering_before_first_request(monkeypatch):
     from jinja2 import DictLoader, Template

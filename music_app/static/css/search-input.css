@@ -66,16 +66,6 @@
 }
 .search-field-action > .search-field-button:disabled { opacity: .5; cursor: default; }
 
-/* The connected dropdown owns focus styling while its trigger is open.
-   Its bridge must paint over the enclosing field border without clipping. */
-:root .search-field-control:has(.search-field-button.trigger-anchor-open) {
-  outline: none;
-  border-bottom-right-radius: 0;
-}
-.search-field-action > .search-field-button.trigger-anchor-open {
-  overflow: visible;
-  z-index: 41;
-}
 /* Portaled dialogs can paint above the field regardless of the button's z-index.
    Their shadows must not introduce a divider across the connected surface. */
 :root .trigger-anchor-surface[data-trigger-anchor-search="true"] {
@@ -100,4 +90,7 @@
 :root .search-field-control .search-field-button {
   outline: none !important;
   box-shadow: none !important;
+}
+:root .search-field-control .search-field-button.trigger-anchor-open {
+  border-width: 0 !important;
 }

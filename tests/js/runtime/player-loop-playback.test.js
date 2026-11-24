@@ -3904,6 +3904,17 @@ for (const actions of [{ 'library.media.read': false }, {}]) {
   });
 }
 
+test('a track started from Loose Tracks remembers that collection as its player origin', async () => {
+  const f = loadCapabilityTrackRow(undefined);
+  const looseTracksModal = {};
+  f.button.closest = selector => (selector === '#non-album-modal' ? looseTracksModal : null);
+  f.context.state.ui = { ...(f.context.state.ui || {}), nonAlbumLibraryWide: true };
+  f.context.state.player.current = null;
+  f.context.activateSharedTrackButton(f.button, { restart: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(f.context.state.player.current.looseTracksOrigin)), { libraryWide: true });
+});
+
 for (const actions of [{ 'library.media.read': true }, undefined]) {
   test(`mobile track click resumes and double-tap restarts through shared playback (${actions ? 'allowed' : 'legacy'})`, async () => {
     const f = loadCapabilityTrackRow(actions);
@@ -4135,9 +4146,17 @@ test('bounded interaction: mobile player metadata motion measures its three rows
     let observed = null;
     const { context } = loadHelper({
       usesMobilePageLayout: () => true,
-      resolveCompactPlayerMetadataRowMotion: ({ scrollWidth, clientWidth }) => {
+      resolveRunningLineMotion: ({ scrollWidth, clientWidth }) => {
         counter.count('itemsVisited');
         return { overflowing: scrollWidth > clientWidth, distance: scrollWidth - clientWidth, durationMs: 4200 };
+      },
+      applyRunningLineMotion: (element, motion) => {
+        element.style?.setProperty?.('--running-line-distance', `${motion.distance}px`);
+        element.style?.setProperty?.('--running-line-duration', `${motion.durationMs}ms`);
+      },
+      clearRunningLineMotion: (element) => {
+        element.style?.removeProperty?.('--running-line-distance');
+        element.style?.removeProperty?.('--running-line-duration');
       },
       ResizeObserver: class {
         constructor(callback) { counter.count('observers'); observed = callback; }

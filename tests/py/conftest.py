@@ -26,6 +26,8 @@ _SAFE_PYTEST_ENV = {
     "LASTFM_SESSION_KEY": "",
     "LASTFM_USERNAME": "",
     "ALBUM_HAVEN_APP_DATABASE_URL": "",
+    # Its background backfill must not race other tests' database resets.
+    "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "0",
 }
 _LASTFM_SENSITIVE_ENV_KEYS = tuple(key for key in _SAFE_PYTEST_ENV if key.startswith("LASTFM_"))
 _SAFE_RUNTIME_CONFIG = {
@@ -53,6 +55,15 @@ _PYTEST_ROOT_REMOVAL_ATTEMPTS = 4
 
 for key, value in _SAFE_PYTEST_ENV.items():
     os.environ[key] = value
+
+
+def _refuse_postgres_connections_that_could_reach_a_real_server() -> None:
+    from tests.py.postgres_target_guard import install
+
+    install()
+
+
+_refuse_postgres_connections_that_could_reach_a_real_server()
 
 
 def _workspace_pytest_temp_root() -> Path:
@@ -530,6 +541,18 @@ def _close_asgi_request_loop_after_each_test():
     asgi_testing = sys.modules.get("tests.py.asgi_testing")
     if asgi_testing is not None:
         asgi_testing.close_server_loop()
+
+
+@pytest.fixture(autouse=True)
+def _a_refused_start_fails_its_test(monkeypatch: pytest.MonkeyPatch):
+    """The startup gate still refuses. In process it fails that test, with the reason, where
+    the real exit would end the whole pytest run; subprocess tests cover the real exit."""
+    import music_app
+
+    def refused(_logger, refusal):
+        raise AssertionError(f"The app refused to start in process: {refusal}")
+
+    monkeypatch.setattr(music_app, "_exit_refusing", refused)
 
 
 @pytest.fixture(autouse=True)

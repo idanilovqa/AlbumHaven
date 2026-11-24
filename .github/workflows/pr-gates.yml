@@ -15,6 +15,8 @@ permissions:
 
 env:
   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+  # The job's own Postgres service: the one port-5432 target pytest may reach (tests/py/postgres_target_guard.py).
+  ALBUM_HAVEN_CI_POSTGRES_SERVICE: 127.0.0.1:5432
 
 concurrency:
   group: pr-gates-${{ github.event.pull_request.number || github.ref }}
@@ -1070,7 +1072,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: idanilovqa/album-haven-test-data
-          ref: b7ffc6b586fd5b25a049617c5e95fbdcccfddc11
+          ref: 38aa02ef034c6235362950946fdf15a4a9a65dc4
           path: album-haven-test-data
           token: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
           persist-credentials: false
@@ -1184,14 +1186,14 @@ jobs:
               throw "Unable to verify the pinned artwork-diversity generator checkout: $($generatorHeadOutput -join [Environment]::NewLine)"
             }
             $generatorHead = ([string]($generatorHeadOutput -join '')).Trim().ToLowerInvariant()
-            if ($generatorHead -ne "b7ffc6b586fd5b25a049617c5e95fbdcccfddc11") {
+            if ($generatorHead -ne "38aa02ef034c6235362950946fdf15a4a9a65dc4") {
               throw "Artwork-diversity generator checkout HEAD mismatch: $generatorHead"
             }
             $runnerArguments += @{
               GeneratorCheckout = $generatorCheckout
               ExpectedFixtureRelease = "fixtures-v1.0.30"
               BaseManifestSha256 = "0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752"
-              GeneratorCommit = "b7ffc6b586fd5b25a049617c5e95fbdcccfddc11"
+              GeneratorCommit = "38aa02ef034c6235362950946fdf15a4a9a65dc4"
               VariantCount = 512
               SourceMaxEdge = 960
             }
@@ -1653,6 +1655,60 @@ jobs:
           name: performance-diagnostics-${{ steps.shard.outputs.target17 }}-${{ github.run_attempt }}
           path: |
             album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target17 }}
+            album-haven-app/test-results/playwright-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload performance foundation 18 foundation-versions-performance-${{ steps.shard.outputs.target18 }}
+        if: ${{ always() && steps.shard.outputs.target18 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-performance-${{ steps.shard.outputs.target18 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target18 }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance result 18 performance-result-${{ steps.shard.outputs.target18 }}
+        if: ${{ always() && steps.shard.outputs.target18 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-result-${{ steps.shard.outputs.target18 }}-${{ github.run_attempt }}
+          path: album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target18 }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance diagnostics 18 performance-diagnostics-${{ steps.shard.outputs.target18 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target18 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-diagnostics-${{ steps.shard.outputs.target18 }}-${{ github.run_attempt }}
+          path: |
+            album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target18 }}
+            album-haven-app/test-results/playwright-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload performance foundation 19 foundation-versions-performance-${{ steps.shard.outputs.target19 }}
+        if: ${{ always() && steps.shard.outputs.target19 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-performance-${{ steps.shard.outputs.target19 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target19 }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance result 19 performance-result-${{ steps.shard.outputs.target19 }}
+        if: ${{ always() && steps.shard.outputs.target19 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-result-${{ steps.shard.outputs.target19 }}-${{ github.run_attempt }}
+          path: album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target19 }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance diagnostics 19 performance-diagnostics-${{ steps.shard.outputs.target19 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target19 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-diagnostics-${{ steps.shard.outputs.target19 }}-${{ github.run_attempt }}
+          path: |
+            album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target19 }}
             album-haven-app/test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
@@ -2489,11 +2545,13 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      # Every attempt of this run, not only the current one: rerunning failed
+      # jobs leaves the passing shards' evidence in the attempt that ran them.
       - name: Download Python contract evidence
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.test_python.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
-          pattern: foundation-versions-python-windows-*-${{ github.run_attempt }}
+          pattern: foundation-versions-python-windows-*
           path: ${{ runner.temp }}/python-shards
 
       # Every Python bounded-interaction contract must have measured its own

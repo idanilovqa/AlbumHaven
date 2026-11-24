@@ -27,6 +27,10 @@ const helperPath = path.join(
   'tag-editor-and-optimistic-updates.js',
 );
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
+  + '\n' + vm.runInNewContext(
+    fs.readFileSync(path.join(path.dirname(helperPath), 'album-track-table.js'), 'utf8')
+      + '\nmatchesAlbumTrackSearch',
+  ).toString()
   + '\n' + fs.readFileSync(helperPath, 'utf8');
 
 test('openTagEditor hydrates an album on mobile', () => {
@@ -186,6 +190,7 @@ function loadHelper(albums, overrides = {}) {
 test('marking an album version completes without waiting for the canonical gallery refresh', async () => {
   let resolveRefresh;
   let refreshStarted = 0;
+  let refreshOptions = null;
   const context = loadHelper([], {
     state: {
       modalReleases: [],
@@ -203,8 +208,9 @@ test('marking an album version completes without waiting for the canonical galle
       context.state.view = { ...context.state.view, ...patch };
     },
     buildApiUrl: () => '/api/library',
-    fetchAndRender() {
+    fetchAndRender(_url, _push, options) {
       refreshStarted += 1;
+      refreshOptions = options;
       return new Promise((resolve) => { resolveRefresh = resolve; });
     },
     scheduleBrowserAnimationFrame(callback) { callback(); },
@@ -218,6 +224,8 @@ test('marking an album version completes without waiting for the canonical galle
 
   assert.equal(saved, true);
   assert.equal(refreshStarted, 1);
+  // UI-11 (owner): the gallery updates in the background (mounted, same scroll), never behind the Loading page.
+  assert.equal(refreshOptions?.preserveScroll, true);
   assert.equal(context.state.view.manual_version_links.child, 'parent');
   resolveRefresh(true);
   await marking;
@@ -230,7 +238,6 @@ test('album editions render the same keyboard tab component as Home', () => {
     { key: 'remix', tabLabel: 'Anniversary Remix - 2018' },
   ];
   context.state.modalReleaseIndex = 1;
-  context.renderVersionContextMenu = () => {};
   const tabs = { hidden: true, innerHTML: '', querySelector: () => null };
   context.renderTrackModalTabs({ tabs });
   assert.equal(tabs.hidden, false);
@@ -286,6 +293,40 @@ test('version tabs are the sole edition indicator while standalone editions reta
     standalone.elements.header.innerHTML,
     /album-details-header__tag">Special Edition<\/span>/,
   );
+});
+
+test('re-rendering an unchanged album keeps its header (and Close) in place', () => {
+  // The summary render and the hydrated details usually build the same header;
+  // rewriting it replaced Close under the pointer and a close click waited ~500 ms.
+  const album = {
+    key: 'stable', name: 'Stable Album', album_artist: 'Stable Artist', year: 2001,
+    release_type: 'ALBUM', cover_path: 'C:\\Music\\Stable\\cover.png', tracks: [],
+  };
+  const { context, elements } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: 'blob:stable-cover', cached: true }),
+  });
+  let html = '';
+  let writes = 0;
+  Object.defineProperty(elements.header, 'innerHTML', {
+    configurable: true,
+    get: () => html,
+    set: (value) => { writes += 1; html = value; },
+  });
+
+  context.renderTrackModalRelease(album);
+  context.renderTrackModalRelease({ ...album, tracks: [] });
+  assert.equal(writes, 1);
+
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 2, 'a changed header still re-renders');
+  assert.match(html, /2002/);
+
+  // Closing clears the title in place; reopening the same album must restore it.
+  html = '<div class="album-details-header"></div>';
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 3, 'a header edited by another owner is rewritten');
+  assert.match(html, /Stable Album/);
 });
 
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
@@ -483,6 +524,31 @@ test('track modal cover transition hides pending image chrome over a blank place
     ['Original - 2000', 'Special Edition - 2000'],
   );
 }
+
+test('version tabs print edition names in release title case without changing the tags', () => {
+  const original = { key: 'original', name: 'My Life in the Bush of Ghosts', album_artist: 'Brian Eno', year: 1981 };
+  const remaster = {
+    key: 'remaster',
+    name: 'My Life in the Bush of Ghosts',
+    album_artist: 'Brian Eno',
+    year: 2006,
+    edition: '2005 remaster',
+  };
+  const suffixed = {
+    key: 'suffixed',
+    name: 'My Life in the Bush of Ghosts (deluxe edition of the MTV iTunes cd)',
+    album_artist: 'Brian Eno',
+    year: 2010,
+  };
+  const context = loadHelper([original, remaster, suffixed]);
+  const releaseSet = context.getAlbumReleaseSet(remaster);
+
+  assert.deepEqual(
+    Array.from(releaseSet.releases, (item) => item.tabLabel),
+    ['Original - 1981', 'Deluxe Edition Of The MTV iTunes Cd - 2010', '2005 Remaster - 2006'],
+  );
+  assert.equal(remaster.edition, '2005 remaster');
+});
 
 test('openTagEditor orders a copied track list by disc, track number, and natural filename', () => {
   const originalTracks = [
@@ -716,6 +782,51 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
   );
 });
 
+test('confirming a tag edit sends the save before drawing the optimistic Gallery', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';
+  const album = {
+    key: 'artist-album',
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album', title: 'Selected' }],
+  };
+  const events = [];
+  const overlay = { hidden: true };
+  const context = loadHelper([album], {
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById: () => overlay },
+    getTagEditorElements: () => ({ overlay }),
+    bindOverlayPointerOrigin() {},
+    getTagEditConfirmElements: () => ({ overlay }),
+    getTagEditorTracks: () => album.tracks,
+    getTrackTagInitialValues: (track) => ({ title: track.title }),
+    renderTagEditor() {},
+    showRepairAlert(message) {
+      events.push(`alert:${message}`);
+    },
+    claimTagEditViewMutation: () => ({ id: 'claim' }),
+    tagEditViewMutationStillOwnsResources: () => true,
+    settleTagEditViewMutation() {},
+    buildChangedTagEditorUpdates: () => ({ [trackPath]: { album: 'Album Two' } }),
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    buildOptimisticUpdatedAlbumsFromEdits: () => [album],
+    applyUpdatedAlbumsToCurrentView: () => [album],
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {
+      events.push('render');
+    },
+    watchSaveTask() {},
+    async fetch(url, init) {
+      events.push(`fetch:${url}:${JSON.parse(init.body).updates[trackPath].album}`);
+      return { ok: true, json: async () => ({ ok: true, updated_albums: [] }) };
+    },
+  });
+
+  context.openTagEditor(album, { tracksMode: 'all' });
+  await context.confirmManualTagEdit();
+
+  assert.deepEqual(events.slice(0, 2), ['fetch:/utilities/edit-tags:Album Two', 'render']);
+});
+
 test('closing the tag editor hides before deferred reorder cleanup', () => {
   const scheduledFrames = [];
   const scheduledIdle = [];
@@ -878,6 +989,50 @@ test('Album Details falls back to natural filename order when track numbers are 
   );
 });
 
+test('one CD with some tracks missing the disc tag shows as one track list in track order', () => {
+  const context = loadHelper([], {
+    state: { player: { current: null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+  });
+  const tracks = [7, 8, 1, 2, 3, 4, 5, 6].map((number) => ({
+    key: `track-${number}`,
+    path: `C:\\Music\\Archspire\\The Vessel\\${number}.flac`,
+    disc_number: number > 6 ? null : 1,
+    disc_number_raw: number > 6 ? '' : '1',
+    track_number: number,
+  }));
+
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.equal(grouped.groups.length, 1);
+  assert.equal(grouped.multiDisc, false);
+  assert.deepEqual(
+    Array.from(grouped.groups[0].tracks, (track) => track.track_number),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  const html = context.buildTrackListHtml(tracks);
+  assert.doesNotMatch(html, /CD ?1/);
+});
+
+test('copies of an album in two folders are never pooled into one CD', () => {
+  const context = loadHelper([]);
+  const copy = (folder, disc) => [1, 2].map((number) => ({
+    path: `${folder}\\${number}.flac`, disc_number: disc, disc_number_raw: disc ? String(disc) : '', track_number: number,
+  }));
+  const tracks = [
+    ...copy('N:\\Music\\Dragonland\\2002 - Holy War', 1),
+    ...copy('C:\\Downloads\\Dragonland - Holy War (Deluxe Edition) (2014)', null),
+  ];
+
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.equal(grouped.groups.length, 2);
+  assert.deepEqual(Array.from(grouped.groups, (group) => group.tracks.length), [2, 2]);
+});
+
 test('Album Details ignores bonus-like album and path words when the raw disc label is ordinary', () => {
   const context = loadHelper([]);
   const grouped = context.groupAlbumTracks([
@@ -1025,6 +1180,55 @@ test('Album Details separates exact main and bonus durations for mixed explicit 
   );
 });
 
+test('Album Details highlights matching track credits without highlighting unrelated compilation tracks', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: 'the court' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: value => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    formatLoopTime: () => '0:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+  const tracks = [
+    { path: 'court.flac', title: 'Anastasius Epitaph', artist: 'The Court', track_number: 1 },
+    { path: 'other.flac', title: 'The Crossing', artist: 'Willowglass', track_number: 2 },
+    { path: 'title.flac', title: 'The Court of Dreams', artist: 'Another Artist', track_number: 3 },
+  ];
+  context.buildTrackListHtml(tracks, {
+    album_artist: 'Various Artists',
+    track_rows: tracks.map(track => ({ path: track.path, title: track.title, secondary_artist: track.artist })),
+  });
+  assert.deepEqual(Array.from(renderedConfig.groups.flatMap(group => group.tracks), track => track.isSearchMatch),
+    [true, false, true]);
+});
+
+test('Album Details highlights every track on a disc whose CD name matches the search', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: 'v-rox festival' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: value => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    formatLoopTime: () => '0:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+  context.buildTrackListHtml([
+    { path: 'cd1-1.mp3', title: 'Opener', disc_number: 1, total_discs: 2, disc_subtitle: 'Moscow 2014', track_number: 1 },
+    { path: 'cd2-1.mp3', title: 'Encore', disc_number: 2, total_discs: 2, disc_subtitle: 'V-ROX Festival 2015', track_number: 1 },
+    { path: 'cd2-2.mp3', title: 'Finale', disc_number: 2, total_discs: 2, disc_subtitle: 'V-ROX Festival 2015', track_number: 2 },
+  ], { album_artist: 'Owner' });
+
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, group => [group.discLabel, Array.from(group.tracks, track => track.isSearchMatch)]),
+    [['CD 1 • Moscow 2014', [false]], ['CD 2 • V-ROX Festival 2015', [true, true]]],
+  );
+});
+
 test('Album Details passes main and bonus group semantics into AlbumTrackTable', () => {
   let renderedConfig = null;
   const context = loadHelper([], {
@@ -1080,7 +1284,7 @@ for (const scenario of [
   });
 }
 
-test('Album Details displays the physical track number, then filename number, before row position', () => {
+test('Album Details displays the tagged track number, then filename number, else no number (owner, 11-17)', () => {
   const context = loadHelper([]);
   const getDisplayNumber = context.getAlbumTrackDisplayNumber;
 
@@ -1099,7 +1303,8 @@ test('Album Details displays the physical track number, then filename number, be
         track_number: null,
       }, 8),
     ],
-    [7, 3, 9],
+    // A track with neither shows no number: a row position duplicated real numbers after a split (BUGFIX-16).
+    [7, 3, ''],
   );
 });
 
@@ -1480,6 +1685,8 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
   const scheduledTimers = [];
   const mutationClaim = { id: 'tag-edit-claim-1' };
   const claimCalls = [];
+  const optimisticSplitCalls = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -1506,6 +1713,10 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     },
     applyUpdatedAlbumsToCurrentView(albums, options) {
       applyCalls.push({ albums, options });
+    },
+    recordCoverLookupOptimisticSplit(...args) {
+      optimisticSplitCalls.push(args);
+      return optimisticSplit;
     },
     updateOpenTrackModalAfterTagEdit() {},
     renderView(options) {
@@ -1554,6 +1765,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     'an empty queued response must retain the already-rendered optimistic state without another apply',
   );
   assert.strictEqual(applyCalls[0].albums, optimisticAlbums);
+  assert.deepEqual(optimisticSplitCalls, [[album, optimisticAlbums]]);
   assert.equal(
     renderCalls.length,
     1,
@@ -1577,6 +1789,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     mutationClaim,
     'the queued save-task watcher must receive the optimistic mutation ownership claim',
   );
+  assert.strictEqual(watchedTasks[0].options.coverLookupOptimisticSplit, optimisticSplit);
   assert.strictEqual(claimCalls[0][0], album);
   assert.deepEqual(Array.from(claimCalls[0][1]), [trackPath]);
   assert.deepEqual(
@@ -2772,7 +2985,6 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   const persistedEntries = [];
   const mutationClaim = { id: 'failed-tag-edit-claim' };
   const releasedClaims = [];
-  const restoredDrafts = [];
   const logEntry = {
     id: 'tag-edit-failure-42',
     action: 'Tag edit failed',
@@ -2799,7 +3011,6 @@ test('manual tag edit does not restore its previous snapshot after navigation du
     showRepairAlert(...args) { alerts.push(args); },
     claimTagEditViewMutation() { return mutationClaim; },
     releaseFailedTagEditViewMutation(claim) { releasedClaims.push(claim); },
-    restoreTagEditorDraftAfterFailedSave(draft) { restoredDrafts.push(draft); },
     async prependUtilityLogHistoryEntry(entry) { persistedEntries.push(entry); },
     async fetch() {
       return {
@@ -2836,10 +3047,42 @@ test('manual tag edit does not restore its previous snapshot after navigation du
     [mutationClaim],
     'a failed POST must release its optimistic mutation claim even after navigation',
   );
-  assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
 });
 
-test('manual tag edit preserves the editor draft for retry after an immediate failed POST', async () => {
+test('a refused save re-reads the Gallery so an album an optimistic merge absorbed comes back', async () => {
+  // Owner (2026-11-18): a refused Ремиксы2 → Ремиксы merge left one Ремиксы2 card and lost Ремиксы; the Gallery must
+  // show both again at once, without a page reload.
+  const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\04. Храм.mp3';
+  const album = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', tracks: [{ path: trackPath, album: 'Ремиксы2' }] };
+  const closedModal = { hidden: true };
+  let refreshes = 0;
+  const context = loadHelper([album], {
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Ремиксы' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [{ ...album, name: 'Ремиксы' }]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return []; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert() {},
+    claimTagEditViewMutation() { return { id: 'refused-merge' }; },
+    releaseFailedTagEditViewMutation() {},
+    async refreshCurrentViewAfterBackgroundCompletion() { refreshes += 1; return true; },
+    async fetch() {
+      return { ok: false, status: 500, async json() { return { ok: false, error: 'Library changes are still being reconciled.' }; } };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(refreshes, 1);
+});
+
+test('manual tag edit keeps the editor closed after an immediate rolled-back persistence failure', async () => {
   const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
   const album = {
     key: 'axxis::kingdom::black',
@@ -2854,6 +3097,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     },
   };
   const alerts = [];
+  const clearedOptimisticSplits = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -2866,6 +3111,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
       return { [trackPath]: { album: values[trackPath].album, edition: values[trackPath].edition } };
     },
     buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    recordCoverLookupOptimisticSplit() { return optimisticSplit; },
+    clearCoverLookupOptimisticSplit(split) { clearedOptimisticSplits.push(split); },
     deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
     applyUpdatedAlbumsToCurrentView() { return [album]; },
     updateOpenTrackModalAfterTagEdit() {},
@@ -2898,14 +3145,23 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
 
   assert.strictEqual(context.state.tagEditor, originalDraft);
   assert.strictEqual(context.state.tagEditor.values, values);
-  assert.equal(closedModal.hidden, false);
+  assert.equal(closedModal.hidden, true);
   assert.equal(
     alerts.at(-1)[0],
     'Source changed during the tag edit. Retry with the preserved values.',
   );
+  assert.deepEqual(clearedOptimisticSplits, [optimisticSplit]);
+
+  clearedOptimisticSplits.length = 0;
+  context.tagEditViewMutationStillOwnsResources = () => false;
+  context.state.tagEditor = { album, tracks: album.tracks, values };
+  await context.confirmManualTagEdit();
+  assert.deepEqual(clearedOptimisticSplits, [], 'an older failed request cannot undo a newer cover merge');
 });
 
-test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {
+// Owner (2026-11-22): a file that can't be written says so in the owner's words, never with its path or error.
+for (const [stage, text] of [['media_write', 'Save failed: Read-only files'], ['persistence', 'Failed to edit tags.']]) {
+test(`FTC-TAGS-040 manual tag edit keeps the editor closed after a logged ${stage} failure and says why`, async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\01 - Track.flac';
   const album = {
     key: 'artist::album::2000',
@@ -2939,7 +3195,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
           return {
             ok: false,
             error: `PermissionError: cannot write ${trackPath}`,
-            failure_stage: 'media_write',
+            failure_stage: stage,
             edit_outcome: 'failed_rolled_back',
             log_entry: { id: 'tag-edit-failure-42', action: 'Tag edit failed' },
           };
@@ -2953,32 +3209,205 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
   await context.confirmManualTagEdit();
 
   assert.equal(closedModal.hidden, true);
-  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
+  assert.equal(alerts.at(-1)[0], text);
   assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\Music|PermissionError/);
   assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1)[3])), {
     logHistoryEntryId: 'tag-edit-failure-42',
     logHistoryLink: true,
   });
 });
+}
 
-test('failed tag save does not replace a newer tag editor session', () => {
-  const originalDraft = { album: { key: 'original' }, sessionMutationClaim: null };
-  const newerDraft = { album: { key: 'newer' }, sessionMutationClaim: null };
-  const overlay = { hidden: true, setAttribute() {} };
-  const context = loadHelper([], {
+// Owner (2026-11-23), "Name the songs": tracks the library no longer holds are named in the alert by the
+// server's text (track titles, never paths); any other refusal keeps the generic message.
+for (const [code, expected] of [
+  ['tracks_not_in_library', 'These tracks are no longer in the library: Second Song. Reload the album and try again.'],
+  ['some_other_refusal', 'Failed to edit tags.'],
+]) {
+test(`a save refused with ${code} shows ${expected === 'Failed to edit tags.' ? 'the generic message' : 'the named songs'}`, async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\02 - Second Song.flac';
+  const album = {
+    key: 'artist::album::2000',
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album', title: 'Second Song' }],
+  };
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
     document: {
-      body: { classList: { add() {} } },
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
     },
-    getTagEditorElements() { return { overlay }; },
-    claimTagEditViewMutation() { return { id: 'stale-claim' }; },
-    scheduleBrowserAnimationFrame() {},
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { title: 'Renamed Song' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return {
+        ok: false,
+        status: 409,
+        async json() {
+          return {
+            ok: false,
+            code,
+            error: 'These tracks are no longer in the library: Second Song. Reload the album and try again.',
+          };
+        },
+      };
+    },
   });
-  context.state.tagEditor = newerDraft;
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
 
-  context.restoreTagEditorDraftAfterFailedSave(originalDraft);
+  await context.confirmManualTagEdit();
 
-  assert.strictEqual(context.state.tagEditor, newerDraft);
-  assert.equal(overlay.hidden, true);
+  assert.equal(alerts.at(-1)[0], expected);
+  assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\\\Music/);
+});
+}
+
+test('a failed tag edit whose files could not be put back says those files keep the new tags', async () => {
+  const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\01 - Track.flac';
+  const album = {
+    key: 'ддт::ремиксы::2000',
+    name: 'Ремиксы',
+    album_artist: 'ДДТ',
+    tracks: [{ path: trackPath, album: 'Ремиксы' }],
+  };
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { album: 'Ремиксы 2' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return {
+        ok: false,
+        async json() {
+          return {
+            ok: false,
+            error: `Structural tag edit database commit failed and media compensation also failed: ${trackPath}: file is in use`,
+            save_task_id: 'failed-tag-save',
+            save_task_status: 'failed',
+            failure_stage: 'persistence',
+            edit_outcome: 'recovery_pending',
+            log_entry: { id: 'tag-edit-failure-43', action: 'Tag edit failed' },
+          };
+        },
+      };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(
+    alerts.at(-1)[0],
+    'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.',
+  );
+  assert.doesNotMatch(alerts.at(-1)[0], /C:\Music/);
+});
+
+for (const [name, fetchResult] of [
+  ['the connection drops', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ['a proxy answers instead of the server', () => Promise.resolve({ ok: false, json: async () => { throw new SyntaxError('not JSON'); } })],
+]) {
+  test(`a tag save whose answer is lost when ${name} reloads instead of reporting failure`, async () => {
+    const trackPath = 'C:\Music\Artist\Album\01 - Track.flac';
+    const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, album: 'Album' }] };
+    const alerts = [];
+    const restored = [];
+    let refreshes = 0;
+    const closedModal = { hidden: true };
+    const context = loadHelper([album], {
+      document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+      getTagEditConfirmElements() { return { overlay: closedModal }; },
+      getTagEditorElements() { return { overlay: closedModal }; },
+      buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Renamed' } }; },
+      buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+      deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+      applyUpdatedAlbumsToCurrentView(albums, options) { if (options?.tagEdits?.[trackPath]?.album === 'Album') restored.push(albums); return albums; },
+      updateOpenTrackModalAfterTagEdit() {},
+      renderView() {},
+      showRepairAlert(...args) { alerts.push(args); },
+      async prependUtilityLogHistoryEntry() {},
+      async refreshCurrentViewAfterBackgroundCompletion() { refreshes += 1; return true; },
+      fetch: fetchResult,
+    });
+    context.state.ui = { viewStateRevision: 7 };
+    context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+    await context.confirmManualTagEdit();
+
+    assert.match(alerts.at(-1)[0], /may already be saved/);
+    assert.equal(refreshes, 1);
+    assert.deepEqual(restored, []);
+  });
+}
+
+test('a tag save whose answer is lost keeps the edit and waits in the Edit Queue instead of reloading', async () => {
+  // Owner (2026-11-17): no answer is not a failure; the save is sent again later under the same id.
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Track.flac';
+  const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, album: 'Album' }] };
+  const alerts = [];
+  const restored = [];
+  const queued = [];
+  const posted = [];
+  let refreshes = 0;
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    window: { AlbumHavenPendingTagEdits: { add: (entry) => queued.push(entry) } },
+    crypto: { randomUUID: () => '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b' },
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Renamed' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView(albums, options) { if (options?.tagEdits?.[trackPath]?.album === 'Album') restored.push(albums); return albums; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    showToast() {},
+    async prependUtilityLogHistoryEntry() {},
+    async refreshCurrentViewAfterBackgroundCompletion() { refreshes += 1; return true; },
+    fetch(_url, options) { posted.push(JSON.parse(options.body)); return Promise.reject(new TypeError('Failed to fetch')); },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(posted[0].client_request_id, '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].id, '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
+  assert.equal(JSON.stringify(queued[0].payload), JSON.stringify(posted[0]), 'the queued save is exactly what was sent');
+  assert.equal(refreshes, 0, 'the edit is not replaced by a reload from before the save');
+  assert.deepEqual(restored, [], 'the edit is never rolled back');
+  assert.equal(alerts.length, 1, 'only the "Saving tags" notice was shown');
 });
 
 test('repair POST does not apply origin albums after navigation and passes its revision to the save task', async () => {
@@ -4083,6 +4512,35 @@ test('track modal shows the existing problem link from server-owned track state 
   assert.match(elements.list.innerHTML, /data-track-path="C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem\.flac"/);
 });
 
+test('track modal links an album track with an outside copy to the Problematic Files entry of that copy', () => {
+  const trackPath = 'C:\\Music\\Artist Alpha\\Album Alpha\\01 Copied.flac';
+  const copyPath = 'C:\\Music\\Copied songs\\1-01 Copied.flac';
+  const album = {
+    key: 'alpha',
+    name: 'Album Alpha',
+    album_artist: 'Artist Alpha',
+    tracks: [{
+      path: trackPath,
+      title: 'Copied',
+      artist: 'Artist Alpha',
+      album_artist: 'Artist Alpha',
+      track_number: 1,
+      is_problematic: true,
+      problem_reasons: ['Duplicate track outside album folder'],
+      problem_track_path: copyPath,
+    }],
+  };
+  const { context, elements } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: 'blob:copy-cover', cached: true }),
+  });
+  context.state.utility = { problematicFiles: [] };
+
+  context.renderTrackModalRelease(album);
+
+  assert.match(elements.list.innerHTML, /data-track-path="C:\\Music\\Copied songs\\1-01 Copied\.flac"/);
+});
+
 test('album playback queue stores the canonical request key instead of the path identity', () => {
   const trackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
   const album = {
@@ -4918,6 +5376,124 @@ test('Album Details passes exact explicit bonus and main durations to final summ
   assert.equal(config.bonusLength, '');
 });
 
+test('every version tab after the original offers Separate release through the shared album menu', async () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const calls = [];
+  const context = loadHelper([], {
+    escapeHtml: value => String(value),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    ensureAlbumCardContextMenu: () => menu,
+    hideAlbumCardContextMenu: () => { menu.hidden = true; menu.dataset.menuKind = ''; },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null) },
+  });
+  const buttons = [{ dataset: {} }, { dataset: {} }, { dataset: {} }];
+  context.state.modalReleases = [
+    { key: 'original', tabLabel: 'Original' },
+    { key: 'remaster', tabLabel: 'Remastered' },
+    { key: 'duplicate', tabLabel: 'Duplicate' },
+  ];
+  context.state.modalReleaseIndex = 0;
+  const tablist = { querySelectorAll: () => buttons, querySelector: () => null, addEventListener() {} };
+  context.mountInPageTabs = () => {};
+  context.renderTrackModalTabs({ tabs: { hidden: true, innerHTML: '', querySelector: () => tablist } });
+  assert.deepEqual(buttons.map((button) => button.dataset.versionContextKey), [undefined, 'remaster', 'duplicate']);
+
+  context.showVersionContextMenu('remaster', 40, 60);
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.albumKey, 'remaster');
+  assert.match(menu.innerHTML, /class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="remaster">Separate release</);
+  context.hideVersionContextMenu();
+  assert.equal(menu.hidden, true);
+
+  context.ignoreAlbumVersion = async (key) => calls.push(['ignore', key]);
+  context.unmarkAlbumVersion = async (key) => calls.push(['unmark', key]);
+  context.state.view.manual_version_links = { linked: 'original' };
+  await context.separateAlbumRelease('remaster');
+  await context.separateAlbumRelease('linked');
+  assert.deepEqual(calls, [['ignore', 'remaster'], ['unmark', 'linked']], 'automatic versions become a version rule; manual links are unmarked');
+});
+
+test('release candidates remain symmetric when the gallery only contains Helloween 1985', () => {
+  const ep = { key: 'helloween::helloween::year::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, preview_only: true };
+  const studio = { key: 'helloween::helloween::year::2021', name: 'Helloween', album_artist: 'Helloween', year: 2021, preview_only: true };
+  const context = loadHelper([ep]);
+  const candidates = [ep, studio];
+  const fromEp = context.getAlbumReleaseSet({ ...ep, release_candidates: candidates });
+  const fromStudio = context.getAlbumReleaseSet({ ...studio, release_candidates: candidates });
+  const expected = [ep.key, studio.key];
+  assert.deepEqual(Array.from(fromEp.releases, release => release.key), expected);
+  assert.deepEqual(Array.from(fromStudio.releases, release => release.key), expected);
+  assert.equal(fromEp.selectedIndex, 0);
+  assert.equal(fromStudio.selectedIndex, 1);
+});
+
+
+test('release base title fixtures match the server candidate contract', () => {
+  const context = loadHelper([]);
+  const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'album-release-base-titles.json'), 'utf8'));
+  vectors.forEach(([title, expected]) => assert.equal(context.normalizeAlbumBaseName(title), expected, title));
+});
+
+test('authoritative release candidates preserve ignore and manual-family rules outside the gallery', () => {
+  const original = { key: 'artist::original', name: 'Album', album_artist: 'Artist', year: 2000 };
+  const edition = { key: 'artist::deluxe', name: 'Album (Deluxe Edition)', album_artist: 'Artist', year: 2020 };
+  const manual = { key: 'other::bonus', name: 'Different Title', album_artist: 'Other', year: 2021 };
+  const context = loadHelper([]);
+  context.state.view.ignored_version_keys = [edition.key];
+  context.state.view.manual_version_links = { [manual.key]: original.key };
+  const result = context.getAlbumReleaseSet({ ...original, release_candidates: [original, edition, manual] });
+  assert.deepEqual(Array.from(result.releases, release => release.key), [original.key, manual.key]);
+  const ignored = context.getAlbumReleaseSet({ ...edition, release_candidates: [original, edition, manual] });
+  assert.deepEqual(Array.from(ignored.releases, release => release.key), [edition.key]);
+});
+
+test('details rule snapshot covers empty-shell opening until current rules arrive', () => {
+  const original = { key: 'original', name: 'Album', album_artist: 'Artist', year: 2000 };
+  const edition = { key: 'edition', name: 'Album (Deluxe Edition)', album_artist: 'Artist', year: 2020 };
+  const bonus = { key: 'bonus', name: 'Bonus', album_artist: 'Other', year: 2021 };
+  const album = { ...original, release_candidates: [original, edition, bonus],
+    release_candidate_rules: { ignored_version_keys: [edition.key], manual_version_links: { [bonus.key]: original.key } } };
+  const context = loadHelper([]);
+  context.state.view.version_rules_loaded = { ignored: false, manual: false };
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, bonus.key]);
+  context.state.view.version_rules_loaded.manual = true;
+  context.state.view.manual_version_links = {};
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key]);
+  context.state.view.version_rules_loaded = { ignored: true, manual: true };
+  context.state.view.ignored_version_keys = [];
+  context.state.view.manual_version_links = {};
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, edition.key]);
+});
+
+test('Album Details names a tracklist section from album.track_sections on its first track (MusicBrainz contract)', () => {
+  // Contract with MusicBrainz Delivery 3: album.track_sections = [{ first_track_path, title }].
+  const { context } = createTrackModalCoverContext();
+  const track = (number, title) => ({ path: `C:/Music/Wallet Box/CD6/${number}.flac`, title, disc_number: 6, track_number: number });
+  const markup = context.buildTrackListHtml([track(1, 'Introducción'), track(2, 'Tema'), track(11, 'Libertango')], {
+    track_sections: [
+      { first_track_path: 'C:/Music/Wallet Box/CD6/1.flac', title: 'Suite Punta Del Este' },
+      { first_track_path: '', title: 'Ignored without a first track' },
+    ],
+  });
+  assert.equal((markup.match(/album-track-table__section-title">Suite Punta Del Este</g) || []).length, 1);
+  assert.ok(markup.indexOf('Suite Punta Del Este') < markup.indexOf('Introducción'), 'the name sits above its first track');
+  assert.doesNotMatch(markup, /Ignored without a first track/);
+});
+
+require('node:test')('same-name albums are versions only when the server found shared tracks (Helloween 1985 vs 2021)', () => {
+  const candidates = [
+    { key: 'helloween::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, shares_tracks: true },
+    { key: 'helloween::2021', name: 'Helloween', album_artist: 'Helloween', year: 2021, shares_tracks: false },
+    { key: 'helloween::2006', name: 'Helloween (Remastered 2006)', album_artist: 'Helloween', year: 2006, shares_tracks: true },
+  ];
+  const album = { ...candidates[0], release_candidates: candidates };
+  const context = loadHelper(candidates);
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key), ['helloween::1985', 'helloween::2006']);
+  context.state.view.manual_version_links = { 'helloween::2021': 'helloween::1985' };
+  assert.ok(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key).includes('helloween::2021'), 'a manual link still groups');
+});
+
 test('Album Details hands each disc its private disc rating and the album rating to the track table', () => {
   let renderedConfig;
   const context = loadHelper([], {
@@ -5031,4 +5607,164 @@ test('request capture: missing album removal posts once and refreshes its own vi
       return { requests };
     },
   });
+});
+
+test('request capture: a missing album refresh reloads its own view once, or the pending view once', async () => {
+  const id = 'js:runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView';
+  const album = { key: 'missing', inventory_status: 'missing' };
+  await measureInteractionContract(id, {
+    setup(albums) {
+      const { context } = createGalleryRefreshContext();
+      useRealViewUrls(context);
+      vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
+      const capture = createRequestCapture(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+      context.fetch = capture.fetch;
+      return { albums, capture, context };
+    },
+    async act({ albums, capture, context }) {
+      const before = capture.requests.length;
+      context.state.busy = false;
+      context.state.view = {
+        artist_groups: [{ artist: 'Synthetic Artist', albums: [album, ...Array.from({ length: albums }, (_, index) => ({ key: `kept-${index}` }))] }],
+      };
+      await context.refreshMissingAlbumView(album, 'missing', null);
+      await context.refreshMissingAlbumView(album, 'missing', { url: '/view-data?artist=Synthetic+Artist', push: false });
+      const requests = capture.requests.slice(before).map(({ url, options }) => ({ url, method: options.method }));
+      const shape = requests.map(({ url }) => [new URL(url, 'http://localhost').pathname, new URL(url, 'http://localhost').searchParams.get('artist')]);
+      assert.deepEqual(shape, [['/home-data', null], ['/view-data', 'Synthetic Artist']]);
+      return { requests };
+    },
+  });
+});
+
+// Owner (relayed 2026-11-22), case 59: a Re-scan that starts the background search says so, and a search
+// that ends without the album says how to bring it back. The search result is polled about every 1.5 s, at
+// most 30 s; a timeout frees the button with no extra toast.
+const RESCAN_SEARCHING = 'Album is not found. Searching your library folders for it...';
+const RESCAN_NOT_FOUND = 'Album must have been deleted or moved out of the library. '
+  + 'Add it back to one of the library paths to see it in the app';
+
+function loadMissingAlbumRescan(answers) {
+  const toasts = [];
+  const requests = [];
+  const delays = [];
+  const refreshed = [];
+  const context = vm.createContext({
+    URL,
+    encodeURIComponent,
+    getTrackModalAlbumRequestKey: album => album.key,
+    showToast: (message, tone) => toasts.push([message, tone]),
+    scheduleBrowserTimeout: (callback, delay) => { delays.push(delay); Promise.resolve().then(callback); return delays.length; },
+    fetch: async (url, options = {}) => {
+      requests.push([options.method || 'GET', String(url)]);
+      const [status, payload] = answers.shift();
+      return { ok: status < 400, status, json: async () => payload };
+    },
+  });
+  vm.runInContext(helperSource, context);
+  // After the helper loads: its own declarations of these two would replace stubs given before it.
+  context.getPendingMissingAlbumRefreshRequest = () => null;
+  context.refreshMissingAlbumView = async (_album, key) => { refreshed.push(key); };
+  const button = { disabled: false, isConnected: true, setAttribute() {}, removeAttribute() {} };
+  return { context, toasts, requests, delays, refreshed, button };
+}
+
+for (const [reason, message] of [
+  ['deleted', RESCAN_NOT_FOUND],
+  [undefined, RESCAN_NOT_FOUND],
+  ['unreachable', 'Still missing: its drive or network share cannot be reached.'],
+]) {
+  test(`a Re-scan that searches in the background says so, polls, then shows ${reason || 'not found'}`, async () => {
+    const page = loadMissingAlbumRescan([
+      [200, { ok: true, status: 'searching' }],
+      [200, { ok: true, status: 'searching' }],
+      [200, { ok: true, status: 'missing', ...(reason ? { reason } : {}) }],
+    ]);
+
+    const restored = await page.context.rescanMissingAlbum({ key: 'a/b', inventory_status: 'missing' }, page.button);
+
+    assert.equal(restored, false);
+    assert.deepEqual(page.toasts, [[RESCAN_SEARCHING, 'info'], [message, 'info']]);
+    assert.deepEqual(page.requests, [
+      ['POST', '/api/library/albums/a%2Fb/rescan'], ['GET', '/api/library/albums/a%2Fb/rescan'],
+      ['GET', '/api/library/albums/a%2Fb/rescan'],
+    ]);
+    assert.deepEqual(page.delays, [1500, 1500]);
+    assert.deepEqual(page.refreshed, ['a/b'], 'the view refreshes once, when the search has its answer');
+    assert.equal(page.button.disabled, false);
+  });
+}
+
+test('a background search that finds the album restores it with the existing message', async () => {
+  const page = loadMissingAlbumRescan([
+    [200, { ok: true, status: 'searching' }],
+    [200, { ok: true, status: 'moved' }],
+  ]);
+
+  assert.equal(await page.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, page.button), true);
+  assert.deepEqual(page.toasts, [[RESCAN_SEARCHING, 'info'], ['Album found in its new folder and restored.', 'success']]);
+});
+
+test('a background search still running after 30 s frees the button with no further toast', async () => {
+  const page = loadMissingAlbumRescan(Array.from({ length: 40 }, () => [200, { ok: true, status: 'searching' }]));
+
+  assert.equal(await page.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, page.button), false);
+  assert.deepEqual(page.toasts, [[RESCAN_SEARCHING, 'info']]);
+  assert.equal(page.delays.length, 20, 'about every 1.5 s, at most 30 s');
+  assert.equal(page.requests.length, 21, 'the POST and twenty polls');
+  assert.deepEqual(page.refreshed, []);
+  assert.equal(page.button.disabled, false);
+});
+
+test('a Re-scan answered at once keeps its messages; a failed one says it could not re-scan', async () => {
+  const deleted = loadMissingAlbumRescan([[200, { ok: true, status: 'missing', reason: 'deleted' }]]);
+  await deleted.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, deleted.button);
+  assert.deepEqual(deleted.toasts, [[RESCAN_NOT_FOUND, 'info']]);
+  assert.deepEqual(deleted.delays, [], 'no poll without a background search');
+
+  const restored = loadMissingAlbumRescan([[200, { ok: true, status: 'restored' }]]);
+  await restored.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, restored.button);
+  assert.deepEqual(restored.toasts, [['Album found and restored.', 'success']]);
+
+  const failed = loadMissingAlbumRescan([[500, { ok: false }]]);
+  await failed.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, failed.button);
+  assert.deepEqual(failed.toasts, [['Unable to re-scan this album.', 'error']]);
+});
+
+// Owner (2026-11-23): a save whose files are written is saved. A "finishing" answer keeps the edit on screen and
+// hands it to the pending-edit store, so a reload or another tab still shows it until the library holds it.
+test('a save answered "finishing" keeps the edit and hands it to the pending-edit store', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Song.flac';
+  const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, title: 'Song' }] };
+  const added = [];
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    window: { AlbumHavenPendingTagEdits: { addFinishing: (entry) => added.push(entry), add: () => assert.fail('resend queue used') } },
+    crypto: { randomUUID: () => '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b' },
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { title: 'Renamed Song' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    scheduleTagEditSaveTaskWatch() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return { ok: true, status: 202, async json() { return { ok: true, save_task_id: 'task-1', save_task_status: 'finishing' }; } };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(added.length, 1, 'the finishing save was not kept for reloads and other tabs');
+  assert.equal(added[0].id, '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
+  assert.deepEqual(JSON.parse(JSON.stringify(added[0].payload.updates)), { [trackPath]: { title: 'Renamed Song' } });
+  assert.ok(!alerts.some(([, variant]) => variant === 'error'), 'a finishing save was reported as failed');
 });

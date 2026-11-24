@@ -433,7 +433,8 @@ def test_run_manual_cover_refresh_worker_preserves_completed_progress_on_failure
             refresh_unsuccessful_cover_artwork=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
         )
 
-    assert library_state["last_error"] == "boom"
+    assert library_state["covers_last_error"] == "boom"
+    assert "last_error" not in library_state
     assert library_state["covers_in_progress"] is False
     assert library_state["covers_processed"] == 5
     assert library_state["covers_total"] == 7
@@ -489,7 +490,7 @@ def test_cover_worker_future_preserves_failure_and_owned_progress(cover_worker_r
             current[0].update(
                 covers_completed=11, covers_processed=12, covers_total=20,
                 covers_downloaded=9, covers_current_folder="Newer/Album",
-                covers_outcome="running", last_error="newer diagnostic",
+                covers_outcome="running", covers_last_error="newer diagnostic",
             )
         expected.update(current[0])
         raise failure
@@ -505,7 +506,7 @@ def test_cover_worker_future_preserves_failure_and_owned_progress(cover_worker_r
         finished = current[0]["covers_finished_monotonic"]
         assert isinstance(finished, (int, float))
         expected.update(
-            last_error=str(failure), covers_in_progress=False,
+            covers_last_error=str(failure), covers_in_progress=False,
             covers_outcome="failed", covers_current_folder="",
             covers_finished_monotonic=finished,
         )
@@ -545,7 +546,7 @@ def test_background_worker_lock_covers_capture_and_failure_not_callback(entrypoi
             return super().get(key, default)
 
         def __setitem__(self, key, value):
-            if key in {"last_error", "covers_outcome", "covers_finished_monotonic"}:
+            if key in {"covers_last_error", "covers_outcome", "covers_finished_monotonic"}:
                 writes.append(cache_lock.locked())
             return super().__setitem__(key, value)
 

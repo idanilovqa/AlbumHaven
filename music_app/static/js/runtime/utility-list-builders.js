@@ -206,9 +206,7 @@ function buildUtilityIntegrationDetail(item) {
   const summary = scrobbleState.summary;
   const scrobbled = summary?.scrobbled ?? item.listen_history_count ?? 0;
   const pending = summary?.pending ?? item.pending_scrobble_count ?? 0;
-  const lastfmTotal = scrobbleState.loading
-    ? 'Loading...'
-    : summary?.lastfm_total == null ? 'Unavailable' : String(summary.lastfm_total);
+  const lastfmTotal = formatLastfmTotal(scrobbleState);
   const scrobbleStatus = item.connected ? `<div class="lastfm-scrobble-status" aria-label="Last.fm scrobble status">
       <p data-lastfm-scrobbled>Scrobbled: ${escapeHtml(String(scrobbled))}</p>
       <p data-lastfm-total>LastFM Total: ${escapeHtml(lastfmTotal)}</p>
@@ -232,6 +230,13 @@ function buildUtilityIntegrationDetail(item) {
       ${submitScrobbles}</div>`;
 }
 
+// The last known Last.fm total stays on screen while a fresher one is fetched.
+function formatLastfmTotal(scrobbleState) {
+  const total = scrobbleState?.summary?.lastfm_total ?? scrobbleState?.rememberedTotal;
+  if (total != null) return String(total);
+  return scrobbleState?.loading || scrobbleState?.refreshingTotal ? 'Loading...' : 'Unavailable';
+}
+
 function matchesUtilityRuleSearch(item) {
   const query = String(state.utility.rulesSearchQuery || '').trim().toLocaleLowerCase();
   if (!query) return true;
@@ -249,7 +254,7 @@ function buildVersionExceptionRuleDetail(rule) {
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
     rows: albums.map(album => ({ key: album.key, cells: {
-      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title" title="${escapeHtml(album.name || album.key || 'Unknown album')}">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
@@ -404,11 +409,7 @@ function buildDetectedProblemsHtml(album) {
           ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
-      <div class="utility-detected-actions utility-missing-album-actions">
-        ${canRemove
-          ? '<button class="button confirm-modal-danger" type="button" data-remove-missing-album="1">Remove from Album Haven</button>'
-          : '<p>Ask an owner or administrator to remove it.</p>'}
-      </div>
+      ${buildMissingAlbumDetailsHtml({ canRemove, albumKey: album.key, reason: album.missing_reason })}
     `;
   }
   const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));
@@ -440,7 +441,7 @@ function buildDetectedProblemsHtml(album) {
     return {
       key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
       cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${highlightProblematicTrackLabel(formatProblematicTrackLabel(track, row), state.utility.searchQuery)}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
         reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
           const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
           const rowKey = String(match?.row_key || '');
@@ -516,12 +517,17 @@ function buildProblematicAlbumDetail(album) {
       </div>
     `
     : '';
-  const cover = buildUtilityAlbumArtbox(album, { label: `Album cover for ${displayName}`, interactive: true, source: coverSrc });
+  const cover = buildUtilityAlbumArtbox(album, {
+    label: `Album cover for ${displayName}`,
+    interactive: true,
+    source: coverSrc,
+    deferPreview: true,
+  });
   return `
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>
       <div class="utility-detail-summary">
-        <h3 class="utility-detail-title">${escapeHtml(displayName)}</h3>
+        <h3 class="utility-detail-title"><button class="ui-text-link" type="button" data-open-problematic-album-details="1">${escapeHtml(displayName)}</button></h3>
         <div class="utility-detail-meta">${escapeHtml(displayArtist)}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(album.year ?? 'Unknown')}</div>
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
@@ -529,15 +535,15 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
-            ${showRepairedDisplay ? 'Converted tags' : 'Original tags'}
+            ${showRepairedDisplay ? 'Displaying: converted tags' : 'Displaying: original tags'}
           </button>
         ` : ''}
       </div>
         <div class="utility-detail-context-actions">
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
-          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Edit Tags', title: 'Edit Tags', iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
+          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
@@ -546,7 +552,7 @@ function buildProblematicAlbumDetail(album) {
 }
 
 function getSelectedProblematicAlbum() {
-  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return findProblematicItemByKey(state.utility.selectedProblematicKey);
 }
 
 function getAlbumTrackPaths(album) {
@@ -647,6 +653,24 @@ function findVisibleAlbumByTrackPath(trackPath) {
   return flattenVisibleAlbums().find((album) => (
     Array.isArray(album?.tracks) && album.tracks.some((track) => String(track.path || '') === targetPath)
   )) || null;
+}
+
+// Tagged tracks read "NN. Title"; without title and number tags the file name
+// (which normally carries the number) identifies the track instead.
+function formatProblematicTrackLabel(track = {}, row = {}) {
+  const title = String(track.title || '').trim();
+  const number = Number.parseInt(track.track_number ?? row.track_number, 10);
+  if (title && Number.isInteger(number) && number > 0) return `${String(number).padStart(2, '0')}. ${title}`;
+  return String(row.filename || getFilenameFromPath(row.path) || title || 'Unknown file');
+}
+
+function highlightProblematicTrackLabel(label, query) {
+  const text = String(label || '');
+  const needle = String(query || '').trim();
+  if (!needle) return escapeHtml(text);
+  const index = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+  if (index < 0) return escapeHtml(text);
+  return `${escapeHtml(text.slice(0, index))}<mark class="utility-track-search-match">${escapeHtml(text.slice(index, index + needle.length))}</mark>${escapeHtml(text.slice(index + needle.length))}`;
 }
 
 function resolveActiveQueueAlbumSnapshot(trackPath) {
@@ -1023,6 +1047,7 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     ...visibleAlbum,
     tracks,
   };
+  let compactDurationSeconds = null;
   if (replaceCompactMembership) {
     mergedAlbum.preview_only = false;
     mergedAlbum.track_paths = Array.from(candidateMembershipPaths);
@@ -1036,6 +1061,14 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     const candidateAddsDistinctMembership = Array.from(candidateMembershipPaths)
       .filter((path) => !visibleMembershipPaths.has(path)).length;
     mergedAlbum.preview_only = true;
+    // A compact card knows only some tracks: its own duration plus the tracks this edit adds.
+    const visibleDeclaredDuration = Number(visibleAlbum?.total_duration_seconds);
+    if (Number.isFinite(visibleDeclaredDuration) && visibleDeclaredDuration > 0) {
+      const addedDuration = (Array.isArray(candidate?.tracks) ? candidate.tracks : [])
+        .filter((track) => !visibleMembershipPaths.has(String(track?.path || '')))
+        .reduce((sum, track) => sum + Math.max(0, Number(track?.duration_seconds || 0) || 0), 0);
+      compactDurationSeconds = visibleDeclaredDuration + addedDuration;
+    }
     if (mergedMembershipPaths.size) {
       mergedAlbum.track_paths = Array.from(mergedMembershipPaths);
       mergedAlbum.track_count_preview = Math.max(
@@ -1046,9 +1079,13 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
       );
     }
   }
-  const shouldRecomputeDuration = tracks.some((track) => Number(track?.duration_seconds || 0) > 0)
+  if (compactDurationSeconds !== null) {
+    mergedAlbum.total_duration_seconds = compactDurationSeconds;
+    mergedAlbum.total_duration_display = formatCanonicalAlbumDuration(compactDurationSeconds);
+  }
+  const shouldRecomputeDuration = compactDurationSeconds === null && (tracks.some((track) => Number(track?.duration_seconds || 0) > 0)
     || Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'total_duration_seconds')
-    || Object.prototype.hasOwnProperty.call(candidate || {}, 'total_duration_seconds');
+    || Object.prototype.hasOwnProperty.call(candidate || {}, 'total_duration_seconds'));
   if (shouldRecomputeDuration) {
     const totalDurationSeconds = tracks.reduce(
       (sum, track) => {
@@ -1655,6 +1692,25 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
     }
     return incomingCandidates;
   }
+  const editedPaths = new Set(Object.keys(options.tagEdits || {}));
+  if (editedPaths.size && albumIsDemonstrablyFullyHydrated(originalAlbum)
+      && !originalAlbum.tag_editor_collection
+      && !incomingCandidates.some(candidate => albumsShareLogicalReleaseIdentity(candidate, originalAlbum))) {
+    const returnedPaths = new Set(incomingCandidates.flatMap(candidate => Array.from(getAlbumTrackPaths(candidate))));
+    const remainingTracks = originalAlbum.tracks.filter(track => (
+      !editedPaths.has(String(track.path || '')) && !returnedPaths.has(String(track.path || ''))
+    ));
+    if (remainingTracks.length) {
+      const remainingPaths = new Set(remainingTracks.map(track => String(track.path || '')));
+      const duration = remainingTracks.reduce((sum, track) => sum + (Number(track.duration_seconds) || 0), 0);
+      // Save responses contain edited destinations, not necessarily the untouched source.
+      incomingCandidates.push({ ...originalAlbum, tracks: remainingTracks,
+        track_paths: Array.from(remainingPaths), track_count_preview: remainingTracks.length,
+        total_duration_seconds: duration, total_duration_display: formatCanonicalAlbumDuration(duration),
+        ...(Array.isArray(originalAlbum.track_rows) ? { track_rows: originalAlbum.track_rows.filter(row => remainingPaths.has(String(row.path || row.track_ref || ''))) } : {}),
+      });
+    }
+  }
   const visibleAlbums = collectVisibleAlbumsUnique();
   const candidates = coalesceUniqueVisibleLogicalAlbumCandidates(
     incomingCandidates,
@@ -1826,9 +1882,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     || !selectedKey
     || (normalizedExpectedAlbumKey && selectedKey !== normalizedExpectedAlbumKey)
   ) return null;
-  const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-    String(album?.key || '').trim() === selectedKey
-  )) || null;
+  const selectedAlbum = findProblematicItemByKey(selectedKey);
   const originalKey = String(originalAlbum?.key || '').trim();
   if (!selectedAlbum || !originalAlbum || (originalKey !== selectedKey && !albumsShareTrackPath(selectedAlbum, getAlbumTrackPaths(originalAlbum)))) {
     return null;
@@ -1843,14 +1897,22 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const list = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.list
     : null;
+  const selectedOwnerItems = [
+    state.utility.problematicFiles || [],
+    state.utility.problematicArtistItems || [],
+    state.utility.problematicServerSearchItems || [],
+  ].find((items) => items.some((album) => String(album?.key || '').trim() === selectedKey)) || [];
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
     originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
-    priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
+    priorKeys: selectedOwnerItems.map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
   };
+  if (String(state.utility.pinnedProblematicKey || '') === selectedKey) {
+    state.utility.pinnedProblematicKey = '';
+  }
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   return mutation;
@@ -1864,7 +1926,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     String(state.utility.selectedProblematicKey || '') === String(mutation.albumKey || '')
   );
   if (reconcileSelection && mutationOwnsView) {
-    const items = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
+    const items = getAllProblematicItems();
     const survivingKeys = new Set(items.map((album) => String(album?.key || '')).filter(Boolean));
     const selectedKey = String(mutation.albumKey || '');
     if (survivingKeys.has(selectedKey)) {
@@ -2018,6 +2080,11 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
   ) return false;
 
   const activeQuery = String(state.view?.query || '').trim();
+  if (
+    activeQuery
+    && selectedArtistKey === destinationArtist.toLocaleLowerCase()
+    && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
+  ) return false;
   const destinationView = {
     ...state.view,
     selected_artist: destinationArtist,
@@ -2145,7 +2212,27 @@ async function watchSaveTask(taskId, context = {}) {
       ? claimTagEditViewMutation(originalAlbum)
       : null
   );
-  const originStillOwnsView = () => (
+  // Owner (2026-11-19): after "Saved" the person may search or navigate at once. The save's own
+  // Gallery requests must not abort that request or take the view back, so before each one the save
+  // waits for a request in flight and, if someone else started it, follows the view it shows.
+  let viewRequestIdAtCompletion = null;
+  const ownViewRequestIds = new Set();
+  let navigatedAfterCompletion = false;
+  const latestViewRequestId = () => Number(state.ui?.activeViewRequestId || 0);
+  const yieldToNavigationAfterCompletion = async () => {
+    for (let waitedMs = 0; state.busy && waitedMs < 10000; waitedMs += 100) {
+      await waitForBrowserTimeout(100);
+    }
+    const latestId = latestViewRequestId();
+    if (latestId !== viewRequestIdAtCompletion && !ownViewRequestIds.has(latestId)) {
+      navigatedAfterCompletion = true;
+    }
+  };
+  const ownViewRequest = (request) => {
+    ownViewRequestIds.add(latestViewRequestId());
+    return request;
+  };
+  const originStillOwnsView = () => !navigatedAfterCompletion && (
     !hasOriginatingViewStateRevision
     || Number(state.ui?.viewStateRevision || 0) === originatingViewStateRevision
   );
@@ -2259,7 +2346,23 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  let completionAnnounced = false;
+  // Owner (2026-11-23): a finishing save (files written, the library catching up) is watched until it ends,
+  // so the page is never left silent: the usual notice at the usual point, then slower checks.
+  let lastTaskStatus = '';
+  let stillUpdatingShown = false;
+  const showStillUpdating = () => {
+    if (stillUpdatingShown || mutationWasSuperseded()) return;
+    stillUpdatingShown = true;
+    // Owner (2026-11-23), their words: "Tags still updating: your edits remain queued."
+    showRepairAlert(
+      'Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
+  };
+  for (let attempt = 0; attempt < 120 || (lastTaskStatus === 'finishing' && !mutationWasSuperseded()); attempt += 1) {
     const consumesProvidedTerminalPayload = Boolean(
       providedTerminalPayload
       && (attempt === 0 || providedTerminalPayload.status === 'completed'),
@@ -2275,6 +2378,7 @@ async function watchSaveTask(taskId, context = {}) {
       } else if (!data.ok) {
         throw new Error(data.error || 'Unable to load save task.');
       }
+      lastTaskStatus = String(data.status || '').trim().toLowerCase();
       const responseTaskId = String(data.task_id || '').trim();
       if (responseTaskId && responseTaskId !== normalizedId) {
         providedTerminalPayload = null;
@@ -2282,6 +2386,27 @@ async function watchSaveTask(taskId, context = {}) {
         continue;
       }
       if (data.status === 'completed') {
+        const completionMessage = String(
+          context.tagEditAlert?.completionMessage || '',
+        ).trim();
+        // Owner (2026-11-19): "Saved" shows once the server has accepted the save; the Gallery
+        // refetch below still runs and corrects the cards.
+        if (completionMessage && !completionAnnounced) {
+          completionAnnounced = true;
+          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+            .map((warning) => String(warning || '').trim())
+            .filter(Boolean);
+          const hasCompletionWarning = completionWarnings.length > 0;
+          showRepairAlert(
+            [completionMessage, ...completionWarnings].join(' '),
+            hasCompletionWarning ? 'warning' : 'success',
+            hasCompletionWarning ? 8000 : 2000,
+            {
+              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+            },
+          );
+        }
+        viewRequestIdAtCompletion ??= latestViewRequestId();
         const committedInventoryMutationRevision = Number(data.inventory_mutation_revision);
         const responseContainsCommittedInventoryMutation = (responseData) => (
           !Number.isSafeInteger(committedInventoryMutationRevision)
@@ -2292,20 +2417,23 @@ async function watchSaveTask(taskId, context = {}) {
           )
         );
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
+        const openTrackModalRefreshes = [];
+        const deferOpenTrackModalRefresh = (refresh) => openTrackModalRefreshes.push(refresh);
         await refreshLoadedProblematicFilesAfterSaveCompletion();
+        await yieldToNavigationAfterCompletion();
         let destinationViewReconciled = false;
         if (data.destination_artist && canReconcileOriginView()) {
           try {
-            destinationViewReconciled = await reconcileCommittedTagEditDestination(
+            destinationViewReconciled = await ownViewRequest(reconcileCommittedTagEditDestination(
               data,
               {
-                renderOptions: currentViewRenderOptions(),
+                renderOptions: { ...currentViewRenderOptions(), deferOpenTrackModalRefresh },
                 shouldApplyResponse: responseData => (
                   !mutationWasSuperseded()
                   && responseContainsCommittedInventoryMutation(responseData)
                 ),
               },
-            );
+            ));
           } catch (destinationError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but failed to open the committed destination artist.',
@@ -2367,6 +2495,7 @@ async function watchSaveTask(taskId, context = {}) {
             })
           ));
         };
+        await yieldToNavigationAfterCompletion();
         if (data.requires_view_refresh) {
           if (
             !viewRefreshed
@@ -2419,19 +2548,11 @@ async function watchSaveTask(taskId, context = {}) {
             try {
               let refreshView = state.view;
               const originSearch = context.originatingSearchContext;
-              const originalOwner = String(originalAlbum?.album_artist || '').trim().toLowerCase();
-              const splitAlbums = Array.isArray(context.optimisticAlbums) ? context.optimisticAlbums : [];
               const restoresAllSearchResults = Boolean(
                 canReconcileOriginView()
                 && structuralTagEditRequiresMountedGalleryChildReplacement
                 && originSearch?.selected_artist_source === 'auto_top_match'
                 && !(originSearch.artist_name_match_artists || []).length
-                && originalOwner
-                && splitAlbums.some(album => String(album?.album_artist || '').trim().toLowerCase() === originalOwner)
-                && splitAlbums.some(album => {
-                  const owner = String(album?.album_artist || '').trim().toLowerCase();
-                  return owner && owner !== originalOwner;
-                })
                 && originatingViewRequestUrl
                 && String(state.view.query || '').trim()
                 && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
@@ -2442,11 +2563,12 @@ async function watchSaveTask(taskId, context = {}) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
-              viewRefreshed = await fetchAndRender(
+              viewRefreshed = await ownViewRequest(fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
+                  deferOpenTrackModalRefresh,
                   preserveMountedGalleryChildren: true,
                   preserveMissingAlbumCoverAuthority: true,
                   ...(!structuralTagEditRequiresCanonicalView
@@ -2458,7 +2580,7 @@ async function watchSaveTask(taskId, context = {}) {
                     && responseContainsCommittedInventoryMutation(responseData)
                   ),
                 },
-              );
+              ));
               if (
                 !viewRefreshed
                 && Number.isSafeInteger(committedInventoryMutationRevision)
@@ -2554,6 +2676,10 @@ async function watchSaveTask(taskId, context = {}) {
             );
           }
         }
+        if (!completionMessage && !consumesProvidedTerminalPayload) {
+          showRepairAlert('Library view updated from saved files.', 'success', 1000);
+        }
+        await Promise.all(openTrackModalRefreshes);
         if (originalAlbum && canReconcileOriginView()) {
           if (
             structuralMembershipTransferRequiresCanonicalRefresh
@@ -2644,29 +2770,17 @@ async function watchSaveTask(taskId, context = {}) {
           await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
         }
         restoreOwnedAbsoluteScroll();
-        const completionMessage = String(
-          context.tagEditAlert?.completionMessage || '',
-        ).trim();
-        if (completionMessage) {
-          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-            .map((warning) => String(warning || '').trim())
-            .filter(Boolean);
-          const hasCompletionWarning = completionWarnings.length > 0;
-          showRepairAlert(
-            [completionMessage, ...completionWarnings].join(' '),
-            hasCompletionWarning ? 'warning' : 'success',
-            hasCompletionWarning ? 8000 : 2000,
-            {
-              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-            },
-          );
-        } else if (!consumesProvidedTerminalPayload) {
-          showRepairAlert('Library view updated from saved files.', 'success', 1000);
-        }
         settleTagEditViewMutation(tagEditMutationClaim);
         return;
       }
       if (data.status === 'failed') {
+        if (
+          context.coverLookupOptimisticSplit
+          && !mutationWasSuperseded()
+          && typeof clearCoverLookupOptimisticSplit === 'function'
+        ) {
+          clearCoverLookupOptimisticSplit(context.coverLookupOptimisticSplit);
+        }
         let viewRefreshed = false;
         if (!mutationWasSuperseded()) {
           try {
@@ -2701,13 +2815,6 @@ async function watchSaveTask(taskId, context = {}) {
             preserveHydratedModalAfterFailedSave: true,
           });
         }
-        if (
-          context.tagEditorDraft
-          && canReconcileOriginView()
-          && typeof restoreTagEditorDraftAfterFailedSave === 'function'
-        ) {
-          restoreTagEditorDraftAfterFailedSave(context.tagEditorDraft);
-        }
         if (data.log_entry) {
           try {
             await prependUtilityLogHistoryEntry(data.log_entry);
@@ -2729,16 +2836,10 @@ async function watchSaveTask(taskId, context = {}) {
       if (consumesProvidedTerminalPayload) throw error;
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
-    await waitForBrowserTimeout(500);
+    if (attempt >= 119) showStillUpdating();
+    await waitForBrowserTimeout(attempt >= 119 ? 5000 : 500);
   }
-  if (!mutationWasSuperseded()) {
-    showRepairAlert(
-      'Tag changes are still being finalized. Your edits remain queued.',
-      'info',
-      8000,
-      { title: 'Tags still updating', dismissible: true },
-    );
-  }
+  showStillUpdating();
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
 }
@@ -2811,10 +2912,45 @@ function preserveHydratedModalTrackDetails(candidate, originalAlbum, enabled = f
   };
 }
 
+// FTC-TAGS-020: an edit that merges tracks into an existing album yields an optimistic destination
+// holding only the moved tracks. Album Details must show the whole album at once (owner rule), so
+// the destination takes the tracks a fully hydrated copy of it already holds; when none is known
+// but the gallery declares more tracks, it stays unhydrated so Album Details loads it.
+function completeTagEditMergeDestination(candidate) {
+  if (typeof getAlbumRequestKey !== 'function') return candidate;
+  const key = String(getAlbumRequestKey(candidate) || '').trim();
+  const candidateTracks = Array.isArray(candidate?.tracks) ? candidate.tracks : [];
+  if (!key || !candidateTracks.length) return candidate;
+  const cached = typeof getCachedHydratedTrackModalAlbum === 'function'
+    ? getCachedHydratedTrackModalAlbum(key)
+    : null;
+  const indexed = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  const known = [cached, indexed].find((album) => (
+    album && album !== candidate
+    && albumIsDemonstrablyFullyHydrated(album)
+    && albumsShareLogicalReleaseIdentity(album, candidate)
+  ));
+  if (known) {
+    const merged = mergeVisibleAlbumWithOptimisticCandidate(known, candidate);
+    return merged.tracks.length > candidateTracks.length ? merged : candidate;
+  }
+  const declaredTrackCount = Number(indexed?.track_count_preview || 0);
+  if (indexed && indexed !== candidate && declaredTrackCount > candidateTracks.length) {
+    return { ...candidate, preview_only: true, track_count_preview: declaredTrackCount };
+  }
+  return candidate;
+}
+
 function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options = {}) {
   const trackModal = document.getElementById('track-modal');
   const modalOpen = Boolean(trackModal && !trackModal.hidden);
-  const candidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
+  // The source keeps only what the edit left it; only a destination it merged into gains tracks.
+  const candidates = (Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [])
+    .map((candidate) => (
+      albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
+        ? candidate
+        : completeTagEditMergeDestination(candidate)
+    ));
   if (!candidates.length) return;
   if (!modalOpen) {
     if (typeof cacheHydratedTrackModalAlbum !== 'function') return;
@@ -2971,6 +3107,95 @@ function normalizeProblemFilterReason(reason) {
     : normalized;
 }
 
+function compareProblematicItems(left, right) {
+  for (const field of ['name', 'album_artist']) {
+    const compared = String(left?.[field] || '').toLowerCase()
+      .localeCompare(String(right?.[field] || '').toLowerCase());
+    if (compared) return compared;
+  }
+  const comparedYear = String(left?.year || '').localeCompare(String(right?.year || ''));
+  if (comparedYear) return comparedYear;
+  return String(left?.key || '').toLowerCase().localeCompare(String(right?.key || '').toLowerCase());
+}
+
+function mergeProblematicItems(...sources) {
+  const byKey = new Map();
+  for (const source of sources) {
+    for (const item of source || []) {
+      const key = String(item?.key || '');
+      if (key && !byKey.has(key)) byKey.set(key, item);
+    }
+  }
+  return Array.from(byKey.values()).sort(compareProblematicItems);
+}
+
+// A committed list is merged and sorted once, and its key index, problem types and filtered views are
+// derived from it once: a render or a reopen reuses them. Every writer commits a new array (an append in
+// place changes its length), so the sources' identities and lengths name the committed list.
+const committedProblematicLists = new Map();
+
+function getCommittedProblematicList(name, sources) {
+  const cached = committedProblematicLists.get(name);
+  if (cached && sources.every((source, index) => (
+    source === cached.sources[index] && (source?.length || 0) === cached.lengths[index]
+  ))) return cached;
+  const list = {
+    sources,
+    lengths: sources.map((source) => source?.length || 0),
+    items: mergeProblematicItems(...sources),
+    byKey: null,
+    reasonTypes: null,
+    filtered: null,
+  };
+  committedProblematicLists.set(name, list);
+  return list;
+}
+
+function getProblematicBaseList() {
+  return getCommittedProblematicList('base', [state.utility.problematicFiles, state.utility.problematicArtistItems]);
+}
+
+function getAllProblematicList() {
+  return getCommittedProblematicList('all', [
+    state.utility.problematicFiles,
+    state.utility.problematicArtistItems,
+    state.utility.problematicServerSearchItems,
+  ]);
+}
+
+// The committed lists are shared: callers read them and never sort or change them in place.
+function getProblematicBaseItems() {
+  return getProblematicBaseList().items;
+}
+
+function getAllProblematicItems() {
+  return getAllProblematicList().items;
+}
+
+function getProblematicItemsByKey() {
+  const list = getAllProblematicList();
+  list.byKey ||= new Map(list.items.map((item) => [String(item.key), item]));
+  return list.byKey;
+}
+
+function findProblematicItemByKey(key) {
+  return getProblematicItemsByKey().get(String(key || '')) || null;
+}
+
+// Each list shown (a committed list or one of its filtered views) is indexed by key once.
+const problematicListIndexes = new WeakMap();
+
+function getProblematicListIndex(items) {
+  let indexed = problematicListIndexes.get(items);
+  if (indexed?.length !== items.length) {
+    const index = new Map();
+    for (const item of items) if (!index.has(item.key)) index.set(item.key, item);
+    indexed = { length: items.length, index };
+    problematicListIndexes.set(items, indexed);
+  }
+  return indexed.index;
+}
+
 function getAlbumProblemFilterReasons(album) {
   return (Array.isArray(album?.problem_reasons) ? album.problem_reasons : [])
     .map((reason) => normalizeProblemFilterReason(reason))
@@ -2978,13 +3203,26 @@ function getAlbumProblemFilterReasons(album) {
 }
 
 function getProblemReasonTypes() {
-  const reasons = new Set();
-  (state.utility.problematicFiles || []).forEach((album) => {
-    getAlbumProblemFilterReasons(album).forEach((reason) => {
-      if (reason) reasons.add(reason);
+  const list = getProblematicBaseList();
+  if (!list.reasonTypes) {
+    const reasons = new Set();
+    list.items.forEach((album) => {
+      getAlbumProblemFilterReasons(album).forEach((reason) => {
+        if (reason) reasons.add(reason);
+      });
     });
-  });
-  return Array.from(reasons).sort((a, b) => a.localeCompare(b));
+    list.reasonTypes = Array.from(reasons).sort((a, b) => a.localeCompare(b));
+  }
+  const current = list.reasonTypes;
+  if (state.utility.problematicFilesComplete === true) {
+    state.utility.completeProblemReasonTypes = Array.from(new Set([
+      ...(state.utility.completeProblemReasonTypes || []),
+      ...current,
+    ])).sort((a, b) => a.localeCompare(b));
+    return state.utility.completeProblemReasonTypes;
+  }
+  return Array.from(new Set([...(state.utility.completeProblemReasonTypes || []), ...current]))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function albumMatchesProblemFilters(album, selectedFilters = state.utility.selectedProblemFilters || []) {
@@ -3008,6 +3246,9 @@ function renderProblemFilterControls(els) {
   const reasonTypes = getProblemReasonTypes();
   const selected = state.utility.selectedProblemFilters || [];
   const selectedSet = new Set(selected);
+  const completeReasonTypesAvailable = state.utility.problematicFilesComplete === true
+    || Boolean((state.utility.completeProblemReasonTypes || []).length);
+  if (!completeReasonTypesAvailable) state.utility.problemDropdownOpen = false;
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
@@ -3016,7 +3257,7 @@ function renderProblemFilterControls(els) {
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;
-    els.problemFilterButton.disabled = !reasonTypes.length;
+    els.problemFilterButton.disabled = !completeReasonTypesAvailable || !reasonTypes.length;
   }
 
   if (els.problemFilterMenu) {
@@ -3029,38 +3270,42 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    const optionsHtml = reasonTypes.length
+    const optionsHtml = completeReasonTypesAvailable && reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
-            <span class="utility-problem-filter-check">${selectedSet.has(reason) ? 'on' : ''}</span>
+            <span class="utility-problem-filter-check" aria-hidden="true">${selectedSet.has(reason) ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>' : ''}</span>
             <span class="utility-problem-filter-label">${escapeHtml(reason)}</span>
           </button>
         `).join('')
-      : '<div class="utility-problem-filter-empty">No problem types found.</div>';
+      : completeReasonTypesAvailable ? '<div class="utility-problem-filter-empty">No problem types found.</div>' : '';
     // List refreshes re-render the controls while the menu is open; rewriting
     // unchanged options would reset its scroll position and keyboard focus.
     if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
-      els.problemFilterMenu.innerHTML = optionsHtml;
+      els.problemFilterMenu.innerHTML = `<div class="trigger-anchor-scroll">${optionsHtml}</div>`;
       renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
     }
-  }
-
-  if (els.problemFilterChips) {
-    els.problemFilterChips.innerHTML = selected.length
-      ? selected.map((reason) => `
-          <button class="utility-problem-filter-chip" type="button" data-remove-problem-filter="${escapeHtml(reason)}" title="Remove problem filter">
-            <span>${escapeHtml(reason)}</span>
-            <span aria-hidden="true">x</span>
-          </button>
-        `).join('')
-      : '';
   }
 }
 
 function getFilteredProblematicAlbums() {
-  const items = state.utility.problematicFiles || [];
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
+  const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
+  const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
+  if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
+  const list = query.length >= 2 && serverQuery === query
+    ? getAllProblematicList()
+    : getProblematicBaseList();
+  const selectedFilters = state.utility.selectedProblemFilters || [];
+  if (!query && !selectedFilters.length) return list.items;
+  // A view is filtered once per committed list, query and selected problem types.
+  const viewKey = JSON.stringify([query, selectedFilters]);
+  if (list.filtered?.key !== viewKey) {
+    list.filtered = { key: viewKey, items: filterProblematicAlbums(list.items, query) };
+  }
+  return list.filtered.items;
+}
 
+function filterProblematicAlbums(items, query) {
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
     if (!query) return true;
@@ -3072,7 +3317,6 @@ function getFilteredProblematicAlbums() {
       String(album.album_artist || ''),
       String(album.raw_album_artist || ''),
       String(album.year || ''),
-      ...(Array.isArray(album.problem_reasons) ? album.problem_reasons.map((reason) => String(reason || '')) : []),
       String(album.search_text || ''),
       ...trackTitles,
       ...repairRows.flatMap((row) => [
@@ -3100,7 +3344,7 @@ function getProblematicAlbumIssueLabel(album) {
 }
 
 function getSelectedProblematicAlbumFrom(items) {
-  return (items || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return getProblematicListIndex(items || []).get(state.utility.selectedProblematicKey) || null;
 }
 
 function getSelectedUtilityRule() {
@@ -3109,10 +3353,27 @@ function getSelectedUtilityRule() {
 
 function getProblematicAlbumForTrackPath(trackPath) {
   const normalized = String(trackPath || '');
-  return (state.utility.problematicFiles || []).find((album) =>
+  return getAllProblematicItems().find((album) =>
     (Array.isArray(album.problematic_track_paths) && album.problematic_track_paths.includes(normalized))
     || (Array.isArray(album.track_paths) && album.track_paths.includes(normalized))
   ) || null;
+}
+
+// One pass for a whole track list: per-row lookups scanned every problematic
+// album, so a long Loose Tracks list multiplied into millions of comparisons.
+// Matches getProblematicAlbumForTrackPath: the first album in list order wins.
+function buildProblematicAlbumTrackPathIndex() {
+  const index = new Map();
+  for (const album of getAllProblematicItems()) {
+    for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        const key = String(path || '');
+        if (!index.has(key)) index.set(key, album);
+      }
+    }
+  }
+  return index;
 }
 
 async function openUtilityModalForTrack(trackPath) {
@@ -3193,6 +3454,33 @@ async function openUtilityModalForTrack(trackPath) {
     if (optimisticDetailPromise) {
       await Promise.allSettled([optimisticDetailPromise]);
       if (!ownsNavigation()) return;
+    }
+    if (!pendingTasks.length && !getProblematicAlbumForTrackPath(trackPath)) {
+      const directAlbum = await loadProblematicAlbumDetailForTrackPath(trackPath);
+      if (!ownsNavigation()) return;
+      if (directAlbum) {
+        const directKey = String(directAlbum.key || '').trim();
+        state.utility.problematicFiles = [
+          ...(state.utility.problematicFiles || []).filter((item) => String(item?.key || '').trim() !== directKey),
+          { ...directAlbum, detail_loaded: true, detail_load_failed: false },
+        ];
+        state.utility.pinnedProblematicKey = directKey;
+        const completeListPending = state.utility.problematicFilesComplete === false
+          && Boolean(state.utility.completeLoadPromise);
+        state.utility.loaded = true;
+        state.utility.selectedProblematicKey = directKey;
+        state.utility.focusedTrackPath = String(trackPath || '');
+        state.utility.showRepairedDisplay = true;
+        state.utility.deferProblematicAutoSelection = false;
+        state.utility.selectedProblemFilters = [];
+        state.utility.problemDropdownOpen = false;
+        setUtilityActiveTab('problematic-files');
+        openedCanonicalTarget = true;
+        openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+        // Fill in the rest of the list behind the open album.
+        if (!completeListPending) void loadProblematicFiles(true);
+        return;
+      }
     }
     const summaryWasLoaded = state.utility.loaded;
     const pendingTaskRefreshedSummary = (
@@ -3333,7 +3621,7 @@ async function openMusicBrainzArtistProblem(occurrenceId) {
     const loadResult = await loadProblematicFiles(true, { render: false });
     if (loadResult === null) return;
   }
-  const findProblem = () => (state.utility.problematicFiles || []).find((item) => [
+  const findProblem = () => getAllProblematicItems().find((item) => [
     item?.occurrence_id,
     item?.musicbrainz_occurrence_id,
     item?.key,

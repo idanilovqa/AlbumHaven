@@ -61,11 +61,27 @@ test('GalleryCardInfo keeps artist and year together with ten-point rating, trac
     title: 'SMPTe', artist: 'Transatlantic', year: '2000', ratingHtml, trackCount: 5, lengthDisplay: '1h 17m',
   });
   assert.match(infoHtml, /SMPTe/);
-  assert.match(infoHtml, /class="album-subtitle"><span data-gallery-metadata-text>Transatlantic · 2000<\/span><\/div>/);
+  assert.match(infoHtml, /class="album-subtitle gallery-card__metadata"><span class="gallery-card__artist"><span data-gallery-metadata-text>Transatlantic<\/span><\/span><span class="gallery-card__year">· 2000<\/span><\/div>/);
   assert.doesNotMatch(infoHtml, /class="album-year"/);
   assert.match(infoHtml, /5 tracks/);
   assert.match(infoHtml, /1h 17m/);
   assert.equal((infoHtml.match(/<span class="star(?: filled)?">/g) || []).length, 10);
+});
+
+test('GalleryCardInfo keeps release year outside the artist motion text', () => {
+  const context = loadGalleryCard();
+  for (const artist of ['Transatlantic', 'A very long collaborative artist credit with several performers']) {
+    const html = context.buildGalleryCardInfoHtml({ title: 'SMPTe', artist, year: '2000' });
+    const motionTexts = Array.from(html.matchAll(/<span data-gallery-metadata-text>(.*?)<\/span>/g), match => match[1]);
+    assert.deepEqual(motionTexts, [artist], 'Only artist text may participate in subtitle motion');
+    assert.match(html, /2000/, 'The stationary release year remains in the card');
+  }
+});
+
+test('GalleryCardInfo never animates a year-only subtitle', () => {
+  const html = loadGalleryCard().buildGalleryCardInfoHtml({ title: 'SMPTe', year: '2000' });
+  assert.match(html, /2000/);
+  assert.doesNotMatch(html, /data-gallery-metadata-text/);
 });
 
 test('GalleryCard keeps a complete accessible name while clamping long card titles', () => {
@@ -144,7 +160,7 @@ test('hover year omits unknown values and safely renders supplied release years'
   assert.doesNotMatch(context.buildGalleryCardHtml({ year: '<img src=x>', displayMode: 'covers' }), /<img src=x>/);
   const cards = context.buildGalleryCardHtml({ year: '2005', displayMode: 'cards' });
   assert.doesNotMatch(cards, /gallery-card__hover-year|gallery-card__year-frame|data-gallery-release-year/);
-  assert.match(cards, /<span data-gallery-metadata-text>2005<\/span><\/div>/);
+  assert.match(cards, /<span class="gallery-card__year">2005<\/span><\/div>/);
 });
 
 // Mobile gallery cards observe each metadata row and its text. One resized row
@@ -178,7 +194,7 @@ function loadMetadataMotion(rowCount) {
     },
   };
   vm.createContext(context);
-  for (const filename of ['compact-player-helpers.js', 'gallery-card-component.js']) {
+  for (const filename of ['running-line.js', 'compact-player-helpers.js', 'gallery-card-component.js']) {
     const sourcePath = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', filename);
     vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   }
@@ -199,7 +215,7 @@ async function oneResizedMetadataRow(rowCount) {
   resizedText.scrollWidth = 400;
   const counts = await counter.measure(() => resize(resizedText));
   assert.equal(row.classList.contains('is-card-text-overflowing'), true, 'the resized row starts its pan');
-  assert.equal(row.style.getPropertyValue('--card-text-distance'), '280px');
+  assert.equal(row.style.getPropertyValue('--running-line-distance'), '280px');
   return counts;
 }
 

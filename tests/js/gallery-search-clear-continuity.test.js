@@ -26,24 +26,24 @@ test('clearing a selected-artist query retains the GalleryBar through the draft 
   assert.deepEqual(hiddenWrites, [false, false, false]);
 });
 
-test('a different nonempty query still hides the stale selected-artist GalleryBar', () => {
+test('different nonempty query retains GalleryBar while results change', () => {
   const { state, hiddenWrites, sync } = setup();
   state.ui.searchDraftQuery = 'Neal Morse';
   sync();
   state.view.query = 'Neal Morse';
   state.view.selected_artist = 'Neal Morse';
   sync();
-  assert.deepEqual(hiddenWrites, [true, false]);
+  assert.deepEqual(hiddenWrites, [false, false]);
 });
 
-test('root searches remain hidden until both draft and committed queries clear', () => {
+test('root searches retain GalleryBar through draft and committed queries', () => {
   const { state, hiddenWrites, sync } = setup({ selectedArtist: '' });
   sync();
   state.ui.searchDraftQuery = '';
   sync();
   state.view.query = '';
   sync();
-  assert.deepEqual(hiddenWrites, [true, true, false]);
+  assert.deepEqual(hiddenWrites, [false, false, false]);
 });
 
 test('mobile GalleryBar remains mounted through query transitions', () => {

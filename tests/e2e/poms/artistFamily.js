@@ -60,8 +60,8 @@ export class ArtistFamily extends BasePage {
     // parity-check: allow-read-only-measurement-evaluate -- measure Artist Family geometry and owned descendants
     return this.box.evaluate((panel) => ({
       anchorEnvelope: panel.dataset.anchorEnvelope || '',
-      anchorWidth: getComputedStyle(panel).getPropertyValue('--gallery-anchor-width').trim(),
-      anchorHeight: getComputedStyle(panel).getPropertyValue('--gallery-anchor-height').trim(),
+      anchorWidth: getComputedStyle(panel).getPropertyValue('--trigger-anchor-width').trim(),
+      anchorGap: getComputedStyle(panel).getPropertyValue('--trigger-anchor-gap').trim(),
       title: panel.querySelector('h2').textContent.trim(),
       titleRight: panel.querySelector('h2').getBoundingClientRect().right,
       totalLeft: panel.querySelector('[data-gallery-family-panel-total]').getBoundingClientRect().left,

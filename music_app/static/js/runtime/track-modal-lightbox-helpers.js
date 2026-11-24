@@ -26,10 +26,15 @@ function albumRequiresHydration(album) {
 }
 
 function renderTrackModalLoadingState(album) {
-  const els = getTrackModalElements();
+  let els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
-  els.title.textContent = headerParts.join(' - ');
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
+  if (els.header && typeof buildTrackModalHeaderHtml === 'function') {
+    els.header.innerHTML = buildTrackModalHeaderHtml(album);
+    els = getTrackModalElements();
+  } else {
+    els.title.textContent = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean).join(' - ');
+  }
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
     els.folder.dataset.album = '';
@@ -71,6 +76,7 @@ function renderTrackModalLoadingState(album) {
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (els.title) {
     els.title.textContent = '';
   }
@@ -233,6 +239,12 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
   });
   liveAliases.forEach((alias) => {
     if (state?.gallery?.albumIndex instanceof Map) {
+      const indexedAlbum = state.gallery.albumIndex.get(alias);
+      if (
+        options.tagEditMutationClaim
+        && trackModalAlbumsShareLogicalRelease(indexedAlbum, resolvedAlbum)
+        && !trackModalAlbumsHaveCompatibleMembership(indexedAlbum, resolvedAlbum)
+      ) return;
       state.gallery.albumIndex.set(alias, resolvedAlbum);
     }
   });
@@ -364,6 +376,16 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
   if (cachedAlbum && !albumRequiresHydration(cachedAlbum)) {
     const indexedAlbum = getIndexedAlbum(normalizedAlbumKey);
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
+    if (Array.isArray(cachedAlbum.release_candidate_family_keys)
+      && typeof getManualVersionFamilyKeys === 'function') {
+      const rules = typeof getAlbumReleaseRules === 'function' ? getAlbumReleaseRules(cachedAlbum) : state.view;
+      const currentFamily = [...getManualVersionFamilyKeys(String(cachedAlbum.key || ''), rules?.manual_version_links || {})].sort();
+      const cachedFamily = [...cachedAlbum.release_candidate_family_keys].map(String).sort();
+      if (JSON.stringify(currentFamily) !== JSON.stringify(cachedFamily)) {
+        invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
+        return null;
+      }
+    }
     const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
     const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
     const pendingMutationOwnsCachedMembership = Boolean(
@@ -464,11 +486,14 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     if (Array.isArray(payload?.current_releases)) error.currentReleases = payload.current_releases;
     throw error;
   }
-  return payload.album;
+  // Owner (2026-11-23): a save still finishing shows its values in the track table too.
+  const pendingTagEdits = typeof window !== 'undefined' ? window.AlbumHavenPendingTagEdits : null;
+  return pendingTagEdits?.overlayAlbumDetails ? pendingTagEdits.overlayAlbumDetails(payload.album) : payload.album;
 }
 
-// A gallery album that is gone was split or merged meanwhile. The refreshed gallery shows every
-// current release as its own card, so the choice is made there, never in a chooser here.
+// The album an open modal shows was split or merged meanwhile. The refreshed gallery shows every
+// current release as its own card, so the choice is made there, never in a chooser here. Only a
+// modal already open on the old album says so (owner, 2026-11-21).
 function closeTrackModalForChangedAlbum() {
   closeTrackModal();
   showToast('This album changed—choose it again in the gallery.', 'info', 4200);
@@ -578,7 +603,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
   // Rows this session edited were rendered optimistically, so they stay until canonical details land.
   const editedLocally = locallyEditedAlbumKeys.has(albumKey);
-  if (!editedLocally) renderTrackModalLoadingState(openAlbum);
+  if (!editedLocally && albumRequiresHydration(openAlbum)) renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {
@@ -601,9 +626,15 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   if (loadError?.status === 404) {
     const release = await findLocallyEditedSplitRelease(albumKey, openAlbum);
     if (els.overlay.hidden || state.modalReleases?.[state.modalReleaseIndex] !== currentAlbum) return false;
+    if (release) {
+      openTrackModal(release);
+      return true;
+    }
+    // This session's own save rebinds the modal when it completes; a key derived before the server
+    // added a release discriminator (::year::) is not an album that changed elsewhere.
+    if (editedLocally) return false;
     // Otherwise the view that triggered this refresh already shows the current releases.
-    if (release) openTrackModal(release);
-    else closeTrackModalForChangedAlbum();
+    closeTrackModalForChangedAlbum();
     return true;
   }
   if (loadError) throw loadError;
@@ -697,6 +728,45 @@ function preloadTrackModalArtwork(album) {
   image.src = source;
 }
 
+// Until a tag edit is saved, the server (and any earlier hydrated copy) still holds the album
+// as it was. The card is what the user sees, so details add the tracks the unsaved edit moved
+// in (the card carries them). A full card also drops tracks the edit moved out; a compact card
+// knows only its additions, so it never removes saved members.
+function overlayPendingTagEditMembership(hydratedAlbum, visibleAlbum) {
+  if (!hydratedAlbum || !visibleAlbum || hydratedAlbum === visibleAlbum
+      || typeof hasPendingTagEditViewMutations !== 'function'
+      || !hasPendingTagEditViewMutations()) return hydratedAlbum;
+  const membership = Array.isArray(visibleAlbum.track_paths)
+    ? new Set(visibleAlbum.track_paths.map((path) => String(path || '')).filter(Boolean))
+    : null;
+  if (!membership?.size) return hydratedAlbum;
+  const hydratedTracks = Array.isArray(hydratedAlbum.tracks) ? hydratedAlbum.tracks : [];
+  const known = new Set(hydratedTracks.map((track) => String(track?.path || '')));
+  const movedIn = (Array.isArray(visibleAlbum.tracks) ? visibleAlbum.tracks : [])
+    .filter((track) => membership.has(String(track?.path || '')) && !known.has(String(track?.path || '')));
+  const kept = visibleAlbum.preview_only === true
+    ? hydratedTracks
+    : hydratedTracks.filter((track) => membership.has(String(track?.path || '')));
+  if (!movedIn.length && kept.length === hydratedTracks.length) return hydratedAlbum;
+  const tracks = [...kept, ...movedIn];
+  if (typeof compareAlbumTracks === 'function') tracks.sort(compareAlbumTracks);
+  const totalDurationSeconds = tracks.reduce((sum, track) => {
+    const duration = Number(track?.duration_seconds || 0);
+    return sum + (Number.isFinite(duration) ? Math.max(0, duration) : 0);
+  }, 0);
+  return {
+    ...hydratedAlbum,
+    tracks,
+    track_paths: tracks.map((track) => String(track?.path || '')).filter(Boolean),
+    track_count: tracks.length,
+    track_count_preview: tracks.length,
+    total_duration_seconds: totalDurationSeconds,
+    ...(typeof formatCanonicalAlbumDuration === 'function'
+      ? { total_duration_display: formatCanonicalAlbumDuration(totalDurationSeconds) }
+      : {}),
+  };
+}
+
 function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -708,7 +778,13 @@ function openTrackModal(album, options = {}) {
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
   }
-  const albumWithPlaybackContext = attachGalleryPlaybackContextToAlbum(album);
+  let albumWithPlaybackContext = attachGalleryPlaybackContextToAlbum(album);
+  if (!albumRequiresHydration(albumWithPlaybackContext) && typeof flattenVisibleAlbums === 'function') {
+    // An earlier full copy predates an unsaved tag edit; the visible card carries the edit.
+    const requestKey = getAlbumRequestKey(albumWithPlaybackContext);
+    const card = flattenVisibleAlbums().find((candidate) => getAlbumRequestKey(candidate) === requestKey);
+    albumWithPlaybackContext = overlayPendingTagEditMembership(albumWithPlaybackContext, card);
+  }
   if (albumRequiresHydration(albumWithPlaybackContext)) {
     const albumKey = getAlbumRequestKey(albumWithPlaybackContext);
     const loadToken = invalidatePendingTrackModalLoad();
@@ -722,9 +798,10 @@ function openTrackModal(album, options = {}) {
     detailsPromise.then((hydratedAlbum) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       const refreshedAlbum = getIndexedAlbum(albumKey);
-      const resolvedAlbum = (!refreshedAlbum || albumRequiresHydration(refreshedAlbum))
-        ? hydratedAlbum
-        : refreshedAlbum;
+      const resolvedAlbum = overlayPendingTagEditMembership(
+        (!refreshedAlbum || albumRequiresHydration(refreshedAlbum)) ? hydratedAlbum : refreshedAlbum,
+        albumWithPlaybackContext,
+      );
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
       invalidatePendingTrackModalLoad();
@@ -738,7 +815,9 @@ function openTrackModal(album, options = {}) {
           openTrackModal(release);
           return;
         }
-        closeTrackModalForChangedAlbum();
+        // Owner (2026-11-21): "This album changed" belongs only to a modal that was already open on
+        // the old identity. A card opened after the change just gives way to the refreshed gallery.
+        closeTrackModal();
         if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
           refreshCurrentViewAfterBackgroundCompletion().catch((refreshError) => {
             console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);
@@ -887,7 +966,10 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
   const album = resolveTrackModalActionAlbum(button);
   if (!album || !(button instanceof HTMLElement)) return album;
   const duplicateSources = Array.isArray(album?.duplicate_sources) ? album.duplicate_sources : [];
-  const sourceIndex = Number(button.getAttribute('data-duplicate-source-index'));
+  const sourceIndexAttribute = String(button.getAttribute('data-duplicate-source-index') || '').trim();
+  const sourceIndex = sourceIndexAttribute
+    ? Number(sourceIndexAttribute)
+    : getTrackModalDuplicateSourceIndex(album, duplicateSources);
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= duplicateSources.length) {
     return album;
   }
@@ -1063,8 +1145,11 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  // An empty second artbox never outlives Album Details.
+  if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (!els.overlay) return;
   const cleanupGeneration = ++trackModalCleanupGeneration;
   const coverLoadSuspensionTokens = takeAllGalleryCoverLoadSuspensionTokens();
@@ -1194,7 +1279,6 @@ function dismissForegroundModal(modal) {
     'cover-lookup-modal': () => closeCoverLookupModal(),
     'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
     'non-album-modal': () => closeNonAlbumModal(),
-    'version-picker-modal': () => closeVersionPickerModal(),
   }[modal.id];
   if (close) close();
   else {

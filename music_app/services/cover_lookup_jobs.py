@@ -50,3 +50,4 @@ class CoverLookupRuntimeJob:
     cancel_event: Event
     manual_urls: list[str] | None = None
     job_contract: dict[str, object] | None = None
+    search_generation: str = ""

@@ -232,6 +232,28 @@ def test_ambiguous_loose_folder_preserves_structurally_inherited_cover(tmp_path)
     assert all(entry["cover_path"] == str(cover) for entry in cache.values())
 
 
+def test_in_folder_split_keeps_the_folder_cover_on_the_album_left_behind(tmp_path):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    folder = tmp_path / "Split album"
+    cover = folder / "cover.jpg"
+    left_behind, moved, stray = folder / "03.mp3", folder / "01.mp3", folder / "04.mp3"
+    cache = {
+        str(left_behind): {"path": str(left_behind), "album": "Original Album", "cover_path": str(cover)},
+        str(moved): {
+            "path": str(moved), "album": "Split Album", "cover_path": str(cover),
+            "cover_inherited_from_structural_edit": True,
+        },
+        str(stray): {"path": str(stray), "album": "Third Album", "cover_path": str(folder / "other.jpg")},
+    }
+
+    changed = clear_ambiguous_folder_covers(cache)
+
+    assert set(changed) == {str(stray)}
+    assert cache[str(left_behind)]["cover_path"] == str(cover)
+    assert cache[str(moved)]["cover_path"] == str(cover)
+
+
 def test_same_album_folder_keeps_art_across_track_artist_and_year_variation(tmp_path):
     from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 
@@ -374,3 +396,48 @@ def test_album_build_contract_repairs_only_contaminated_albums_at_production_tra
         assert counts.stat_calls <= 8 and counts.media_parses <= 1
     assert small.stat_calls == production.stat_calls
     assert small.filesystem_enumerations == production.filesystem_enumerations
+
+
+def _strict_folder(folder, first_cover, second_cover, *, first=None, second=None):
+    """Two complete albums alone in one folder: a multi-album folder by the strict rule."""
+    cache = {}
+    for album, cover, extra in (("First Album", first_cover, first), ("Second Album", second_cover, second)):
+        for number in (1, 2):
+            track = folder / f"{album[:5]}-{number:02d}.mp3"
+            cache[str(track)] = {
+                "path": str(track), "album": album, "album_artist": "Artist", "artist": "Artist",
+                "track_number": number, "disc_number": 1, "cover_path": str(cover), "cover_revision": "rev",
+                "cover_selection_origin": "automatic", **(extra or {}),
+            }
+    return cache
+
+
+def test_a_multi_album_folder_keeps_its_one_image_on_every_album(tmp_path):
+    """Owner (11-22, strict rule 11-24): both albums of a real multi-album folder show the folder's one image
+    until a different cover is picked for one."""
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    cover = tmp_path / "Shared" / "cover.jpg"
+    cache = _strict_folder(cover.parent, cover, cover)
+
+    assert clear_ambiguous_folder_covers(cache) == {}
+    assert {entry["cover_path"] for entry in cache.values()} == {str(cover)}
+
+
+def test_a_multi_album_folder_with_different_images_still_loses_them(tmp_path):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    folder = tmp_path / "Shared"
+    cache = _strict_folder(folder, folder / "cover.jpg", folder / "other.jpg")
+
+    assert set(clear_ambiguous_folder_covers(cache)) == set(cache)
+
+
+def test_a_user_pick_on_one_album_keeps_the_other_on_the_folder_image(tmp_path):
+    from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
+
+    folder = tmp_path / "Shared"
+    cache = _strict_folder(folder, folder / "picked.jpg", folder / "cover.jpg", first={"cover_selection_origin": "user"})
+
+    assert clear_ambiguous_folder_covers(cache) == {}
+    assert {entry["cover_path"] for entry in cache.values()} == {str(folder / "picked.jpg"), str(folder / "cover.jpg")}

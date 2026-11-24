@@ -9,6 +9,7 @@ test('every Postgres migration has its own number', () => {
   const names = fs.readdirSync(directory).filter((name) => name.endsWith('.sql'));
   const byNumber = new Map();
   for (const name of names) {
+    if (name === '0117b_define_fold_search_accents.sql') continue; // the one written exception (AGENTS.md)
     assert.match(name, /^\d{4}_[a-z0-9_]+\.sql$/, `${name} must be NNNN_name.sql`);
     const number = name.slice(0, 4);
     byNumber.set(number, [...(byNumber.get(number) || []), name]);

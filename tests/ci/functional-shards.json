@@ -50,6 +50,27 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+              "case": "FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons and Loose Tracks as one side-bar button",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+              "case": "FTC-ARTIST-TREE-004 keeps Loose Tracks selected after cold hydration without another navigation action",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+              "case": "FTC-ARTIST-TREE-005 keeps Artist Tree selected when expanded during cold Loose Tracks hydration",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
               "case": "FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing",
               "area": "settings"
@@ -94,6 +115,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
               "case": "FTC-TAGS-027 loads every disc when expanding an indexed album folder",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+              "case": "FTC-TAGS-028 adds the missing sibling disc without losing selection or unsaved edits",
               "area": "tag-edit"
             },
             {
@@ -246,7 +274,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
+              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
               "area": "tag-edit"
             },
             {
@@ -313,8 +341,29 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/responsiveGallery.spec.js",
+              "case": "FTC-MOBILE-WEB-008 switching Chrome device emulation from phone back to web restores the full web layout and mouse input",
+              "area": "responsive-visual"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
               "case": "FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/compilationTitleSearch.spec.js",
+              "case": "FTC-SEARCH-NAV-036 a title-only search selects the artist owning every matching compilation",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchDuringScan.spec.js",
+              "case": "FTC-SEARCH-NAV-035 a pasted search URL without an artist loads its results while a full rescan runs",
               "area": "gallery-search"
             },
             {
@@ -324,7 +373,6 @@
               "case": "FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -332,7 +380,27 @@
               "case": "FTC-SEARCH-NAV-029 watcher preserves punctuation-only band identity",
               "area": "gallery-search"
             },
-
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that disc",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/gallerySourceSwitchLoading.functional.spec.js",
+              "case": "FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, never an empty Library",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryHomeFromSettings.functional.spec.js",
+              "case": "FTC-GALLERY-HOME-002 Home from the admin panel opens library Home, not the earlier search",
+              "area": "gallery-search"
+            },
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -340,7 +408,6 @@
               "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -348,7 +415,6 @@
               "case": "FTC-SEARCH-NAV-031 watcher keeps soundtrack track artists under Featured On",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -356,7 +422,13 @@
               "case": "FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing display names",
               "area": "gallery-search"
             },
-
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-032 watcher sorts I\u2019m with Her before IZZ without changing display names",
+              "area": "gallery-search"
+            },
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -371,7 +443,6 @@
               "case": "FTC-ALBUM-TRACK-CREDITS-003 groups repeated featured artists under one marker",
               "area": "album-details"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -379,7 +450,6 @@
               "case": "FTC-SEARCH-NAV-034 keeps empty artist-scoped Non-album tracks disabled after hydration",
               "area": "gallery-search"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -387,14 +457,15 @@
               "case": "FTC-LIBROOTS-019 reconciles offline legacy deletions without stale active tracks",
               "area": "library-roots"
             },
-
             {
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
               "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
               "area": "library-roots",
-              "relatedAreas": ["album-details"]
+              "relatedAreas": [
+                "album-details"
+              ]
             },
             {
               "config": "playwright.config.js",
@@ -429,6 +500,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
               "case": "FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-003 finds accented artist names through visible search and direct links",
               "area": "gallery-search"
             },
             {
@@ -504,6 +582,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+              "case": "FTC-GALLERY-STARTUP-007 desktop sign-in progress never restarts and keeps a visible advancing bar",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+              "case": "FTC-GALLERY-STARTUP-007M mobile sign-in progress never restarts and keeps a visible advancing bar",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
               "case": "FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal",
               "area": "gallery-search"
@@ -535,6 +627,20 @@
               "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
               "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
+              "case": "FTC-MOBILE-HOME-001 mobile Home clears an active search and resets the Artists tree",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
+              "case": "FTC-MOBILE-HOME-002 mobile Home closes Loose Tracks and renders Home",
+              "area": "gallery-search"
             }
           ]
         }
@@ -664,6 +770,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "SMALL-SOUNDTRACK-GUEST a guest copy stays off the gallery and beside its soundtrack source in Problematic Files",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
               "case": "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
               "area": "cover-providers"
             },
@@ -674,13 +787,13 @@
               "case": "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
               "area": "cover-providers"
             },
-          {
-            "config": "playwright.config.js",
-            "project": "functional",
-            "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
-            "case": "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
-            "area": "cover-providers"
-          },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
+              "area": "cover-providers"
+            },
             {
               "config": "playwright.config.js",
               "project": "functional",
@@ -691,8 +804,36 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox owns its selection",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-COVERS-046 a split notification asks during the running search and keeps the chosen release",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-ALBUM-DETAILS-030 marking a separated release as a version again removes its version exception",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-048 every Cover Look Up opening shows all of its cards at once",
               "area": "cover-providers"
             },
             {
@@ -774,6 +915,34 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
+        "case": "FTC-COVERS-041 unhydrated notification opens the optimistic split chooser immediately",
+        "area": "cover-providers"
+      },
+      {
+        "config": "playwright.config.js",
+        "project": "functional",
+        "test": "tests/e2e/specs/coverLookup.spec.js",
+        "case": "FTC-COVERS-047 split re-merge redirects unanswered split chooser notification to the survivor",
+        "area": "cover-providers"
+      },
+      {
+        "config": "playwright.config.js",
+        "project": "functional",
+        "test": "tests/e2e/specs/coverLookup.spec.js",
+        "case": "FTC-COVERS-049 an in-app split from search results opens the split chooser from the notification",
+        "area": "cover-providers"
+      },
+      {
+        "config": "playwright.config.js",
+        "project": "functional",
+        "test": "tests/e2e/specs/coverLookup.spec.js",
+        "case": "FTC-COVERS-047 split re-merge redirects chosen split release notification to the survivor",
+        "area": "cover-providers"
+      },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
               "case": "FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally",
               "area": "cover-providers"
             },
@@ -788,7 +957,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
-              "case": "FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers",
+              "case": "FTC-COVERS-018 a new album the watcher finds gets an automatic lookup that applies the first acceptable cover and stops later providers, and an existing album with a user cover is never searched",
               "area": "cover-providers"
             },
             {
@@ -905,7 +1074,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
-              "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits",
+              "case": "FTC-ALBUM-DETAILS-029 an open Album Details whose album is split or merged elsewhere says 'This album changed—choose it again in the gallery' and returns to the gallery; a stale card opened afterwards just shows the refreshed gallery; a gallery open never shows the split chooser",
               "area": "tag-edit"
             },
             {
@@ -919,7 +1088,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
-              "case": "FTC-TAGS-008 keeps an accepted terminal failure readable without false success",
+              "case": "FTC-TAGS-008 keeps a failed file write readable without false success and leaves both files unchanged",
               "area": "tag-edit"
             },
             {
@@ -935,6 +1104,76 @@
               "test": "tests/e2e/specs/albumTagRename.spec.js",
               "case": "FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/duplicateTwinMarker.spec.js",
+              "case": "FTC-TAGS-033 Editing an album's tags so its album artist, album and year match another album's shows the two copies as one album card with the Duplicate files marker at once; editing it back shows the two separate album cards again without the marker at once",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-034 Save removes an album's card within 350 ms of the click, while the files are still being written, when no second album remains",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-035 Save shows a new or renamed album's card within 350 ms of the click, while the files are still being written",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-036 A copy that a save folds into another album leaves the gallery at Save, and no frame shows both cards afterwards",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-037 A copy that a save unfolds gets its own card at Save",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-038 Clicking Save before the fold is decided still updates every other card at once; only the fold follows, when its decision arrives",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-039 A failed or outdated fold decision is shown readably and never waits for the save to finish to change cards",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-040 A failed save puts cards, counts, markers and the artist tree back, and says why",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-041 A page opened during a save shows the edited albums as the save will leave them",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/saveCards.spec.js",
+              "case": "FTC-TAGS-042 Save keeps the selected artist and gallery position while cards appear and disappear",
+              "area": "tag-edit"
             },
             {
               "config": "playwright.config.js",
@@ -990,6 +1229,37 @@
               "project": "functional",
               "test": "tests/e2e/specs/tagEditorSelectionReorder.spec.js",
               "case": "FTC-TAGS-025 preserves selection and reorder semantics through cancel and apply",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/notificationIdentity.spec.js",
+              "case": "FTC-COVERS-044 saved notification tracks recover missing identity history without duplicating cards",
+              "area": "tag-edit",
+              "relatedAreas": [
+                "cover-providers"
+              ]
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryDataCorrections.spec.js",
+              "case": "FTC-LIBRARY-CORRECTIONS-001 an unreadable track artist shows the album artist, is a problem, and Write in tags fixes the tags",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+              "case": "FTC-TAGS-043 a save that finishes while a scan holds the library shows its new album name immediately, still shows it after a reload, in a second tab and in Album Details, and keeps it once the library holds it",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
+              "case": "FTC-TAGS-044 a save whose file write fails shows the old values again, keeps no pending edit, and a reload shows the old values",
               "area": "tag-edit"
             }
           ]
@@ -1080,6 +1350,13 @@
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal",
               "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-014 a watcher-found problem album appears in the open Problematic Files list without a reload",
+              "area": "problematic-files"
             },
             {
               "config": "playwright.config.js",

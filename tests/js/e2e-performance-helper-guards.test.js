@@ -1983,11 +1983,15 @@ test('broad Problematic Files benchmark retains timing classification before its
   const coldBlock = spec.slice(coldStart, coldEnd);
   assert.ok(spec.indexOf('await galleryActions.goto();') < coldStart);
   assert.ok(coldEnd > coldStart, 'A document navigation must discard frontend state before the warm-server open.');
+  const captureStart = spec.indexOf('capture = observeProblematicDetails(page)');
+  const warmOpen = spec.indexOf("stepLogger.step('Open Settings and wait for Problematic Files to become ready'");
+  assert.ok(captureStart > coldEnd, 'Rapid-jump evidence must observe only the document retained after the cold reset.');
+  assert.ok(warmOpen > captureStart, 'Install evidence capture before the retained document opens Problematic Files.');
   assert.match(coldBlock, /measureProblematicFilesSettingsOpenWithNetworkEvidence\(/);
   assert.match(coldBlock, /readCompletedResponseDurationMs\(coldResponse\)/);
   assert.match(coldBlock, /await coldResponse\.text\(\)/);
   assert.match(coldBlock, /new TextEncoder\(\)\.encode\(coldResponseBody\)\.byteLength/);
-  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('bounded'\)/);
+  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('indexed'\)/);
   assert.match(coldBlock, /completeSummaryResponse\.text\(\)/);
   assert.match(coldBlock, /JSON\.parse\(completeResponseBody\)/);
   assert.match(coldBlock, /evaluateProblematicFilesDatasetContract\(/);

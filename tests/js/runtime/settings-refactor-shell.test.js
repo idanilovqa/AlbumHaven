@@ -139,6 +139,7 @@ test('S01 ordinary typing and modified shortcuts do not change the active tab', 
 
 test('S03 ArrowDown opens Filters and focuses its first option', () => {
   const { context, els } = harness();
+  context.state.utility.problematicFilesComplete = true;
   const option = element({ 'data-problem-filter-value': 'Missing year' });
   els.problemFilterButton.closest = (selector) => selector.includes('problem-filter') ? els.problemFilterButton : null;
   els.problemFilterMenu.querySelectorAll = () => [option];
@@ -198,6 +199,7 @@ test('S03 disabled Filters does not activate through keyboard navigation', () =>
 
 test('S03 filter menu uses the shared trigger anchor and clears it when closed', () => {
   const { context, els } = harness();
+  context.state.utility.problematicFilesComplete = true;
   const anchored = [];
   const cleared = [];
   context.getProblemReasonTypes = () => ['Missing year', 'Encoding'];
@@ -212,6 +214,39 @@ test('S03 filter menu uses the shared trigger anchor and clears it when closed',
   context.renderProblemFilterControls(els);
   assert.deepEqual(cleared, [els.problemFilterMenu]);
   assert.equal(els.problemFilterMenu.hidden, true);
+});
+
+test('S03 a selected problem filter shows a check instead of the word on', () => {
+  const { context, els } = harness();
+  context.state.utility.problematicFilesComplete = true;
+  context.getProblemReasonTypes = () => ['Missing year', 'Encoding'];
+  context.state.utility.problemDropdownOpen = true;
+  context.state.utility.selectedProblemFilters = ['Missing year'];
+  context.renderProblemFilterControls(els);
+  const [selected, unselected] = els.problemFilterMenu.innerHTML.split('</button>');
+  assert.match(selected, /utility-problem-filter-check" aria-hidden="true"><svg viewBox="0 0 16 16"><path /);
+  assert.doesNotMatch(selected, />on</);
+  assert.match(unselected, /utility-problem-filter-check" aria-hidden="true"><\/span>/);
+});
+
+test('S03 the filter menu stays closed and disabled until every problem type has loaded', () => {
+  const { context, els } = harness();
+  context.getProblemReasonTypes = () => ['Missing year'];
+  context.state.utility.problemDropdownOpen = true;
+  context.state.utility.problematicFilesComplete = false;
+  context.renderProblemFilterControls(els);
+  // cd08172b3 replaced the partial list and its "Loading more problem types" note.
+  assert.equal(els.problemFilterButton.disabled, true);
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(els.problemFilterMenu.hidden, true);
+  assert.doesNotMatch(els.problemFilterMenu.innerHTML, /Missing year|Loading more problem types/);
+  context.state.utility.problematicFilesComplete = true;
+  context.state.utility.problemDropdownOpen = true;
+  context.renderProblemFilterControls(els);
+  assert.equal(els.problemFilterButton.disabled, false);
+  assert.equal(els.problemFilterMenu.hidden, false);
+  assert.match(els.problemFilterMenu.innerHTML, /Missing year/);
+  assert.doesNotMatch(els.problemFilterMenu.innerHTML, /Loading more problem types/);
 });
 
 test('S03 the integrated search control labels Filters without replacing its shared icon', () => {
@@ -303,6 +338,29 @@ for (const kind of ['problematic', 'loops']) {
     assert.doesNotMatch(html, /Unknown year|2024|data-open-lightbox/);
   });
 }
+
+test('problematic loose-track card subtext shows folder artist and album metadata', () => {
+  const { context } = harness();
+  const base = {
+    ...album,
+    key: 'loose-source::private-hash',
+    name: 'Loose Tracks',
+    loose_track_folder_path: 'Main/Loose',
+    loose_track_artist: 'First Artist',
+  };
+
+  assert.equal(
+    context.getProblematicAlbumNavigationOptions({
+      ...base,
+      loose_track_album: 'First Album',
+    }, false).subtitle,
+    'Main/Loose · First Artist · First Album',
+  );
+  assert.equal(
+    context.getProblematicAlbumNavigationOptions(base, false).subtitle,
+    'Main/Loose · First Artist',
+  );
+});
 
 test('S01/S03 live Settings template removes redundant visible shell and sidebar headings', () => {
   const template = read('music_app/templates/partials/primary-modals.html').split('<div class="tag-editor-modal"')[0];

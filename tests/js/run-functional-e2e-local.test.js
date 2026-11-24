@@ -17,6 +17,61 @@ const windowsPowerShell = path.join(
   'powershell.exe',
 );
 const powerShellExecutable = process.platform === 'win32' ? windowsPowerShell : 'pwsh';
+
+test('functional bootstrap uses the requested PostgreSQL port for provision and teardown', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  assert.match(source, /\[ValidateRange\(1, 65535\)\]\[int\]\$PostgresPort = 5432/u);
+  const script = `
+$source = Get-Content -Raw -LiteralPath '${runnerPath.replace(/'/g, "''")}'
+$tokens = $null; $parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
+$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-PostgresBootstrap' }, $true)
+Invoke-Expression $definition.Extent.Text
+function Capture-Bootstrap { $global:LASTEXITCODE = 0; $args | ConvertTo-Json -Compress }
+$bootstrapPowerShell = 'Capture-Bootstrap'
+$bootstrap = $postgresBin = $repositoryRoot = $python = 'unused'
+$PostgresPort = 49972
+Invoke-PostgresBootstrap -Mode Provision -DatabaseSuffix test -RunnerTemp unused -GithubEnv unused -StatePath unused
+Invoke-PostgresBootstrap -Mode Teardown -DatabaseSuffix test -RunnerTemp unused -GithubEnv unused -StatePath unused
+`;
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-Command', script], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const calls = result.stdout.trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+  assert.equal(calls.length, 2);
+  for (const call of calls) assert.equal(String(call[call.indexOf('-Port') + 1]), '49972');
+  assert.deepEqual(calls.map((call) => call[call.indexOf('-Mode') + 1]), ['Provision', 'Teardown']);
+});
+
+test('functional admin password lookup rejects other PostgreSQL ports', () => {
+  const script = `
+$source = Get-Content -Raw -LiteralPath '${runnerPath.replace(/'/g, "''")}'
+$tokens = $null; $parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
+$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-PostgresAdminPassword' }, $true)
+Invoke-Expression $definition.Extent.Text
+function Get-Content { param($LiteralPath) $script:entries }
+$PostgresPort = 49972
+$script:entries = @('localhost:5432:*:postgres:other', '127.0.0.1:49972:*:postgres:owned')
+if ((Get-PostgresAdminPassword unused) -ne 'owned') { throw 'Wrong target credential selected' }
+$script:entries = @('localhost:5432:*:postgres:other')
+$rejected = $false
+try { $null = Get-PostgresAdminPassword unused } catch { $rejected = $true }
+if (-not $rejected) { throw 'Other port must be rejected' }
+$PostgresPort = 5432
+if ((Get-PostgresAdminPassword unused) -ne 'other') { throw 'Default port compatibility lost' }
+$PostgresPort = 49972
+$script:entries = @('*:*:*:postgres:wildcard')
+if ((Get-PostgresAdminPassword unused) -ne 'wildcard') { throw 'Wildcard compatibility lost' }
+Write-Output 'verified'
+`;
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-Command', script], {
+    encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.stdout.trim(), 'verified');
+});
 const testPortPairHelpers = `
 function Open-TestListener([int]$Port) {
   $socket = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)

@@ -241,6 +241,8 @@ test('preloaded targets reload the released fixture before every Playwright atte
     '--profile', 'synthetic-large-library',
     '--database-url', databaseUrl,
     '--replace-existing',
+    // Each attempt starts from a published relation projection, as production does (FTC-COVERS-019P).
+    '--relation-projection', 'ready',
   ];
 
   assert.equal(result.exitCode, 1);

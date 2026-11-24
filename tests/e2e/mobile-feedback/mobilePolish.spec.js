@@ -31,8 +31,8 @@ test('phone menus are exclusive, search is joined, gallery pinch and first-touch
   await expect(app.artistRail.getByRole('button', { name: 'Artists', exact: true })).toBeVisible();
   await app.closeArtistRail.click();
   await phone.artistInfo.click();
-  await phone.expectArtistDialogCentered();
-  await snapshot('61-mobile-artist-dialog');
+  await phone.expectArtistInfoBottomSheet();
+  await snapshot('61-mobile-artist-sheet');
   await phone.artistDialog.getByRole('button', { name: 'Close artist information' }).click();
   await app.openSettings();
   await app.settingsSectionsButton.click();

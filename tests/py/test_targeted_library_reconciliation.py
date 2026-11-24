@@ -139,6 +139,8 @@ def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     assert result.affected_album_keys == ("broadcast::tender buttons",)
     assert result.active_track_paths == (str(requested),)
     assert result.new_track_paths == (str(requested),)
+    # Every touched file is named, so projections may be patched by path.
+    assert result.paths_complete is True
     assert repository.calls[0]["root_id"] == "main"
     entries = repository.calls[0]["active_file_entries"]
     assert list(entries) == [str(requested)]
@@ -768,8 +770,10 @@ def test_targeted_reconciler_passes_root_scoped_deleted_subtrees_without_scannin
         ],
     )
 
-    reconciler.reconcile(_request(deleted_subtrees=(deleted_album,)))
+    result = reconciler.reconcile(_request(deleted_subtrees=(deleted_album,)))
 
+    # A deleted folder's files are not named, so projections are rebuilt instead.
+    assert result.paths_complete is False
     assert repository.calls[0]["root_id"] == "main"
     assert repository.calls[0]["deleted_subtrees"] == (str(deleted_album),)
     assert repository.calls[0]["active_file_entries"] == {}
@@ -838,6 +842,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     from music_app.services import state
 
     invalidated: list[str] = []
+    postgres_invalidations = []
     monkeypatch.setattr(
         state,
         "schedule_gallery_projection_refresh",
@@ -859,7 +864,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     monkeypatch.setattr(
         state,
         "invalidate_postgres_utility_projection_cache",
-        lambda **kwargs: invalidated.append("postgres"),
+        lambda **kwargs: invalidated.append("postgres") or postgres_invalidations.append(kwargs),
         raising=False,
     )
     library_state = {
@@ -878,6 +883,10 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert library_state["inventory_mutation_revision"] == 4
     assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
     assert invalidated == ["gallery", "problems", "rules", "postgres"]
+    assert postgres_invalidations == [{
+        "database_url": "postgresql://example",
+        "kinds": ("problematic-files", "rules", "loose-tracks"),
+    }]
 
 
 def test_cover_only_invalidation_refreshes_no_library_projection(monkeypatch):
@@ -1572,11 +1581,89 @@ def test_targeted_reconciliation_rejects_shared_art_for_multiple_releases_in_one
 
 
 
+def test_catch_up_defers_without_publishing_when_a_full_scan_starts_midway(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    tracks = [root / "Owner" / "Album" / f"0{index}.flac" for index in range(3)]
+    for track in tracks:
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"audio")
+    roots = [{"id": "main", "path": str(root), "category": "main_library_roots"}]
+    repository = RecordingRepository()
+    read = []
+    scan_started = False
+
+    def read_metadata(path):
+        nonlocal scan_started
+        read.append(path)
+        scan_started = True  # the startup repair scan begins after the first file
+        return {"path": str(path), "album": "Album", "album_artist": "Owner", "artist": "Owner", "title": path.stem}
+
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}}, repository=repository, root_definitions=roots,
+        metadata_reader=read_metadata, stat_path=lambda path: path.stat(), wait=lambda _seconds: None,
+    )
+    result = reconciler.reconcile(
+        _request(paths=(root,), deleted_subtrees=(root,)),
+        interrupted=lambda: scan_started,
+    )
+
+    assert result.health == "deferred"
+    assert len(read) == 1
+    assert repository.calls == []
+
+
+def test_targeted_projection_invalidation_patches_problematic_files_by_complete_paths(monkeypatch):
+    """Owner (11-18): each watcher pass dropped the whole Problematic Files list (94 s rebuild)."""
+    from music_app.services import state
+
+    events: list[object] = []
+    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", lambda config: None)
+    monkeypatch.setattr(state, "invalidate_problematic_albums_payload_cache",
+                        lambda _state, include_postgres=True: events.append(("problems", include_postgres)))
+    monkeypatch.setattr(state, "invalidate_utility_rules_payload_cache",
+                        lambda _state, include_postgres=True: events.append(("rules", include_postgres)))
+    monkeypatch.setattr(state, "invalidate_postgres_utility_projection_cache",
+                        lambda **kwargs: events.append(("drop", kwargs)))
+    monkeypatch.setattr(state, "refresh_postgres_utility_projections_after_edit",
+                        lambda config, **kwargs: events.append(("patch", kwargs)))
+    monkeypatch.setattr(state, "library_browse_postgres_is_effective", lambda config: False)
+
+    state.invalidate_targeted_library_projections(
+        {}, {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"}, revision=2,
+        affected_album_keys=("artist::album",), track_paths=("C:/Music/Artist/Album/01.flac",),
+    )
+
+    assert events == [("problems", False), ("rules", False),
+                      ("patch", {"track_paths": ("C:/Music/Artist/Album/01.flac",)})]
+
+
 def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_library_size(tmp_path, monkeypatch):
+    """A watcher event never does library-scale work. Owner (2026-11-21): the pass patches the
+    event album in place (its relation facts included), so it may read that album's files more
+    than once, but every file it opens belongs to the event album and the counts are the same
+    at 20 and 1,000 albums."""
+    import builtins
+    import os
+
     from music_app.services import metadata
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
     from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
     from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    opened: list[Path] = []
+
+    def recording(open_function):
+        def record(target, *args, **kwargs):
+            if isinstance(target, (str, os.PathLike)):
+                opened.append(Path(target))
+            return open_function(target, *args, **kwargs)
+        return record
+
+    original_path_open = Path.open
+    monkeypatch.setattr(builtins, "open", recording(builtins.open))
+    monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: (opened.append(self), original_path_open(self, *args, **kwargs))[1])
 
     def run(album_count: int) -> OperationCounts:
         root = tmp_path / f"Music-{album_count}"
@@ -1592,6 +1679,7 @@ def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_li
         (album / "02.flac").write_bytes(b"two")
         (album / "cover.jpg").write_bytes(b"cover")
         repository = RecordingRepository()
+        opened.clear()  # only the reconcile's own reads, not the fixture's writes
         counts = OperationCounts()
         with count_filesystem_and_media(monkeypatch, counts, media_modules=(metadata,)):
             reconciler = TargetedLibraryReconciler(
@@ -1602,6 +1690,9 @@ def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_li
             )
             reconciler.reconcile(_request(paths=(requested,)))
         assert set(repository.calls[0]["active_file_entries"]) == {str(requested), str(album / "02.flac")}
+        # Every file read is the event album's own; no sibling album is opened.
+        assert opened and all(path.resolve().is_relative_to(album.resolve()) for path in opened), opened
+        assert len(set(opened)) <= 3, opened
         return counts
 
     small, production = measure_scale_pair(
@@ -1609,7 +1700,8 @@ def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_li
         small=20,
         large=1_000,
         run=run,
-        budgets={"filesystem_enumerations": 1, "stat_calls": 36, "open_calls": 3, "media_parses": 2},
+        budgets={"filesystem_enumerations": 1, "stat_calls": 36, "open_calls": 5, "media_parses": 2},
         growth=("stat_calls", 0),
     )
     assert small == production
+    assert small.open_calls == production.open_calls

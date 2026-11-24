@@ -5,15 +5,22 @@ const { applyFixtureAppearance } = require('./appearanceFixture');
 
 const root = path.resolve(__dirname, '../..');
 
-const loadProgress = async (page, initialPercent, appearance = { palette_id: 'parchment-pine', panel_index: 0 }) => {
-  const markup = fs.readFileSync(
-    path.join(root, 'music_app/templates/components/startup-progress.html'),
-    'utf8',
-  )
-    .replace(/{{ startup_progress_initial \| default\(0\) }}/, String(initialPercent))
-    .replace(/<script[\s\S]*?<\/script>/, '');
+const renderProgressMarkup = initialPercent => fs.readFileSync(
+  path.join(root, 'music_app/templates/components/startup-progress.html'),
+  'utf8',
+)
+  .replace(/{% set startup_progress_percent = [^%]+%}\s*/, '')
+  .replaceAll('{{ startup_progress_percent }}', String(initialPercent))
+  .replace(/{% if not startup_progress_percent %} hidden{% endif %}/, initialPercent ? '' : ' hidden')
+  .replace(/<script[\s\S]*?<\/script>/, '');
+
+const loadProgress = async (page, initialPercent, {
+  themed = true,
+  appearance = { palette_id: 'parchment-pine', panel_index: 0 },
+} = {}) => {
+  const markup = renderProgressMarkup(initialPercent);
   await page.setContent(`<body>${markup}<main><button>Gallery action</button></main></body>`);
-  await applyFixtureAppearance(page, appearance);
+  if (themed) await applyFixtureAppearance(page, appearance);
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/base-layout.css') });
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/startup-progress.css') });
   await page.addScriptTag({ path: path.join(root, 'music_app/static/js/startup-progress.js') });
@@ -102,9 +109,36 @@ for (const width of [390, 1280]) {
   });
 }
 
+test('startup progress keeps a colored bar without a themed palette or the sign-in stylesheet', async ({ page }) => {
+  await loadProgress(page, 50, { themed: false });
+  const colors = await page.evaluate(() => ({
+    track: getComputedStyle(document.querySelector('.progress-bar')).backgroundColor,
+    fill: getComputedStyle(document.querySelector('.progress-fill')).backgroundColor,
+    fillTransition: getComputedStyle(document.querySelector('.progress-fill')).transitionDuration,
+  }));
+  expect(colors.track).toBe('rgba(24, 36, 53, 0.82)');
+  expect(colors.fill).toBe('rgb(50, 188, 115)');
+  expect(colors.fillTransition).toBe('0s');
+});
+
+test('startup progress paints its starting stage before the script runs', async ({ page }) => {
+  await page.setContent(`<body>${renderProgressMarkup(50)}</body>`);
+  await expect(page.locator('[data-startup-percent]')).toHaveText('50%');
+  await expect(page.locator('.progress-fill')).toHaveAttribute('style', /width:\s*50%/);
+  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+});
+
+test('a startup failure hides the whole meter, never a lone percent', async ({ page }) => {
+  await loadProgress(page, 50);
+  await page.evaluate(() => window.AlbumHavenStartupProgress.fail());
+  await expect(page.locator('[data-startup-meter]')).toBeHidden();
+  await expect(page.locator('[data-startup-percent]')).toBeHidden();
+  await expect(page.getByRole('alert')).toBeVisible();
+});
+
 // Default accounts set no player tokens, and the app page does not load login.css.
 test('startup bar stays visible on the app page for a default-appearance account', async ({ page }) => {
-  await loadProgress(page, 50, { palette_id: null, panel_index: 0 });
+  await loadProgress(page, 50, { appearance: { palette_id: null, panel_index: 0 } });
   await expect(page.locator('[data-startup-percent]')).toHaveText('50%');
 
   const bar = await page.evaluate(() => {
@@ -135,4 +169,37 @@ test('startup progress honors reduced motion with an immediate stage update', as
   await page.evaluate(() => window.AlbumHavenStartupProgress.show(73));
   await expect(page.locator('.progress-fill')).toHaveAttribute('style', /width:\s*73%/);
   await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '73');
+});
+
+test('sign-in progress continues on the app document without restarting or uncovering the page', async ({ page }) => {
+  const script = fs.readFileSync(path.join(root, 'music_app/static/js/startup-progress.js'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'music_app/static/css/startup-progress.css'), 'utf8');
+  const documentFor = initialPercent => `<!doctype html><html><head><style>${css}</style></head>`
+    + `<body style="background:#000">${renderProgressMarkup(initialPercent)}<script>${script}</script></body></html>`;
+  await page.route('http://startup.test/**', route => route.fulfill({
+    contentType: 'text/html',
+    body: documentFor(route.request().url().endsWith('/app') ? 50 : 0),
+  }));
+  await page.goto('http://startup.test/login');
+  await page.evaluate(() => window.AlbumHavenStartupProgress.show(25));
+  await expect(page.locator('[data-startup-percent]')).toHaveText('25%');
+
+  await page.goto('http://startup.test/app');
+  const overlay = page.locator('[data-startup-progress]');
+  // The overlay is painted with the first app frame, so the black body never shows.
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toHaveCSS('background-color', 'rgb(7, 16, 29)');
+  const widths = await page.evaluate(async () => {
+    const fill = document.querySelector('.progress-fill');
+    const samples = [Number.parseFloat(fill.style.width)];
+    for (let index = 0; index < 4; index += 1) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      samples.push(Number.parseFloat(fill.style.width));
+    }
+    return samples;
+  });
+  expect(Math.min(...widths)).toBeGreaterThanOrEqual(50);
+  await expect(page.locator('[data-startup-percent]')).toHaveText('50%');
+  await page.evaluate(() => window.AlbumHavenStartupProgress.finish());
+  await expect(overlay).toBeHidden();
 });

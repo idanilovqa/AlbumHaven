@@ -962,10 +962,22 @@ function normalizeViewPayload(payload, fallbackView = null) {
         ? null
         : base.search_context,
     ),
-    ignored_version_keys: cloneRuntimeArray(source.ignored_version_keys, base.ignored_version_keys),
+    ignored_version_keys: cloneRuntimeArray(
+      source.version_rules_loaded?.ignored === false && base.version_rules_loaded?.ignored === true
+        ? undefined : source.ignored_version_keys, base.ignored_version_keys,
+    ),
+    version_rules_loaded: {
+      ignored: (source.version_rules_loaded?.ignored ?? Array.isArray(source.ignored_version_keys))
+        || base.version_rules_loaded?.ignored === true,
+      manual: (source.version_rules_loaded?.manual ?? isRuntimePlainObject(source.manual_version_links))
+        || base.version_rules_loaded?.manual === true,
+    },
     non_album_tracks: cloneRuntimeArray(source.non_album_tracks, base.non_album_tracks),
     non_album_exception_values: cloneRuntimeArray(source.non_album_exception_values, base.non_album_exception_values),
-    manual_version_links: cloneRuntimeObject(source.manual_version_links, base.manual_version_links),
+    manual_version_links: cloneRuntimeObject(
+      source.version_rules_loaded?.manual === false && base.version_rules_loaded?.manual === true
+        ? undefined : source.manual_version_links, base.manual_version_links,
+    ),
     query: normalizeRuntimeString(source.query, base.query),
     selected_artist: normalizeRuntimeString(
       isPlaylistSurface ? '' : source.selected_artist,
@@ -1560,7 +1572,11 @@ function applyViewPayload(payload, options = {}) {
       cacheState.relatedFilterBaseQuery = String(nextView.query || '');
     }
   }
-  return commitViewPayload(previousView, nextView, options);
+  const committed = commitViewPayload(previousView, nextView, options);
+  // Owner (2026-11-23): saves still finishing (files written, the library catching up) keep showing their
+  // values after any load, as at the Save.
+  if (typeof window !== 'undefined') window.AlbumHavenPendingTagEdits?.overlayCurrentView?.();
+  return committed;
 }
 
 // Mounts a normalized view and reconciles the browse state that follows it.
@@ -1591,6 +1607,8 @@ function commitViewPayload(previousView, nextView, options = {}) {
     }
   }
   state.view = nextView;
+  // A different artist (or none) leaves the deferred loose-track count and list it was waiting for.
+  if (selectionChanged && typeof cancelDeferredNonAlbumRetries === 'function') cancelDeferredNonAlbumRetries();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
@@ -1661,7 +1679,14 @@ function commitRootGalleryContinuation({ mergedLastGroup = null, appendedGroups 
 function mergeViewPayload(patch, options = {}) {
   const baseView = normalizeViewPayload(state.view);
   const nextPatch = isRuntimePlainObject(patch) ? patch : {};
-  return applyViewPayload({ ...baseView, ...nextPatch }, options);
+  return applyViewPayload({
+    ...baseView,
+    ...nextPatch,
+    version_rules_loaded: {
+      ignored: Array.isArray(nextPatch.ignored_version_keys) || baseView.version_rules_loaded.ignored,
+      manual: isRuntimePlainObject(nextPatch.manual_version_links) || baseView.version_rules_loaded.manual,
+    },
+  }, options);
 }
 
 function applyStatusPayload(payload, fallbackStatus = null) {

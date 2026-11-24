@@ -287,7 +287,9 @@ def test_postgres_adapter_load_notification_summaries_uses_database_projection()
     assert "task_summary" in summary_sql
     assert "'album_id', coalesce(" in summary_sql
     assert "select ops.cover_lookup_tasks.provider_payload," not in summary_sql
-    assert "select ops.cover_lookup_tasks.metadata" not in summary_sql
+    # The only projected column is the compact summary, never the raw metadata.
+    assert ") select jsonb_strip_nulls(" in summary_sql
+    assert ") as task_summary from ops.cover_lookup_tasks " in summary_sql
 
 
 def test_postgres_adapter_requires_delete_privilege_to_clear_legacy_terminal_notification(

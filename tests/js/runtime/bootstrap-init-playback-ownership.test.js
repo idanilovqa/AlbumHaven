@@ -1596,6 +1596,19 @@ test(`bootstrap init hydrates partial startup but keeps complete root pages boun
 });
 }
 
+for (const settings of ['', '?settings=appearance']) {
+  test(`standalone Settings entry opens Appearance only when requested: ${settings}`, () => {
+    const calls = [];
+    const entry = helperSource.slice(helperSource.indexOf('// Standalone admin pages link'));
+    vm.runInNewContext(entry, {
+      URL, window: { location: { href: 'https://albumhaven.example/' + settings } },
+      setUtilityActiveTab: tab => calls.push(tab),
+      openUtilityModal: () => calls.push('open'),
+    });
+    assert.deepEqual(calls, settings ? ['appearance', 'open'] : []);
+  });
+}
+
 // Request-capture contract (tests/ci/bounded-interactions.json): startup hydration resolves its
 // endpoint with the real view URL helpers and requests it once; a blank Home endpoint resolves to
 // /home-data, never /view-data. fetchAndRender passes these API URLs to fetch unchanged.

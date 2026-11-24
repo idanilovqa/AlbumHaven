@@ -9,6 +9,23 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+test('artist loose-track readiness reads lexical runtime state without requiring a window property', async () => {
+  const vm = require('node:vm');
+  const { pathToFileURL } = require('node:url');
+  const { ArtistPageSettings } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/artistPageSettings.js')).href);
+  let readiness;
+  await ArtistPageSettings.prototype.waitForNonAlbumTracksHydrated.call({
+    async waitForPageCondition(callback) { readiness = callback; },
+  });
+  for (const deferred of [true, false]) {
+    const context = vm.createContext({});
+    vm.runInContext(`const state = { view: { non_album_tracks_deferred: ${deferred} } };`, context);
+    assert.equal(vm.runInContext('globalThis.state', context), undefined);
+    assert.equal(vm.runInContext(`(${readiness.toString()})()`, context), !deferred);
+  }
+  assert.equal(vm.runInNewContext(`(${readiness.toString()})()`), false);
+});
+
 test('isolated rarity fixture uses generated media before the Postgres snapshot', () => {
   const fixture = read('tests/e2e/support/isolatedLibraryApp.py');
 

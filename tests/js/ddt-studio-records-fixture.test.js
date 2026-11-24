@@ -299,9 +299,9 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
   assert.match(sql, /'album_edition_rows'/);
   assert.match(sql, /'file_edition_rows'/);
   assert.doesNotMatch(sql, /relation_projection,status/);
-  assert.match(sql, /- 'relation_projection'/);
-  assert.match(sql, /- 'relation_views'/);
-  assert.match(sql, /- 'relations_last_built'/);
+  assert.doesNotMatch(sql, /- 'relation_projection'/);
+  assert.doesNotMatch(sql, /- 'relation_views'/);
+  assert.doesNotMatch(sql, /- 'relations_last_built'/);
   assert.match(
     sql,
     /delete from library\.separate_releases[\s\S]*release_key like[\s\S]*lower\(/,

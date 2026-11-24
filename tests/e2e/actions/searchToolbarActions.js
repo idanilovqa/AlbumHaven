@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { isSearchLooseTracksPrefetchUrl } from '../helpers/productionViewObserver.js';
 
 export class SearchToolbarActions {
   constructor(searchToolbar) {
@@ -45,10 +46,12 @@ export class SearchToolbarActions {
 
   async settleDebouncedPrefixesThenSubmit(query, prefixes, options = {}) {
     const completedQuery = String(query || '');
+    await expect(this.searchToolbar.galleryHeader).toBeVisible();
     for (const prefix of prefixes) {
       const typedPrefix = String(prefix || '');
       await this.searchToolbar.input.fill(typedPrefix);
       await expect(this.searchToolbar.input).toHaveValue(typedPrefix);
+      await expect(this.searchToolbar.galleryHeader).toBeVisible();
     }
     if (await this.searchToolbar.input.inputValue() !== completedQuery) {
       await this.searchToolbar.input.fill(completedQuery);
@@ -56,6 +59,7 @@ export class SearchToolbarActions {
     }
     await this.searchToolbar.input.press('Enter');
     await this.waitForQuery(completedQuery, options);
+    await expect(this.searchToolbar.galleryHeader).toBeVisible();
   }
 
   async searchAndReadViewDataPayload(query, options = {}) {
@@ -64,7 +68,8 @@ export class SearchToolbarActions {
       if (response.request().method() !== 'GET' || !response.ok()) return false;
       const url = new URL(response.url());
       return url.pathname === '/view-data'
-        && String(url.searchParams.get('q') || '').trim() === expectedQuery;
+        && String(url.searchParams.get('q') || '').trim() === expectedQuery
+        && !isSearchLooseTracksPrefetchUrl(url);
     });
     await this.search(expectedQuery, options);
     const response = await responsePromise;

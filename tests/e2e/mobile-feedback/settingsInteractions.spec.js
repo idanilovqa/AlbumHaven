@@ -83,11 +83,15 @@ test('mobile Problematic Files search, filters and exact exceptions survive relo
   await expect(search.problemFilterMenu).not.toBeVisible();
   await search.problemFilterButton.click();
   await search.filterOptionByValue('Missing year').click();
-  await expect(search.filterChipByValue('Missing year')).toBeVisible();
+  await expect(search.filterOptionByValue('Missing year')).toHaveAttribute('aria-selected', 'true');
+  await expect(search.problemFilterButton).toHaveClass(/is-active/u);
   await expect(problems.listItems.filter({ hasText: 'Collected Skies 03' })).toBeVisible();
   await expect(problems.listItems.filter({ hasText: 'Collected Skies 02' })).toHaveCount(0);
-  await search.filterChipByValue('Missing year').click();
-  await expect(search.filterChipByValue('Missing year')).toHaveCount(0);
+  if (!await search.problemFilterMenu.isVisible()) await search.problemFilterButton.click();
+  await search.filterOptionByValue('Missing year').click();
+  await expect(search.filterOptionByValue('Missing year')).toHaveAttribute('aria-selected', 'false');
+  await expect(search.problemFilterButton).not.toHaveClass(/is-active/u);
+  await search.problemFilterButton.click();
   await search.searchInput.fill('Collected Skies 02');
   await expect(problems.listItems).toHaveCount(1);
   await problems.listItems.click();

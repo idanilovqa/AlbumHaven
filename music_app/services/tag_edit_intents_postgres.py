@@ -19,6 +19,18 @@ _UNFINISHED_STATUSES = frozenset({"prepared", "files_verified", "recovery_failed
 _TERMINAL_STATUSES = frozenset({"completed", "rolled_back", "reconciled_external"})
 
 
+class DuplicateTagEditRequest(RuntimeError):
+    """The page resent a save the server already received (same client request id)."""
+
+
+def normalize_client_request_id(value: object) -> str:
+    """A page-made save id is a UUID; anything else is ignored rather than trusted."""
+    try:
+        return str(uuid.UUID(str(value or "").strip()))
+    except ValueError:
+        return ""
+
+
 class PostgresTagEditIntentRepository:
     """Durable journal for Edit Tags operations that cross file and DB boundaries."""
 
@@ -28,15 +40,39 @@ class PostgresTagEditIntentRepository:
         *,
         connect: Callable[[str], Any] | None = None,
     ) -> None:
+        self._config = config
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
         # The intent's advisory lock is a session lock held through the media writes: never on a
         # connection that a request could borrow next.
         self._lock_connect = connect or session_connection
 
-    def intent_lease(self):
-        """Own a journal session until the edit's background finalizer releases it."""
-        return _TagEditIntentLease(self)
+    def intent_lease(self, request_id: str = ""):
+        """Own a journal session until the edit's background finalizer releases it.
+
+        ``request_id`` is the page's id for this save; it becomes the intent id so a resent save is
+        recognised (owner, 2026-11-17: a save without a server answer is kept and sent again)."""
+        return _TagEditIntentLease(self, request_id)
+
+    def request_status(self, request_id: str) -> str | None:
+        """The journal status of a page's save, or None when the server never received it."""
+        return self.request_statuses([request_id]).get(normalize_client_request_id(request_id))
+
+    def request_statuses(self, request_ids: list[str]) -> dict[str, str | None]:
+        """Each valid save id's journal status (None: never received), read in one statement.
+
+        A retry pass asks about all its waiting saves at once (6.5, 11-22); ids that are not
+        UUIDs are left out, so the rows read never exceed the distinct ids sent."""
+        intent_ids = list(dict.fromkeys(filter(None, map(normalize_client_request_id, request_ids))))
+        if not intent_ids:
+            return {}
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                "select id::text as id, status from library.tag_edit_intents where id = any(%(intent_ids)s::uuid[])",
+                {"intent_ids": intent_ids},
+            ).fetchall()
+        statuses = {str(_row_mapping(row).get("id")): str(_row_mapping(row).get("status") or "") or None for row in rows}
+        return {intent_id: statuses.get(intent_id) for intent_id in intent_ids}
 
     @contextmanager
     def claim_unfinished_intent(self, intent_id: str, *, library_root_identity: str):
@@ -186,6 +222,11 @@ class PostgresTagEditIntentRepository:
                     status=status,
                     last_error=last_error,
                 )
+        if exception_updates:
+            # Completed on its own, outside the tag save: its overrides' albums go to the relation owner.
+            from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
+
+            queue_journaled_relation_drain(self._config)
 
     def mark_recovery_failed(self, intent_id: str, error: object) -> None:
         with self._connect_to_database() as connection:
@@ -242,8 +283,9 @@ class _FallbackJsonb:
 class _TagEditIntentLease:
     """A dedicated session lock; no transaction stays open during media writes."""
 
-    def __init__(self, repository):
+    def __init__(self, repository, request_id: str = ""):
         self._repository = repository
+        self._request_id = normalize_client_request_id(request_id)
         self._stack = ExitStack()
         self._connection = None
         self._intent_id = ""
@@ -270,13 +312,16 @@ class _TagEditIntentLease:
         if not identity:
             raise ValueError("Tag edit intent requires a library root identity.")
         try:
-            self._acquire(str(uuid.uuid4()), wait=True)
+            self._acquire(self._request_id or str(uuid.uuid4()), wait=True)
             with _transaction(self._connection):
-                self._connection.execute(_prepare_intent_sql(), {
+                inserted = _first_row(self._connection.execute(_prepare_intent_sql(), {
                     "intent_id": self._intent_id,
                     "library_root_identity": identity,
                     "changes": _jsonb(normalized_changes),
-                })
+                }))
+            if inserted is None:
+                # The same save arrived twice: the first one owns it, so this one writes nothing.
+                raise DuplicateTagEditRequest(self._intent_id)
             return self._intent_id
         except BaseException:
             self.release()
@@ -342,13 +387,14 @@ def _validate_changes(changes: list[dict[str, object]]) -> list[dict[str, object
             raise ValueError(
                 "Tag edit intent requires matching old and requested values."
             )
-        normalized.append(
-            {
-                "path": path,
-                "old_values": dict(old_values),
-                "requested_values": dict(requested_values),
-            }
-        )
+        change = {
+            "path": path,
+            "old_values": dict(old_values),
+            "requested_values": dict(requested_values),
+        }
+        if isinstance(raw_change.get("text_correction_write"), Mapping):
+            change["text_correction_write"] = dict(raw_change["text_correction_write"])
+        normalized.append(change)
     return normalized
 
 
@@ -371,6 +417,7 @@ def _prepare_intent_sql() -> str:
         ) values (
           %(intent_id)s::uuid, %(library_root_identity)s, 'prepared', %(changes)s::jsonb
         )
+        on conflict (id) do nothing
         returning id::text as id
     """
 
@@ -386,15 +433,29 @@ def _mark_files_verified_sql() -> str:
 
 
 def _mark_terminal_sql() -> str:
+    # A "Write in tags" correction is recorded as written only by the commit that completes its save.
     return """
-        update library.tag_edit_intents
-        set status = %(status)s,
-            updated_at = now(),
-            completed_at = now(),
-            last_error = %(last_error)s
-        where id = %(intent_id)s::uuid
-          and status in ('prepared', 'files_verified', 'recovery_failed')
-        returning id::text as id
+        with terminal as (
+          update library.tag_edit_intents
+          set status = %(status)s,
+              updated_at = now(),
+              completed_at = now(),
+              last_error = %(last_error)s
+          where id = %(intent_id)s::uuid
+            and status in ('prepared', 'files_verified', 'recovery_failed')
+          returning id, status, changes
+        ), written as (
+          insert into library.local_track_file_text_correction_writes (track_file_id, text_corrections)
+          select files.id, change -> 'text_correction_write' -> 'text_corrections'
+          from terminal
+          cross join lateral jsonb_array_elements(terminal.changes) change
+          join library.local_track_files files
+            on files.id = (change -> 'text_correction_write' ->> 'track_file_id')::bigint
+          where terminal.status = 'completed'
+          on conflict (track_file_id) do update
+            set text_corrections = excluded.text_corrections, written_at = now()
+        )
+        select id::text as id from terminal
     """
 
 

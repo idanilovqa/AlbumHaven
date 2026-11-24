@@ -265,8 +265,9 @@ export class GalleryPage extends BasePage {
     this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
     this.galleryContextMetadata = this.galleryContext.locator('[data-gallery-context-metadata]');
     this.galleryContextInlineTotal = this.galleryContext.locator('[data-gallery-context-inline-total]');
-    this.galleryContextCountryPills = this.galleryContext.locator('.ui-metadata-pill--country');
-    this.galleryContextGenrePills = this.galleryContext.locator('.ui-metadata-pill--genre');
+    // The header holds a desktop and a phone summary; CSS shows one per layout.
+    this.galleryContextCountryPills = this.galleryContext.locator('.ui-metadata-pill--country:visible');
+    this.galleryContextGenrePills = this.galleryContext.locator('.ui-metadata-pill--genre:visible');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
     this.artistInfoTrigger = this.galleryContext.locator('[data-artist-info-trigger]');
     this.artistInfoPanel = page.locator('[data-artist-info-overlay]');
@@ -424,6 +425,33 @@ export class GalleryPage extends BasePage {
     });
   }
 
+  async readArtistDiscographySections(artistName) {
+    const section = this.sectionByArtistHeading(artistName);
+    // parity-check: allow-read-only-measurement-evaluate -- read visible production headings and card labels in DOM order
+    return section.evaluate((element, selectors) => {
+      const sections = [{ title: null, albums: [] }];
+      for (const block of element.querySelector('.artist-rows').children) {
+        const heading = block.querySelector('.artist-subsection-title');
+        if (heading) {
+          sections.push({ title: heading.textContent.trim(), albums: [] });
+        } else {
+          for (const card of block.querySelectorAll(selectors.card)) {
+            sections.at(-1).albums.push({
+              name: card.querySelector(selectors.title).textContent.trim(),
+              subtitle: card.querySelector(selectors.subtitle)?.textContent.trim() || '',
+              key: card.getAttribute('data-gallery-card-key'),
+            });
+          }
+        }
+      }
+      return sections;
+    }, {
+      card: this.albumCardWithinSectionSelector,
+      title: this.albumTitleButtonWithinSectionSelector,
+      subtitle: this.albumCard.subtitleWithinCardSelector,
+    });
+  }
+
   async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {
     const section = this.sectionByArtistHeading(artistName);
     const matchingCards = section.locator(
@@ -514,6 +542,69 @@ export class GalleryPage extends BasePage {
     });
   }
 
+  // Page-clock record of the named albums' card track counts, one entry per rendered change,
+  // plus the moment the button named startButtonText is clicked.
+  async startAlbumCardTrackCountObservation({ albums, startButtonText }) {
+    // parity-check: allow-read-only-measurement-evaluate -- observe rendered card count labels on the page clock without touching application state
+    const observation = await this.page.evaluateHandle((options) => {
+      const names = new Set(options.albums);
+      const changes = [];
+      let startMs = null;
+      let lastKey = '';
+      let frame = 0;
+      const read = () => {
+        frame = 0;
+        const counts = Object.fromEntries(options.albums.map((album) => [album, null]));
+        document.querySelectorAll(options.cardSelector).forEach((card) => {
+          const album = String(card.querySelector(options.titleSelector)?.textContent || '').trim();
+          if (!names.has(album)) return;
+          const match = String(card.querySelector(options.trackCountSelector)?.textContent || '')
+            .trim().match(/^(\d+)\s+tracks?$/i);
+          counts[album] = match ? Number(match[1]) : -1;
+        });
+        const key = JSON.stringify(counts);
+        if (key === lastKey) return;
+        lastKey = key;
+        changes.push({ atMs: performance.now(), counts });
+      };
+      const schedule = () => { if (!frame) frame = requestAnimationFrame(read); };
+      const onClick = (event) => {
+        const button = event.target?.closest?.('button');
+        if (startMs === null && String(button?.textContent || '').trim() === options.startButtonText) {
+          startMs = performance.now();
+        }
+      };
+      const observer = new MutationObserver(schedule);
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      document.addEventListener('click', onClick, true);
+      read();
+      return {
+        finish() {
+          observer.disconnect();
+          document.removeEventListener('click', onClick, true);
+          if (frame) cancelAnimationFrame(frame);
+          read();
+          return { startMs, changes };
+        },
+      };
+    }, {
+      albums,
+      startButtonText,
+      cardSelector: `${this.artistSectionSelector} ${this.albumCardWithinSectionSelector}`,
+      titleSelector: this.albumTitleButtonWithinSectionSelector,
+      trackCountSelector: this.albumCard.trackCountWithinCardSelector,
+    });
+    let finished = null;
+    return {
+      async finish() {
+        // parity-check: allow-read-only-measurement-evaluate -- stop the card count observer and return its page-clock record
+        finished ??= observation.evaluate((owned) => owned.finish())
+          .finally(() => observation.dispose());
+        return finished;
+      },
+    };
+  }
+
   async readMountedAlbumInventory() {
     // parity-check: allow-read-only-measurement-evaluate -- atomically read every mounted production-card identity and row position across current gallery sections
     return this.page.locator(this.artistSectionSelector).evaluateAll((sections, selectors) => (
@@ -569,9 +660,13 @@ export class GalleryPage extends BasePage {
       const ownsSingleArtist = !element.querySelector('.artist-name')
         && document.querySelectorAll(selectors.artistSectionSelector).length === 1
         && String(context?.querySelector('[data-gallery-context-name]')?.textContent || '').trim() === selectors.artistName;
-      const artistMetaText = String(sectionCount?.textContent
-        // A single-artist header reads "Name (i) • N albums": the count follows the name.
-        || (ownsSingleArtist ? context.querySelector('[data-gallery-context-inline-total]')?.textContent : '') || '').trim();
+      // A single-artist header puts the count on its second line ("N albums • genre"); the inline total
+      // after the name is an older placement that stays hidden and empty in the two-line header.
+      const singleArtistCount = ownsSingleArtist
+        ? context.querySelector('[data-gallery-context-summary] .gallery-bar__summary-count')?.textContent
+          || context.querySelector('[data-gallery-context-inline-total]')?.textContent
+        : '';
+      const artistMetaText = String(sectionCount?.textContent || singleArtistCount || '').trim();
       const expectedAlbums = new Set(selectors.expectedAlbumNames);
       const renderedIdentities = [...element.querySelectorAll(selectors.albumCardSelector)]
         .map((card) => ({
@@ -941,7 +1036,7 @@ export class GalleryPage extends BasePage {
     throw new Error('Expected an observed production view response or settled SSR payload before reading browse telemetry.');
   }
 
-  async readAlbumTargetState(expected = {}) {
+  async readAlbumTargetState(expected = {}, { fullProjection = false } = {}) {
     let initialObservation = this.productionViewObserver.read();
     if (initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError) {
       throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError}`);
@@ -999,7 +1094,7 @@ export class GalleryPage extends BasePage {
       ? String(inputQuery || '').trim()
       : String(expected.query || '').trim();
     const readAppliedProjection = () => (
-      expectedQuery && typeof this.page.evaluate === 'function'
+      expectedQuery && !fullProjection && typeof this.page.evaluate === 'function'
         ? this.readAppliedAlbumTargetProjection({
           artist: expectedArtist,
           album: expectedAlbum,

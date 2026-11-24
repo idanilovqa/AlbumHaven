@@ -27,8 +27,13 @@ def app(tmp_path, monkeypatch):
         def __init__(self, config):
             self.config = config
 
-        def intent_lease(self):
+        received_statuses = {}
+
+        def intent_lease(self, request_id=""):
             return self
+
+        def request_status(self, request_id):
+            return self.received_statuses.get(request_id)
 
         def release(self):
             pass
@@ -378,6 +383,7 @@ def test_asgi_library_settings_read_uses_asgi_config_without_flask_bridge(app, a
             "library.settings.manage": True,
             "library.filesystem.browse": True,
             "library.paths.read": True,
+            "library.files.edit_tags": True,
         },
         "settings": {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],
@@ -731,7 +737,8 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
     assert post_payload["refresh_started"] is True
     assert post_payload["status"]["scan_in_progress"] is True
     assert post_payload["status"]["scan_mode"] == "library_settings_update"
-    assert asgi_app.state.library_state["pending_cover_refresh_after_scan"] is True
+    # Case 65 (6.5): the save's scan looks up covers only for the albums it adds, never the whole library.
+    assert not asgi_app.state.library_state.get("pending_cover_refresh_after_scan")
     assert refresh_calls == [
         {
             "library_state": asgi_app.state.library_state,
@@ -800,8 +807,11 @@ def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_se
 
     def workflow(config, settings, **kwargs):
         return save_library_settings_and_start_refresh(
-            config, settings, save_root_settings=save_roots, **kwargs,
+            config, settings, save_root_settings=save_roots,
+            load_root_identity=lambda _config: ",".join(saved), **kwargs,
         )
+
+    monkeypatch.setattr(routes, "queue_root_change_scan_for_state", lambda *_args: True, raising=False)
 
     def start_refresh(library_state, *_args, **_kwargs):
         library_state["scan_in_progress"] = True
@@ -846,9 +856,11 @@ def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_se
         timer.join(timeout=2.0)
         assert not timer.is_alive()
 
-    assert [result[0] for result in results] == ([200, 409] if concurrent_save else [200])
-    assert saved == ["first"]
-    assert replacements == ["first"]
+    # A save during the scan the first one started is saved too, never refused.
+    expected = ["first", "second"] if concurrent_save else ["first"]
+    assert [result[0] for result in results] == [200] * len(expected)
+    assert saved == expected
+    assert replacements == expected
     assert asgi_app.state.library_state["scan_in_progress"] is True
 
 
@@ -907,21 +919,31 @@ def test_asgi_library_settings_post_rejects_overlapping_roots(app, asgi_app, mon
     assert "cannot overlap or nest" in payload["error"]
 
 
-def test_asgi_library_settings_write_returns_scan_blocked_without_bridge_context(
-    app, asgi_app, monkeypatch
+@pytest.mark.parametrize("roots_changed", [True, False])
+def test_asgi_library_settings_write_during_a_scan_saves_and_queues_without_bridge_context(
+    app, asgi_app, monkeypatch, roots_changed,
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.library_settings import save_library_settings_and_start_refresh
 
-    class FailingAppContext:
-        def __enter__(self):
-            raise AssertionError("scan-blocked POST /library-settings must not enter Flask app_context")
+    saved = []
+    queued = []
+    identities = iter(["roots-before", "roots-after" if roots_changed else "roots-before"])
 
-        def __exit__(self, exc_type, exc, traceback):
-            return False
+    def workflow(config, settings, **kwargs):
+        return save_library_settings_and_start_refresh(
+            config, settings, **kwargs,
+            save_root_settings=lambda _config, payload, **_scope: saved.append(payload) or payload,
+            load_root_identity=lambda _config: next(identities),
+        )
 
-    def fail_flask_app(_request):
-        raise AssertionError("scan-blocked POST /library-settings must not read through _flask_app")
-
+    monkeypatch.setattr(asgi_routes, "save_library_settings_and_start_refresh", workflow)
+    monkeypatch.setattr(
+        asgi_routes, "queue_root_change_scan_for_state",
+        lambda _state, _config, _logger, identity: queued.append(identity) or True,
+        raising=False,
+    )
+    asgi_app.state.replace_library_watch_roots = lambda _roots: None
     asgi_app.state.library_state["scan_in_progress"] = True
     assert not hasattr(asgi_routes, "_flask_app")
 
@@ -938,11 +960,12 @@ def test_asgi_library_settings_write_returns_scan_blocked_without_bridge_context
         },
     )
 
-    assert status == 409
-    assert _decode_json(body) == {
-        "ok": False,
-        "error": "Wait for the current library scan to finish before saving library settings.",
-    }
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["ok"] is True
+    assert (payload["refresh_started"], payload["refresh_queued"]) == (False, roots_changed)
+    assert len(saved) == 1
+    assert queued == (["roots-after"] if roots_changed else [])
 
 
 def test_asgi_rules_routes_preserve_payloads_mutations_and_background_cold_start_hydration(app, asgi_app, monkeypatch):
@@ -1297,6 +1320,10 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
     monkeypatch.setattr(state_service, "state", fail_flask_global_lookup, raising=False)
     monkeypatch.setattr(asgi_routes, "load_manual_version_links", fake_load_manual_version_links)
     monkeypatch.setattr(asgi_routes, "save_manual_version_links", fake_save_manual_version_links)
+    ignored_versions = {"child", "unrelated-album"}
+    saved_ignored: list[list[str]] = []
+    monkeypatch.setattr(asgi_routes, "load_ignored_version_keys", lambda config: set(ignored_versions))
+    monkeypatch.setattr(asgi_routes, "save_ignored_version_keys", lambda config, keys: saved_ignored.append(sorted(keys)))
     monkeypatch.setattr(asgi_routes, "log_app_event", fake_log_app_event)
 
     status, _headers, body = _run_asgi_request(
@@ -1307,7 +1334,11 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
     )
 
     assert status == 200
-    assert _decode_json(body) == {"ok": True, "manual_version_links": {"child": "parent"}}
+    assert _decode_json(body) == {
+        "ok": True, "manual_version_links": {"child": "parent"}, "ignored_version_keys": ["unrelated-album"],
+    }
+    # Owner (11-09): marking an album as a version removes its Separate release exception from Settings > Rules.
+    assert saved_ignored == [["unrelated-album"]]
     assert saved_links == [{"child": "parent"}]
     assert log_calls == [
         {
@@ -1393,6 +1424,10 @@ def test_asgi_mark_album_version_answers_pending_until_background_hydration_publ
     )
     monkeypatch.setattr(asgi_routes, "load_manual_version_links", fake_load_manual_version_links)
     monkeypatch.setattr(asgi_routes, "save_manual_version_links", fake_save_manual_version_links)
+    ignored_versions = {"child", "unrelated-album"}
+    saved_ignored: list[list[str]] = []
+    monkeypatch.setattr(asgi_routes, "load_ignored_version_keys", lambda config: set(ignored_versions))
+    monkeypatch.setattr(asgi_routes, "save_ignored_version_keys", lambda config, keys: saved_ignored.append(sorted(keys)))
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
 
     pending_status, _pending_headers, pending_body = _run_asgi_request(
@@ -1417,7 +1452,11 @@ def test_asgi_mark_album_version_answers_pending_until_background_hydration_publ
     )
 
     assert status == 200
-    assert _decode_json(body) == {"ok": True, "manual_version_links": {"child": "parent"}}
+    assert _decode_json(body) == {
+        "ok": True, "manual_version_links": {"child": "parent"}, "ignored_version_keys": ["unrelated-album"],
+    }
+    # Owner (11-09): marking an album as a version removes its Separate release exception from Settings > Rules.
+    assert saved_ignored == [["unrelated-album"]]
     assert hydrate_calls == [
         {
             "library_state": asgi_library_state,
@@ -1560,6 +1599,10 @@ def test_asgi_mark_album_version_uses_selected_postgres_manual_versions_without_
     monkeypatch.setattr("music_app.services.rule_state_postgres.psycopg", FakeRuleStatePsycopg())
     monkeypatch.setattr(manual_versions_module, "RuleStatePostgresAdapter", FakeManualVersionsAdapter)
     assert not hasattr(asgi_routes, "_flask_app")
+    ignored_versions = {"child", "unrelated-album"}
+    saved_ignored: list[list[str]] = []
+    monkeypatch.setattr(asgi_routes, "load_ignored_version_keys", lambda config: set(ignored_versions))
+    monkeypatch.setattr(asgi_routes, "save_ignored_version_keys", lambda config, keys: saved_ignored.append(sorted(keys)))
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
 
     status, _headers, body = _run_asgi_request(
@@ -1576,7 +1619,9 @@ def test_asgi_mark_album_version_uses_selected_postgres_manual_versions_without_
             "child": "parent",
             "postgres-existing": "postgres-parent",
         },
+        "ignored_version_keys": ["unrelated-album"],
     }
+    assert saved_ignored == [["unrelated-album"]]
     assert manual_links == {"child": "parent", "postgres-existing": "postgres-parent"}
     assert json.loads(manual_versions_json_path.read_text(encoding="utf-8")) == {
         "manual_version_links": {"file-era-child": "file-era-parent"}
@@ -3536,6 +3581,12 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
     monkeypatch.setattr(asgi_routes, "_apply_repairs_worker", fake_media_worker)
     monkeypatch.setattr(asgi_routes, "_update_cache_entry_after_repairs", fake_update_cache_entry_after_repairs)
     monkeypatch.setattr(asgi_routes, "_build_affected_album_dicts", fail_legacy_album_builder)
+    # The structural validation reads the database; this route test owns the route, not that read.
+    validated: list[set[str]] = []
+    monkeypatch.setattr(
+        asgi_routes, "validate_structural_tag_edit_for_config",
+        lambda _config, **options: validated.append(set(options["changed_paths"])),
+    )
     monkeypatch.setattr(asgi_routes, "load_separate_release_keys", lambda _config: set())
     monkeypatch.setattr(asgi_routes, "append_log_history", lambda *args, **kwargs: None)
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
@@ -3544,6 +3595,12 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
         asgi_routes,
         "_bridge_queue_finalize_save_task",
         capture_completed_save_task,
+    )
+    # A structural edit finalizes through the selected Postgres queue, not the bridge.
+    monkeypatch.setattr(
+        asgi_routes,
+        "_asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder",
+        lambda _request: capture_completed_save_task,
     )
 
     status, _headers, body = _run_asgi_request(
@@ -3571,9 +3628,11 @@ def test_asgi_edit_tags_mixed_media_write_requires_refresh_without_legacy_fragme
     assert media_jobs == [(track_path, {"title": "New Title"})]
     assert saved_overrides == [{track_path: "Non-album rarity"}]
     assert queued_tasks
-    assert queued_tasks[0]["find_albums_by_track_paths"]({track_path}) == []
-    assert queued_tasks[0]["find_problematic_album_by_track_paths"]({track_path}) is None
-    assert "title" in queued_tasks[0]["structural_edit_fields"]
+    # The structural finalizer reads the inventory, so it is handed no legacy album finder at all.
+    assert "find_albums_by_track_paths" not in queued_tasks[0]
+    assert "find_problematic_album_by_track_paths" not in queued_tasks[0]
+    assert "title" in queued_tasks[0]["changed_field_names"]
+    assert validated == [{track_path}]
 
 
 def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completion_requires_refresh_without_legacy_fragments(
@@ -3639,6 +3698,12 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
     monkeypatch.setattr(asgi_routes, "_apply_repairs_worker", fake_media_worker)
     monkeypatch.setattr(asgi_routes, "_update_cache_entry_after_repairs", fake_update_cache_entry_after_repairs)
     monkeypatch.setattr(asgi_routes, "_build_affected_album_dicts", lambda *_args, **_kwargs: [])
+    # The structural validation reads the database; this route test owns the route, not that read.
+    validated: list[set[str]] = []
+    monkeypatch.setattr(
+        asgi_routes, "validate_structural_tag_edit_for_config",
+        lambda _config, **options: validated.append(set(options["changed_paths"])),
+    )
     monkeypatch.setattr(asgi_routes, "_find_albums_by_track_paths", fake_find_albums_by_track_paths)
     monkeypatch.setattr(
         asgi_routes,
@@ -3701,6 +3766,7 @@ def test_asgi_edit_tags_selected_postgres_targeted_inventory_save_task_completio
     assert save_payload["updated_albums"] == []
     assert save_payload["updated_problematic_album"] is None
     assert save_payload["requires_view_refresh"] is True
+    assert validated == [{track_path}]
 
 
 def test_asgi_edit_tags_unsupported_fields_do_not_qualify_for_postgres_fragments(
@@ -4333,6 +4399,11 @@ def test_asgi_edit_tags_rejects_mixed_resolved_and_missing_postgres_paths_withou
         def build_album_payloads_by_track_paths(self, _track_paths):
             return [{"key": "artist-album", "tracks": [{"path": resolved_path, "album": "Album", "exception_type": ""}]}]
 
+        def wait_for_inventory_publication(self, *, timeout_seconds):
+            waits.append(timeout_seconds)
+            return True
+
+    waits: list[float] = []
     saved_overrides: list[dict[str, str]] = []
     monkeypatch.setattr(exception_overrides_module, "RuleStatePostgresAdapter", FakeExceptionOverridesAdapter)
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
@@ -4349,7 +4420,7 @@ def test_asgi_edit_tags_rejects_mixed_resolved_and_missing_postgres_paths_withou
         "/utilities/edit-tags",
         json_body={
             "confirmed": True,
-            "album": {"tracks": [{"path": resolved_path}, {"path": missing_path}]},
+            "album": {"tracks": [{"path": resolved_path}, {"path": missing_path, "title": "Missing Track"}]},
             "updates": {
                 resolved_path: {"exception_type": "Non-album rarity"},
                 missing_path: {"exception_type": "Non-album rarity"},
@@ -4358,9 +4429,13 @@ def test_asgi_edit_tags_rejects_mixed_resolved_and_missing_postgres_paths_withou
     )
 
     payload = _decode_json(body)
-    assert 400 <= status < 500
+    # Edits always save (6.5, 11-23, row B4): one wait for an in-flight publication, then the missing
+    # track is named by its title, never by its local path.
+    assert status == 409
     assert payload["ok"] is False
-    assert missing_path in payload["error"]
+    assert len(waits) == 1
+    assert "Missing Track" in payload["error"]
+    assert missing_path not in payload["error"]
     assert saved_overrides == []
 
 
@@ -4767,7 +4842,7 @@ def test_selected_postgres_media_compensation_is_path_scoped_and_restores_except
     monkeypatch.setattr(
         asgi_routes,
         "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
+        lambda path, repairs: applied_repairs.append((path, dict(repairs))) or (path, True, list(repairs)),
     )
     monkeypatch.setattr(
         asgi_routes,
@@ -5788,3 +5863,81 @@ def test_edit_tag_reservation_releases_intent_and_structural_owners_even_on_fail
         reservation.release()
     reservation.release()
     assert releases == ["intent", "structural"]
+
+
+_RESENT_SAVE_ID = "8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b"
+
+
+class _SaveJournal:
+    """Intent journal stand-in that knows which page saves the server received."""
+
+    statuses = {_RESENT_SAVE_ID: "completed"}
+
+    def __init__(self, _config):
+        pass
+
+    batches = []
+
+    def request_status(self, request_id):
+        return self.statuses.get(request_id)
+
+    def request_statuses(self, request_ids):
+        self.batches.append(list(request_ids))
+        return {request_id: self.statuses.get(request_id) for request_id in request_ids}
+
+    def intent_lease(self, request_id=""):
+        raise AssertionError("a save the server already received must not start again")
+
+
+def test_a_resent_save_the_server_already_received_is_refused_before_any_work(monkeypatch):
+    """Owner (2026-11-17): a save with no answer is sent again with the same id; it must never apply twice."""
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    asgi_app = _make_asgi_app()
+    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
+    monkeypatch.setattr(routes, "handle_edit_tags_request",
+                        lambda **_kwargs: pytest.fail("the edit pipeline must not run for a resent save"))
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
+        "confirmed": True, "client_request_id": _RESENT_SAVE_ID,
+        "album": {"key": "album-alpha", "name": "Album", "album_artist": "Artist",
+                  "tracks": [{"path": "C:/Music/Artist/Album/01.mp3"}]},
+        "updates": {"C:/Music/Artist/Album/01.mp3": {"title": "New"}},
+    })
+    assert status == 409
+    assert _decode_json(body) == {"ok": False, "code": "duplicate_request", "intent_status": "completed",
+                                  "error": "This save was already received."}
+
+
+def test_one_status_request_answers_every_waiting_save(monkeypatch):
+    """6.5 (11-22): a retry pass asks about all its waiting saves in one request, read in one call."""
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    unknown = "0b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b"
+    asgi_app = _make_asgi_app()
+    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
+    monkeypatch.setattr(_SaveJournal, "batches", [])
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags/requests/status", json_body={
+        "ids": [_RESENT_SAVE_ID, unknown.upper(), "not-a-save-id"],
+    })
+    assert status == 200
+    assert _decode_json(body) == {
+        "ok": True,
+        "requests": {
+            _RESENT_SAVE_ID: {"found": True, "status": "completed"},
+            unknown.upper(): {"found": False, "status": None},
+        },
+        "invalid": ["not-a-save-id"],
+    }
+    assert _SaveJournal.batches == [[_RESENT_SAVE_ID, unknown]]
+
+
+@pytest.mark.parametrize("body", [{}, {"ids": "x"}, {"ids": [str(index) for index in range(501)]}])
+def test_status_request_refuses_a_missing_or_oversized_id_list(monkeypatch, body):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    asgi_app = _make_asgi_app()
+    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
+    monkeypatch.setattr(_SaveJournal, "batches", [])
+    status, _, _body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags/requests/status", json_body=body)
+    assert status == 400
+    assert _SaveJournal.batches == []

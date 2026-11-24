@@ -11,6 +11,7 @@ from copy import deepcopy
 import re
 from typing import Any
 
+# Every page render reads these; a pooled lease avoids opening a new Postgres connection per request.
 from music_app.services.postgres_connections import pooled_connection as _connect
 
 PROFILES = ("web_desktop", "mobile", "tv")

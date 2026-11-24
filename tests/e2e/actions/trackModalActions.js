@@ -294,8 +294,14 @@ export class TrackModalActions {
   }
 
   async waitForInteractiveSummary(options = {}) {
-    await this.waitForReady(options);
-    const summary = await this.readSummary();
+    let summary;
+    await expect.poll(async () => {
+      const snapshot = await this.trackModal.readExactAlbumDetailsSnapshot({ includeSummary: true });
+      summary = snapshot.summary;
+      return snapshot.visible && !snapshot.loading
+        && summary.trackRows > 0 && summary.playButtons > 0 && Boolean(summary.title)
+        && (!options.expectedTitle || summary.title === options.expectedTitle);
+    }, { timeout: options.timeout || 60000 }).toBe(true);
     expect(summary.trackRows).toBeGreaterThan(0);
     expect(summary.playButtons).toBeGreaterThan(0);
     expect(summary.title).not.toEqual('');

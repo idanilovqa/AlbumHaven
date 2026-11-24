@@ -53,10 +53,9 @@ function syncGalleryCardMetadataMotion(root) {
         const text = rows.get(row);
         if (!text) continue;
         if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); texts.delete(text); continue; }
-        const motion = !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
+        const motion = !reduced.matches ? resolveRunningLineMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-card-text-overflowing', motion.overflowing);
-        row.style.setProperty('--card-text-distance', `${motion.distance}px`);
-        row.style.setProperty('--card-text-duration', `${motion.durationMs}ms`);
+        applyRunningLineMotion(row, motion);
       }
       dirty.clear();
     };

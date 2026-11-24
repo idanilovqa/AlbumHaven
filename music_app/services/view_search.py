@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 import shlex
+import unicodedata
 
 from music_app.routes.api_rules_helpers import looks_like_collaboration_name
 from music_app.services.library import shared_album_display_artist
@@ -12,8 +14,29 @@ _TRACK_PATH_SEPARATOR_RE = re.compile(r"[\\/]+")
 _SEARCH_COMMIT_DEBOUNCE_MS = 150
 
 
+def fold_search_accents(value: str) -> str:
+    return _fold_search_accents(str(value or ""))
+
+
+@lru_cache(maxsize=131072)
+def _fold_search_accents(value: str) -> str:
+    text = value.strip().casefold()
+    if text.isascii():
+        return text
+    decomposed = unicodedata.normalize("NFD", text)
+    # Fold Latin accents only; й and ё remain distinct Cyrillic letters.
+    return unicodedata.normalize("NFC", re.sub(r"([a-z])[\u0300-\u036f]+", r"\1", decomposed))
+
+
 def normalize_search_text(value: str) -> str:
-    text = (value or "").strip().casefold()
+    return _normalize_search_string(value if isinstance(value, str) else (value or ""))
+
+
+# Search text helpers are pure string functions applied to the same library
+# words on every request (a search's Loose Tracks pass alone made ~21k calls).
+@lru_cache(maxsize=131072)
+def _normalize_search_string(value: str) -> str:
+    text = unicodedata.normalize("NFC", (value or "").strip().casefold())
     text = text.replace("'", "").replace("\u2019", "")
     text = _SEARCH_PUNCT_RE.sub(" ", text)
     words = []
@@ -409,13 +432,19 @@ def bounded_edit_distance(left: str, right: str, max_distance: int = 2) -> int:
 
 
 def search_word_matches(query_word: str, candidate_word: str) -> bool:
-    query_text = str(query_word or "").strip()
-    candidate_text = str(candidate_word or "").strip()
+    return _search_word_matches(str(query_word or "").strip(), str(candidate_word or "").strip())
+
+
+@lru_cache(maxsize=262144)
+def _search_word_matches(query_text: str, candidate_text: str) -> bool:
     if not query_text or not candidate_text:
         return False
     if query_text == candidate_text:
         return True
-    if len(query_text) >= 3 and (query_text in candidate_text or candidate_text in query_text):
+    if len(query_text) >= 3 and (
+        query_text in candidate_text
+        or (len(candidate_text) >= 3 and candidate_text in query_text)
+    ):
         return True
     if query_text[0] != candidate_text[0] and min(len(query_text), len(candidate_text)) >= 4:
         return False
@@ -424,14 +453,17 @@ def search_word_matches(query_word: str, candidate_word: str) -> bool:
 
 
 def search_term_matches_field(term: str, field: str) -> bool:
-    normalized_term = str(term or "").strip()
-    normalized_field = str(field or "").strip()
+    normalized_term = fold_search_accents(term)
+    normalized_field = fold_search_accents(field)
     if not normalized_term or not normalized_field:
         return False
     if normalized_term in normalized_field:
         return True
     field_words = [word for word in normalized_field.split() if word]
-    if any(search_word_matches(normalized_term, word) for word in field_words):
+    if all(
+        any(search_word_matches(term_word, word) for word in field_words)
+        for term_word in normalized_term.split()
+    ):
         return True
     compact_term = compact_search_key(normalized_term)
     compact_field = compact_search_key(normalized_field)
@@ -457,14 +489,18 @@ def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
 
 
 def artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> tuple[int, int, str]:
-    normalized_query = normalize_search_text(query)
-    candidates = {normalize_search_text(canonical_artist), *{normalize_search_text(value) for value in aliases if value}}
+    spelling_query = normalize_search_text(query)
+    normalized_query = fold_search_accents(spelling_query)
+    candidates = {normalize_search_text(value) for value in [canonical_artist, *aliases] if value}
     best_rank = (5, 9999, canonical_artist.casefold())
-    for candidate in candidates:
+    for spelling_candidate in candidates:
+        candidate = fold_search_accents(spelling_candidate)
         if not candidate:
             continue
-        if candidate == normalized_query:
-            rank = (0, 0, candidate)
+        if spelling_candidate == spelling_query:
+            rank = (0, 0, spelling_candidate)
+        elif candidate == normalized_query:
+            rank = (0, 1, spelling_candidate)
         elif candidate.startswith(normalized_query):
             rank = (1, len(candidate) - len(normalized_query), candidate)
         elif f" {normalized_query}" in candidate or candidate.endswith(normalized_query):
@@ -614,6 +650,7 @@ def _get_album_track_search_fields(album) -> tuple[list[str], str]:
             getattr(track, "title", "") or "",
             track_path_name,
             track_path_stem,
+            getattr(track, "disc_subtitle", "") or "",
             source=track,
         ):
             if not normalized or normalized in seen:

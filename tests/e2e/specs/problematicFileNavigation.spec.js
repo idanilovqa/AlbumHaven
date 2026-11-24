@@ -73,7 +73,7 @@ test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded 
 
   await stepLogger.step('Keep the generated excluded album out of Problematic Files', async () => {
     await utilityTabBarActions.openTab('problematic-files');
-    await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+    await utilityProblematicFilesActions.waitForReady({ requirePopulated: true, diagnosticTerm: LEGACY_IGNORED_ALBUM });
     await utilityProblematicFilesActions.search(LEGACY_IGNORED_ALBUM);
     await utilityProblematicFilesActions.waitForNoSearchResults(LEGACY_IGNORED_ALBUM);
   });
@@ -226,7 +226,7 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
     expect(startupPartialRows).toHaveLength(PARTIAL_LEGACY_IGNORED_TRACK_COUNT);
 
     await utilityTabBarActions.openTab('problematic-files');
-    await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+    await utilityProblematicFilesActions.waitForReady({ requirePopulated: true, diagnosticTerm: LEGACY_IGNORED_ALBUM });
     await utilityProblematicFilesActions.search(LEGACY_IGNORED_ALBUM);
     await utilityProblematicFilesActions.waitForNoSearchResults(LEGACY_IGNORED_ALBUM);
 
@@ -249,9 +249,9 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
       await revertGate?.dispose();
     }
 
+    // The earlier search stays in the box, so the reverted album is listed under it without
+    // being selected (an active search never auto-selects); selecting it opens its problems.
     await utilityTabBarActions.openTab('problematic-files');
-    await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
-    await utilityProblematicFilesActions.search(LEGACY_IGNORED_ALBUM);
     await utilityProblematicFilesActions.waitForSearchResults(LEGACY_IGNORED_ALBUM);
     await utilityProblematicFilesActions.selectAlbumByTitle(LEGACY_IGNORED_ALBUM);
     expect(await utilityProblematicFilesActions.readAlbumProblemReasons()).toEqual([
@@ -290,10 +290,11 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
       await createMutation.waitForAcknowledgement();
       await utilityRulesActions.waitForExclusionAcknowledged(LEGACY_IGNORED_RULE_TARGET);
 
+      // Reopening Settings keeps the search and clears the selection; an active search never
+      // auto-selects, so the excluded album's absence is checked under that search.
       await settingsModalAppBarActions.closeSettings();
       await settingsModalAppBarActions.openSettings();
       await utilityTabBarActions.openTab('problematic-files');
-      await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
       await utilityProblematicFilesActions.search(LEGACY_IGNORED_ALBUM);
       await utilityProblematicFilesActions.waitForNoSearchResults(LEGACY_IGNORED_ALBUM);
       await utilityTabBarActions.openTab('rules');
@@ -340,7 +341,7 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
     await settingsModalAppBarActions.openSettings();
 
     await utilityTabBarActions.openTab('problematic-files');
-    await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+    await utilityProblematicFilesActions.waitForReady({ requirePopulated: true, diagnosticTerm: LEGACY_IGNORED_ALBUM });
     await utilityProblematicFilesActions.search(LEGACY_IGNORED_ALBUM);
     await utilityProblematicFilesActions.waitForSearchResults(LEGACY_IGNORED_ALBUM);
     await utilityProblematicFilesActions.selectAlbumByTitle(LEGACY_IGNORED_ALBUM);
@@ -725,7 +726,9 @@ test('FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     await utilityProblematicFilesActions.search(ALBUM);
     await utilityProblematicFilesActions.waitForSearchResults(ALBUM);
-    expect(await utilityProblematicFilesActions.readAlbumProblemReasons())
-      .toContain(ALBUM_EXCLUSION_REASON);
+    const reasons = await utilityProblematicFilesActions.readAlbumProblemReasons();
+    // Diagnostic: the page and server state when the reverted album shows no reasons.
+    expect(reasons, reasons.includes(ALBUM_EXCLUSION_REASON) ? '' : `Problematic Files state: ${
+      await utilityProblematicFilesActions.describeProblematicState(ALBUM)}`).toContain(ALBUM_EXCLUSION_REASON);
   });
 });

@@ -39,7 +39,12 @@ test('sensitive browse, sidebar, modal, status, and mobile changes select their 
     ['music_app/services/compressed_static_files.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/app-copy.js', ['app-open-all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/services/http_compression.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused']],
-    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused']],
+    // Every HTML document render reads the account's layout preferences.
+    ['music_app/services/client_layout_preferences.py', ['app-open-all-artists', 'artist-tree-scroll-navigation']],
+    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused', 'cover-lookup']],
+    ['music_app/static/js/runtime/cover-lookup-modal-and-drawer.js', ['cover-lookup']],
+    ['music_app/services/cover_lookup_runtime.py', ['cover-lookup']],
+    ['music_app/services/album_release_candidates.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'gallery-artwork-diversity']],
     ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity']],
     ['music_app/static/js/runtime/track-modal-lightbox-helpers.js', ['selected-artist', 'all-artists', 'gapless-playback', 'utility-problematic-files', 'problematic-files-focused']],
@@ -63,7 +68,13 @@ test('multiple sensitive changes deduplicate required targets in reviewed contra
     'music_app/static/js/runtime/status-ui-helpers.js',
     'music_app/static/js/runtime/notification-ui-helpers.js',
     'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js',
-  ]), ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']);
+  ]), [
+    'idle-memory',
+    'selected-artist',
+    'artist-tree-scroll-navigation',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive',
+  ]);
 });
 
 test('focused CI automatically includes required performance targets and shards', () => {
@@ -143,10 +154,9 @@ test('Problematic Files dependencies require both real-app performance targets',
     'music_app/static/js/runtime/utility-loaders-and-cover-lookup.js',
     'music_app/static/js/runtime/problematic-files-virtual-list.js',
     'music_app/static/js/runtime/problem-exclusion-mutations.js',
-    'music_app/static/js/utilities/problematic-tab.js',
-    'music_app/static/js/utilities/shell.js',
     'music_app/static/js/runtime/utility-list-builders.js',
     'music_app/static/js/runtime/utility-renderers-and-actions.js',
+    'music_app/static/js/runtime/bootstrap-utility-event-handlers.js',
     'music_app/static/js/runtime/track-modal-lightbox-helpers.js',
     'music_app/static/css/runtime/utilities.css',
     'tests/e2e/helpers/utilityPerformanceHelpers.js',

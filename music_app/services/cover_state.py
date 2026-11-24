@@ -5,7 +5,7 @@ import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
-from music_app.services.covers import image_dimensions
+from music_app.services.covers import image_dimensions, planned_cover_backup_name
 from music_app.services.generated_preview_storage import (
     is_generated_cover_artifact,
     is_managed_preview_path,
@@ -38,6 +38,23 @@ def active_cover_path_for_track_paths(
         track_paths,
     )
     return active_cover_path
+
+
+def _selected_local_cover_source_for_track_paths(
+    file_cache: dict[str, object] | None,
+    track_paths: set[str],
+) -> Path | None:
+    normalized_cache = file_cache if isinstance(file_cache, dict) else {}
+    for track_path in track_paths:
+        entry = normalized_cache.get(track_path)
+        source_value = (
+            str(entry.get("selected_local_cover_source_path") or "").strip()
+            if isinstance(entry, dict)
+            else ""
+        )
+        if source_value:
+            return Path(source_value)
+    return None
 
 
 def active_remote_cover_for_track_paths(
@@ -118,17 +135,18 @@ def resolve_authoritative_album_track_paths(
     return authoritative_track_paths
 
 
-def _iter_local_image_paths(album_root: Path, image_extensions: set[str]) -> list[Path]:
+def _iter_local_image_paths(album_root: Path, image_extensions: set[str], *, cancel_requested=None) -> list[Path]:
     paths: list[Path] = []
     pending_directories = [album_root]
     while pending_directories:
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Local cover inventory refresh cancelled")
         directory = pending_directories.pop()
-        try:
-            entries = list(os.scandir(directory))
-        except OSError:
-            continue
-        for entry in entries:
-            try:
+        # An unreadable directory is unknown inventory, never an empty gallery.
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if cancel_requested is not None and cancel_requested():
+                    raise InterruptedError("Local cover inventory refresh cancelled")
                 if entry.is_dir(follow_symlinks=False):
                     directory_path = Path(entry.path)
                     if not is_managed_preview_path(directory_path):
@@ -136,11 +154,9 @@ def _iter_local_image_paths(album_root: Path, image_extensions: set[str]) -> lis
                     continue
                 if not entry.is_file() or Path(entry.name).suffix.lower() not in image_extensions:
                     continue
-            except OSError:
-                continue
-            path = Path(entry.path)
-            if not is_managed_preview_path(path) and not is_generated_cover_artifact(path, album_root):
-                paths.append(path)
+                path = Path(entry.path)
+                if not is_managed_preview_path(path) and not is_generated_cover_artifact(path, album_root):
+                    paths.append(path)
     return paths
 
 
@@ -151,9 +167,12 @@ def iter_local_cover_candidates(
     image_dimensions,
     is_squareish_cover,
     active_cover_path: Path | None,
+    cancel_requested=None,
 ) -> list[dict[str, object]]:
     candidates: list[dict[str, object]] = []
-    for path in _iter_local_image_paths(album_root, image_extensions):
+    for path in _iter_local_image_paths(album_root, image_extensions, cancel_requested=cancel_requested):
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Local cover inventory refresh cancelled")
         width, height = image_dimensions(path)
         relative_path = path.relative_to(album_root)
         candidates.append(
@@ -161,6 +180,7 @@ def iter_local_cover_candidates(
                 "path": str(path),
                 "filename": path.name,
                 "relative_path": str(relative_path),
+                "sort_relative_path": str(relative_path).casefold(),
                 "width": width,
                 "height": height,
                 "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
@@ -184,6 +204,7 @@ def iter_local_cover_candidates(
                         "path": str(active_cover_path),
                         "filename": active_cover_path.name,
                         "relative_path": active_cover_path.name,
+                        "sort_relative_path": active_cover_path.name.casefold(),
                         "width": width,
                         "height": height,
                         "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
@@ -206,12 +227,82 @@ def iter_local_cover_candidates(
     return candidates
 
 
-def _file_sha256(path: Path) -> str:
+def _file_sha256(path: Path, *, cancel_requested=None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as image:
         for chunk in iter(lambda: image.read(1024 * 1024), b""):
+            if cancel_requested is not None and cancel_requested():
+                raise InterruptedError("Local cover inventory refresh cancelled")
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _redundant_generated_cover_backup_paths(
+    candidates: list[dict[str, object]],
+    selected_source_path: str | None,
+) -> set[str]:
+    def is_generated_backup(item: Mapping[str, object]) -> bool:
+        name = Path(str(item.get("path") or "")).name.casefold()
+        suffix = name.removeprefix("cover-existing-").removesuffix(".jpg")
+        return name.startswith("cover-existing-") and name.endswith(".jpg") and suffix.isdigit()
+
+    backups = [candidate for candidate in candidates if is_generated_backup(candidate)]
+    if not backups:
+        return set()
+
+    sizes: dict[str, int] = {}
+    digests: dict[str, str] = {}
+
+    def size(item: Mapping[str, object]) -> int:
+        path = str(item.get("path") or "")
+        if path not in sizes:
+            try:
+                sizes[path] = Path(path).stat().st_size
+            except OSError:
+                sizes[path] = -1
+        return sizes[path]
+
+    def digest(item: Mapping[str, object]) -> str:
+        path = str(item.get("path") or "")
+        if path not in digests:
+            try:
+                digests[path] = str(item.get("sha256") or _file_sha256(Path(path)))
+            except OSError:
+                digests[path] = ""
+        return digests[path]
+
+    backup_sizes = {size(candidate) for candidate in backups}
+    ordinary_hashes = {
+        digest(candidate)
+        for candidate in candidates
+        if not is_generated_backup(candidate) and size(candidate) in backup_sizes
+    }
+    return {
+        str(candidate["path"])
+        for candidate in candidates
+        if is_generated_backup(candidate)
+        and not candidate.get("is_active")
+        and str(candidate["path"]) != str(selected_source_path or "")
+        and digest(candidate) in ordinary_hashes
+        and digest(candidate)
+    }
+
+
+def _inventory_cover_backup_name(candidates: list[dict[str, object]], folder: Path) -> str | None:
+    """planned_cover_backup_name from an indexed inventory, without reading the album folder."""
+    cover_path = folder / "cover.jpg"
+    cover = next((item for item in candidates if Path(str(item["path"])) == cover_path), None)
+    if cover is None:
+        return None
+    digest = cover.get("sha256")
+    # An unhashed cover is assumed unique: saves usually keep the replaced picture.
+    if digest and any(item is not cover and item.get("sha256") == digest for item in candidates):
+        return None
+    names = {Path(str(item["path"])).name.casefold() for item in candidates}
+    index = 1
+    while f"cover-existing-{index}.jpg" in names:
+        index += 1
+    return f"cover-existing-{index}.jpg"
 
 
 def _matching_local_cover_sources(
@@ -250,6 +341,45 @@ def selected_local_cover_source(
     return next(_matching_local_cover_sources(candidates, active_path, revision), str(active_path))
 
 
+def _validated_selected_local_cover_source(
+    candidates: list[dict[str, object]],
+    selected_source_path: Path | None,
+    active_cover_revision: str | None,
+) -> str | None:
+    if selected_source_path is None or not active_cover_revision:
+        return None
+    selected_key = os.path.normcase(os.path.abspath(str(selected_source_path)))
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if os.path.normcase(os.path.abspath(str(item.get("path") or ""))) == selected_key
+        ),
+        None,
+    )
+    if candidate is None:
+        return None
+    candidate_path = Path(str(candidate["path"]))
+    if not candidate_path.is_file():
+        return None
+    try:
+        candidate_revision = _file_sha256(candidate_path)
+    except OSError:
+        return None
+    return str(candidate["path"]) if candidate_revision == active_cover_revision else None
+def _album_folder_file_path(candidates: list[dict[str, object]], folder: Path, filename: str) -> str:
+    """A file of the album folder, spelled like the listed files there so its reference matches their cards."""
+    listed_folder = next(
+        (
+            Path(str(item["path"])).parent
+            for item in candidates
+            if str(item.get("relative_path") or item.get("filename") or "") == Path(str(item["path"])).name
+        ),
+        folder,
+    )
+    return str(listed_folder / filename)
+
+
 def _client_candidate(item: Mapping[str, object]) -> dict[str, object]:
     """A lookup candidate named by fields the cover reference boundary turns into references."""
     candidate = {key: value for key, value in item.items() if key not in {"path", "duplicate_of"}}
@@ -269,25 +399,108 @@ def serialize_cover_gallery_payload(
     is_squareish_cover,
     task_payload: dict[str, object] | None = None,
     candidate_snapshot: Mapping[str, object] | None = None,
+    include_local: bool = True,
+    local_inventory: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
         file_cache,
         track_paths,
     )
+    persisted_selected_source = _selected_local_cover_source_for_track_paths(
+        file_cache,
+        track_paths,
+    )
     active_remote_cover = active_remote_cover_for_track_paths(file_cache, track_paths)
-    local_candidates = iter_local_cover_candidates(
+    if not include_local:
+        return {
+            "ok": True,
+            "local_inventory_complete": False,
+            "remote_cover": active_remote_cover,
+            "task": task_payload or None,
+            "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
+        }
+    cover_write_root = album_root
+    if local_inventory is None:
+        album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
+    if local_inventory is not None and not local_inventory.get("available"):
+        return {
+            "ok": True, "local_inventory_complete": False, "local_inventory_pending": True,
+            "local_inventory_error": str(local_inventory.get("error") or ""),
+            "remote_cover": active_remote_cover, "task": task_payload or None,
+            "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
+        }
+    local_candidates = [dict(candidate) for candidate in local_inventory.get("candidates", [])] if local_inventory is not None else iter_local_cover_candidates(
         album_root,
         image_extensions=image_extensions,
         image_dimensions=image_dimensions,
         is_squareish_cover=is_squareish_cover,
         active_cover_path=None if active_remote_cover else active_cover_path,
     )
-    selected_source_path = None if active_remote_cover else selected_local_cover_source(
-        local_candidates, active_cover_path, active_cover_revision,
-    )
+    inventory_candidates = list(local_candidates)
+    if local_inventory is not None:
+        if active_cover_path and not active_remote_cover and not is_managed_preview_path(active_cover_path) and active_cover_path.suffix.lower() in image_extensions and not any(Path(item["path"]) == active_cover_path for item in local_candidates):
+            entry = next((entry for path, entry in (file_cache or {}).items() if path in track_paths and isinstance(entry, dict) and entry.get("cover_path") == str(active_cover_path)), {})
+            width, height = (
+                (int(entry.get("local_cover_width") or 0), int(entry.get("local_cover_height") or 0))
+                if local_inventory.get("complete")
+                else (0, 0)
+            )
+            local_candidates.append({
+                "path": str(active_cover_path), "filename": active_cover_path.name,
+                "relative_path": active_cover_path.name, "width": width, "height": height,
+                "sort_relative_path": active_cover_path.name.casefold(),
+                "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
+                "is_squareish": is_squareish_cover(width, height), "is_active": True,
+                "area": width * height, "depth": 0, "sha256": active_cover_revision,
+            })
+        for candidate in local_candidates:
+            candidate["is_active"] = bool(not active_remote_cover and active_cover_path and Path(candidate["path"]) == active_cover_path)
+        selected_source_path = None if active_remote_cover or not active_cover_path else str(active_cover_path)
+        if active_cover_revision and not active_remote_cover:
+            selected_source_path = next((str(item["path"]) for item in local_candidates if not item.get("is_active") and item.get("sha256") == active_cover_revision), selected_source_path)
+    else:
+        selected_source_path = None if active_remote_cover else selected_local_cover_source(
+            local_candidates, active_cover_path, active_cover_revision,
+        )
+    if not active_remote_cover:
+        selected_source_path = (
+            _validated_selected_local_cover_source(
+                local_candidates,
+                persisted_selected_source,
+                active_cover_revision,
+            )
+            or selected_source_path
+        )
+        redundant_backups = _redundant_generated_cover_backup_paths(
+            local_candidates,
+            selected_source_path,
+        )
+        local_candidates = [
+            candidate for candidate in local_candidates
+            if str(candidate["path"]) not in redundant_backups
+        ]
+        # Owner (2026-11-15, one card per picture): a cover.jpg the app copied from the selected file
+        # is not a picture of its own; the selected file's card stays, in place, and is the selection.
+        app_copy = next((
+            candidate for candidate in local_candidates
+            if candidate.get("is_active")
+            and Path(str(candidate["path"])).name.casefold() == "cover.jpg"
+            and selected_source_path
+            and str(candidate["path"]) != str(selected_source_path)
+        ), None)
+        source = app_copy and next((
+            candidate for candidate in local_candidates
+            if str(candidate["path"]) == str(selected_source_path)
+        ), None)
+        if source:
+            local_candidates.remove(app_copy)
+            source["is_active"] = True
     if active_cover_path and not active_cover_revision and not active_remote_cover:
-        duplicates = set(_matching_local_cover_sources(local_candidates, active_cover_path, None))
+        if local_inventory is not None:
+            active_hash = next((item.get("sha256") for item in local_candidates if item.get("is_active")), None)
+            duplicates = {str(item["path"]) for item in local_candidates if active_hash and item.get("sha256") == active_hash and not item.get("is_active")}
+        else:
+            duplicates = set(_matching_local_cover_sources(local_candidates, active_cover_path, None))
         for candidate in local_candidates:
             if candidate["path"] in duplicates:
                 candidate["duplicate_of"] = str(active_cover_path)
@@ -295,13 +508,41 @@ def serialize_cover_gallery_payload(
         for candidate in local_candidates:
             if candidate.get("is_active") or candidate["path"] == selected_source_path:
                 candidate["cover_revision"] = active_cover_revision
+    cover_backup_name = (
+        _inventory_cover_backup_name(inventory_candidates, cover_write_root)
+        if local_inventory is not None
+        else planned_cover_backup_name(cover_write_root)
+    )
     return {
         "ok": True,
+        "local_inventory_complete": local_inventory is None or bool(local_inventory.get("complete")),
+        "local_inventory_available": True,
+        "local_inventory_pending": local_inventory is not None and not bool(local_inventory.get("complete")),
+        "local_inventory_error": str(local_inventory.get("error") or "") if local_inventory is not None else "",
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
         "selected_source_cover_path": selected_source_path,
+        # What the current cover.jpg becomes when a save replaces it, so a pending save can show final names.
+        # Both files leave only as candidate references (cover_jpg_ref, cover_backup_ref).
+        "cover_backup_name": cover_backup_name,
+        "cover_jpg_cover_path": _album_folder_file_path(local_candidates, cover_write_root, "cover.jpg"),
+        "cover_backup_cover_path": (
+            _album_folder_file_path(local_candidates, cover_write_root, cover_backup_name)
+            if cover_backup_name
+            else None
+        ),
         "remote_cover": active_remote_cover,
-        "local_covers": [_client_candidate(item) for item in local_candidates if item.get("is_squareish")],
-        "other_art": [_client_candidate(item) for item in local_candidates if not item.get("is_squareish")],
+        "local_covers": [
+            _client_candidate(item) for item in local_candidates
+            if item.get("is_squareish")
+            or item.get("is_active")
+            or item.get("path") == selected_source_path
+        ],
+        "other_art": [
+            _client_candidate(item) for item in local_candidates
+            if not item.get("is_squareish")
+            and not item.get("is_active")
+            and item.get("path") != selected_source_path
+        ],
         "task": task_payload if task_payload else None,
         "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
     }
@@ -376,6 +617,7 @@ def apply_cover_selection_for_tracks(
     find_updated_albums,
     find_problematic_album,
     cover_path: Path | None = None,
+    selected_local_cover_source_path: Path | None = None,
     remote_cover_url: str | None = None,
     remote_cover_thumbnail_url: str | None = None,
     remote_cover_source: str | None = None,
@@ -390,6 +632,11 @@ def apply_cover_selection_for_tracks(
     file_cache = library_state.get("file_cache") or {}
     updated_entries: dict[str, dict[str, object]] = {}
     cover_value = str(cover_path) if cover_path else None
+    selected_source_value = (
+        str(selected_local_cover_source_path)
+        if cover_value and selected_local_cover_source_path is not None
+        else None
+    )
     revision_value = str(cover_revision or "").strip() or None
     remote_url_value = str(remote_cover_url or "").strip() or None
     remote_thumb_value = str(remote_cover_thumbnail_url or "").strip() or None
@@ -409,6 +656,7 @@ def apply_cover_selection_for_tracks(
             continue
         if (
             entry.get("cover_path") == cover_value
+            and (str(entry.get("selected_local_cover_source_path") or "").strip() or None) == selected_source_value
             and all(entry.get(key) == value for key, value in selection_authority.items())
             and (str(entry.get("cover_revision") or "").strip() or None) == revision_value
             and (str(entry.get("remote_cover_url") or "").strip() or None) == remote_url_value
@@ -423,6 +671,7 @@ def apply_cover_selection_for_tracks(
         next_entry = dict(entry)
         next_entry.update(selection_authority)
         next_entry["cover_path"] = cover_value
+        next_entry["selected_local_cover_source_path"] = selected_source_value
         next_entry["cover_revision"] = revision_value
         next_entry["remote_cover_url"] = remote_url_value
         next_entry["remote_cover_thumbnail_url"] = remote_thumb_value
@@ -441,6 +690,7 @@ def apply_cover_selection_for_tracks(
         album_tracks = list(getattr(album, "tracks", []) or [])
         for key, value in selection_authority.items():
             setattr(album, key, value)
+        setattr(album, "selected_local_cover_source_path", selected_source_value)
         _set_cover_fields(
             album,
             cover_value=cover_value,
@@ -459,6 +709,7 @@ def apply_cover_selection_for_tracks(
             if manual_selection:
                 track.local_cover_width = selection_authority["local_cover_width"]
                 track.local_cover_height = selection_authority["local_cover_height"]
+            setattr(track, "selected_local_cover_source_path", selected_source_value)
             _set_cover_fields(
                 track,
                 cover_value=cover_value,
@@ -484,6 +735,7 @@ def apply_authoritative_local_cover_fallback(
     track_paths: set[str],
     cover_path: Path,
     cover_revision: str,
+    selected_local_cover_source_path: Path | None = None,
 ) -> None:
     """Apply the minimal in-memory state required after a committed selection."""
     normalized_paths = {
@@ -524,6 +776,7 @@ def apply_authoritative_local_cover_fallback(
             entry,
             cover_value=cover_value,
             revision_value=revision_value,
+            selected_local_cover_source_path=selected_local_cover_source_path,
             local_cover_width=width or None,
             local_cover_height=height or None,
         )
@@ -533,6 +786,11 @@ def apply_authoritative_local_cover_fallback(
     for album, matching_tracks in matching_albums:
         album.cover_selection_origin = "user"
         album.cover_selection_provenance = "explicit"
+        album.selected_local_cover_source_path = (
+            str(selected_local_cover_source_path)
+            if selected_local_cover_source_path is not None
+            else None
+        )
         album.local_cover_width = width or None
         album.local_cover_height = height or None
         _set_cover_fields(
@@ -555,6 +813,11 @@ def apply_authoritative_local_cover_fallback(
         for track in matching_tracks:
             track.local_cover_width = width or None
             track.local_cover_height = height or None
+            track.selected_local_cover_source_path = (
+                str(selected_local_cover_source_path)
+                if selected_local_cover_source_path is not None
+                else None
+            )
             _set_cover_fields(
                 track,
                 cover_value=cover_value,
@@ -592,11 +855,17 @@ def _set_local_cover_fields_on_mapping(
     *,
     cover_value: str,
     revision_value: str,
+    selected_local_cover_source_path: Path | None,
     local_cover_width: int | None,
     local_cover_height: int | None,
 ) -> None:
     entry["cover_path"] = cover_value
     entry["cover_revision"] = revision_value
+    entry["selected_local_cover_source_path"] = (
+        str(selected_local_cover_source_path)
+        if selected_local_cover_source_path is not None
+        else None
+    )
     entry["cover_selection_origin"] = "user"
     entry["cover_selection_provenance"] = "explicit"
     entry["local_cover_width"] = local_cover_width

@@ -27,7 +27,7 @@ from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.edit_state import affected_album_track_paths
 from music_app.services.library_album_index import merge_file_cache_entries
 from music_app.services.non_album_view_payloads import album_container_sibling_entries
-from music_app.services.edit_tag_timings import EditTagTimingRecorder
+from music_app.services.edit_tag_timings import EditTagTimingRecorder, collect_persistence_stages
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
 
@@ -473,6 +473,53 @@ def _build_save_failure_log_entry(
     }
 
 
+# Owner (2026-11-23, approved through 6.5): a save whose files are written but whose album re-read failed.
+CATCH_UP_PENDING_MESSAGE = "Tags saved. The library will catch up shortly."
+# Queues the library's catch-up with a verified save; the callback gets "settled" or "failed".
+VerifiedSaveCatchUp = Callable[..., object]
+
+
+def _catch_up_verified_save(
+    task_id: str,
+    *,
+    catch_up: VerifiedSaveCatchUp,
+    config: dict[str, object],
+    logger: object,
+    append_log_history: LogHistoryAppender,
+    log_app_event: AppEventLogger,
+    log_entry: JsonDict,
+    error: object,
+) -> None:
+    """Owner's rule (2026-11-23): the save's files are written and verified, so it has succeeded. Its DB step
+    failed: nothing is restored, the task is "finishing" and the library re-reads only this save's files."""
+    recorded = Event()
+
+    def settle(outcome: str) -> None:
+        if outcome == "settled":
+            if not recorded.is_set():
+                recorded.set()
+                try:
+                    append_log_history(config, log_entry)
+                except Exception:
+                    logger.exception("Could not record a caught-up tag edit in History.")
+            update_save_task(task_id, status="completed", requires_view_refresh=True, warnings=[],
+                             completed_at=datetime.now(timezone.utc).isoformat())
+        elif save_task_result(task_id).get("status") == "finishing":
+            # The first failed re-read answers the page; later retries continue in the background.
+            update_save_task(task_id, status="completed", requires_view_refresh=False,
+                             warnings=[CATCH_UP_PENDING_MESSAGE], catch_up_pending=True,
+                             completed_at=datetime.now(timezone.utc).isoformat())
+
+    try:
+        log_app_event(config, logger, "Tag edit saved; the library is catching up", level="warning",
+                      error=str(error), **{key: value for key, value in log_entry.items()
+                                           if key not in {"id", "timestamp", "action"}})
+    except Exception:
+        pass
+    update_save_task(task_id, status="finishing")
+    catch_up(on_settled=settle)
+
+
 def _fail_save_task(
     task_id: str,
     *,
@@ -581,6 +628,7 @@ def _finalize_save_task(
     scoped_postgres_exception_only: bool = False,
     run_state_mutation: StateMutationGuard | None = None,
     compensate_save_task: StructuralTagEditCompensator | None = None,
+    catch_up_verified_save: VerifiedSaveCatchUp | None = None,
     before_persistence_commit: Callable[[object], object] | None = None,
     complete_scoped_persistence: Callable[[], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
@@ -635,6 +683,12 @@ def _finalize_save_task(
                     "Tag edit persistence returned no durable completion task."
                 )
     except Exception as exc:
+        if catch_up_verified_save is not None and not scoped_postgres_exception_only:
+            _catch_up_verified_save(
+                task_id, catch_up=catch_up_verified_save, config=config, logger=logger,
+                append_log_history=append_log_history, log_app_event=log_app_event, log_entry=log_entry, error=exc,
+            )
+            return
         compensation_succeeded = False
         try:
             if compensate_save_task is not None:
@@ -730,16 +784,9 @@ def _finalize_save_task(
             )
         ):
             try:
-                if isinstance(committed_relation_state, dict) and isinstance(
-                    committed_relation_state.get("relation_views"),
-                    dict,
-                ):
-                    st["relation_views"] = dict(
-                        committed_relation_state["relation_views"]
-                    )
-                    st["relations_last_built"] = float(
-                        committed_relation_state.get("relations_last_built") or 0.0
-                    )
+                if isinstance(committed_relation_state, dict):
+                    from music_app.services.scoped_relation_projection import apply_committed_relation_state
+                    apply_committed_relation_state(st, committed_relation_state, config=config)
                 else:
                     raise RuntimeError(
                         "Postgres persistence returned no canonical relation projection state."
@@ -749,15 +796,27 @@ def _finalize_save_task(
 
         from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
         from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
+        from music_app.services.library_browse_postgres import refresh_postgres_utility_projections_after_edit
 
+        # The Postgres list is patched for the edited files, never dropped whole.
         for stage, callback in (
             (
                 "Problematic album invalidation",
-                lambda: invalidate_problematic_albums_payload_cache(st),
+                lambda: invalidate_problematic_albums_payload_cache(st, include_postgres=False),
             ),
             (
                 "Utility rule invalidation",
-                lambda: invalidate_utility_rules_payload_cache(st),
+                lambda: invalidate_utility_rules_payload_cache(st, include_postgres=False),
+            ),
+            (
+                "Utility projection refresh",
+                lambda: refresh_postgres_utility_projections_after_edit(
+                    config, track_paths=changed_paths or requested_track_paths,
+                    previous_entries=[
+                        entry for path in (changed_paths or requested_track_paths)
+                        if isinstance(entry := previous_file_cache.get(path), dict)
+                    ],
+                ),
             ),
         ):
             try:
@@ -869,7 +928,7 @@ def finalize_structural_tag_edit_save_task(
     get_state: StateProvider,
     rebuild_affected_albums_in_state: AlbumStateRebuilder,
     persist_structural_tag_edit: StructuralTagEditPersister,
-    compensate_structural_tag_edit: StructuralTagEditCompensator | None = None,
+    catch_up_verified_save: VerifiedSaveCatchUp | None = None,
     append_log_history: LogHistoryAppender,
     log_app_event: AppEventLogger,
     find_albums_by_track_paths: AlbumFinder,
@@ -889,8 +948,15 @@ def finalize_structural_tag_edit_save_task(
     before_persistence_commit: Callable[[object], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
     timing_recorder: EditTagTimingRecorder | None = None,
+    lock_wait_seconds: float | None = None,
 ) -> None:
+    """``lock_wait_seconds`` bounds the save's wait for the inventory lock. Past it the save raises
+    EditSaveLockBusy with its files written and intent stored, keeping its reservation for the
+    background completion (row B2); None waits as long as the publication takes."""
+    from music_app.services.scan_cache_persistence import EditSaveLockBusy, edit_save_lock_wait
+
     finalize_started = perf_counter()
+    finishing = False
     try:
         try:
             persistence_started = perf_counter()
@@ -903,31 +969,35 @@ def finalize_structural_tag_edit_save_task(
                 timing_recorder.measure("postgres_commit")
                 if timing_recorder is not None
                 else nullcontext()
-            ):
-                persistence_result = persist_structural_tag_edit(
-                    changed_paths=set(changed_paths),
-                    previous_file_entries=previous_file_cache,
-                    updated_file_entries=updated_file_cache,
-                    changed_field_names=set(changed_field_names),
-                    # Read on this background thread, and only by a blank-Album edit.
-                    blank_album_evidence=lambda paths: album_container_sibling_entries(get_state(), paths),
-                    **persistence_options,
-                )
-            persistence_ms = (perf_counter() - persistence_started) * 1000.0
-        except Exception as exc:
-            compensation_succeeded = False
-            try:
-                if compensate_structural_tag_edit is not None:
-                    compensate_structural_tag_edit(
+            ), collect_persistence_stages() as persistence_stages, edit_save_lock_wait(lock_wait_seconds):
+                try:
+                    persistence_result = persist_structural_tag_edit(
                         changed_paths=set(changed_paths),
                         previous_file_entries=previous_file_cache,
                         updated_file_entries=updated_file_cache,
                         changed_field_names=set(changed_field_names),
+                        # Read on this background thread, and only by a blank-Album edit.
+                        blank_album_evidence=lambda paths: album_container_sibling_entries(get_state(), paths),
+                        **persistence_options,
                     )
-                    compensation_succeeded = True
-            except Exception as compensation_exc:
-                compensation_succeeded = False
-                exc = compensation_exc
+                finally:
+                    if timing_recorder is not None:
+                        timing_recorder.record_postgres_commit_stages(persistence_stages)
+            persistence_ms = (perf_counter() - persistence_started) * 1000.0
+        except EditSaveLockBusy:
+            # Saved, finishing: never compensate (restore) written files for a busy lock.
+            finishing = True
+            raise
+        except Exception as exc:
+            if catch_up_verified_save is not None:
+                _catch_up_verified_save(
+                    task_id, catch_up=catch_up_verified_save, config=config, logger=logger,
+                    append_log_history=append_log_history, log_app_event=log_app_event, log_entry=log_entry,
+                    error=exc,
+                )
+                return
+            # Without a stored intent there is nothing to catch up from; the files keep their new tags.
+            compensation_succeeded = False
             if record_scoped_persistence_failure is not None:
                 try:
                     record_scoped_persistence_failure(compensation_succeeded, exc)
@@ -967,10 +1037,10 @@ def finalize_structural_tag_edit_save_task(
         committed_separate_release_key = str(
             persistence_result.get("separate_release_key") or ""
         ).strip()
+        committed_separate_release_keys = {
+            str(key) for key in persistence_result.get("separate_release_keys", []) if key
+        }
         committed_relation_views = persistence_result.get("relation_views")
-        committed_relations_last_built = float(
-            persistence_result.get("relations_last_built") or 0.0
-        )
 
         def refresh_runtime_state() -> None:
             st = get_state()
@@ -979,6 +1049,7 @@ def finalize_structural_tag_edit_save_task(
                 int(persistence_result.get("inventory_mutation_revision") or 0),
             )
             current_separate_release_keys = set(separate_release_keys)
+            current_separate_release_keys.update(committed_separate_release_keys)
             if committed_separate_release_key:
                 current_separate_release_keys.add(
                     committed_separate_release_key
@@ -1006,7 +1077,10 @@ def finalize_structural_tag_edit_save_task(
                     ),
                 ),
             )
+            inherited_paths = set(persistence_result.get("cover_inherited_paths", [])) & set(changed_paths)
             if persistence_result.get("cover_inherited_from_structural_edit") is True:
+                inherited_paths.update(changed_paths)
+            if inherited_paths:
                 current_file_cache = merge_file_cache_entries(
                     st,
                     _structurally_inherited_cover_entries(
@@ -1017,12 +1091,12 @@ def finalize_structural_tag_edit_save_task(
                             st,
                             previous_file_cache,
                             current_file_cache,
-                            changed_paths,
+                            inherited_paths,
                             current_separate_release_keys,
                         ),
                         previous_file_entries=previous_file_cache,
                         updated_file_entries=updated_file_cache,
-                        changed_paths=changed_paths,
+                        changed_paths=inherited_paths,
                     ),
                 )
             required_relation_fields = (
@@ -1033,15 +1107,16 @@ def finalize_structural_tag_edit_save_task(
             if changed_field_names & required_relation_fields:
                 if (
                     not isinstance(committed_relation_views, dict)
+                    and not isinstance(persistence_result.get('relation_view_patch'), dict)
                     and persistence_result.get("projection_mode") != "stale"
                 ):
                     warnings.append(
                         "Relation state refresh failed after persistence committed: "
                         "Postgres persistence returned no canonical relation projection state."
                     )
-                elif isinstance(committed_relation_views, dict):
-                    st["relation_views"] = dict(committed_relation_views)
-                    st["relations_last_built"] = committed_relations_last_built
+                elif isinstance(committed_relation_views, dict) or isinstance(persistence_result.get('relation_view_patch'), dict):
+                    from music_app.services.scoped_relation_projection import apply_committed_relation_state
+                    apply_committed_relation_state(st, persistence_result, config=config)
             try:
                 rebuild_affected_albums_in_state(
                     st,
@@ -1057,14 +1132,15 @@ def finalize_structural_tag_edit_save_task(
             from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
             from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
 
+            # Structural persistence already patched the Postgres utility projections.
             for stage, callback in (
                 (
                     "Problematic album invalidation",
-                    lambda: invalidate_problematic_albums_payload_cache(st),
+                    lambda: invalidate_problematic_albums_payload_cache(st, include_postgres=False),
                 ),
                 (
                     "Utility rule invalidation",
-                    lambda: invalidate_utility_rules_payload_cache(st),
+                    lambda: invalidate_utility_rules_payload_cache(st, include_postgres=False),
                 ),
             ):
                 try:
@@ -1087,6 +1163,9 @@ def finalize_structural_tag_edit_save_task(
                 None,
             )
         warning_count_before_canonical_lookup = len(warnings)
+        canonical_lookup_paths = set(requested_track_paths) | {
+            str(path) for path in persistence_result.get("affected_track_paths", []) if path
+        }
         with (
             timing_recorder.measure("canonical_album_lookup")
             if timing_recorder is not None
@@ -1095,7 +1174,7 @@ def finalize_structural_tag_edit_save_task(
             updated_albums = _post_commit_value(
                 warnings,
                 "Canonical album reconciliation",
-                lambda: find_albums_by_track_paths(requested_track_paths),
+                lambda: find_albums_by_track_paths(canonical_lookup_paths),
                 [],
             )
         reconciliation_pending = (
@@ -1190,9 +1269,17 @@ def finalize_structural_tag_edit_save_task(
             completion["_structural_resource_keys"] = reservation_resource_keys
             completion["_structural_completed_monotonic"] = perf_counter()
         update_save_task(task_id, **completion)
+        log_info = getattr(logger, "info", None)
+        if timing_recorder is not None and callable(log_info):
+            snapshot = timing_recorder.snapshot()
+            log_info(
+                "Edit Tags save timings files=%d phases=%s postgres_commit_stages=%s",
+                len(changed_paths), snapshot["phase_timings_ms"],
+                snapshot["postgres_commit_stages_ms"],
+            )
     finally:
         release = getattr(structural_tag_edit_reservation, "release", None)
-        if callable(release):
+        if callable(release) and not finishing:
             release()
 
 
@@ -1231,8 +1318,21 @@ def queue_finalize_structural_tag_edit_save_task(
     **kwargs,
 ) -> None:
     if wait_for_completion:
-        finalize_structural_tag_edit_save_task(**kwargs)
+        from music_app.services.scan_cache_persistence import EditSaveLockBusy, edit_save_lock_wait_seconds
+
+        try:
+            finalize_structural_tag_edit_save_task(
+                **kwargs, lock_wait_seconds=edit_save_lock_wait_seconds(kwargs.get("config")))
+        except EditSaveLockBusy:
+            # The request answers "saved, finishing"; the same finalize completes the stored intent in
+            # the background as soon as the lock frees, holding the save's reservation until then.
+            update_save_task(kwargs["task_id"], status="finishing")
+            _submit_structural_finalize(kwargs)
         return
+    _submit_structural_finalize(kwargs)
+
+
+def _submit_structural_finalize(kwargs: dict) -> None:
     try:
         future = _STRUCTURAL_TAG_EDIT_EXECUTOR.submit(
             finalize_structural_tag_edit_save_task,

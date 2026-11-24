@@ -26,6 +26,8 @@ function buildStatusIndicatorTitleParts(data = {}) {
     const scanTotal = Number(data.scan_total || 0);
     const scanProcessed = Number(data.scan_processed || 0);
     const hasScanProgress = scanTotal > 0 || scanProcessed > 0 || Boolean(data.scan_current_path);
+    const standaloneRelationRefresh = scanPhase === 'finalizing' && !data.relations_in_progress;
+    if (standaloneRelationRefresh) parts.push('Refreshing artist relationships');
     if (scanPhase === 'discovering') {
       parts.push('Discovering music files');
       parts.push(`Found so far: ${scanTotal}`);
@@ -47,7 +49,7 @@ function buildStatusIndicatorTitleParts(data = {}) {
       if (data.scan_current_path) {
         parts.push(`Current file: ${data.scan_current_path}`);
       }
-    } else {
+    } else if (!standaloneRelationRefresh) {
       parts.push('Preparing library scan');
       parts.push('Discovering music files before progress is available');
     }

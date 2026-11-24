@@ -3,8 +3,11 @@
 Owner, 2026-11-21: "After album cover save Cover Look Up loads tremendously
 slow". The save dropped every utility projection, so what opened next rebuilt
 the library's, and its runtime update copied and walked the whole library
-state. This contract drives the real save, Cover Look Up and Problematic Files
-routes over the real repository; only Postgres and its stores are stand-ins.
+state. This contract drives the real save and Cover Look Up routes and the
+Rules projection over the real repository; only Postgres and its stores are
+stand-ins. Problematic Files reads its persisted index, which the database
+journal keeps current for the saved album (problematic_index); its own tests
+own that.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from tests.py.bounded_interactions import CountingConnection, OperationCounts, m
 from tests.py.test_library_route_bounded_contracts import (
     _CountingAlbums,
     _CountingFileCache,
+    _indexed_cover_inventory,
     _registered,
     _use_roots,
     library_app,  # noqa: F401 - fixture
@@ -111,7 +115,7 @@ def postgres_app(library_app, monkeypatch):  # noqa: F811 - the imported fixture
     return library_app
 
 
-def test_cover_save_contract_next_cover_lookup_and_problematic_files_open_grow_with_the_saved_album(
+def test_cover_save_contract_next_cover_lookup_and_rules_grow_with_the_saved_album(
     postgres_app, tmp_path, monkeypatch,
 ):
     from PIL import Image
@@ -132,6 +136,10 @@ def test_cover_save_contract_next_cover_lookup_and_problematic_files_open_grow_w
         track_paths = [str(album_root / f"{number:02d}.mp3") for number in (1, 2)]
         for path in track_paths:
             (album_root / path).write_bytes(b"track")
+        _indexed_cover_inventory(monkeypatch, app, album_root)
+        inventory = app.state._state["local_cover_inventory"]
+        inventory.invalidate_paths = lambda _paths: None  # the committed save's listing refresh
+        monkeypatch.setitem(config, "_LOCAL_COVER_INVENTORY", inventory)
         _use_roots(app, {"main_library_roots": [{"id": "main", "path": str(main_root), "layout_mode": "artist"}]})
         albums = [
             {"id": 1, "key": "selected::album", "name": "Album", "artist": "Selected", "paths": track_paths},
@@ -171,16 +179,13 @@ def test_cover_save_contract_next_cover_lookup_and_problematic_files_open_grow_w
         for name in ("_UTILITY_PROJECTION_CACHE", "_UTILITY_PROJECTION_GENERATIONS", "_UTILITY_COVER_CHANGES"):
             monkeypatch.setattr(browse, name, {}, raising=False)
 
-        for kind in ("_build_problematic_files_payload_uncached", "_build_problematic_files_first_page"):
-            build = getattr(browse.PostgresLibraryBrowseRepository, kind)
-            build = getattr(build, "__wrapped__", build)
+        build = browse._utility_rules_projection_payload
 
-            def counted(self, *args, _build=build, **kwargs):
-                counts.count("builder_calls")
-                return _build(self, *args, **kwargs)
+        def counted_rules_build(rows):
+            counts.count("builder_calls")
+            return build(rows)
 
-            counted.__wrapped__ = build
-            monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, kind, counted)
+        monkeypatch.setattr(browse, "_utility_rules_projection_payload", counted_rules_build)
         for owner in (gallery, state_service):
             monkeypatch.setattr(owner, "schedule_gallery_projection_refresh", lambda *_a, **_k: counts.count("worker_wakes"))
         monkeypatch.setattr(
@@ -195,14 +200,7 @@ def test_cover_save_contract_next_cover_lookup_and_problematic_files_open_grow_w
 
         repository = browse.PostgresLibraryBrowseRepository(config)
 
-        def open_problematic_files():
-            page = call("GET", "/utilities/problematic-files", query={"limit": "50"})
-            return page, call("GET", "/utilities/problematic-files")
-
-        # What was open before the save: the complete list and Rules, warm.
-        _page, complete = open_problematic_files()
-        assert complete["count"] == album_count + 1
-        assert complete["initial_detail"]["key"] == "selected::album"
+        # What was open before the save: Rules, warm.
         assert repository.build_utility_rules_payload()["rules"][0]["albums"]
         database_url = config["ALBUM_HAVEN_APP_DATABASE_URL"]
         for kind in _OTHER_PROJECTIONS:
@@ -225,26 +223,17 @@ def test_cover_save_contract_next_cover_lookup_and_problematic_files_open_grow_w
             after_commit=lambda _result: counts.count("worker_wakes"),
         ).reconcile(SimpleNamespace(root_id="main", paths=(album_root / "cover.jpg",)))
         assert call("POST", "/utilities/cover-lookup/gallery", json_body={"album": album_payload})["ok"]
-        page, complete = open_problematic_files()
         rules = repository.build_utility_rules_payload()
         counts.invalidations = sum(
             (database_url, kind) not in browse._UTILITY_PROJECTION_CACHE
-            for kind in (*_OTHER_PROJECTIONS, "problematic-files", "rules")
+            for kind in (*_OTHER_PROJECTIONS, "rules")
         )
         measured = OperationCounts(**vars(counts))
 
         # What is shown is what rebuilding the library would show.
-        assert complete["count"] == album_count and page["count"] == min(50, album_count)
-        assert "selected::album" not in {item["key"] for item in [*page["items"], *complete["items"]]}
-        assert page["initial_detail"]["key"] == page["items"][0]["key"] == "artist 00000::record"
         version = next(album for album in rules["rules"][0]["albums"] if album["key"] == "selected::album")
         assert version["cover_revision"] == saved["cover_revision"]
-        scoped = repository.build_problematic_files_payload()
         browse.invalidate_postgres_utility_projection_cache(database_url=database_url)
-        rebuilt = repository.build_problematic_files_payload()
-        for payload in (scoped, rebuilt):
-            payload.pop("projection_cache_status")
-        assert scoped == rebuilt
         assert rules == repository.build_utility_rules_payload()
         assert {state["file_cache"][path]["cover_revision"] for path in track_paths} == {saved["cover_revision"]}
         return measured

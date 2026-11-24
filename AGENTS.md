@@ -35,13 +35,43 @@ operate, or contribute to the application.
   dark), switch rows have no hover fill, checkbox hover uses neutral control
   colors, and buttons share visibly disabled states. Keep light-theme alerts
   readable without changing approved dark-theme alerts; do not add page-local
-  copies or overrides of these rules.
+  copies or overrides of these rules. Never add buttons to the web
+  navigation-tree header; a new side-bar entry goes vertically under the
+  existing side-bar buttons in their style. Never place the same control in
+  two places, and never render an empty or icon-less button.
+- Artist Gallery headers stay exactly two lines on web and mobile: artist name,
+  info icon, and country on line one; album count, a fat dot, and only the
+  highest-ranked genre on line two. Neither line may wrap. If the first line
+  collides with Gallery controls, move those controls to line two before
+  ellipsizing the artist name.
+- After changing a Gallery dropdown invocation or its shared connected-anchor
+  owner (`music_app/templates/index.html`, `music_app/static/js/runtime/gallery-main-components.js`,
+  `music_app/static/js/runtime/gallery-main-interactions.js`, `music_app/static/js/runtime/trigger-anchor.js`,
+  `music_app/static/css/gallery-main.css`, or `music_app/static/css/runtime/trigger-anchor.css`), immediately run
+  `npx playwright test --config=playwright.component.config.js triggerAnchorSurface.spec.js --grep "Gallery (Header Artist Info|Artist Row Info|Album Types|Artist Family) keeps one continuous anchored outline"`.
+  The controlled visual cases must retain a continuous trigger-to-panel outline
+  and unchanged trigger/icon geometry for both Artist Info invocations, Album
+  Types, and Artist Family.
+- Indexed reads for library-wide data (owner rule, 2026-11-19): any surface that
+  lists, searches, filters, counts or pages over library-wide data reads a
+  persisted, indexed projection, kept current album by album by the save,
+  watcher and scan paths (through the database change journal). A request,
+  startup, deploy, save or watcher pass never computes such data from the whole
+  library; only a one-time backfill, shown with a visible progress state, or an
+  explicit Full Rescan may. In-memory caches may sit in front of the persisted
+  projection but never replace it. A new surface adds its projection, journal
+  marks and backfill in the same change. The Problematic Files index
+  (`music_app/services/problematic_index.py`, migration 0188) is the reference.
 - Postgres migrations (owner rule, 2026-11-10): every file in `migrations/postgres`
   has a unique four-digit number. Numbers may leave gaps and may be applied out
   of order, but a new migration never reuses a number that main or any open pull
   request already uses; renumber before merging when two branches collide. Only
   code merged to main may apply migrations to a shared or production database;
   branch work uses an isolated database or a disposable copy.
+  One written exception (owner, 2026-11-22), for this file only:
+  `0117b_define_fold_search_accents.sql` shares 0117. It must sort before the
+  applied 0118, which needs its function, and no lower number is free. No
+  other file may take a suffix or share a number.
 - Production-copy development (owner rule, 2026-11-14): production stays up and
   is never a development database. Each branch or sandbox develops against its
   own restored copy of the production database, with media writes disabled or a
@@ -64,6 +94,38 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Mandatory component reuse
+
+This rule outranks convenience and applies to every agent, chat, and change.
+
+- Before writing any UI element (button, link, input, path or folder picker,
+  radio, checkbox, switch, select, menu, tab, header, footer, alert, dialog,
+  tree or list item, table, card, badge), search this repository for the
+  component that already owns it and use that component. If the owner names a
+  page with "a header", "five buttons", "an input" or any other element, each
+  named element is a lookup, not something to build.
+- Current owners: `partials/button.html` and `static/js/button-component.js`
+  (Button, ActionButton, icons); `partials/form-controls.html` and
+  `static/js/path-input.js` (RadioOption, PathInput with folder browse);
+  `partials/gallery-bar.html` / `page-gallery-bar.html` (every page header);
+  `components/on-page-alert.html` and `runtime/alert-components.js`
+  (OnPageAlert, SmallAlert with severity or library-source tone, AlertLabel);
+  `partials/app-form-modal.html`, `css/dialog-component.css` and
+  `showAppFormDialog` (dialogs); `navigation-tree.js` (tree and list items,
+  including the wide artwork variant); `album-card-context-menu` (context
+  menus); `runtime/compact-data-table.js` and `runtime/album-track-table.js`
+  (tables); `runtime/in-page-tabs.js` (tabs).
+- Extend the owning component (a variant, option, tone, or slot) when it does
+  not fit. Never copy its markup or CSS into a page, never restyle it from a
+  page stylesheet, and never add a parallel "page" version. A component owns
+  its own shape and states; it must render correctly on every page that loads
+  its stylesheet.
+- Wire components the same way on every host: a Settings page must work when
+  loaded directly and when opened inside the library document.
+- Prefer deleting a page-local copy over keeping it. Keep files small and
+  focused; split by ownership instead of growing a page file.
+- A review that finds a page-local substitute for an existing component is a
+  blocking finding.
 ## Mandatory bounded-interaction gate
 
 - Mandatory for every agent and chat (owner rule, 2026-11-18): after any
@@ -118,8 +180,8 @@ operate, or contribute to the application.
   a route reaching registered library-scale work or enumerating a directory
   directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
   middleware; work an entry lists in its own `forbiddenWork` (a scoped save
-  forbids the library-wide invalidators, rebuild schedulers and
-  `library-state-scan`; add to the list, never shorten it to pass); a database
+  forbids the library-wide invalidators and `library-state-scan`; add to the
+  list, never shorten it to pass); a database
   connection opened or leased per loop item (BI-05) in a
   route or middleware; a new database connection (`psycopg.connect`) anywhere
   a route, middleware, poller, scheduler, or watcher reaches, instead of a

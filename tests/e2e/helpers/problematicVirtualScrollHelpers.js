@@ -122,8 +122,10 @@ export function observeProblematicDetails(page) {
         remember(url.searchParams.get('album_key'), payload);
       } else {
         assert.ok(Array.isArray(payload.items), 'Normal summary must expose its complete items');
-        // A bounded first page (complete: false) is never the complete summary.
-        if (payload.complete !== false && sequence > capturedSummarySequence) {
+        // A bounded first page (complete: false), a search answer (q) or an Artist page is never
+        // the complete summary.
+        const unfilteredSummary = !url.searchParams.has('q') && !url.searchParams.has('artists');
+        if (unfilteredSummary && payload.complete !== false && sequence > capturedSummarySequence) {
           capturedSummarySequence = sequence;
           summary = JSON.stringify(payload.items);
         }

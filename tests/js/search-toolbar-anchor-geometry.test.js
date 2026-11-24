@@ -12,6 +12,7 @@ test('recent searches align with the complete shared search control including Cl
       getByRole(role, options) { nestedRoles.push([selector, role, options]); return {}; },
     }),
     getByRole: () => ({ boundingBox: async () => popover, getByRole: () => ({}) }),
+    getByLabel: () => ({}),
     on() {},
   };
   const pom = new SearchToolbar(page);

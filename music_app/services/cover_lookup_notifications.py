@@ -29,6 +29,15 @@ def load_cover_lookup_notification(
     return _cover_lookup_notifications_adapter(config).load_notification(task_id)
 
 
+def load_reusable_cover_lookup_notification(
+    config: dict[str, object], track_paths: set[str], *,
+    manual_urls: list[str], excluded_task_ids: set[str],
+) -> dict[str, object] | None:
+    return _cover_lookup_notifications_adapter(config).load_reusable_notification(
+        track_paths, manual_urls=manual_urls, excluded_task_ids=excluded_task_ids,
+    )
+
+
 def load_cover_lookup_notification_summaries(
     config: dict[str, object],
 ) -> list[dict[str, object]]:
@@ -78,6 +87,53 @@ def load_cover_lookup_notification_summary_page(
 def save_cover_lookup_notifications(config: dict[str, object], tasks: list[dict[str, object]]) -> None:
     filtered_tasks = _filter_notification_tasks(tasks)
     _cover_lookup_notifications_adapter(config).save_notifications(filtered_tasks)
+
+
+def admit_cover_lookup_notification(
+    config: dict[str, object], task: dict[str, object], *, preferred_task_id: str = "", allow_preferred_path_rebind: bool = False,
+) -> tuple[dict[str, object], bool]:
+    return _cover_lookup_notifications_adapter(config).admit_notification(
+        task, preferred_task_id=preferred_task_id, allow_preferred_path_rebind=allow_preferred_path_rebind,
+    )
+
+
+def upsert_cover_lookup_notification(
+    config: dict[str, object],
+    task: dict[str, object],
+    *,
+    persistence_revision: int,
+    expected_search_generation: str = "",
+) -> None:
+    """Write one task; with a search generation, only while that search still owns it."""
+    if not expected_search_generation:
+        upsert_cover_lookup_notifications(config, [(task, persistence_revision)])
+        return
+    if not isinstance(task, dict) or not str(task.get("id") or "").strip():
+        return
+    adapter = _cover_lookup_notifications_adapter(config)
+    upsert_notification = getattr(adapter, "upsert_notification", None)
+    if callable(upsert_notification):
+        upsert_notification(
+            task,
+            persistence_revision=persistence_revision,
+            expected_search_generation=expected_search_generation,
+        )
+        return
+    upsert_cover_lookup_notifications(config, [(task, persistence_revision)])
+
+
+def upsert_guarded_cover_lookup_notifications(
+    config: dict[str, object],
+    items: list[tuple[dict[str, object], int, str]],
+) -> None:
+    """Write each (task, revision, search generation) only while that search still owns it,
+    in one store transaction."""
+    items = [
+        item for item in items
+        if isinstance(item[0], dict) and str(item[0].get("id") or "").strip() and item[2]
+    ]
+    if items:
+        _cover_lookup_notifications_adapter(config).upsert_guarded_notifications(items)
 
 
 def upsert_cover_lookup_notifications(

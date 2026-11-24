@@ -1,9 +1,10 @@
 import { expect, test } from '../support/baseFixtures.js';
 import {
+  changedId3Frames,
   readGeneratedMp3AlbumTags,
   readGeneratedMp3TagSnapshots,
+  temporarilyMakeGeneratedMp3Unavailable,
 } from '../helpers/physicalTagHelpers.js';
-import { temporarilyRevokeRuntimeDeletePrivileges } from '../helpers/postgresPrivilegeHelpers.js';
 import { holdStructuralSavePersistence } from '../helpers/structuralSavePollWindowHelpers.js';
 import {
   defineTimingBudget,
@@ -64,7 +65,7 @@ const POST_EDIT_DEGRADATION_BUDGET = defineTimingBudget({
   graceMs: POST_EDIT_DEGRADATION_GRACE_MS,
 });
 
-test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits', { tag: '@area:tag-edit' }, async ({
+test("FTC-ALBUM-DETAILS-029 an open Album Details whose album is split or merged elsewhere says 'This album changed—choose it again in the gallery' and returns to the gallery; a stale card opened afterwards just shows the refreshed gallery; a gallery open never shows the split chooser", { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   stepLogger,
@@ -180,22 +181,34 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
   });
 
   // Owner rule: a gallery-opened album never offers the split chooser, because the
-  // gallery shows every release the split produced.
+  // gallery shows every release the split produced. Owner (2026-11-21): only a modal that was
+  // already open on the old album says "This album changed"; a stale card clicked afterwards
+  // just gives way to the refreshed gallery.
   for (const [label, session, comeOnline, notice] of [
     ['open source album', staleSplitSession, false, staleSplitNotice],
     ['rendered stale card', staleCardSession, true, undefined],
   ]) {
     await stepLogger.step(`Send the ${label} back to the refreshed gallery`, async () => {
-      const noticeShown = notice || session.trackModalActions.watchForChangedAlbumNotice();
       if (comeOnline) {
+        // Reconnected at a random point, the next status poll could replace the stale card before
+        // the click. Bring the card into view, then reconnect just after a poll failed.
+        await session.galleryActions.scrollToAlbumUnderHeading(FIXTURE_ARTIST, FAILURE_FIXTURE_ALBUM, {
+          year: FIXTURE_YEAR,
+          detailsAction: true,
+        });
+        await session.galleryActions.waitForFailedStatusPoll();
         await session.context.setOffline(false);
         await session.galleryActions.selectAlbumDetailsByIdentity({
           artist: FIXTURE_ARTIST,
           album: FAILURE_FIXTURE_ALBUM,
           year: FIXTURE_YEAR,
         });
+        await session.trackModalActions.waitForClosed();
+        await expect(session.trackModalActions.trackModal.changedAlbumNotice).toHaveCount(0);
+        await expect(session.trackModalActions.trackModal.splitChooser).toHaveCount(0);
+      } else {
+        await session.trackModalActions.waitForChangedAlbumNotice(notice);
       }
-      await session.trackModalActions.waitForChangedAlbumNotice(noticeShown);
       await session.galleryActions.waitForAlbumHidden(FAILURE_FIXTURE_ALBUM);
       for (const album of [LINEAGE_SPLIT_ALBUM_A, LINEAGE_SPLIT_ALBUM_B]) {
         await session.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, album);
@@ -244,9 +257,11 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
     expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
     await trackModalActions.closeIfOpen();
 
-    const mergedSummary = await staleMergeSession.trackModalActions.waitForTitle(
+    await staleMergeSession.trackModalActions.waitForTitle(
       albumDetailsTitle(FAILURE_FIXTURE_ALBUM),
     );
+    const mergedSummary = await staleMergeSession.trackModalActions.waitForInteractiveSummary();
+    expect(mergedSummary.title).toBe(albumDetailsTitle(FAILURE_FIXTURE_ALBUM));
     expect(mergedSummary.trackRows).toBe(1);
     await staleMergeSession.trackModalActions.close();
 
@@ -690,7 +705,7 @@ test('FTC-TAGS-008 returns one terminal saved response after optimistic rename p
   }
 });
 
-test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', { tag: '@area:tag-edit' }, async ({
+test('FTC-TAGS-008 keeps a failed file write readable without false success and leaves both files unchanged', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   settingsModalAppBarActions,
@@ -713,34 +728,45 @@ test('FTC-TAGS-008 keeps an accepted terminal failure readable without false suc
     });
   });
 
-  await stepLogger.step('Keep the failed task readable after compensation', async () => {
-    const privilegeGuard = await temporarilyRevokeRuntimeDeletePrivileges([
-      'library.ignored_versions',
-      'library.manual_versions',
-    ]);
+  await stepLogger.step('A failed file write stays readable, with its details in log history and both files unchanged', async () => {
+    // Edits always save once their files are written, so a save can no longer fail after it is accepted; a file
+    // that cannot be written fails it at the media_write stage, before anything is kept.
+    const filesBefore = await readGeneratedMp3TagSnapshots({ artist: FIXTURE_ARTIST, album: FAILURE_FIXTURE_ALBUM });
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+    await tagEditorActions.selectTrackByFilename(FAILURE_FIXTURE_TRACK);
+    await tagEditorActions.setAlbumName('Rejected Album Rename Fixture');
+    const unwritableTrack = temporarilyMakeGeneratedMp3Unavailable({
+      artist: FIXTURE_ARTIST, album: FAILURE_FIXTURE_ALBUM, filename: FAILURE_FIXTURE_TRACK,
+    });
+    let failure;
     try {
-      await trackModalActions.openTagEditor();
-      await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
-      await tagEditorActions.selectTrackByFilename(FAILURE_FIXTURE_TRACK);
-      await tagEditorActions.setAlbumName('Rejected Album Rename Fixture');
-      const failure = await tagEditorActions.applyAndWaitForAsyncFailure();
-      expect(failure.task.error).toContain('ignored_versions');
-      expect(failure.alertText).toContain('ignored_versions');
-      await tagEditorActions.expectTerminalFailureRemainsReadable(failure.task.error);
-      await tagEditorActions.openLogHistoryFromFailure();
-      await utilityLogHistoryActions.waitForReady();
-      expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.task.error);
-      await settingsModalAppBarActions.closeSettings();
-      await trackModalActions.waitForExactAlbumDetails({
-        title: albumDetailsTitle(FAILURE_FIXTURE_ALBUM),
-        trackTitles: ['Apply Rarity Here', 'Remain Editable'],
-      });
+      // The page names the stage in the owner's words; the path and raw error stay in log history.
+      failure = await tagEditorActions.applyAndWaitForFailure({ expectedErrorPattern: /^Save failed: Read-only files$/u });
     } finally {
-      await privilegeGuard.restore();
+      unwritableTrack.restore();
     }
+    expect(failure.status).toBe(500);
+    expect(failure.payload.failure_stage).toBe('media_write');
+    const failureError = String(failure.payload.error || '').trim();
+    expect(failureError).toContain(FAILURE_FIXTURE_TRACK);
+    expect(failure.alertText).not.toContain(FAILURE_FIXTURE_TRACK);
+    await tagEditorActions.openLogHistoryFromFailure();
+    await utilityLogHistoryActions.waitForReady();
+    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failureError);
+    await settingsModalAppBarActions.closeSettings();
+    await trackModalActions.waitForExactAlbumDetails({
+      title: albumDetailsTitle(FAILURE_FIXTURE_ALBUM),
+      trackTitles: ['Apply Rarity Here', 'Remain Editable'],
+    });
+    const filesAfter = await readGeneratedMp3TagSnapshots({ artist: FIXTURE_ARTIST, album: FAILURE_FIXTURE_ALBUM });
+    expect(changedId3Frames(filesBefore, filesAfter)).toEqual(
+      [FAILURE_FIXTURE_TRACK, FAILURE_FIXTURE_SECOND_TRACK].sort((left, right) => left.localeCompare(right))
+        .map((filename) => ({ filename, changedFrames: [] })),
+    );
   });
 
-  await stepLogger.step('Reload the compensated rarity fixture as one exact two-track album', async () => {
+  await stepLogger.step('Reload the unchanged rarity fixture as one exact two-track album', async () => {
     await trackModalActions.closeIfOpen();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await galleryActions.waitForGalleryReady();
@@ -883,6 +909,13 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
     expect(coverResourceIdentity(sourceCover.productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     destinationCoverSrc = destinationCover.productionSrc;
     expect(coverResourceIdentity(destinationCoverSrc)).toBe(coverResourceIdentity(originalCoverSrc));
+
+    await galleryActions.openAlbumTagEditorFromContextMenu(SPLIT_RENAMED_ALBUM);
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+    expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(
+      [SPLIT_SELECTED_FILENAME],
+    );
+    await tagEditorActions.close();
 
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
@@ -1104,6 +1137,17 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       )
     ).productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await galleryActions.waitForAlbumHidden(SPLIT_RENAMED_ALBUM);
+
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: SPLIT_ORIGINAL_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    await trackModalActions.waitForExactAlbumDetails({
+      title: albumDetailsTitle(SPLIT_ORIGINAL_ALBUM),
+      trackTitles: [EXPECTED_SPLIT_TRACK_TITLES[0], ...EXPECTED_SPLIT_TRACK_TITLES.slice(2)],
+    });
+    await trackModalActions.close();
   });
 
   await stepLogger.step('Restore the second moved track without duplicating the original album', async () => {
@@ -1623,6 +1667,8 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
     await utilityTabBarActions.openTab('problematic-files');
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     await utilityProblematicFilesActions.search(SPLIT_ORIGINAL_ALBUM);
+    // The list re-renders for the query; selecting before it settles walks the old, scrolled list.
+    await utilityProblematicFilesActions.waitForSearchResults(SPLIT_ORIGINAL_ALBUM);
     await utilityProblematicFilesActions.selectAlbumByTitle(SPLIT_ORIGINAL_ALBUM);
     const detail = await utilityProblematicFilesActions.readSelectedDetailSummary();
     expect(detail.title).toBe(SPLIT_ORIGINAL_ALBUM);

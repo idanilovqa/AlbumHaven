@@ -46,7 +46,7 @@ def _require_library_state(library_state: dict[str, object] | None) -> dict[str,
 
 
 def drop_utility_rules_payload_cache(library_state: dict[str, object] | None = None) -> None:
-    """Drop the in-memory payload only."""
+    """Drop the in-memory payload only (a cover save: the guard forbids the Postgres invalidation there)."""
     st = _require_library_state(library_state)
     with _UTILITY_RULES_CACHE_LOCK:
         st.pop(_UTILITY_RULES_CACHE_KEY, None)
@@ -56,8 +56,14 @@ def drop_utility_rules_payload_cache(library_state: dict[str, object] | None = N
         ) + 1
 
 
-def invalidate_utility_rules_payload_cache(library_state: dict[str, object] | None = None) -> None:
+def invalidate_utility_rules_payload_cache(
+    library_state: dict[str, object] | None = None,
+    *,
+    include_postgres: bool = True,
+) -> None:
     drop_utility_rules_payload_cache(library_state)
+    if not include_postgres:
+        return
     from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
 
     invalidate_postgres_utility_projection_cache()

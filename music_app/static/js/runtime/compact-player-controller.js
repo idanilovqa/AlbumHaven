@@ -102,11 +102,10 @@ function refreshCompactPlayerMetadataRows(els = compactPlayerElements()) {
   for (const [row, text] of [[els.titleRow, els.titleText], [els.artistRow, els.artistText]]) {
     if (!row || !text) continue;
     const motion = compactPlayerPresentation === 'docked' && !reducedMotion
-      ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+      ? resolveRunningLineMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
       : { overflowing: false, distance: 0, durationMs: 0 };
     row.classList.toggle('is-overflowing', motion.overflowing);
-    row.style.setProperty('--compact-player-row-pan-distance', `${motion.distance}px`);
-    row.style.setProperty('--compact-player-row-pan-duration', `${motion.durationMs}ms`);
+    applyRunningLineMotion(row, motion);
   }
 }
 

@@ -52,7 +52,7 @@ from music_app.services.capability_artwork import render_browse_artwork
 from music_app.services.cover_references import CANDIDATE as CANDIDATE_COVER, cover_library_id, legacy_cover_path_is_named
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
-from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
+from music_app.services.app_copy import app_copy_account, app_copy_requested, fits_app_copy, mark_app_copy
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -226,6 +226,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             ("accounts.read", "system.preview_storage.read"),
         ),
         "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
+        "pending_edit_scope": _pending_edit_scope(actor),
         "account_menu_csrf_token": issue_session_csrf(
             request.cookies.get("__Host-album_haven_session"),
             request.app.state.auth_policy_config,
@@ -579,8 +580,7 @@ def _build_startup_hydration_contract(
             visible_library_categories,
             active_surface=normalized_surface,
             root_sidebar=bool(
-                initial_view_partial
-                and normalized_surface == "albums"
+                normalized_surface == "albums"
                 and selected_artist
                 and not query_raw
             ),
@@ -675,13 +675,12 @@ def _build_postgres_selected_artist_startup_view(
     payload_started_at = time.perf_counter()
     repository = PostgresLibraryBrowseRepository(config)
     selected_query_args = QueryParams(query_args)
-    if not selected_query_args.get("q"):
-        selected_query_items = list(selected_query_args.multi_items())
-        if not selected_query_args.get("payload_tier"):
-            selected_query_items.append(("payload_tier", "gallery_summary"))
-        if not selected_query_args.get("root_sidebar"):
-            selected_query_items.append(("root_sidebar", "1"))
-        selected_query_args = QueryParams(selected_query_items)
+    selected_query_items = list(selected_query_args.multi_items())
+    if not selected_query_args.get("payload_tier"):
+        selected_query_items.append(("payload_tier", "gallery_summary"))
+    if not selected_query_args.get("q") and not selected_query_args.get("root_sidebar"):
+        selected_query_items.append(("root_sidebar", "1"))
+    selected_query_args = QueryParams(selected_query_items)
     payload = repository.build_selected_artist_payload(
         query_params=selected_query_args,
         library_state=library_state,
@@ -730,6 +729,17 @@ def _build_postgres_selected_artist_startup_view(
     return initial_view, payload_elapsed_ms
 
 
+def _pending_edit_scope(actor) -> str:
+    """An opaque key for the signed-in account and its current library. The page's pending tag edits are
+    kept per scope, so another account on the same browser never sees or resends them (T3)."""
+    import hashlib
+
+    if not actor or not getattr(actor, "is_authenticated", False) or getattr(actor, "account_id", None) is None:
+        return ""
+    material = f"album-haven-edit-scope:{actor.account_id}:{getattr(actor, 'current_library_id', '') or ''}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
+
+
 def _build_bootstrap_payload(
     *,
     query_args: Any,
@@ -740,6 +750,7 @@ def _build_bootstrap_payload(
     selected_artist: str,
     refreshed: bool,
     request_started_epoch_ms: int,
+    defer_selected_artist_startup: bool = False,
 ) -> tuple[dict[str, object], float, dict[str, object]]:
     payload_elapsed_ms = 0.0
     # Read before the view so a mutation committed while it builds is still seen as newer.
@@ -771,7 +782,7 @@ def _build_bootstrap_payload(
             else:
                 preview_mode = "fresh_preview" if bool(initial_view.get("initial_view_partial")) else "full_view"
         else:
-            if selected_artist:
+            if selected_artist and not defer_selected_artist_startup:
                 initial_view, payload_elapsed_ms = _build_postgres_selected_artist_startup_view(
                     config=config,
                     query_args=query_args,
@@ -921,15 +932,6 @@ async def _json_payload(request: Request) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _file_response(path: Path, *, max_age: int | None = None, no_cache: bool = False) -> FileResponse:
-    response = FileResponse(path, filename=path.name, content_disposition_type="inline")
-    if max_age is not None:
-        response.headers["Cache-Control"] = f"public, max-age={max_age}"
-    elif no_cache:
-        response.headers["Cache-Control"] = "no-cache"
-    return response
-
-
 def _etag_matches(if_none_match: str, etag: str) -> bool:
     for candidate in if_none_match.split(","):
         candidate = candidate.strip()
@@ -970,7 +972,6 @@ def _conditional_file_response(
     path: Path,
     *,
     max_age: int | None = None,
-    no_cache: bool = False,
     stat_result=None,
     content: bytes | None = None,
 ) -> Response:
@@ -978,7 +979,8 @@ def _conditional_file_response(
     file_response = FileResponse(
         path,
         stat_result=resolved_stat,
-        filename=path.name,
+        # A cover may be stored, its headers with it: those never carry the library's file name.
+        filename=path.name if max_age is None else f"cover{path.suffix.lower()}",
         content_disposition_type="inline",
     )
     if max_age is not None:
@@ -986,8 +988,9 @@ def _conditional_file_response(
         file_response.headers["Cache-Control"] = f"private, max-age={max_age}" + (
             ", immutable" if max_age >= _IMMUTABLE_COVER_MAX_AGE else ""
         )
-    elif no_cache:
-        file_response.headers["Cache-Control"] = "no-cache"
+    else:
+        # Audio: its file name, and for a track its address, name the library.
+        file_response.headers["Cache-Control"] = "private, no-store"
 
     if_none_match = request.headers.get("if-none-match")
     etag = file_response.headers.get("etag")
@@ -1017,9 +1020,26 @@ async def favicon() -> Response:
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> Response:
+    if (
+        request.url.path == "/"
+        and str(request.query_params.get("surface") or "").strip().casefold() == "albums"
+    ):
+        canonical_query = urlencode([
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key != "surface"
+        ])
+        return RedirectResponse(
+            f"/albums{f'?{canonical_query}' if canonical_query else ''}",
+            status_code=307,
+        )
     request_started_at = time.perf_counter()
     request_started_epoch_ms = int(time.time() * 1000)
-    query_args = request.query_params
+    query_args = (
+        QueryParams([("surface", "albums"), *request.query_params.multi_items()])
+        if request.url.path == "/albums"
+        else request.query_params
+    )
     config = _app_config(request)
     route_logger = _app_logger(request)
     library_state = _library_state(request)
@@ -1036,6 +1056,7 @@ async def index(request: Request) -> Response:
         selected_artist=selected_artist,
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
+        defer_selected_artist_startup=True,
     )
     bootstrap_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
     initial_view = bootstrap_payload.get("initial_view") or {}
@@ -1063,7 +1084,11 @@ async def index(request: Request) -> Response:
         bootstrap_payload["bootstrap"]["scanInProgress"] = True
         bootstrap_payload["bootstrap"]["scanPhase"] = "discovering"
         bootstrap_payload["bootstrap"]["scanMode"] = "background"
-    copy_account = app_copy_account(request.state.current_actor) if app_copy_requested(request) else ""
+    copy_account = ""
+    if app_copy_requested(request) and await run_in_threadpool(
+        fits_app_copy, bootstrap_payload, [value for _name, value in query_args.multi_items()],
+    ):
+        copy_account = app_copy_account(request.state.current_actor)
     appearance_started_at = time.perf_counter()
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
@@ -1124,6 +1149,16 @@ async def index(request: Request) -> Response:
         else "shell_only",
     )
     return response
+
+
+@router.get("/albums", response_class=HTMLResponse)
+async def albums_page(request: Request) -> Response:
+    return await index(request)
+
+
+@router.get("/loose-tracks", response_class=HTMLResponse)
+async def loose_tracks_page(request: Request) -> Response:
+    return await index(request)
 
 
 @router.get("/news", response_class=HTMLResponse)
@@ -1252,9 +1287,12 @@ async def refresh_api(request: Request) -> JSONResponse:
     config = _app_config(request)
     library_state = _library_state(request)
     full_rescan = bool(payload.get("full_rescan"))
-    accepted_state_updates: dict[str, object] = {}
+    # A user-requested scan retries cover searches for coverless and poor-art
+    # albums now, instead of waiting for the negative search cache to expire.
+    accepted_state_updates: dict[str, object] = {"user_requested_cover_retry": True}
     if full_rescan:
         accepted_state_updates = {
+            "user_requested_cover_retry": True,
             "rescan_ignore_existing_cache": True,
             "scan_processed": 0,
             "scan_total": 0,
@@ -1329,7 +1367,7 @@ def track(request: Request, path: str = "") -> FileResponse:
     resolved = resolve_configured_media_path(_app_config(request), path)
     if resolved is None:
         return _not_found()
-    return _conditional_file_response(request, resolved, no_cache=True)
+    return _conditional_file_response(request, resolved)
 
 
 @router.get("/loops/media/{loop_id}")
@@ -1337,7 +1375,7 @@ async def saved_loop_media(request: Request, loop_id: str) -> FileResponse:
     resolved = await run_in_threadpool(resolve_loop_media_path, _app_config(request), loop_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved)
 
 
 @router.get("/loops/pitch-preview/{preview_id}")
@@ -1345,7 +1383,7 @@ async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileRes
     resolved = await run_in_threadpool(resolve_loop_preview_path, _app_config(request), preview_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved)
 
 
 def _cached_cover_variant_response(
@@ -1440,15 +1478,16 @@ def _cover_response(
         return _not_found()
     if requested_size > 0:
         if not cache_roots:
-            # Unrevisioned lookup candidates stay app-local; configured storage is a read fallback.
-            app_cache_roots = display_cover_variant_cache_roots(
+            cache_roots = display_cover_variant_cache_roots(
                 resolved,
                 data_dir=config.get("DATA_DIR"),
+                storage_policy=storage_policy,
             )
-            cache_roots = tuple(dict.fromkeys((
-                *app_cache_roots,
-                *display_cover_variant_cache_roots(resolved, storage_policy=storage_policy),
-            )))
+            if storage_policy is None:
+                cache_roots = tuple(dict.fromkeys((
+                    *cache_roots,
+                    *display_cover_variant_cache_roots(resolved),
+                )))
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )
@@ -1469,8 +1508,10 @@ def _cover_response(
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
                 source_path = resolved
                 generation_options = {}
-                # An unrevisioned preview stays in app data, outside the relocation inventory.
-                if inventory_recorder is not None and normalized_revision:
+                # Previews follow the storage setting (owner, 2026-11-22): under a storage policy every
+                # preview is written to its root and joins the relocation inventory. Without one, an
+                # unrevisioned preview stays in app data, outside it (0845e566c).
+                if inventory_recorder is not None and (normalized_revision or storage_policy is not None):
                     generation_options["on_published"] = inventory_recorder
                 resolved = resolve_cover_display_variant(
                     resolved,

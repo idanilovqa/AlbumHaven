@@ -523,6 +523,7 @@ ALIAS_PARITY_ARTIST_FIXTURES = {
     **MORSE_ALIAS_FIXTURES,
     **EMPTY_KEY_ARTIST_FIXTURES,
     **WHITESPACE_FAMILY_FIXTURES,
+    "Onségen Ensemble": ("Awalaï", 2016),
     SNOW_WHITE_RAW_ARTIST: (SNOW_WHITE_ALBUM, SNOW_WHITE_YEAR),
 }
 _NAME_RNG = random.Random(os.urandom(16))
@@ -2219,6 +2220,10 @@ def build_file_cache(
                     title = ORDINARY_GROUPED_FEATURE_TRACK_TITLE
                     track_artist = ORDINARY_GROUPED_FEATURE_TRACK_ARTIST
                     track_path = album_dir / "03 - Grouped Feature Signal.mp3"
+                elif is_ordinary_track_credit_fixture and track_index == 3:
+                    title = "Semicolon Feature Signal"
+                    track_artist = f"{ORDINARY_TRACK_CREDIT_ARTIST}; Guest One; Guest Two; Guest One"
+                    track_path = album_dir / "04 - Semicolon Feature Signal.mp3"
                 if artist == SNOW_WHITE_RAW_ARTIST and album == SNOW_WHITE_ALBUM:
                     track_artist = SNOW_WHITE_TRACK_ARTISTS[
                         track_index % len(SNOW_WHITE_TRACK_ARTISTS)
@@ -3116,6 +3121,43 @@ def persist_fixture_inventory(
     persist_fixture_album_rating_contract(setup_database_url)
     persist_duplicate_artist_header_contract(setup_database_url)
     persist_legacy_ignored_album_contract(setup_database_url)
+
+
+def seed_cover_lookup_local_inventory(database_url, library_root):
+    import psycopg
+    from config import Config, PERSISTENCE_BACKEND_POSTGRES
+    from music_app.services.cover_workflow import resolve_album_root_from_track_paths
+    from music_app.services.local_cover_inventory import (
+        LocalCoverInventoryRepository,
+        context_key,
+        discover_local_cover_inventory,
+    )
+
+    with psycopg.connect(database_url) as connection:
+        paths = {row[0] for row in connection.execute(
+            """select files.private_path from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id
+               join library.local_albums albums on albums.id = tracks.album_id
+               join library.local_artists artists on artists.id = albums.artist_id
+               where artists.name = %s and albums.title = %s
+               and coalesce((files.metadata #>> '{scan_cache,stale}')::boolean, false) is false""",
+            ("Mastodon", "Crack The Skye"),
+        )}
+    if not paths:
+        return
+    inventory_config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+        "MUSIC_DIR": library_root,
+        "PERSISTENCE_BACKENDS": {"library_roots": PERSISTENCE_BACKEND_POSTGRES},
+        "IMAGE_EXTENSIONS": Config.IMAGE_EXTENSIONS,
+    }
+    root = resolve_album_root_from_track_paths(inventory_config, paths)
+    if root is None:
+        raise RuntimeError("Canonical cover fixture must resolve to an album root before startup")
+    repository = LocalCoverInventoryRepository(inventory_config)
+    repository.request_context(paths, foreground=False)
+    repository.publish_context(context_key(paths), 1, root, foreground=False)
+    repository.publish(root, 1, discover_local_cover_inventory(root, inventory_config))
 
 
 def ensure_provider_storage_policy_cover_spec(
@@ -4195,6 +4237,27 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 1800,
             "candidate_fixture_mode": "automatic-candidate",
         })
+        # FTC-COVERS-046: a candidate for the watched album that is split while its search is held.
+        self.cover_lookup_split_chooser_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "watcher-split-chooser-candidate",
+            "artist": "Watcher Split Chooser Artist",
+            "album": "Watcher Split Chooser Album",
+            "year": 2009,
+            "width": 2000,
+            "height": 2000,
+        })
+        # FTC-COVERS-018: the first acceptable candidate for a new album the watcher finds.
+        self.cover_lookup_watcher_first_acceptable_spec = prepare_provider_artwork_spec({
+            **dict(cover_specs[0]),
+            "cover_id": "watcher-first-acceptable-primary",
+            "artist": "Watcher First Acceptable Artist",
+            "album": "Watcher First Acceptable Album",
+            "year": 2008,
+            "width": 1800,
+            "height": 1800,
+            "candidate_fixture_mode": "watcher-first-acceptable",
+        })
         self.cover_lookup_watcher_candidate_spec = prepare_provider_artwork_spec({
             **dict(cover_specs[0]),
             "cover_id": "watcher-automatic-candidate",
@@ -4342,6 +4405,8 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             *(dict(spec) for spec in self.cover_lookup_matching_specs),
             self.cover_lookup_automatic_candidate_spec,
             self.cover_lookup_watcher_candidate_spec,
+            self.cover_lookup_watcher_first_acceptable_spec,
+            self.cover_lookup_split_chooser_spec,
             self.cover_lookup_neutral_user_cover_spec,
             self.cover_lookup_user_improvement_spec,
             self.cover_lookup_same_art_improvement_spec,
@@ -4378,6 +4443,12 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.musicbrainz_hydration_started = threading.Event()
         self.cover_lookup_candidate_image_gate = threading.Event()
         self.cover_lookup_candidate_image_gate.set()
+        # Owner (2026-11-15): Sandbox2 saves pasted covers slowly; a held gate replays that window for real.
+        self.pasted_cover_save_gate = threading.Event()
+        self.pasted_cover_save_gate.set()
+        # Holds the complete Problematic Files list so a test can prove the bounded page works first.
+        self.problematic_complete_list_gate = threading.Event()
+        self.problematic_complete_list_gate.set()
         self.cover_lookup_mode = "no-results"
         self.cover_lookup_mode_lock = threading.Lock()
         self.cover_cache_path = cover_cache_path
@@ -4534,12 +4605,25 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.cover_lookup_later_provider_gate.set()
 
     def hold_cover_lookup_candidate_images(self) -> None:
+        # A held provider is a slow provider: images the app's remote-image cache kept from earlier views would
+        # otherwise never reach the gate. The app runs in this process, so its cache starts empty for the hold.
+        from music_app.services import cover_lookup_runtime
+
+        with cover_lookup_runtime._REMOTE_IMAGE_CACHE_LOCK:
+            cover_lookup_runtime._REMOTE_IMAGE_CACHE.clear()
+            cover_lookup_runtime._REMOTE_IMAGE_CACHE_BYTES = 0
         with self.cover_lookup_evidence_lock:
             self.cover_lookup_evidence["candidate_image_requests"] = 0
         self.cover_lookup_candidate_image_gate.clear()
 
     def release_cover_lookup_candidate_images(self) -> None:
         self.cover_lookup_candidate_image_gate.set()
+
+    def wait_for_pasted_cover_save(self) -> None:
+        self.pasted_cover_save_gate.wait()
+
+    def wait_for_problematic_complete_list(self) -> None:
+        self.problematic_complete_list_gate.wait()
 
     def wait_for_cover_lookup_candidate_image(self) -> None:
         with self.cover_lookup_evidence_lock:
@@ -4574,6 +4658,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "service-deadline",
             "artist-conjunction",
             "split-identity",
+            "watcher-split-chooser",
             "automatic-coverless",
             "automatic-scan",
             "same-art-improvement",
@@ -4819,6 +4904,14 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             self.server.hold_cover_lookup_candidate_images()
         elif action == "release-candidate-images":
             self.server.release_cover_lookup_candidate_images()
+        elif action == "hold-pasted-cover-save":
+            self.server.pasted_cover_save_gate.clear()
+        elif action == "release-pasted-cover-save":
+            self.server.pasted_cover_save_gate.set()
+        elif action == "hold-problematic-complete-list":
+            self.server.problematic_complete_list_gate.clear()
+        elif action == "release-problematic-complete-list":
+            self.server.problematic_complete_list_gate.set()
         elif action == "reset-evidence":
             self.server.reset_cover_lookup_evidence()
         elif action == "set-itunes-search-delay":
@@ -5017,6 +5110,8 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
         if mode == "split-identity":
             return [dict(self.server.cover_lookup_split_identity_spec)]
+        if mode == "watcher-split-chooser":
+            return [dict(self.server.cover_lookup_split_chooser_spec)]
         if mode in {"selection-concurrency-a", "selection-concurrency-b"}:
             index = 0 if mode.endswith("-a") else 1
             if _normalize_provider_query("E2E Rarity Artist Queued Album Rename Fixture") in normalized_query:
@@ -5038,6 +5133,10 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 "Watcher Automatic Cover Album"
             ) in normalized_query:
                 return [dict(self.server.cover_lookup_watcher_candidate_spec)]
+            if _normalize_provider_query(
+                "Watcher First Acceptable Album"
+            ) in normalized_query:
+                return [dict(self.server.cover_lookup_watcher_first_acceptable_spec)]
             return []
         if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
             return [dict(self.server.cover_lookup_automatic_candidate_spec)]
@@ -5599,9 +5698,35 @@ class ProviderFixtureService:
     def start(self) -> None:
         self._thread.start()
 
+    def gate_pasted_cover_saves(self) -> None:
+        # The real save still runs and writes the file; it only starts once the test releases the gate.
+        from music_app.routes import api_wave_d_asgi_routes
+
+        save = api_wave_d_asgi_routes.save_pasted_image_as_authoritative_cover
+
+        def gated_save(*args, **kwargs):
+            self._server.wait_for_pasted_cover_save()
+            return save(*args, **kwargs)
+
+        api_wave_d_asgi_routes.save_pasted_image_as_authoritative_cover = gated_save
+
+    def gate_problematic_complete_list(self) -> None:
+        # The real complete list is still built and returned; it only starts once the test releases it.
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+        build = PostgresLibraryBrowseRepository.build_problematic_files_payload
+
+        def gated_build(repository, *args, **kwargs):
+            self._server.wait_for_problematic_complete_list()
+            return build(repository, *args, **kwargs)
+
+        PostgresLibraryBrowseRepository.build_problematic_files_payload = gated_build
+
     def stop(self) -> None:
         self._server.release_cover_lookup_later_provider()
         self._server.release_cover_lookup_candidate_images()
+        self._server.pasted_cover_save_gate.set()
+        self._server.problematic_complete_list_gate.set()
         self._server.release_musicbrainz_hydration()
         self._server.shutdown()
         self._server.server_close()
@@ -5832,6 +5957,9 @@ def main() -> None:
             materialize_rating_scan_discovery_track(library_root, loop_source)
             seed_fixture_lastfm_timezone()
 
+        if not reuse_state:
+            seed_cover_lookup_local_inventory(setup_database_url, library_root)
+
         if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
             provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
             persist_provider_storage_policy_candidates(
@@ -5870,6 +5998,13 @@ def main() -> None:
         assert_production_runtime_configuration(
             app.state.config, temp_root, fixture_media_root=fixture_media_root
         )
+        provider_service.gate_pasted_cover_saves()
+        # A restored fixture database runs the deploy step, as a production server does before
+        # it serves (0188, 0268); tests then start on ready indexes, outside their own time limits.
+        from tests.e2e.support.isolatedPostgres import prepare_app_to_serve
+
+        prepare_app_to_serve(app)
+        provider_service.gate_problematic_complete_list()
         print(
             f"Album Haven production E2E app listening on http://127.0.0.1:{args.port} "
             f"with {artist_count} artists, {album_count} albums, {track_count} tracks, "

@@ -56,3 +56,5 @@
 }
 .account-menu-item:disabled .account-menu-icon,
 .account-menu-item[aria-disabled="true"] .account-menu-icon { color: #536276; }
+
+.app-bar--settings > .account-menu-component { margin-left: auto; }

@@ -548,6 +548,33 @@ test('Gallery country pills show the full country name, not the ISO code', () =>
   assert.match(context.buildGalleryArtistMetadataHtml({ country: 'Russia', genres: [] }), />Russia</, 'stored names pass through');
 });
 
+test('the Artist info panel shows the artist pills main shows: its country, then up to three genres', () => {
+  // FTC-MBID-003 (MBD1-13): the header split moved genres out of the country pill builder, and the panel,
+  // still built from it alone, lost every genre pill ("Genre unavailable" included).
+  const context = { console };
+  vm.createContext(context);
+  vm.runInContext(read('music_app/static/js/runtime/markup-format-helpers.js'), context);
+  vm.runInContext(read('music_app/static/js/runtime/gallery-main-components.js'), context);
+  const panel = context.buildGalleryArtistInfoMetadataHtml;
+  const country = (name) => `<span class="ui-metadata-pill ui-metadata-pill--country">${name}</span>`;
+  const genre = (name) => `<span class="ui-metadata-pill ui-metadata-pill--genre">${name}</span>`;
+
+  assert.equal(typeof panel, 'function', 'the panel has its own pill builder');
+  assert.equal(panel({ country: 'FI', genres: ['Genre unavailable'] }),
+    `${country('Finland')}<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>`);
+  assert.equal(panel({ country: 'AT', genres: ['black metal', ' doom metal ', '', 'folk metal', 'pagan metal'] }),
+    `${country('Austria')}${genre('black metal')}${genre('doom metal')}${genre('folk metal')}`,
+    'real genres, trimmed, at most three, as main shows them');
+  assert.equal(panel({ genres: ['<b>noise</b>'] }), genre('&lt;b&gt;noise&lt;/b&gt;'), 'escaped');
+  assert.equal(panel(null), '');
+  assert.doesNotMatch(panel({ country: 'FI', genres: ['rock'] }), /gallery-bar__/, 'no gallery bar markup in the panel');
+
+  const interactions = read('music_app/static/js/runtime/gallery-main-interactions.js');
+  const builder = interactions.slice(interactions.indexOf('function renderGalleryArtistInfo('));
+  assert.match(builder, /const metadata = buildGalleryArtistInfoMetadataHtml\(group\.artist_musicbrainz\);/,
+    'the panel is built from its own pills, genres included');
+});
+
 test('a MusicBrainz status change reloads only the Gallery view, never Problematic Files', () => {
   const source = read('music_app/static/js/runtime/gallery-refresh-and-status.js');
   const body = (name) => {

@@ -9,6 +9,7 @@ use; the filesystem, media, and library-building work is real and counted.
 
 from __future__ import annotations
 
+import contextlib
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,8 +72,11 @@ def library_app(tmp_path, monkeypatch):
     def refuse_connection(*_args, **_kwargs):
         raise psycopg.OperationalError("bounded-interaction contracts never connect to Postgres")
 
-    monkeypatch.setattr(psycopg, "connect", refuse_connection)
-    monkeypatch.setattr(psycopg.Connection, "connect", classmethod(lambda cls, *args, **kwargs: refuse_connection()))
+    # The refusal has an undo stack of its own: a failed undo of the test's other patches can never leave
+    # psycopg refusing connections for the rest of the session.
+    refusal = pytest.MonkeyPatch()
+    refusal.setattr(psycopg, "connect", refuse_connection)
+    refusal.setattr(psycopg.Connection, "connect", classmethod(lambda cls, *args, **kwargs: refuse_connection()))
     monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", _RootSettingsStore)
     # The in-memory inventory below is the published library: no hydration runs.
     monkeypatch.setattr(api_read_asgi_routes, "request_library_hydration_for_state", lambda *_args, **_kwargs: True)
@@ -89,7 +93,10 @@ def library_app(tmp_path, monkeypatch):
     monkeypatch.setattr(album_details, "build_track_preference_overlay_lookup", lambda *_args, **_kwargs: {})
     # The Postgres rule-state store holds no rules for this library.
     monkeypatch.setattr(rule_state_postgres.RuleStatePostgresAdapter, "_load_rows", lambda _self, _sql: [])
-    return app
+    try:
+        yield app
+    finally:
+        refusal.undo()
 
 
 def _use_roots(app, settings: dict[str, object]) -> None:
@@ -626,7 +633,7 @@ class _EditTagsDatabase:
             def __init__(self, _config):
                 pass
 
-            def intent_lease(self):
+            def intent_lease(self, _request_id=""):
                 return self
 
             def release(self):
@@ -962,6 +969,47 @@ def _cover_lookup_library(app, root: Path, album_count: int) -> tuple[Path, list
     return album_root, track_paths, counts
 
 
+def _stub_cover_lookup_task_store(monkeypatch, current_counts):
+    """The Postgres task store: a reusable-task lookup is one scoped row read (counted), and the
+    guarded notification write is one transaction like the unguarded one."""
+    from music_app.services import cover_lookup_tasks
+
+    def load_reusable(*_args, **_kwargs):
+        if current_counts.get("counts") is not None:
+            current_counts["counts"].sql_statements += 1
+        return None
+
+    monkeypatch.setattr(cover_lookup_tasks, "load_reusable_cover_lookup_notification", load_reusable)
+    # Reading one task back is one row read by id; the live run stays authoritative.
+    monkeypatch.setattr(cover_lookup_tasks, "load_cover_lookup_notification", load_reusable)
+    monkeypatch.setattr(cover_lookup_tasks, "upsert_guarded_cover_lookup_notifications", lambda *_args, **_kwargs: None)
+
+
+def _indexed_cover_inventory(monkeypatch, app, album_root):
+    """The local cover index as the worker publishes it: the selected album's folder listing is read
+    from Postgres by root, never from the folder, so the route does no library-sized work for it."""
+    listing = [{
+        "path": str(album_root / "front.jpg"), "filename": "front.jpg", "is_squareish": True,
+        "width": 1200, "height": 1200, "sha256": "a" * 64,
+    }]
+    worker = SimpleNamespace(
+        repository=SimpleNamespace(
+            root_for_tracks=lambda _paths: album_root,
+            get=lambda _root: {"available": True, "complete": True, "candidates": listing},
+        ),
+        note_foreground_activity=lambda: None,
+        request=lambda _root: None,
+        request_context=lambda _paths: {"root_path": str(album_root)},
+        recheck_context=lambda _paths: None,
+        wait_for_context=lambda _paths, _timeout: None,
+        wait_for_listing=lambda _root, _timeout: None,
+    )
+    # Starlette's State keeps its attributes in one dict. Patched as an item, the worker is restored
+    # however many times a contract installs it; an attribute patch can record the attribute as absent
+    # and fail its own undo with a KeyError, aborting every undo queued behind it.
+    monkeypatch.setitem(app.state._state, "local_cover_inventory", worker)
+
+
 def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size(
     library_app, tmp_path, monkeypatch,
 ):
@@ -979,9 +1027,13 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     match = {"id": "pasted-1", "image_url": "https://covers.example/front.jpg", "source": "manual", "width": 1200, "height": 1200}
     # Fetching the pasted pages is provider network work outside this contract.
     monkeypatch.setattr(api_wave_d_asgi_routes, "add_manual_cover_candidates_from_urls", lambda urls, **_kwargs: [dict(match)])
+    current_counts = {"counts": None}
+    _stub_cover_lookup_task_store(monkeypatch, current_counts)
 
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+        current_counts["counts"] = counts
+        _indexed_cover_inventory(monkeypatch, library_app, album_root)
 
         def request():
             status, _headers, body = run_asgi_request(
@@ -1006,11 +1058,81 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_add_remote"))
 
 
+@pytest.mark.parametrize("route", ["additional-artwork", "additional-artwork/remove"])
+def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch, route,
+):
+    """The second artbox's choose and remove routes read and check only the selected album."""
+    from music_app.routes import api_wave_d_asgi_routes
+    from music_app.services import album_additional_artworks_postgres, covers, library_browse_postgres
+
+    saved: list[tuple[str, dict[str, object]]] = []
+
+    class AlbumIdentity:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            return 7
+
+    class SelectedAlbumDetail:
+        def __init__(self, _config, **_kwargs):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id):
+            return {"id": album_id, "cover_path": None}
+
+    class Artworks:
+        """The Postgres artwork rows: one write of the chosen slot."""
+
+        def __init__(self, _config):
+            pass
+
+        def save(self, **values):
+            saved.append(("save", values))
+            return [{"slot": values["slot"]}]
+
+        def remove(self, **values):
+            saved.append(("remove", values))
+            return []
+
+    monkeypatch.setattr(api_wave_d_asgi_routes, "AlbumCoverCandidateSnapshotRepository", AlbumIdentity)
+    monkeypatch.setattr(library_browse_postgres, "PostgresLibraryBrowseRepository", SelectedAlbumDetail)
+    monkeypatch.setattr(album_additional_artworks_postgres, "AlbumAdditionalArtworkRepository", Artworks)
+    interaction = (
+        "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork"
+        + ("_remove" if route.endswith("remove") else "")
+    )
+
+    def run(album_count: int) -> OperationCounts:
+        album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"{route[-6:]}-{album_count}", album_count)
+        _indexed_cover_inventory(monkeypatch, library_app, album_root)
+        payload = {"album": {"name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]},
+                   "slot": 1, "source_kind": "local", "source_path": str(album_root / "front.jpg")}
+
+        def request():
+            saved.clear()
+            status, _headers, body = run_asgi_request(library_app, "POST", f"/utilities/cover-lookup/{route}", json_body=payload)
+            assert status == 200, body
+            assert decode_json(body)["album_id"] == 7
+            assert [kind for kind, _values in saved] == ["remove" if route.endswith("remove") else "save"]
+
+        request()
+        counts.__init__()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            request()
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction))
+
+
 def test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_at_production_library_size(
     library_app, tmp_path, monkeypatch,
 ):
+    from contextlib import nullcontext
+
     from music_app.routes import api_wave_d_asgi_routes
-    from music_app.services import covers, library_browse_postgres
+    from music_app.services import covers, library_browse_postgres, user_cover_choice
 
     selected: dict[str, object] = {}
 
@@ -1031,12 +1153,20 @@ def test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_
     monkeypatch.setattr(api_wave_d_asgi_routes, "PostgresLibraryBrowseRepository", SelectedAlbumRepository)
     persisted: list[tuple[set[str], str]] = []
 
-    def persist_cover_selection(track_paths, cover_path, *, commit_guard, **_options):
-        # The Postgres cover-selection commit for the selected tracks.
+    def persist_cover_selection(track_paths, cover_path, *, commit_guard, prepare_selection, **_options):
+        # The Postgres cover-selection commit for the selected tracks, settling the clicked image as it does.
+        prepare_selection(None)
         persisted.append((set(track_paths), str(cover_path)))
         return commit_guard(lambda: {"album_rows_updated": 1, "track_file_rows_updated": len(track_paths)})
 
     monkeypatch.setattr(api_wave_d_asgi_routes, "persist_cover_selection_for_tracks", persist_cover_selection)
+    read_chosen_image = user_cover_choice.read_chosen_image
+    # One indexed Postgres read of the clicked file's recorded automatic writes; none is recorded here.
+    monkeypatch.setattr(user_cover_choice, "_automatic_writes", lambda _connection, _path: [])
+    monkeypatch.setattr(
+        user_cover_choice, "read_chosen_image",
+        lambda _connect, path: read_chosen_image(nullcontext, path),
+    )
 
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
@@ -1063,6 +1193,139 @@ def test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_
         return counts
 
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_local_select"))
+
+
+class _ArtboxConnection:
+    """Postgres for the second-artbox save: its clicked-image and artbox statements, each scoped to one file or album."""
+
+    def __init__(self, stored):
+        self._stored = stored
+
+    def execute(self, query, _params=None):
+        from music_app.services import album_additional_artworks_postgres, user_cover_choice
+
+        rows = []
+        if query == user_cover_choice._AUTOMATIC_WRITES_SQL:
+            rows = list(self._stored["automatic_writes"])
+        elif query == user_cover_choice._RECORD_WRITE_BACK_SQL:
+            rows = [{"private_path": path, "origin": "automatic"} for path in self._stored["track_paths"]]
+        elif query == album_additional_artworks_postgres._LIST_SQL:
+            rows = [{"slot": 1, "source_kind": "local", "cover_path": self._stored["source"], "remote_url": None}]
+        return SimpleNamespace(fetchall=lambda: rows, description=True, rowcount=-1)
+
+    def commit(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch,
+):
+    """One normal save plus one save that writes back over an automatic write: the budgets are the two saves' sum."""
+    import hashlib
+    import os
+
+    from music_app.routes import api_wave_d_asgi_routes
+    from music_app.services import (
+        album_additional_artworks_postgres, covers, library_browse_postgres, postgres_connections, user_cover_choice,
+    )
+
+    current: dict[str, object] = {"counts": OperationCounts(), "automatic_writes": [], "job_write": None}
+
+    def scoped_read():
+        current["counts"].sql_statements += 1
+
+    class SelectedAlbumRepository:
+        """The Postgres reads of the selected album; each is one scoped statement."""
+
+        def __init__(self, _config, **_kwargs):
+            pass
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            scoped_read()
+            return [{"tracks": [{"path": path} for path in current["track_paths"]]}]
+
+        def build_album_detail_payload_by_id(self, _album_id):
+            scoped_read()
+            return {"cover_path": ""}
+
+    def lease(*_args, **_kwargs):
+        current["counts"].pool_leases += 1
+        return CountingConnection(_ArtboxConnection(current), current["counts"])
+
+    def album_identity(*_args):
+        scoped_read()
+        return None, 41, None
+
+    read_chosen_image = user_cover_choice.read_chosen_image
+
+    def read_then_wait(connect, path):
+        chosen = read_chosen_image(connect, path)
+        if current["job_write"]:  # an automatic job replaces the clicked file and commits while the save waits
+            prepared, current["automatic_writes"] = current["job_write"]
+            os.replace(prepared, path)
+        return chosen
+
+    monkeypatch.setattr(library_browse_postgres, "PostgresLibraryBrowseRepository", SelectedAlbumRepository)
+    monkeypatch.setattr(api_wave_d_asgi_routes, "PostgresLibraryBrowseRepository", SelectedAlbumRepository)
+    monkeypatch.setattr(api_wave_d_asgi_routes, "_resolved_snapshot_album_context", album_identity)
+    monkeypatch.setattr(postgres_connections, "leased_connection", lease)
+    monkeypatch.setattr(album_additional_artworks_postgres, "_pooled_connection", lease)
+    monkeypatch.setattr(user_cover_choice, "read_chosen_image", read_then_wait)
+    invalidated: list[set[str]] = []
+
+    def invalidate_artwork_listing(paths):
+        scoped_read()
+        invalidated.append(set(paths))
+
+    monkeypatch.setitem(library_app.state.config, "_LOCAL_COVER_INVENTORY",
+                        SimpleNamespace(invalidate_paths=invalidate_artwork_listing))
+
+    def run(album_count: int) -> OperationCounts:
+        album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+        source = album_root / "front.jpg"
+        clicked = source.read_bytes()
+        current.update(counts=OperationCounts(), track_paths=track_paths, source=str(source), automatic_writes=[],
+                       job_write=None)
+        # The lookup gallery named the local image as a candidate before the user picked it.
+        source_ref = library_app.state.cover_reference_store.references_for(
+            _COVER_LIBRARY_ID, {str(source): "candidate"},
+        )[str(source)]
+        prepared = album_root.parent / "job-write.tmp"
+        prepared.write_bytes(clicked + b"\0")
+        job_write = (prepared, [{
+            "album_id": 7, "revision": hashlib.sha256(clicked + b"\0").hexdigest(), "write_id": "job-write",
+            "is_current": True,
+        }])
+
+        def request():
+            status, _headers, body = run_asgi_request(
+                library_app, "POST", "/utilities/cover-lookup/additional-artwork",
+                json_body={"album": {"name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]},
+                           "slot": 1, "source_kind": "local", "source_cover_ref": source_ref},
+            )
+            assert status == 200, body
+
+        request()
+        counts.__init__()
+        current["counts"] = counts
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            request()
+            current["job_write"] = job_write
+            request()
+        current["job_write"] = None
+        assert source.read_bytes() == clicked, "the write-back did not run"
+        assert invalidated[-1] == set(track_paths), "the artwork listing is refreshed for more than the album"
+        entries = library_app.state.library_state["file_cache"]
+        assert all(entries[path]["cover_revision"] == hashlib.sha256(clicked).hexdigest() for path in track_paths)
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork"))
 
 
 def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_at_production_library_size(
@@ -1092,8 +1355,13 @@ def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_a
     )
     match = {"id": "remote-1", "url": "https://covers.example/front.jpg", "source": "musicbrainz", "art_kind": "cover", "width": 1200, "height": 1200}
 
+    current_counts = {"counts": None}
+    _stub_cover_lookup_task_store(monkeypatch, current_counts)
+
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+        current_counts["counts"] = counts
+        _indexed_cover_inventory(monkeypatch, library_app, album_root)
         album = {"id": 7, "name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]}
         task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(album, set(track_paths), config=library_app.state.config)
         cover_lookup_tasks.update_cover_lookup_task(
@@ -1141,6 +1409,28 @@ def _problematic_rows(track_count: int) -> list[dict[str, object]]:
     return rows
 
 
+class _CandidateFolderConnection:
+    """The narrowing's one read of the candidate folders' files, counted (6.5, 2026-11-24)."""
+
+    def __init__(self, counts, rows):
+        self.counts, self.rows = counts, rows
+
+    def execute(self, _sql, params):
+        from music_app.services.album_local_membership import physical_album_folder
+
+        self.counts.sql_statements += 1
+        folders = {physical_album_folder(path) for path in params["paths"]}
+        # The index answer: only the candidate folders' own files, never the library.
+        found = [{"private_path": row["file_private_path"], "album": row["file_entry"]["album"],
+                  "album_artist": row["file_entry"]["album_artist"], "artist": row["file_entry"]["artist"],
+                  "track_number": row["track_number"], "disc_number": 1, "total_tracks": None,
+                  "exception_type": None, "membership_problem": None, "album_files_elsewhere": False}
+                 for row in self.rows if physical_album_folder(row["file_private_path"]) in folders]
+        self.counts.returned_rows += len(found)
+        return SimpleNamespace(fetchall=lambda: found)
+
+
+@pytest.mark.parametrize("candidate_folders", [0, 1, 5])
 @pytest.mark.parametrize("backend", ["in-memory", "postgres"])
 @pytest.mark.parametrize("route", [
     ("py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail", "/utilities/problematic-files/broadcast::tender buttons", {}),
@@ -1148,8 +1438,12 @@ def _problematic_rows(track_count: int) -> list[dict[str, object]]:
      {"album_key": "broadcast::tender buttons"}),
 ], ids=["path", "query"])
 def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count(
-    library_app, tmp_path, monkeypatch, route, backend,
+    library_app, tmp_path, monkeypatch, route, backend, candidate_folders,
 ):
+    """D3 (6.5, 2026-11-24): with candidate folders, the mixed-folder narrowing adds exactly one statement,
+    however many folders, and reads only those folders' files."""
+    if backend == "in-memory" and candidate_folders:
+        pytest.skip("the narrowing belongs to the Postgres projection")
     from music_app.routes import api_read_asgi_routes
     from music_app.services import library_browse_postgres, problematic_albums
 
@@ -1168,15 +1462,39 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
             # The keyed Postgres read: `where album_key = %(album_key)s`.
             selected = [row for row in current["rows"] if row["album_key"] == album_key]
             current["counts"].candidate_rows += len(selected)
-            return [dict(row) for row in selected]
+            rows = [dict(row) for row in selected]
+            for index, row in enumerate(rows):
+                if candidate_folders:
+                    # The selected album's files spread over the candidate folders the SQL marked mixed.
+                    folder = f"/library/Shared {index % candidate_folders}"
+                    row["file_private_path"] = f"{folder}/{index:02d}.mp3"
+                    row["file_entry"] = {**row["file_entry"], "path": row["file_private_path"]}
+                    row["file_mixed_album_folder"] = True
+            return library_browse_postgres._narrow_mixed_album_folders(
+                _CandidateFolderConnection(current["counts"], rows), rows,
+            )
 
         def load_relation_alias_maps(_self, **_options):
             # One Postgres read of the relation alias maps per request.
             current["counts"].sql_statements += 1
             return {"alias_to_canonical": {}}
 
+        def load_missing_album_rows(_self, album_key=None, **_options):
+            # The keyed missing-album read (`where album_key = ...`); this album is present.
+            selected: list[dict[str, object]] = []
+            current["counts"].candidate_rows += len(selected)
+            return selected
+
+        @contextlib.contextmanager
+        def browse_connection_context(_self):
+            # The request leases one pooled connection for all of its reads.
+            current["counts"].pool_leases += 1
+            yield SimpleNamespace()
+
         monkeypatch.setattr(repository, "_load_problematic_file_rows", load_problematic_file_rows)
         monkeypatch.setattr(repository, "_load_relation_alias_maps", load_relation_alias_maps)
+        monkeypatch.setattr(repository, "_load_missing_album_rows", load_missing_album_rows)
+        monkeypatch.setattr(repository, "_browse_connection_context", browse_connection_context)
 
     def run(track_count: int) -> OperationCounts:
         if backend == "postgres":
@@ -1190,6 +1508,10 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
         assert payload["key"] == "broadcast::tender buttons"
         assert len(payload["tracks"]) == 12
         assert "Encoding problem" in payload["problem_reasons"]
+        if backend == "postgres":
+            # Exactly one statement without a candidate folder (the alias read), exactly two with any number.
+            assert counts.sql_statements == (2 if candidate_folders else 1)
+            assert counts.returned_rows == (12 if candidate_folders else 0)
         return counts
 
     measure_scale_pair(run=run, **_registered(interaction_id))

@@ -1,4 +1,7 @@
 (() => {
+  // Standalone Settings documents own their app-bar menu; the library runtime attaches its own.
+  const accountMenu = document.querySelector('.shell-app-bar [data-account-menu-component]');
+  if (accountMenu && !document.getElementById('app-shell') && typeof attachAccountMenu === 'function') attachAccountMenu(accountMenu);
   const ACTIVE_STATES = new Set(['queued', 'running', 'cancel_requested']);
 
   const configurationLocked = operationState => {
@@ -22,9 +25,15 @@
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
+  // Refusals read as sentences, never as a silent no-op (owner, 11-10).
+  const REFUSALS = {
+    'CSRF validation failed.': 'Your session changed. Reload the page and try again.',
+    'Action not permitted.': 'Preview storage can be changed only by the server owner on a computer.',
+  };
+
   async function readJson(response) {
-    const data = await response.json();
-    if (!response.ok) throw new Error(data?.detail || 'The request could not be completed.');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(REFUSALS[data?.detail] || data?.detail || 'The request could not be completed.');
     return data;
   }
 
@@ -40,28 +49,55 @@
     const retry = form.querySelector('[data-preview-retry]');
     const status = form.querySelector('[data-preview-status]');
     const error = form.querySelector('[data-preview-error]');
-    const progress = form.querySelector('[data-preview-progress]');
     const counts = form.querySelector('[data-preview-counts]');
-    const location = form.querySelector('[data-preview-location]');
+    const browse = form.querySelector('[data-path-input-browse]');
     const failure = form.querySelector('[data-preview-failure]');
     const request = options.request || fetch;
-    const confirmChange = options.confirm || window.confirm.bind(window);
+    // Owner (11-09): the move is confirmed in the app's own dialog, never the browser's confirm().
+    const confirmChange = options.confirm || (message => showAppFormDialog({
+      title: 'Move album previews',
+      description: message,
+      submitLabel: 'Move previews',
+      onSubmit: () => true,
+    }).then(Boolean));
+    const chooseFolder = options.chooseFolder || (settings => window.AlbumHavenPathInput.choose(settings));
+    const canBrowse = Boolean(browse?.hasAttribute?.('data-path-input-browsable'));
+    const setButtonDisabled = (button, disabled) => window.ButtonComponent.setDisabled(button, disabled);
     const schedule = options.setTimeout || setTimeout;
     const unschedule = options.clearTimeout || clearTimeout;
     let state = null;
+    let retryClicked = false;
     let pollTimer = null;
     let disposed = false;
 
     const selectedMode = () => custom.checked ? 'custom' : 'album_folders';
+    // Owner (11-10): "if specific folder or vice versa fails don't reselect the other option after reload". The
+    // requested option stays chosen, marked not finished until the move switches to it.
+    const savedMode = () => String(state?.requested_mode || state?.mode || 'album_folders');
+    const savedPath = () => String(state?.requested_root || state?.active_root || '');
+    const markUnfinished = (requestedMode) => modes.forEach((control) => {
+      const label = control.parentElement?.querySelector?.('span');
+      if (!label) return;
+      if (!label.dataset.label) label.dataset.label = label.textContent;
+      label.textContent = control.getAttribute('data-preview-mode') === requestedMode
+        ? `${label.dataset.label} (not finished)` : label.dataset.label;
+    });
+    // Save is available only for a valid, unsaved choice: a special path always needs a folder.
+    const syncControls = () => {
+      const locked = !state || configurationLocked(state.operation_state);
+      const special = selectedMode() === 'custom';
+      const path = pathInput.value.trim();
+      pathInput.disabled = !special || locked;
+      // The buttons render disabled with aria-disabled; the shared Button keeps both in step (UI-7).
+      if (browse) setButtonDisabled(browse, !special || locked || !canBrowse);
+      const changed = selectedMode() !== savedMode() || (special && path !== savedPath());
+      setButtonDisabled(save, locked || !changed || (special && !path));
+    };
     const syncPathControl = () => {
-      const locked = configurationLocked(state?.operation_state);
-      pathInput.disabled = selectedMode() !== 'custom' || locked;
-      pathInput.required = selectedMode() === 'custom';
-      if (selectedMode() === 'album_folders') {
-        pathInput.value = '';
-      } else if (!pathInput.value) {
-        pathInput.value = String(state?.suggested_path || '');
-      }
+      // Owner (11-09, UI-8): the proposed folder is the field's value, ready to save or edit.
+      if (selectedMode() === 'album_folders') pathInput.value = '';
+      else if (!pathInput.value.trim()) pathInput.value = String(state?.suggested_path || '');
+      syncControls();
     };
 
     const schedulePoll = () => {
@@ -74,30 +110,60 @@
 
     const render = next => {
       state = next;
-      const mode = String(next.requested_mode || next.mode || 'album_folders');
+      const mode = savedMode();
       albumFolders.checked = mode === 'album_folders';
       custom.checked = mode === 'custom';
-      pathInput.value = String(next.requested_root || next.active_root || '');
+      pathInput.value = mode === 'custom' ? savedPath() : '';
       const active = ACTIVE_STATES.has(String(next.operation_state || 'idle'));
       const locked = configurationLocked(next.operation_state);
       modes.forEach(control => { control.disabled = locked; });
-      save.disabled = locked;
       cancel.hidden = !active;
       const canceled = String(next.operation_state || 'idle') === 'canceled';
       retry.hidden = !((Number(next.failed_count || 0) > 0 || canceled) && !active);
       retry.textContent = canceled ? 'Resume move' : 'Retry failed files';
-      progress.max = Math.max(1, Number(next.total_count || 0));
-      progress.value = Math.min(progress.max, Number(next.completed_count || 0));
       const inventoryCount = Number(next.inventory_count ?? next.total_count ?? 0);
       const inventoryBytes = Number(next.inventory_bytes ?? next.total_bytes ?? 0);
-      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored · ${Number(next.completed_count || 0)} of ${Number(next.total_count || 0)} moved · ${Number(next.failed_count || 0)} failed`;
+      const totalCount = Number(next.total_count || 0);
+      // UI-8 (owner, 11-09): the summary separates previews moved with a fresh checksum and previews left to be
+      // regenerated from real failures; it stays after the move finishes.
+      const regenerateLater = Number(next.regenerate_later_count || 0);
+      const rechecked = Number(next.rechecked_count || 0);
+      const movement = totalCount > 0 && String(next.operation_state || 'idle') !== 'idle'
+        ? [` · ${Number(next.completed_count || 0) - regenerateLater} of ${totalCount} moved`,
+          rechecked ? ` · ${rechecked} re-checked` : '',
+          regenerateLater ? ` · ${regenerateLater} to be regenerated` : '',
+          ` · ${Number(next.failed_count || 0)} failed`].join('')
+        : '';
+      // Owner (11-09): the move cleans the album folders' leftover .album-haven folders and says what it left.
+      const cleanup = next.cache_cleanup || {};
+      const cleaned = [
+        Number(cleanup.cleaned_count || 0) ? ` · cleaned up ${Number(cleanup.cleaned_count)} cache folders` : '',
+        Number(cleanup.kept_count || 0) ? ` · ${Number(cleanup.kept_count)} kept (they hold other files)` : '',
+        Number(cleanup.left_count || 0) ? ` · ${Number(cleanup.left_count)} left for later (drive unavailable)` : '',
+      ].join('');
+      counts.textContent = `${inventoryCount} previews · ${formatBytes(inventoryBytes)} stored${movement}${cleaned}`;
+      // Owner (11-10): an unfinished move says so plainly instead of looking like the new folder is in use.
+      const destination = next.requested_mode === 'custom' ? String(next.requested_root || 'the special path') : 'album folders';
+      const failedCount = Number(next.failed_count || 0);
+      // Owner (11-10): "I don't think I need a separate info message. We already print into there in the line. Maybe
+      // show it when it tells user to click retry - but after retry is clicked remove it." The summary line carries
+      // progress and results; the note shows only while the move waits for Retry or Resume.
+      markUnfinished(next.requested_mode || null);
+      showAlert(status, next.requested_mode && !active && !retryClicked
+        ? (canceled
+          ? `Moving to ${destination} was canceled. Previews stay where they are until the move is resumed.`
+          : failedCount
+            ? `Moving to ${destination}: ${failedCount} ${failedCount === 1 ? 'file' : 'files'} failed. The switch happens after they're retried.`
+            : '')
+        : '');
+      if (!active) retryClicked = false;
+      window.ButtonComponent.setBusy(retry, false);
+      window.ButtonComponent.setBusy(cancel, false);
+      counts.hidden = false;
       const failures = Array.isArray(next.failure_summary) ? next.failure_summary : [];
       const lastFailure = failures.at(-1);
       failure.textContent = lastFailure?.error ? `Last failure: ${lastFailure.error}` : '';
       failure.hidden = !failure.textContent;
-      location.textContent = mode === 'custom'
-        ? String(next.active_root || next.requested_root || 'Special server path')
-        : 'Album folders';
       syncPathControl();
       schedulePoll();
     };
@@ -129,16 +195,29 @@
     };
 
     modes.forEach(control => control.addEventListener('change', syncPathControl));
+    pathInput.addEventListener('input', syncControls);
+    browse?.addEventListener('click', async event => {
+      event.preventDefault?.();
+      if (browse.disabled) return;
+      try {
+        const chosen = await chooseFolder({
+          title: 'Choose server folder',
+          isCurrent: () => !disposed,
+          onError: failure => showAlert(error, failure.message),
+        });
+        if (!chosen || disposed) return;
+        pathInput.value = chosen;
+        syncControls();
+      } catch (failure) {
+        if (!disposed) showAlert(error, failure.message || 'Folder picker unavailable.');
+      }
+    });
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      if (save.disabled) return;
       const mode = selectedMode();
-      if (mode === 'custom' && !pathInput.value.trim()) {
-        showAlert(error, 'Enter a path on the Album Haven server.');
-        pathInput.focus?.();
-        return;
-      }
-      if (!confirmChange('Move generated album previews to the selected location? Covers remain available while the move runs.')) return;
-      save.disabled = true;
+      if (!(await confirmChange('Move generated album previews to the selected location? Covers stay available while the move runs.'))) return;
+      setButtonDisabled(save, true);
       try {
         const next = await mutate('/admin/server/preview-storage', {
           mode,
@@ -149,7 +228,7 @@
         showAlert(status, next.unchanged ? 'Preview storage is unchanged.' : 'Preview relocation started.');
       } catch (failure) {
         showAlert(error, failure.message);
-        save.disabled = false;
+        syncControls();
       }
     });
     cancel.addEventListener('click', async () => {
@@ -161,15 +240,21 @@
       }
     });
     retry.addEventListener('click', async () => {
+      if (retry.disabled) return;
+      // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The click shows at once.
+      window.ButtonComponent.setBusy(retry, true);
+      retryClicked = true;
+      showAlert(status);
       try {
         await mutate('/admin/server/preview-storage/retry', {});
-        showAlert(status, 'Failed preview files were queued again.');
       } catch (failure) {
+        window.ButtonComponent.setBusy(retry, false);
+        retryClicked = false;
         showAlert(error, failure.message);
       }
     });
 
-    save.disabled = true;
+    setButtonDisabled(save, true);
     void load();
     return () => {
       disposed = true;

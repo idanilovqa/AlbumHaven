@@ -307,13 +307,21 @@ function getProblematicAlbumNavigationOptions(album, selected) {
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
+  const looseTrackFolder = String(album.loose_track_folder_path || '').trim();
+  const subtitle = looseTrackFolder
+    ? [
+        looseTrackFolder,
+        String(album.loose_track_artist || '').trim(),
+        String(album.loose_track_album || '').trim(),
+      ].filter(Boolean).join(' · ')
+    : displayArtist;
   const displayYear = String(album.year || '').trim();
   const artworkSource = buildAlbumDisplayCoverUrl(album);
   const artworkLabel = `Artwork for ${displayName}`;
   const artworkHtml = buildUtilityAlbumArtbox(album, { label: artworkLabel, source: artworkSource });
   return {
       variant: 'wide', action: true, key: album.key, selected, label: displayName,
-      subtitle: displayArtist, year: displayYear, artworkHtml, artworkSource, artworkLabel,
+      subtitle, year: displayYear, artworkHtml, artworkSource, artworkLabel,
       count: album.track_count ?? (Array.isArray(album.tracks) ? album.tracks.length : null), countHidden: true,
       attributes: { 'data-problematic-album-key': album.key },
   };

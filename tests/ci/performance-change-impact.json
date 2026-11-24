@@ -1,12 +1,25 @@
 {
   "schemaVersion": 1,
   "requiredPaths": [
+    "music_app/services/problematic_index.py",
+    "migrations/postgres/0268_create_album_duplicate_results.sql",
+    "migrations/postgres/0269_index_stray_decision_lookups.sql",
+    "music_app/routes/api_wave_a_asgi_routes.py",
+    "music_app/services/edit_state.py",
+    "music_app/services/edit_tag_timings.py",
+    "music_app/services/tag_edit_intents_postgres.py",
+    "music_app/services/tag_edit_recovery.py",
+    "migrations/postgres/0108_add_scoped_relation_projection.sql",
+    "music_app/services/scoped_relation_projection.py",
+    "migrations/postgres/0109_add_incremental_gallery_membership.sql",
+    "migrations/postgres/0110_journal_gallery_metadata_changes.sql",
     "music_app/services/runtime_asset_versions.py",
     "music_app/services/compressed_static_files.py",
     "music_app/services/http_compression.py",
     "music_app/services/app_copy.py",
     "music_app/static/js/app-copy.js",
     "music_app/static/js/app-copy-worker.js",
+    "music_app/services/client_layout_preferences.py",
     "music_app/services/scan_cache_persistence.py",
     "music_app/services/empty_local_album_retirement.py",
     "music_app/services/relation_projection_postgres.py",
@@ -16,12 +29,16 @@
     "music_app/services/library_hydration.py",
     "music_app/services/library_album_index.py",
     "music_app/services/library_browse_postgres.py",
+    "music_app/services/album_release_candidates.py",
     "music_app/services/non_album_view_payloads.py",
+    "music_app/services/loose_track_store.py",
     "music_app/services/selected_artist_membership.py",
     "music_app/services/view_payloads.py",
     "music_app/services/startup_bootstrap.py",
     "music_app/static/js/navigation-tree.js",
     "music_app/static/js/runtime/album-details-components.js",
+    "music_app/static/js/runtime/album-additional-artbox.js",
+    "music_app/services/album_additional_artworks_postgres.py",
     "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
     "music_app/static/js/runtime/bootstrap-init.js",
     "music_app/static/js/runtime/core-state-and-helpers.js",
@@ -30,6 +47,7 @@
     "music_app/static/js/runtime/gallery-main-state.js",
     "music_app/static/js/runtime/gallery-main-interactions.js",
     "music_app/static/js/runtime/gallery-card-component.js",
+    "music_app/static/js/runtime/running-line.js",
     "music_app/static/js/runtime/gallery-cover-preview-cache.js",
     "music_app/static/js/runtime/gallery-cover-load-scheduler.js",
     "music_app/static/js/runtime/gallery-refresh-and-status.js",
@@ -41,6 +59,7 @@
     "music_app/static/js/runtime/response-state-helpers.js",
     "music_app/static/js/runtime/pending-projection-fetch.js",
     "music_app/static/js/runtime/status-ui-helpers.js",
+    "music_app/static/js/runtime/pending-tag-edits.js",
     "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
     "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
     "music_app/static/js/runtime/view-state-helpers.js",
@@ -62,19 +81,27 @@
     "music_app/static/js/runtime/problematic-files-virtual-list.js",
     "music_app/static/js/runtime/problematic-album-helpers.js",
     "music_app/static/js/runtime/problem-exclusion-mutations.js",
-    "music_app/static/js/utilities/problematic-tab.js",
     "music_app/static/css/runtime/utilities.css",
-    "music_app/static/js/utilities/shell.js",
     "music_app/static/js/runtime/utility-list-builders.js",
     "music_app/static/js/runtime/utility-renderers-and-actions.js",
+    "music_app/static/js/runtime/bootstrap-utility-event-handlers.js",
     "tests/e2e/helpers/utilityPerformanceHelpers.js",
     "tests/e2e/helpers/problematicPayloadEvidence.js",
     "tests/e2e/actions/utilityProblematicFilesActions.js",
     "tests/e2e/poms/utilityProblematicFilesTab.js",
     "music_app/services/album_local_membership.py",
+    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
+    "music_app/services/local_cover_inventory.py",
+    "music_app/services/cover_workflow.py",
+    "music_app/services/cache.py",
     "music_app/services/cover_provider_outcomes_postgres.py",
     "music_app/services/album_ratings_postgres.py",
-    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
+    "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+    "music_app/static/css/runtime/cover-lookup-modal.css",
+    "music_app/services/cover_lookup_runtime.py",
+    "music_app/routes/api_wave_d_asgi_routes.py",
+    "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
+    "tests/e2e/syntheticLargeLibrary/projectionPendingWindows.js",
     "music_app/services/cover_reference_boundary.py",
     "music_app/services/cover_references.py",
     "migrations/postgres/0200_create_cover_references.sql",
@@ -83,11 +110,65 @@
   ],
   "rules": [
     {
-      "paths": ["music_app/services/runtime_asset_versions.py", "music_app/services/compressed_static_files.py"],
-      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation", "utility-problematic-files", "problematic-files-focused"]
+      "paths": [
+        "music_app/services/problematic_index.py",
+        "migrations/postgres/0268_create_album_duplicate_results.sql",
+        "migrations/postgres/0269_index_stray_decision_lookups.sql"
+      ],
+      "targets": [
+        "selected-artist",
+        "all-artists",
+        "root-album-browse",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "edit-tags-post-edit",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
+    },
+    {
+      "paths": [
+        "migrations/postgres/0108_add_scoped_relation_projection.sql",
+        "music_app/services/scoped_relation_projection.py",
+        "migrations/postgres/0109_add_incremental_gallery_membership.sql",
+        "migrations/postgres/0110_journal_gallery_metadata_changes.sql",
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "targets": [
+        "root-album-browse",
+        "artist-tree-scroll-navigation",
+        "edit-tags-post-edit",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/services/runtime_asset_versions.py",
+          "music_app/services/compressed_static_files.py",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
+      ],
+      "targets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
     },
     {
       "paths": ["music_app/services/app_copy.py", "music_app/static/js/app-copy.js", "music_app/static/js/app-copy-worker.js"],
+      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation"]
+    },
+    {
+      "paths": ["music_app/services/client_layout_preferences.py"],
       "targets": ["app-open-all-artists", "artist-tree-scroll-navigation"]
     },
     {
@@ -95,9 +176,18 @@
         "music_app/services/scan_cache_persistence.py",
         "music_app/services/empty_local_album_retirement.py",
         "music_app/services/relation_projection_postgres.py",
-        "music_app/services/gallery_projection_postgres.py"
+        "music_app/services/gallery_projection_postgres.py",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
       ],
-      "targets": ["artist-family", "search-all-artists", "search-browse"]
+      "targets": [
+        "artist-family",
+        "search-all-artists",
+        "search-browse"
+      ]
     },
     {
       "paths": [
@@ -106,8 +196,10 @@
         "music_app/services/library_hydration.py",
         "music_app/services/library_album_index.py",
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/album_release_candidates.py",
         "music_app/services/http_compression.py",
         "music_app/services/non_album_view_payloads.py",
+        "music_app/services/loose_track_store.py",
         "music_app/services/selected_artist_membership.py",
         "music_app/services/view_payloads.py",
         "music_app/services/startup_bootstrap.py",
@@ -117,7 +209,12 @@
         "music_app/static/js/runtime/gallery-main-state.js",
         "music_app/static/js/runtime/response-state-helpers.js",
         "music_app/static/js/runtime/pending-projection-fetch.js",
-        "music_app/static/js/runtime/view-state-helpers.js"
+        "music_app/static/js/runtime/view-state-helpers.js",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
       ],
       "targets": [
         "all-artists",
@@ -153,6 +250,8 @@
         "music_app/static/vendor/wasm-audio-decoders/flac-decoder.min.js",
         "music_app/static/vendor/wasm-audio-decoders/mpg123-decoder.min.js",
         "music_app/static/js/runtime/album-details-components.js",
+        "music_app/static/js/runtime/album-additional-artbox.js",
+        "music_app/services/album_additional_artworks_postgres.py",
         "music_app/static/js/runtime/modal-and-overlay-helpers.js",
         "music_app/static/css/runtime/album-details-components.css"
       ],
@@ -164,6 +263,7 @@
     },
     {
       "paths": [
+        "music_app/services/child_process.py",
         "music_app/static/js/audio-worklets/gapless-playback-processor.js",
         "music_app/static/js/runtime/player-streaming-engine.js"
       ],
@@ -182,7 +282,12 @@
     {
       "paths": [
         "music_app/static/js/navigation-tree.js",
-        "music_app/static/js/runtime/discovery-center-navigation.js"
+        "music_app/static/js/runtime/discovery-center-navigation.js",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
+        "music_app/services/scan_state.py"
       ],
       "targets": [
         "search-browse",
@@ -206,6 +311,16 @@
     },
     {
       "paths": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "targets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/static/js/runtime/pending-tag-edits.js",
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
       ],
       "targets": [
@@ -226,6 +341,7 @@
     {
       "paths": [
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/album_release_candidates.py",
         "music_app/services/http_compression.py",
         "music_app/services/problematic_albums.py",
         "migrations/postgres/0112_add_problematic_file_path_projection.sql",
@@ -243,17 +359,19 @@
         "music_app/static/js/runtime/problematic-files-virtual-list.js",
         "music_app/static/js/runtime/problematic-album-helpers.js",
         "music_app/static/js/runtime/problem-exclusion-mutations.js",
-        "music_app/static/js/utilities/problematic-tab.js",
         "music_app/static/css/runtime/utilities.css",
-        "music_app/static/js/utilities/shell.js",
         "music_app/static/js/runtime/utility-list-builders.js",
         "music_app/static/js/runtime/utility-renderers-and-actions.js",
+        "music_app/static/js/runtime/bootstrap-utility-event-handlers.js",
         "tests/e2e/helpers/utilityPerformanceHelpers.js",
         "tests/e2e/helpers/problematicPayloadEvidence.js",
         "tests/e2e/actions/utilityProblematicFilesActions.js",
         "tests/e2e/poms/utilityProblematicFilesTab.js",
         "tests/e2e/utilityProblematicFiles/**",
         "music_app/services/album_local_membership.py",
+        "music_app/services/local_cover_inventory.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/cache.py",
         "music_app/services/cover_provider_outcomes_postgres.py",
         "music_app/services/album_ratings_postgres.py"
       ],
@@ -268,6 +386,7 @@
         "music_app/static/js/runtime/gallery-main-state.js",
         "music_app/static/js/runtime/gallery-main-interactions.js",
         "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/running-line.js",
         "music_app/static/js/runtime/gallery-cover-preview-cache.js",
         "music_app/static/js/runtime/gallery-cover-load-scheduler.js",
         "music_app/static/js/runtime/render-markup-helpers.js",
@@ -278,6 +397,20 @@
       ],
       "targets": [
         "gallery-artwork-diversity"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+        "music_app/static/css/runtime/cover-lookup-modal.css",
+        "music_app/services/cover_lookup_runtime.py",
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
+        "tests/e2e/syntheticLargeLibrary/projectionPendingWindows.js"
+      ],
+      "targets": [
+        "cover-lookup"
       ]
     },
     {
@@ -306,6 +439,24 @@
         "music_app/services/edit_workflows.py"
       ],
       "targets": ["edit-tags-post-edit"]
+    },
+    {
+      "paths": [
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/save_tasks.py",
+        "music_app/services/edit_workflows.py",
+        "music_app/services/edit_state.py",
+        "music_app/services/edit_tag_timings.py",
+        "music_app/services/tag_edit_intents_postgres.py",
+        "music_app/services/tag_edit_recovery.py",
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/runtime/pending-tag-edits.js",
+        "tests/e2e/helpers/ddtRemixesFixture.js",
+        "tests/e2e/helpers/timingComparability.js",
+        "tests/e2e/syntheticLargeLibrary/editTagsSplitMergePerformance.spec.js",
+        "tests/e2e/syntheticLargeLibrary/editTagsApiConsecutivePerformance.spec.js"
+      ],
+      "targets": ["edit-tags-split-merge", "edit-tags-api-consecutive"]
     }
   ]
 }

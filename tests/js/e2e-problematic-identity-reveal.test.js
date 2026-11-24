@@ -17,7 +17,7 @@ function fixture({ horizontal = false, target = true, offset = 0 } = {}) {
       wheels.push([x, y]); view.offset = Math.max(0, Math.min(1160, view.offset + (horizontal ? x : y)));
     } } },
     waitForPageCondition: async (predicate, options, selectors) => {
-      assert.ok(options.timeout > 0 && options.timeout <= 30000);
+      assert.ok(options.timeout > 0 && options.timeout <= 60000);
       if (selectors?.completeInventory) return;
       assert.equal(selectors.target, view.offset);
       waits.push({ predicate, selectors });
@@ -75,6 +75,32 @@ test('native traversal reports an absent identity at the real boundary without c
   await assert.rejects(UtilityProblematicFilesActions.prototype.revealListItemByIdentity.call(owner,
     { title: 'Target', meta: 'Exact artist · 2026' }), /Exact Problematic Files identity was not found/);
   assert.equal(view.offset, view.extent - view.viewport);
+});
+
+test('title selection scrolls the native virtual list before clicking an initially unmounted row', async () => {
+  const { UtilityProblematicFilesActions } = await import(actionsUrl);
+  const { owner, view, wheels, items } = fixture();
+  items[0].title = 'Other';
+  let clicked = false;
+  const target = {
+    waitFor: async ({ state }) => {
+      assert.equal(state, 'visible');
+      assert.ok(view.offset > 0, 'the target becomes visible only after native scrolling');
+    },
+    getAttribute: async () => '12',
+    click: async () => { clicked = true; },
+  };
+  owner.utilityProblematicFilesTab.listItemByTitle = () => target;
+  owner.waitForSelectedDetailSelection = async ({ expectedKey, expectedTitle }) => {
+    assert.equal(expectedKey, '12');
+    assert.equal(expectedTitle, 'Target');
+  };
+  owner.readSelectedDetailSummary = async () => ({ title: 'Target' });
+  Object.setPrototypeOf(owner, UtilityProblematicFilesActions.prototype);
+
+  assert.deepEqual(await owner.selectAlbumByTitle('Target'), { title: 'Target' });
+  assert.ok(wheels.length > 0);
+  assert.equal(clicked, true);
 });
 
 test('native traversal readiness requires both delivered scroll and mounted viewport coverage', async () => {

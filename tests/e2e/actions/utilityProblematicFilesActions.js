@@ -9,8 +9,74 @@ export class UtilityProblematicFilesActions {
     this.navigationObservation = null;
   }
 
+  // A restored fixture database fills the Problematic Files index once after startup; a
+  // restarted production server already has it. /status reports the fill without warming
+  // Problematic Files, so a timed open afterwards stays cold.
+  async waitForIndexReady(options = {}) {
+    const page = this.utilityProblematicFilesTab.page;
+    const deadline = Date.now() + (options.timeout || 600000);
+    let last = null;
+    while (Date.now() < deadline) {
+      const response = await authenticatedPageGet(page, '/status');
+      assert.ok(response.ok(), `/status answered ${response.status()} while waiting for the Problematic Files index.`);
+      last = await response.json();
+      if (last.problematic_index_in_progress === false) return;
+      await page.waitForTimeout(500);
+    }
+    throw new Error(`The Problematic Files index did not finish filling: ${JSON.stringify(last?.problematic_index_in_progress)}`);
+  }
+
+  // Diagnostic (FTC-UTIL-PROBLEMS-001): what the page holds and what the server answers.
+  async describeProblematicState(searchTerm = '') {
+    const page = this.utilityProblematicFilesTab.page;
+    // parity-check: allow-read-only-measurement-evaluate -- diagnostic snapshot of client state
+    const client = await page.evaluate((term) => {
+      if (typeof state === 'undefined') return null;
+      const utility = state.utility || {};
+      const matches = (item) => !term || String(item?.name || '').includes(term);
+      const pick = (items) => (items || []).filter(matches).slice(0, 5).map((item) => ({
+        key: item?.key, name: item?.name, reasons: item?.problem_reasons, detailLoaded: item?.detail_loaded,
+      }));
+      return {
+        loading: utility.loading, loaded: utility.loaded, complete: utility.problematicFilesComplete,
+        indexing: utility.problematicIndexing, loadError: utility.problematicLoadError,
+        summaryToken: utility.problematicSummaryRequestToken, hasLoadPromise: Boolean(utility.loadPromise),
+        hasCompleteLoadPromise: Boolean(utility.completeLoadPromise), selected: utility.selectedProblematicKey,
+        itemCount: (utility.problematicFiles || []).length, items: pick(utility.problematicFiles),
+        searchItems: pick(utility.problematicServerSearchItems),
+      };
+    }, searchTerm);
+    const pills = await this.readAlbumProblemReasons();
+    const read = async (url) => {
+      const response = await authenticatedPageGet(page, url);
+      return { status: response.status(), body: response.ok() ? await response.json() : await response.text() };
+    };
+    const first = await read('/utilities/problematic-files?limit=50');
+    const search = searchTerm ? await read(`/utilities/problematic-files?limit=50&q=${encodeURIComponent(searchTerm)}`) : null;
+    const status = await read('/status');
+    const summarize = (result) => (result?.body && typeof result.body === 'object' ? {
+      status: result.status, count: result.body.count, complete: result.body.complete, indexing: result.body.indexing,
+      error: result.body.error, items: (result.body.items || []).filter((item) => !searchTerm
+        || String(item?.name || '').includes(searchTerm)).slice(0, 5)
+        .map((item) => ({ key: item.key, reasons: item.problem_reasons })),
+    } : result);
+    return JSON.stringify({
+      client, pills, firstPage: summarize(first), search: summarize(search),
+      indexInProgress: status.body?.problematic_index_in_progress,
+    });
+  }
+
   async waitForReady(options = {}) {
     const timeout = options.timeout || 60000;
+    // A failure rethrows with a snapshot of the page and server state appended.
+    await this.waitForReadyCondition(options, timeout).then(undefined, async (failure) => {
+      failure.message += `
+Problematic Files state: ${await this.describeProblematicState(options.diagnosticTerm || '')}`;
+      throw failure;
+    });
+  }
+
+  async waitForReadyCondition(options, timeout) {
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
       if (typeof state !== 'undefined' && state.utility?.loading) return false;
       const isVisible = (element) => Boolean(element && (
@@ -91,8 +157,10 @@ export class UtilityProblematicFilesActions {
 
   async waitForBoundedPageEvidence(problemType, albumTitle, options = {}) {
     const timeout = options.timeout || 60000;
+    // The first bounded response proves the page; with the indexed list the complete list can
+    // replace that page before a check of the rendered state runs, so the screen is only
+    // required to show the filter and the row.
     const rendered = this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
-      if (typeof state === 'undefined' || state.utility?.problematicFilesComplete !== false) return false;
       const filter = Array.from(document.querySelectorAll(expected.filterOptionSelector))
         .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
       const item = Array.from(document.querySelectorAll(expected.listItemSelector)).find((candidate) => {
@@ -112,7 +180,11 @@ export class UtilityProblematicFilesActions {
       return candidate.ok()
         && candidate.request().method() === 'GET'
         && url.pathname === '/utilities/problematic-files'
-        && url.searchParams.has('limit');
+        && url.searchParams.has('limit')
+        // The Artist rows page shares the path; only the first album page proves the case.
+        && !url.searchParams.has('artists')
+        && !url.searchParams.has('cursor')
+        && !url.searchParams.has('q');
     }, { timeout });
     const [response] = await Promise.all([responsePromise, rendered]);
     const payload = await response.json();
@@ -276,7 +348,7 @@ export class UtilityProblematicFilesActions {
   async revealListItemByIdentity({ key, title, meta }, options = {}) {
     const reveal = async () => {
       for await (const items of this.walkListWindows(options)) {
-        const matches = items.filter(item => key ? item.key === key : item.title === title && item.meta === meta);
+        const matches = items.filter(item => key ? item.key === key : item.title === title && (meta === undefined || item.meta === meta));
         assert.ok(matches.length <= 1, `Ambiguous Problematic Files identity: ${key || `${title} / ${meta}`}`);
         if (matches.length) return matches[0];
       }
@@ -354,7 +426,7 @@ export class UtilityProblematicFilesActions {
 
   async applySingleProblemFilter(problemType) {
     const searchSection = this.utilityProblematicFilesTab.searchSection;
-    if (await searchSection.filterChipByValue(problemType).count()) {
+    if (await searchSection.selectedFilterOptionByValue(problemType).count()) {
       return;
     }
     await this.openProblemFilterMenu();
@@ -363,12 +435,12 @@ export class UtilityProblematicFilesActions {
       if (typeof state === 'undefined') return false;
       const selected = state.utility?.selectedProblemFilters || [];
       if (selected.length !== 1 || selected[0] !== expected.problemType) return false;
-      return document.querySelector(expected.filterChipSelector) !== null;
+      return document.querySelector(expected.selectedOptionSelector) !== null;
     }, {
       timeout: 60000,
     }, {
       problemType,
-      filterChipSelector: searchSection.filterChipSelector(problemType),
+      selectedOptionSelector: searchSection.selectedFilterOptionSelector(problemType),
     });
     if (await searchSection.problemFilterMenu.isVisible()) {
       await searchSection.problemFilterButton.click();
@@ -377,8 +449,8 @@ export class UtilityProblematicFilesActions {
   }
 
   async clearProblemFilter(problemType) {
-    const chip = this.utilityProblematicFilesTab.searchSection.filterChipByValue(problemType);
-    if (!await chip.count()) {
+    const searchSection = this.utilityProblematicFilesTab.searchSection;
+    if (!await searchSection.selectedFilterOptionByValue(problemType).count()) {
       return;
     }
     const waitForFilterRemoved = async (timeout = 60000) => {
@@ -390,7 +462,11 @@ export class UtilityProblematicFilesActions {
         timeout,
       }, problemType);
     };
-    await chip.click();
+    if (!await searchSection.problemFilterMenu.isVisible()) {
+      await searchSection.problemFilterButton.click();
+      await this.utilityProblematicFilesTab.waitForVisible(searchSection.problemFilterMenu);
+    }
+    await searchSection.filterOptionByValue(problemType).click();
     await waitForFilterRemoved();
     if (await this.utilityProblematicFilesTab.searchSection.problemFilterMenu.isVisible()) {
       await this.utilityProblematicFilesTab.searchSection.problemFilterButton.click();
@@ -668,6 +744,10 @@ export class UtilityProblematicFilesActions {
   }
 
   async selectAlbumByTitle(albumTitle, options = {}) {
+    await this.revealListItemByIdentity({ title: albumTitle }, {
+      ...options,
+      timeout: options.timeout || 60000,
+    });
     const item = this.utilityProblematicFilesTab.listItemByTitle(albumTitle);
     await item.waitFor({ state: 'visible', timeout: options.timeout || 60000 });
     const key = String(await item.getAttribute('data-problematic-album-key') || '');
@@ -703,13 +783,19 @@ export class UtilityProblematicFilesActions {
     return detail.evaluate((element, selectors) => {
       const text = (node) => String(node?.textContent || '').trim();
       const table = element.querySelector(selectors.table);
+      const albumLabels = Array.from(element.querySelectorAll(selectors.albumProblems));
       const reasonHeader = Array.from(table?.querySelectorAll(selectors.headers) || [])
         .find((header) => text(header) === 'Problems');
       const reasonCells = Array.from(table?.querySelectorAll(selectors.reasonCells) || []);
       return {
         albumLabelsBeforeTable: Boolean(element.querySelector(selectors.albumSection)?.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING),
         detectedHeadingCount: Array.from(element.querySelectorAll(selectors.sectionHeadings)).filter(heading => text(heading) === 'Detected problems').length,
-        albumReasons: Array.from(element.querySelectorAll(selectors.albumProblems), text),
+        albumReasons: albumLabels.map(text),
+        albumLabelExtraWidths: albumLabels.map((label) => {
+          const range = document.createRange();
+          range.selectNodeContents(label);
+          return Math.round((label.getBoundingClientRect().width - range.getBoundingClientRect().width) * 100) / 100;
+        }),
         headers: Array.from(table?.querySelectorAll(selectors.headers) || [], text),
         rows: Array.from(table?.querySelectorAll(selectors.rows) || []).map((row) => ({
           cells: Array.from(row.querySelectorAll(selectors.directCells), (cell) => ({

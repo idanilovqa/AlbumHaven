@@ -177,14 +177,14 @@ def _app_owned_override(values: dict[str, object]) -> object:
 def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[str, int]:
     """Recover only journals whose owning writer session has released its lease."""
     from music_app.services.library_roots import library_root_cache_identity
-    from music_app.services.scan_cache_persistence import select_scan_cache_adapter
     from music_app.services.tag_edit_intents_postgres import PostgresTagEditIntentRepository
 
     config = getattr(runtime, "config")
     repository = PostgresTagEditIntentRepository(config)
     root_identity = library_root_cache_identity(config)
     summary = {"completed": 0, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
-    file_cache = None
+    # No whole-projection readiness or preparation here (case 56): each edit is saved through the keyed
+    # tag-save path, which journals its albums for the relation owner.
     for candidate in repository.load_unfinished_intents(
         library_root_identity=root_identity
     ):
@@ -193,24 +193,15 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
         ) as claimed:
             if claimed is None:
                 continue
-            if file_cache is None:
-                adapter = select_scan_cache_adapter(config)
-                file_cache, _last_scan, _relations, _relations_at, error = adapter.load_snapshot(
-                    config["CACHE_PATH"], root_identity,
-                )
-                if error:
-                    raise RuntimeError(f"Could not load Postgres inventory for tag edit recovery: {error}")
-            result = _reconcile_claimed_tag_edit_intent(runtime, repository, claimed, file_cache)
+            result = _reconcile_claimed_tag_edit_intent(runtime, repository, claimed)
             for key in summary:
                 summary[key] += result[key]
     return summary
 
 
-def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file_cache):
-    from music_app.services.cache import (
-        persist_structural_tag_edit_for_config,
-        save_cache_updates_to_disk_for_config,
-    )
+def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent):
+    from music_app.services.cache import persist_structural_tag_edit_for_config
+    from music_app.services.scan_cache_persistence import TARGETED_TAG_EDIT_FIELDS, select_scan_cache_adapter
     from music_app.services.library_roots import iter_library_root_paths, resolve_media_path_within_roots
     from music_app.services.metadata import (
         apply_text_repairs_to_file,
@@ -233,6 +224,7 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
 
     resolved_recovery_paths: dict[str, Path] = {}
     recoverable_intents: list[dict[str, object]] = []
+    file_cache: dict[str, dict[str, object]] = {}
     preflight_failures = 0
     for intent in [claimed_intent]:
         intent_id = str(intent.get("id") or "").strip()
@@ -240,6 +232,11 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
             for change in _normalized_changes(intent.get("changes")):
                 raw_path = str(change["path"])
                 resolved_recovery_paths[raw_path] = resolve_recovery_path(raw_path)
+            file_cache = select_scan_cache_adapter(config).load_file_entries(
+                set(resolved_recovery_paths)
+            )
+            if any(path not in file_cache for path in resolved_recovery_paths):
+                raise RuntimeError("Postgres inventory is missing a selected tag edit recovery file.")
         except Exception as exc:
             repository.mark_recovery_failed(intent_id, exc)
             preflight_failures += 1
@@ -300,40 +297,21 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
             status=status,
             last_error=last_error,
         )
-        structural_field = _recovery_structural_field(
-            previous_entries={
-                str(change["path"]): dict(change["old_values"])
-                for change in recorded_changes
-            },
-            updated_entries={
-                str(change["path"]): dict(change["requested_values"])
-                for change in recorded_changes
-            },
-            recorded_fields={
-                field
-                for change in recorded_changes
-                for field in dict(change["requested_values"])
-                if field != "exception_type"
-            },
+        persist_structural_tag_edit_for_config(
+            config,
+            changed_paths=set(changed_entries),
+            previous_file_entries=file_cache,
+            updated_file_entries=changed_entries,
+            changed_field_names=(
+                {field for change in recorded_changes for field in change["requested_values"]}
+                | {field for path, entry in changed_entries.items() for field in TARGETED_TAG_EDIT_FIELDS
+                   if _text(file_cache[path].get(field)) != _text(entry.get(field))}
+            ),
+            before_commit=repository_hook,
+            # The live tag save's keyed path: after the commit, the journaled albums go to the relation
+            # owner (persist_structural_tag_edit queues it; it returns quietly while relations are not ready).
+            rebuild_relation_projection=False,
         )
-        if structural_field:
-            persist_structural_tag_edit_for_config(
-                config,
-                changed_paths=set(changed_entries),
-                previous_file_entries=file_cache,
-                updated_file_entries={**file_cache, **changed_entries},
-                changed_field_names={structural_field},
-                before_commit=repository_hook,
-                rebuild_relation_projection=True,
-            )
-        else:
-            save_cache_updates_to_disk_for_config(
-                config,
-                changed_entries,
-                baseline_file_cache=file_cache,
-                before_commit=repository_hook,
-            )
-        file_cache.update(changed_entries)
 
     summary = reconcile_tag_edit_intents(
         recoverable_intents,
@@ -357,20 +335,3 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
         summary["failed"],
     )
     return summary
-
-
-def _recovery_structural_field(
-    *,
-    previous_entries: Mapping[str, Mapping[str, object]],
-    updated_entries: Mapping[str, Mapping[str, object]],
-    recorded_fields: set[str] | None = None,
-) -> str:
-    changed_fields = set(recorded_fields) if recorded_fields is not None else {
-        field
-        for path, entry in updated_entries.items()
-        for field in entry
-        if field != "exception_type"
-        and _text(previous_entries.get(path, {}).get(field))
-        != _text(entry.get(field))
-    }
-    return next(iter(changed_fields)) if changed_fields in ({"album"}, {"year"}) else ""

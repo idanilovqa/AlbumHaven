@@ -3,6 +3,11 @@
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
+// How often a running scan's progressively published albums refresh the view.
+const LIVE_SCAN_REFRESH_INTERVAL_MS = 5000;
+// Refetches of a view whose gallery projection was stale, after 3, 6, 12, 24, 48 and 96 seconds.
+const STALE_PROJECTION_VIEW_REFRESH_LIMIT = 6;
+const STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS = 3000;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -277,6 +282,28 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+// The last automatic reverse prepend: a prepend must push the viewport down by
+// about its own height. When it does not, the next one re-exposes the top and
+// the chain walks the whole library backwards with no user input.
+let rootGalleryPreviousPrepend = null;
+
+function readRootGalleryUserScrollGeneration() {
+  return typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.getUserScrollIntentGeneration?.() ?? null;
+}
+
+function rootGalleryPreviousPrependStalled(scroll) {
+  const last = rootGalleryPreviousPrepend;
+  if (!last) return false;
+  if (last.userScrollGeneration !== readRootGalleryUserScrollGeneration()) {
+    rootGalleryPreviousPrepend = null;
+    return false;
+  }
+  const grown = Number(scroll.scrollHeight || 0) - last.scrollHeight;
+  return grown > 0 && Number(scroll.scrollTop || 0) - last.scrollTop < grown / 2;
+}
+
 async function loadPreviousRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -286,7 +313,8 @@ async function loadPreviousRootGalleryPage() {
     || !scroll || scroll.clientHeight <= 0
     // Space held above the loaded artists is not content: measure from the first loaded artist.
     || scroll.scrollTop - Number(typeof virtualGrid === 'undefined' ? 0 : virtualGrid?.leadingExtent || 0)
-      > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+      > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT
+    || rootGalleryPreviousPrependStalled(scroll)) return false;
 
   const request = {
     controller: new AbortController(),
@@ -326,6 +354,11 @@ async function loadPreviousRootGalleryPage() {
       || data.gallery_page?.previous_cursor === request.cursor) return false;
 
     const currentPage = state.view.gallery_page;
+    rootGalleryPreviousPrepend = {
+      scrollTop: Number(scroll.scrollTop || 0),
+      scrollHeight: Number(scroll.scrollHeight || 0),
+      userScrollGeneration: readRootGalleryUserScrollGeneration(),
+    };
     applyViewPayload({
       ...state.view,
       artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
@@ -463,7 +496,7 @@ function beginPendingViewTransition(requestId, options = {}) {
   renderLibraryLoader({
     ...(state.status || {}),
     transition_in_progress: true,
-    transition_detail: 'Updating the current artist view...',
+    transition_detail: options.transitionDetail || 'Updating the current artist view...',
   });
 }
 
@@ -761,7 +794,13 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
+    const refreshView = (
+      String(state.view?.query || '').trim()
+      && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
+    )
+      ? { ...state.view, selected_artist: '' }
+      : state.view;
+    const refreshApplied = await fetchAndRender(buildApiUrl(refreshView, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
       preserveMountedGalleryChildren: true,
@@ -797,6 +836,10 @@ function markStartupFollowup(name, requestOptions = {}, detail = {}) {
   };
   startupMetrics.markOnce(`startup_followup_${name}`, markDetail);
   startupMetrics.markOnce(`startup_followup_${hydrationTier}_${name}`, markDetail);
+  const progress = ({ fetch_started: 75, payload_received: 85, apply_complete: 90, render_complete: 95 })[name];
+  if (progress && typeof startupMetrics.advanceInitialRefresh === 'function') {
+    startupMetrics.advanceInitialRefresh(progress);
+  }
 }
 
 function scheduleStartupFollowupPaintMark(name, requestOptions = {}, readDetail) {
@@ -833,6 +876,8 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  // A save still being written shows as it will leave the library, in every render.
+  if (typeof saveFoldDecisions !== 'undefined') saveFoldDecisions.show();
   const renderOptions = { ...options };
   const galleryScroll = document.getElementById('albums-scroll');
   if (
@@ -1060,6 +1105,48 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+// Watcher changes reach the tree on their own, without reloading the gallery or an open album.
+async function refreshArtistTreeAfterInventoryMutation(revision) {
+  const treeRevision = Number(state.ui.appliedArtistTreeInventoryMutationRevision);
+  if (Number.isSafeInteger(treeRevision) && treeRevision >= revision) {
+    state.ui.pendingArtistTreeRefresh = false;
+    return;
+  }
+  // A search tree lists only its matches, so the next search response owns it.
+  if (String(state.view?.query || '').trim()
+    || !Array.isArray(state.view?.artists_sidebar) || !state.view.artists_sidebar.length) {
+    state.ui.pendingArtistTreeRefresh = false;
+    return;
+  }
+  // A gallery request in flight owns the view; the tree waits for the next poll.
+  const viewBusy = () => Boolean(state.ui.pendingViewTransition || state.ui.activeViewRequestUrl);
+  if (viewBusy()) return;
+  const viewRevision = readViewStateRevision();
+  const treeUrl = buildApiUrl({ ...state.view, selected_artist: '' }, { payloadTier: 'sidebar' });
+  // The purpose header marks a tree-only read; a failed read is retried by the next poll.
+  const response = await fetch(treeUrl, {
+    headers: { Accept: 'application/json', 'X-Album-Haven-View-Purpose': 'artist-tree' },
+  });
+  const data = await response.json();
+  if (!response.ok || !Array.isArray(data?.artists_sidebar)) {
+    throw new Error(data?.error || 'Failed to load the artist tree.');
+  }
+  if (viewBusy() || readViewStateRevision() !== viewRevision
+    || String(state.view?.query || '').trim()) return;
+  state.view.artists_sidebar = typeof withPendingArtistTreeEdits === 'function'
+    ? withPendingArtistTreeEdits(data.artists_sidebar)
+    : data.artists_sidebar;
+  if (Object.prototype.hasOwnProperty.call(data, 'show_all_artists_sidebar_link')) {
+    state.view.show_all_artists_sidebar_link = data.show_all_artists_sidebar_link;
+  }
+  const responseRevision = Number(data.inventory_mutation_revision);
+  state.ui.appliedArtistTreeInventoryMutationRevision = Number.isSafeInteger(responseRevision)
+    ? responseRevision
+    : revision;
+  state.ui.pendingArtistTreeRefresh = false;
+  renderSidebar();
+}
+
 function fetchGalleryViewResponse(url, signal) {
   return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
@@ -1075,6 +1162,10 @@ async function readGalleryResponse(response, ownsResponse) {
     : responsePayload;
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  // The tree in a response doesn't hold the saves this page is still writing.
+  if (Array.isArray(data?.artists_sidebar) && typeof withPendingArtistTreeEdits === 'function') {
+    data.artists_sidebar = withPendingArtistTreeEdits(data.artists_sidebar);
   }
   return data;
 }
@@ -1302,6 +1393,8 @@ async function fetchAndRender(url, push = true, options = {}) {
     : '';
   state.ui.activeViewRequestController = controller;
   state.ui.pendingViewRequest = null;
+  // A search's Loose Tracks indicator runs alongside it, not after the gallery.
+  if (typeof prefetchLibraryNonAlbumSearch === 'function') prefetchLibraryNonAlbumSearch(apiUrl);
   state.busy = true;
   state.ui.activeViewPayloadReady = false;
   const retainsMountedSelectedViewState = Boolean(
@@ -1311,7 +1404,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
+  if (requestOptions.showSearchProgress || requestOptions.showViewTransition || state.ui.pendingViewTransition
     || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
     beginPendingViewTransition(requestId, requestOptions);
   }
@@ -1487,13 +1580,16 @@ async function fetchAndRender(url, push = true, options = {}) {
         !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
         || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
       );
-    // A library view without its tree stays behind this revision until a full refresh adds it.
-    const rootViewLacksArtistTree = String(url).includes('omit_sidebar=1')
-      && !/[?&](?:artist|q)=/.test(String(url));
     if (responseProjectionIsCurrent
       && Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0
-      && !rootViewLacksArtistTree) {
+      && Array.isArray(payloadToApply?.artists_sidebar)) {
+      state.ui.appliedArtistTreeInventoryMutationRevision = appliedInventoryMutationRevision;
+    }
+    // A stale projection's albums lag its revision; counting it as applied kept the gallery from refetching.
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
       const observedInventoryMutationRevision = Number(
         state.status?.inventory_mutation_revision,
@@ -1505,6 +1601,19 @@ async function fetchAndRender(url, push = true, options = {}) {
         && appliedInventoryMutationRevision >= observedInventoryMutationRevision
       ) {
         state.ui.pendingInventoryMutationViewRefresh = false;
+      }
+    }
+    if (responseProjectionIsCurrent) {
+      state.ui.staleProjectionViewRefreshCount = 0;
+      state.ui.staleProjectionViewRefreshDueAt = null;
+    } else {
+      // The library change is not published in the gallery yet, and the status revision has
+      // already moved for it, so nothing else would ask again: an idle poll refetches, backing off.
+      const staleProjectionViewRefreshCount = Number(state.ui.staleProjectionViewRefreshCount || 0);
+      if (staleProjectionViewRefreshCount < STALE_PROJECTION_VIEW_REFRESH_LIMIT) {
+        state.ui.staleProjectionViewRefreshCount = staleProjectionViewRefreshCount + 1;
+        state.ui.staleProjectionViewRefreshDueAt = Date.now()
+          + STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS * (2 ** staleProjectionViewRefreshCount);
       }
     }
     finishPendingViewTransition(requestId);
@@ -1541,7 +1650,17 @@ async function fetchAndRender(url, push = true, options = {}) {
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
       invalidateAllHydratedTrackModalAlbumDetails();
       if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
-        await refreshOpenTrackModalAfterInventoryMutation();
+        // An open album that no longer exists must not leave the applied gallery half-finished.
+        const openTrackModalRefresh = refreshOpenTrackModalAfterInventoryMutation()
+          .catch((modalRefreshError) => {
+            console.error('[AlbumHaven][Watcher] Failed to refresh the open album.', modalRefreshError);
+          });
+        // A caller that reports the applied gallery first takes the open album's reload instead.
+        if (typeof requestOptions.deferOpenTrackModalRefresh === 'function') {
+          requestOptions.deferOpenTrackModalRefresh(openTrackModalRefresh);
+        } else {
+          await openTrackModalRefresh;
+        }
       }
     }
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -2176,7 +2295,9 @@ async function pollStatus() {
     && !startedDuringPendingStart;
   let nextPollDelay = null;
   const knownStatus = state.status || {};
-  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
+  // Like the inventory revision, the first observed watcher health is a baseline: the loaded lists already reflect it.
+  const knownWatcherHealth = Object.prototype.hasOwnProperty.call(knownStatus, 'watcher_health')
+    ? watcherHealthRefreshSignature(knownStatus) : null;
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -2245,8 +2366,10 @@ async function pollStatus() {
         state.ui.pendingInventoryMutationViewRefresh = true;
       }
     }
+    if (inventoryAdvanced) state.ui.pendingArtistTreeRefresh = true;
     const utility = state.utility;
-    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    const healthChanged = knownWatcherHealth !== null
+      && knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
     if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
       utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
     }
@@ -2311,6 +2434,13 @@ async function pollStatus() {
     const scanFinalizing = Boolean(normalizedStatus.scan_in_progress)
       && String(normalizedStatus.scan_phase || '').trim().toLowerCase() === 'finalizing';
     const busyNow = normalizedStatus.scan_in_progress || normalizedStatus.relations_in_progress;
+    // A reading scan publishes finished albums as it goes; show them while it
+    // runs, at most every few seconds, rather than only once it completes.
+    const liveScanRefreshDue = Boolean(normalizedStatus.scan_in_progress)
+      && !scanFinalizing
+      && !normalizedStatus.relations_in_progress
+      && Date.now() - Number(state.ui.lastLiveScanRefreshAt || 0) >= LIVE_SCAN_REFRESH_INTERVAL_MS;
+    const inventoryRefreshAllowed = !busyNow || liveScanRefreshDue;
     const coverBusyNow = Boolean(normalizedStatus.covers_in_progress);
     const wasPollingBusy = Boolean(state.wasPollingBusy);
     const wasScanFinalizing = Boolean(state.wasScanFinalizing);
@@ -2395,9 +2525,18 @@ async function pollStatus() {
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    if (busyNow && liveScanRefreshDue
+      && (state.ui.pendingInventoryMutationViewRefresh || state.ui.pendingArtistTreeRefresh)) {
+      state.ui.lastLiveScanRefreshAt = Date.now();
+    }
+    const staleProjectionViewRefreshDueAt = Number(state.ui.staleProjectionViewRefreshDueAt);
+    if (staleProjectionViewRefreshDueAt > 0 && Date.now() >= staleProjectionViewRefreshDueAt) {
+      state.ui.staleProjectionViewRefreshDueAt = null;
+      state.ui.pendingInventoryMutationViewRefresh = true;
+    }
     if (
       state.ui.pendingInventoryMutationViewRefresh
-      && !busyNow
+      && inventoryRefreshAllowed
       && !coverBusyNow
       && !state.busy
       && !hasPendingSidebarNavigation()
@@ -2420,6 +2559,18 @@ async function pollStatus() {
         console.error(
           '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
           inventoryRefreshError,
+        );
+      }
+    }
+    if (state.ui.pendingArtistTreeRefresh && inventoryRefreshAllowed && !state.busy && !hasPendingSidebarNavigation()) {
+      try {
+        await refreshArtistTreeAfterInventoryMutation(currentInventoryRevision);
+        if (!ownsStatus()) return;
+      } catch (treeRefreshError) {
+        if (!ownsStatus()) return;
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh the artist tree after an inventory change.',
+          treeRefreshError,
         );
       }
     }

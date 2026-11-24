@@ -40,6 +40,8 @@ permissions:
 
 env:
   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+  # The job's own Postgres service: the one port-5432 target pytest may reach (tests/py/postgres_target_guard.py).
+  ALBUM_HAVEN_CI_POSTGRES_SERVICE: 127.0.0.1:5432
 
 concurrency:
   group: heavy-gates-${{ inputs.ref }}-${{ inputs.gates }}-${{ inputs.cases }}-${{ inputs.targets }}
@@ -240,6 +242,22 @@ jobs:
               --root=test-results/playwright-performance-targets `
               --json=test-results/playwright-performance-targets/gate-timings.json `
               --markdown=$env:GITHUB_STEP_SUMMARY
+          }
+
+      # The functional runner keeps a failed shard under the system temp folder, outside the upload.
+      # Only Playwright's output and blob are copied; database state and fixture media stay behind.
+      - name: Collect failed functional shard evidence
+        if: ${{ failure() }}
+        run: |
+          foreach ($shard in @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter "album-haven-functional-local-*")) {
+            $destination = Join-Path "test-results/regression-gates/functional-shards" $shard.Name
+            foreach ($part in @("output", "blob")) {
+              $source = Join-Path $shard.FullName $part
+              if (Test-Path -LiteralPath $source -PathType Container) {
+                New-Item -ItemType Directory -Force -Path $destination | Out-Null
+                Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+              }
+            }
           }
 
       # No teardown: the runner VM and its PostgreSQL service are discarded after the job.

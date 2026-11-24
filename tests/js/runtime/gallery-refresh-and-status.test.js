@@ -26,6 +26,76 @@ test('a stale gallery projection does not count applying inventory revision', as
   assert.equal(context.state.view.artist_groups[0].albums[0].identity_revision, undefined);
 });
 
+test('FTC-SEARCH-NAV-031: a stale gallery is fetched again by an idle poll though the revision stays', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  let now = 1_000_000;
+  vm.runInContext('Date', context).now = () => now;
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  const idle = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false };
+  // The page loads after the watcher's revision: status will never report a newer one.
+  context.state.status = { ...idle, inventory_mutation_revision: 2 };
+
+  const load = context.fetchAndRender('/view-data?surface=albums&omit_sidebar=1', false, { preserveScroll: true });
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Watcher Artist One', albums: [{ key: 'one' }] }],
+    inventory_mutation_revision: 2,
+    gallery_page: { projection_stale: true },
+  });
+  await load;
+  assert.equal(context.state.ui.staleProjectionViewRefreshDueAt, now + 3000);
+
+  // A poll before the first back-off step asks nothing more.
+  const early = context.pollStatus();
+  pendingRequests[1].resolveWith({ ...idle, inventory_mutation_revision: 2 });
+  await early;
+  for (let attempt = 0; attempt < 5; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 2);
+
+  now += 3000;
+  const due = context.pollStatus();
+  pendingRequests[2].resolveWith({ ...idle, inventory_mutation_revision: 2 });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 4; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 4, 'the due idle poll asks for the view again');
+  pendingRequests[3].resolveWith({
+    artist_groups: [
+      { artist: 'Watcher Artist One', albums: [{ key: 'one' }] },
+      { artist: 'Watcher Artist Two', albums: [{ key: 'two' }] },
+    ],
+    inventory_mutation_revision: 2,
+    gallery_page: { projection_stale: false },
+  });
+  await due;
+
+  assert.deepEqual(calls.fetchRequests.map(request => request.url).slice(1, 3), ['/status', '/status']);
+  assert.deepEqual(context.state.view.artist_groups.map(group => group.artist), ['Watcher Artist One', 'Watcher Artist Two']);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+  assert.equal(context.state.ui.staleProjectionViewRefreshCount, 0);
+  assert.equal(context.state.ui.staleProjectionViewRefreshDueAt, null);
+});
+
+test('a gallery that stays stale is refetched six times, each wait twice as long', async () => {
+  const { context, pendingRequests } = createContext();
+  const now = 1_000_000;
+  vm.runInContext('Date', context).now = () => now;
+  const staleResponse = {
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+    inventory_mutation_revision: 2,
+    gallery_page: { projection_stale: true },
+  };
+  const delays = [];
+  for (let index = 0; index < 7; index += 1) {
+    context.state.ui.staleProjectionViewRefreshDueAt = null;
+    const applied = context.fetchAndRender('/view-data?surface=albums', false, { preserveScroll: true });
+    pendingRequests[index].resolveWith(staleResponse);
+    await applied;
+    delays.push(context.state.ui.staleProjectionViewRefreshDueAt === null
+      ? null : context.state.ui.staleProjectionViewRefreshDueAt - now);
+  }
+
+  assert.deepEqual(delays, [3000, 6000, 12000, 24000, 48000, 96000, null]);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
 const galleryEventHandlersPath = path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js');
 const galleryEventHandlersSource = fs.readFileSync(galleryEventHandlersPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
@@ -164,6 +234,30 @@ test('foreground view consumes a deferred inventory refresh at the revision it a
     '/status',
   ]);
   assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+});
+
+test('background refresh replays an automatic search without narrowing it to the top artist', async () => {
+  const { context } = createContext();
+  const requestedViews = [];
+  context.state.view = {
+    ...context.state.view,
+    query: 'ремиксы',
+    selected_artist: 'ДДТ',
+    search_context: { selected_artist_source: 'auto_top_match' },
+  };
+  context.buildApiUrl = (view) => {
+    requestedViews.push(JSON.parse(JSON.stringify(view)));
+    return '/view-data';
+  };
+  context.fetchAndRender = async () => true;
+
+  assert.equal(await context.refreshCurrentViewAfterBackgroundCompletion(), true);
+  assert.equal(requestedViews[0].query, 'ремиксы');
+  assert.equal(requestedViews[0].selected_artist, '');
+
+  context.state.view.search_context.selected_artist_source = 'requested_artist';
+  assert.equal(await context.refreshCurrentViewAfterBackgroundCompletion(), true);
+  assert.equal(requestedViews[1].selected_artist, 'ДДТ');
 });
 
 test('post-scan search refresh rejects a transient active-scan snapshot', async () => {
@@ -878,6 +972,7 @@ test('initial startup readiness waits for its successful full render', async () 
   pendingRequests[0].resolveWith({ artist_groups: [], initial_view_partial: false });
   assert.equal(await startup, true);
   assert.equal(context.startupMetrics.completed, 1);
+  assert.deepEqual(context.startupMetrics.progress, [75, 85, 90, 95]);
 });
 
 test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {
@@ -3609,22 +3704,42 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   assert.deepEqual(calls.showToast, []);
 });
 
-test('a library view without the artist tree does not count as applying an inventory revision', async () => {
-  const { context, pendingRequests } = createContext();
-  context.state.ui.appliedViewInventoryMutationRevision = 12;
+for (const [label, scanPhase, lastRefreshAgoMs, refreshes] of [
+  ['shows albums a reading scan has published', 'indexing', 60_000, true],
+  ['waits a few seconds between live scan refreshes', 'indexing', 1_000, false],
+  ['leaves a finalizing scan to its completion refresh', 'finalizing', 60_000, false],
+]) {
+  test(`pollStatus ${label}`, async () => {
+    const { context, pendingRequests } = createContext();
+    context.scheduleBrowserTimeout = () => {};
+    context.buildApiUrl = () => '/view-data?surface=albums';
+    context.state.ui.lastLiveScanRefreshAt = Date.now() - lastRefreshAgoMs;
+    // Already finalizing: entering that phase has its own completion refresh.
+    context.state.wasScanFinalizing = scanPhase === 'finalizing';
+    const scanning = {
+      scan_in_progress: true,
+      scan_phase: scanPhase,
+      relations_in_progress: false,
+      covers_in_progress: false,
+    };
+    context.state.status = { ...scanning, inventory_mutation_revision: 12 };
 
-  const refresh = context.fetchAndRender('/view-data?surface=albums&omit_sidebar=1', false, {
-    preserveScroll: true,
-  });
-  pendingRequests[0].resolveWith({
-    artist_groups: [{ artist: 'Ben', albums: [{ key: 'ben::album', name: 'Album' }] }],
-    payload_tier: 'full',
-    inventory_mutation_revision: 13,
-  });
-  await refresh;
+    const statusPromise = context.pollStatus();
+    pendingRequests[0].resolveWith({ ...scanning, inventory_mutation_revision: 13 });
+    for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+      await flushMicrotasks();
+    }
 
-  assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 12);
-});
+    assert.equal(pendingRequests.length, refreshes ? 2 : 1, pendingRequests.map((request) => request.url).join(' '));
+    if (refreshes) {
+      assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+      pendingRequests[1].resolveWith({ artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'new' }] }], album_count: 1 });
+    }
+    await statusPromise;
+    await flushMicrotasks();
+    assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, !refreshes);
+  });
+}
 
 test('pollStatus does not reload a foreground view already read at the advanced inventory revision', async () => {
   const { context, calls, pendingRequests } = createContext();
@@ -3656,6 +3771,75 @@ test('pollStatus does not reload a foreground view already read at the advanced 
     '/status',
   ]);
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+function artistTreeStatus(revision) {
+  return {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: revision,
+  };
+}
+
+test('a library change refreshes only the artist tree on an artist page', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = (view, options = {}) => (
+    `/view-data?artist=${view.selected_artist || ''}&payload_tier=${options.payloadTier || ''}`
+  );
+  const artistGroups = [{ artist: 'Ben', albums: [{ key: 'ben::album' }] }];
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Ben',
+    artist_groups: artistGroups,
+    artists_sidebar: [{ artist: 'Ben' }],
+  };
+  context.state.ui.appliedViewInventoryMutationRevision = 13;
+  context.state.ui.appliedArtistTreeInventoryMutationRevision = 12;
+  context.state.status = artistTreeStatus(12);
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith(artistTreeStatus(13));
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Ben' }, { artist: 'Beny' }],
+    inventory_mutation_revision: 13,
+  });
+  await statusRequest;
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
+    '/status',
+    '/view-data?artist=&payload_tier=sidebar',
+  ]);
+  assert.deepEqual(context.state.view.artists_sidebar.map((item) => item.artist), ['Ben', 'Beny']);
+  assert.equal(context.state.view.selected_artist, 'Ben');
+  assert.equal(context.state.view.artist_groups, artistGroups);
+  assert.equal(context.state.ui.appliedArtistTreeInventoryMutationRevision, 13);
+  assert.equal(calls.renderSidebar, 1);
+  assert.equal(calls.renderView.length, 0);
+});
+
+test('a library change leaves a search tree to the next search response', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    query: 'Ben',
+    artists_sidebar: [{ artist: 'Ben' }],
+  };
+  context.state.ui.appliedViewInventoryMutationRevision = 13;
+  context.state.ui.appliedArtistTreeInventoryMutationRevision = 12;
+  context.state.status = artistTreeStatus(12);
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith(artistTreeStatus(13));
+  await statusRequest;
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
+  assert.equal(Boolean(context.state.ui.pendingArtistTreeRefresh), false);
 });
 
 test('pollStatus refreshes an open Album Details after applying an inventory mutation', async () => {
@@ -3693,6 +3877,36 @@ test('pollStatus refreshes an open Album Details after applying an inventory mut
   await statusRequest;
 
   assert.equal(modalRefreshes, 1);
+});
+
+test('fetchAndRender hands the open album reload to a caller that reports the gallery first', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [{ key: 'saved-album' }];
+  context.state.modalReleaseIndex = 0;
+  context.state.ui.appliedViewInventoryMutationRevision = 12;
+  let finishModalRefresh;
+  context.refreshOpenTrackModalAfterInventoryMutation = () => new Promise((resolve) => {
+    finishModalRefresh = resolve;
+  });
+  const deferredRefreshes = [];
+
+  const render = context.fetchAndRender('/view-data?surface=albums', false, {
+    deferOpenTrackModalRefresh: (refresh) => deferredRefreshes.push(refresh),
+  });
+  for (let attempt = 0; attempt < 10 && !pendingRequests.length; attempt += 1) {
+    await flushMicrotasks();
+  }
+  pendingRequests[0].resolveWith({ artist_groups: [], inventory_mutation_revision: 13 });
+
+  assert.equal(await render, true);
+  assert.equal(deferredRefreshes.length, 1);
+  let modalRefreshSettled = false;
+  deferredRefreshes[0].then(() => { modalRefreshSettled = true; });
+  await flushMicrotasks();
+  assert.equal(modalRefreshSettled, false);
+  finishModalRefresh();
+  await deferredRefreshes[0];
+  assert.equal(modalRefreshSettled, true);
 });
 
 test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {
@@ -3771,7 +3985,9 @@ test('pollStatus preserves mutation-owned hydrated membership and reconciles it 
   pendingRequests[0].resolveWith({ ...status, inventory_mutation_revision: 13 });
   await first;
   assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), optimistic);
-  assert.equal(context.getIndexedAlbum(albumKey), optimistic);
+  // The pending edit's membership (17) disagrees with the card's own count (18), so the gallery
+  // card keeps the server's version until the save settles (multiroot acceptance, 2026-11-14).
+  assert.equal(context.getIndexedAlbum(albumKey), preview);
   assert.equal(context.getCachedHydratedTrackModalAlbum('unclaimed'), null);
   assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
   assert.equal(calls.fetchRequests.length, 1);
@@ -3883,6 +4099,25 @@ test('a failed health refresh remains pending even when the utility loader clear
   assert.equal(attempts, 2);
   await fixture.observe(watcherWarning());
   assert.equal(attempts, 2);
+});
+
+test('the first watcher health observation is a baseline, not a change that reloads Problematic Files', async () => {
+  // FTC-UTIL-PROBLEMS-009: Settings opened right after page load; the first status poll landed during
+  // the utility's own load and forced a second complete summary 140 ms after it.
+  const fixture = watcherRefreshFixture();
+  fixture.context.state.status = {};
+  const utility = fixture.context.state.utility;
+  utility.loaded = false;
+  utility.loading = true;
+  utility.loadPromise = Promise.resolve(['summary from the page load']);
+  await fixture.observe({ state: 'healthy', problems: [] });
+  utility.loading = false;
+  utility.loaded = true;
+  utility.loadPromise = null;
+  await fixture.observe({ state: 'healthy', problems: [] });
+  assert.deepEqual(fixture.refreshes, [], 'the page load already reflects the first observed health');
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [true], 'a later real health change still refreshes the loaded list');
 });
 
 test('pollStatus treats the first inventory revision observation as a baseline', async () => {

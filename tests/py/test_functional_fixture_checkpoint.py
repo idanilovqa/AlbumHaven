@@ -217,7 +217,10 @@ def _gallery_trigger_modes(connection):
         select n.nspname, c.relname, t.tgname, t.tgenabled
         from pg_trigger t join pg_class c on c.oid=t.tgrelid
         join pg_namespace n on n.oid=c.relnamespace
-        where t.tgfoid='library.invalidate_gallery_projection_statement()'::regprocedure
+        where t.tgfoid in (
+          'library.invalidate_gallery_projection_statement()'::regprocedure,
+          'library.capture_relation_album_changes()'::regprocedure,
+          'library.capture_gallery_metadata_changes()'::regprocedure)
         order by n.nspname,c.relname,t.tgname
     """).fetchall()
 
@@ -247,10 +250,16 @@ def test_live_checkpoint_restores_ready_gallery_and_preserves_trigger_modes(gall
         connection.execute('alter table library.local_albums enable always trigger gallery_source_insert')
         connection.execute('alter table library.local_albums enable replica trigger gallery_source_delete')
         connection.execute('alter table library.local_artists disable trigger gallery_source_delete')
+        connection.execute('alter table library.libraries enable always trigger libraries_relation_dirty')
+        connection.execute('alter table library.local_artists enable replica trigger local_artists_empty_relation_dirty')
+        connection.execute('alter table library.library_roots disable trigger library_roots_empty_relation_dirty')
+        connection.execute('select library.mark_relation_album_dirty(id,0) from library.libraries')
         modes = _gallery_trigger_modes(connection)
         checkpoint.capture_checkpoint(connection)
         saved_state = connection.execute('select * from library.gallery_projection_state order by library_id').fetchall()
         saved_snapshots = connection.execute('select * from library.gallery_projection_snapshots').fetchall()
+        saved_journal = connection.execute('select * from library.local_relation_dirty_albums order by library_id,album_id').fetchall()
+        assert any(row[1] == 0 for row in saved_journal)
         assert saved_snapshots
         connection.execute("update library.local_albums set title=title || ' changed'")
         connection.commit()
@@ -258,6 +267,7 @@ def test_live_checkpoint_restores_ready_gallery_and_preserves_trigger_modes(gall
         checkpoint.verify_checkpoint(connection)
         assert connection.execute('select * from library.gallery_projection_state order by library_id').fetchall() == saved_state
         assert connection.execute('select * from library.gallery_projection_snapshots').fetchall() == saved_snapshots
+        assert connection.execute('select * from library.local_relation_dirty_albums order by library_id,album_id').fetchall() == saved_journal
         assert _gallery_trigger_modes(connection) == modes
         connection.commit()
     with isolatedPostgres._connect(fixture.runtime_url) as connection:

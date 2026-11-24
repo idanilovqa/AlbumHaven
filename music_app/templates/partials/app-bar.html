@@ -7,6 +7,10 @@
       <span class="app-bar-brand-label"><span class="app-bar-brand-label-hole"></span></span>
     </span>
   </a>
-  {% if caller is defined %}{{ caller() }}{% endif %}
+  {% if caller is defined %}{{ caller() }}{% else %}
+  {% with account_menu_standalone=true, account_menu_id_prefix='settings-shell-', account_menu_csrf_token=csrf_token | default(account_menu_csrf_token) %}
+    {% include "partials/account-menu.html" %}
+  {% endwith %}
+  {% endif %}
 </header>
 {%- endmacro %}

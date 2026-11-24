@@ -87,7 +87,7 @@ export class AlbumCard extends BasePage {
   }
 
   get yearWithinCardSelector() {
-    return '.album-year, .album-subtitle';
+    return '.gallery-card__year, .album-year, .album-subtitle:not(.gallery-card__metadata)';
   }
 
   get ratingRowWithinCardSelector() {
@@ -209,7 +209,15 @@ export class AlbumCard extends BasePage {
     const singleArtistSection = singleArtistContext
       .locator('xpath=following::*[@id="artist-groups"][1]')
       .locator(':scope > .artist-section:only-child:not(:has(.artist-name))');
-    return explicitSection.or(singleArtistSection).first();
+    // All-artists search results with one artist render that artist's section without a heading;
+    // its cards name the artist.
+    const unheadedOnlyArtistSection = this.page
+      .locator('#artist-groups > .artist-section:only-child:not(:has(.artist-name))')
+      .filter({
+        has: this.page.locator('.gallery-card__artist').filter({ hasText: normalizedHeading }),
+        hasNot: this.page.locator('.gallery-card__artist').filter({ hasNotText: normalizedHeading }),
+      });
+    return explicitSection.or(singleArtistSection).or(unheadedOnlyArtistSection).first();
   }
 
   cardsByArtistAndAlbum(artistName, albumName, options = {}) {
@@ -222,7 +230,7 @@ export class AlbumCard extends BasePage {
   cardByIdentity(artistName, albumName, year, options = {}) {
     return this.cardsByArtistAndAlbum(artistName, albumName, options).filter({
       has: this.page.locator(this.yearWithinCardSelector).filter({
-        hasText: new RegExp(`(?:^| · )${String(year).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
+        hasText: new RegExp(`(?:^|·\\s*)${String(year).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
       }),
     });
   }
@@ -245,6 +253,10 @@ export class AlbumCard extends BasePage {
 
   emptyArtboxMarkByAlbumName(albumName) {
     return this.artboxByAlbumName(albumName).locator('.album-artbox__missing-mark svg');
+  }
+
+  duplicateMarkerByAlbumName(albumName) {
+    return this.cardByAlbumName(albumName).locator('.gallery-source-action--duplicate');
   }
 
   missingAlertByAlbumName(albumName) {
@@ -394,6 +406,15 @@ export class AlbumCard extends BasePage {
   }
 
   async readVisibleMetadata(card) {
+    const currentMetadata = card.locator('.gallery-card__metadata');
+    if (await currentMetadata.count()) {
+      const artist = currentMetadata.locator('.gallery-card__artist');
+      const year = currentMetadata.locator('.gallery-card__year');
+      return parseVisibleAlbumMetadata(
+        await artist.count() ? await artist.textContent() : '',
+        await year.count() ? await year.textContent() : '',
+      );
+    }
     const subtitle = await card.locator(this.subtitleWithinCardSelector).first().textContent();
     const separateYear = card.locator('.album-year');
     return parseVisibleAlbumMetadata(subtitle,
@@ -409,7 +430,7 @@ export class AlbumCard extends BasePage {
   }
 
   async readMetadataByAlbumName(albumName) {
-    return parseVisibleAlbumMetadata(await this.subtitleByAlbumName(albumName).textContent());
+    return this.readVisibleMetadata(this.cardByAlbumName(albumName));
   }
 
   trackCountByAlbumName(albumName) {

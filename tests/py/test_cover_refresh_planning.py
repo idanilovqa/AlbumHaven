@@ -244,14 +244,69 @@ def test_planner_checks_the_explicit_selected_artwork_before_automatic_fetch(tmp
     assert len(jobs) == expected_count
 
 
-def test_conflicting_album_ids_do_not_supply_selected_cover_to_folder_job(tmp_path, monkeypatch):
+def test_conflicting_album_ids_create_separate_folder_jobs(tmp_path, monkeypatch):
     selected = str(tmp_path / "selected.jpg")
     entries = {str(tmp_path / "Album" / f"{index}.mp3"): {
         "album_artist": "Artist", "album": "Album", "album_id": index,
         "cover_selection_origin": "user", "selected_cover_path": selected,
     } for index in (12, 13)}
-    monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: False)
-    assert cover_refresh_planning.build_cover_refresh_jobs(entries)[0]["selected_cover_path"] is None
+    monkeypatch.setattr(cover_refresh_planning, "local_cover_requires_upgrade_check", lambda *_args: True)
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+    assert len(jobs) == 2
+    assert {job["album_id"] for job in jobs} == {12, 13}
+    assert all(job["selected_cover_path"] == selected for job in jobs)
+
+
+def test_cover_jobs_keep_different_albums_in_one_folder_separate(tmp_path):
+    folder = tmp_path / "Unsorted Music"
+    entries = {
+        str(folder / "kansas.mp3"): {
+            "album_artist": "Kansas", "album": "Leftoverture", "year": 1976,
+            "album_id": 12, "cover_path": None,
+        },
+        str(folder / "iona.mp3"): {
+            "album_artist": "Iona", "album": "The River Flows", "year": 2002,
+            "album_id": 13, "cover_path": None,
+        },
+    }
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+
+    assert {(job["album_id"], tuple(job["track_paths"])) for job in jobs} == {
+        (12, (str(folder / "kansas.mp3"),)),
+        (13, (str(folder / "iona.mp3"),)),
+    }
+
+
+def test_an_entry_without_an_id_joins_neither_of_two_identified_albums_with_its_tags(tmp_path):
+    folder = tmp_path / "Album"
+    entries = {
+        str(folder / f"{index}.mp3"): {"album_artist": "Artist", "album": "Album", "album_id": album_id}
+        for index, album_id in enumerate((12, None, 13), start=1)
+    }
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+
+    assert {(job["album_id"], tuple(job["track_paths"])) for job in jobs} == {
+        (album_id, (str(folder / f"{index}.mp3"),)) for index, album_id in enumerate((12, None, 13), start=1)
+    }
+
+
+def test_entries_without_an_id_never_join_a_different_album(tmp_path):
+    folder = tmp_path / "Unsorted Music"
+    entries = {
+        str(folder / f"{index}.mp3"): {"album_artist": artist, "album": album, "album_id": album_id}
+        for index, (artist, album, album_id) in enumerate(
+            (("Kansas", "Leftoverture", 12), ("Iona", "Beyond These Shores", None), ("Kansas", "Monolith", None)),
+            start=1,
+        )
+    }
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+
+    assert {(job["album"], job["album_id"], len(job["track_paths"])) for job in jobs} == {
+        ("Leftoverture", 12, 1), ("Beyond These Shores", None, 1), ("Monolith", None, 1),
+    }
 
 
 def test_build_cover_refresh_jobs_groups_folder_tracks_and_logs_summary(tmp_path: Path):

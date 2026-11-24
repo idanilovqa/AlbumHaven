@@ -23,19 +23,22 @@ function notificationSurfaceIsHidden(node) {
   return Boolean(node?.hidden || node?.closest?.('[hidden], [inert], [aria-hidden="true"]'));
 }
 
-// The open modal's controls a notification must not cover. Each control the modal renders joins
-// the set at once; an IntersectionObserver then keeps only those on screen as the modal scrolls, so
-// a placement frame reads them instead of every control of a long modal list.
-let modalControlWatch = null;
+// Every open modal's controls a notification must not cover (stacked modals included). Each control
+// a modal renders joins its set at once; an IntersectionObserver then keeps only those on screen as
+// the modal scrolls, so a placement frame reads them instead of every control of a long modal list.
+const modalControlWatches = new Map();
 
-function releaseModalControls() {
-  modalControlWatch?.disconnect();
-  modalControlWatch = null;
+function releaseModalControls(keep = null) {
+  for (const [modal, watch] of modalControlWatches) {
+    if (keep?.has(modal)) continue;
+    watch.disconnect();
+    modalControlWatches.delete(modal);
+  }
 }
 
 function watchModalControls(modal) {
-  if (modalControlWatch?.modal === modal) return modalControlWatch.controls;
-  releaseModalControls();
+  const existing = modalControlWatches.get(modal);
+  if (existing) return existing.controls;
   const controls = new Set();
   const onScreen = new IntersectionObserver((entries) => {
     entries.forEach(({ target, isIntersecting }) => {
@@ -60,17 +63,19 @@ function watchModalControls(modal) {
     childList: true, subtree: true,
     attributes: true, attributeFilter: ['tabindex', 'role', 'href', 'type', 'contenteditable', 'data-loop-range-surface'],
   });
-  modalControlWatch = { modal, controls, disconnect() { onScreen.disconnect(); rendering.disconnect(); } };
+  modalControlWatches.set(modal, { controls, disconnect() { onScreen.disconnect(); rendering.disconnect(); } });
   return controls;
 }
 
 function getNotificationCollisionNodes() {
   const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
   const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
-  const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
-  if (!activeModal) releaseModalControls();
-  else fixed.push(...Array.from(watchModalControls(activeModal))
-    .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
+  const modals = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
+  releaseModalControls(new Set(modals));
+  for (const modal of modals) {
+    fixed.push(...Array.from(watchModalControls(modal))
+      .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
+  }
   return fixed;
 }
 

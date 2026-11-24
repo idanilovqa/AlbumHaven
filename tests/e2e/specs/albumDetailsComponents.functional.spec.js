@@ -131,14 +131,38 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       await expect(utilityAppearanceActions.utilityAppearanceTab.documentRoot)
         .toHaveAttribute('data-album-details-layout', layout);
       await settingsModalAppBarActions.closeSettings();
+      // A fresh document has no cached details, so the album opens through its loading state.
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
 
       await searchToolbarActions.search(MULTI_DISC_ALBUM, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(MULTI_DISC_ALBUM);
       await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
       await expect(galleryActions.galleryPage.albumCard.coverImageByAlbumName(MULTI_DISC_ALBUM))
         .toHaveCSS('object-fit', 'fill');
+      // INT-040 (owner, 11-09): the album shows the chosen layout from its first frame, including while its
+      // details load (a fresh document has none cached), never the previous layout.
+      // parity-check: allow-read-only-measurement-evaluate -- record the open dialog's header layout on every frame
+      await page.evaluate(() => {
+        const frames = [];
+        window.__albumLayoutFrames = frames;
+        const read = () => {
+          const dialog = document.querySelector('#track-modal:not([hidden]) .track-modal-dialog');
+          const header = dialog?.querySelector(':scope > .track-modal-header > .album-details-header');
+          const subtitle = document.getElementById('track-modal-subtitle')?.textContent?.trim() || '';
+          if (dialog) {
+            const entry = `${header?.getAttribute('data-album-details-layout') || 'none'}|${subtitle === 'Loading album details...' ? 'loading' : 'loaded'}`;
+            if (frames.at(-1) !== entry) frames.push(entry);
+          }
+          if (!(dialog && frames.at(-1)?.endsWith('|loaded')) && frames.length < 50) requestAnimationFrame(read);
+        };
+        requestAnimationFrame(read);
+      });
       await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);
       await trackModalActions.waitForReady();
+      const layoutFrames = await page.evaluate(() => window.__albumLayoutFrames);
+      expect(layoutFrames.length, JSON.stringify(layoutFrames)).toBeGreaterThan(0);
+      expect(layoutFrames.every((frame) => frame.startsWith(`${layout}|`)), JSON.stringify(layoutFrames)).toBe(true);
       await expect(trackModalActions.trackModal.coverImage).toHaveCSS('object-fit', 'fill');
       await expect(trackModalActions.trackModal.header).toHaveAttribute('data-album-details-layout', layout);
       await expect(trackModalActions.trackModal.headerActions).toHaveCount(3);
@@ -158,13 +182,16 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       // parity-check: allow-read-only-measurement-evaluate -- inspect pointer feedback without confusing it with the keyboard-only focus outline
       await expect.poll(async () => editAction.evaluate((button, restingBackground) => {
         const style = getComputedStyle(button);
+        // An outline is drawn only with a style, a width and a visible color; the color alone defaults to the text.
+        const outlineDrawn = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0
+          && style.outlineColor !== 'rgba(0, 0, 0, 0)';
         return {
-          outline: style.outlineColor,
+          outline: outlineDrawn ? `${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor}` : 'none',
           borderVisible: style.borderColor !== 'rgba(0, 0, 0, 0)',
           backgroundChanged: style.backgroundColor !== restingBackground,
         };
       }, restingBackground)).toEqual({
-        outline: 'rgba(0, 0, 0, 0)',
+        outline: 'none',
         borderVisible: !outlinesOff,
         backgroundChanged: true,
       });

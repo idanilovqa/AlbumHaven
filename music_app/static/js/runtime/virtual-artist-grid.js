@@ -113,6 +113,18 @@ function getAlbumCardSourceCategories(album) {
   return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
+function refreshRetainedAlbumCardActions(retainedCard, nextCard) {
+  const freshAction = nextCard.querySelector?.('[data-open-tracklist="1"]');
+  if (!freshAction) return;
+  retainedCard.querySelectorAll?.('[data-open-tracklist="1"]').forEach((action) => {
+    ['data-album', 'data-album-key', 'data-album-version-key'].forEach((name) => {
+      const value = freshAction.getAttribute(name);
+      if (value === null) action.removeAttribute(name);
+      else action.setAttribute(name, value);
+    });
+  });
+}
+
 function getAlbumCardRenderKey(album) {
   const summary = getAlbumCardSummary(album);
   return JSON.stringify([
@@ -1357,6 +1369,9 @@ class VirtualArtistGrid {
   replayDeferredAppends(deferredAppends) {
     this._renderGeneration += 1;
     this._preserveExistingChildrenGeneration = this._renderGeneration;
+    // The replay completes the scroll that deferred it, as a setGroups render does.
+    const scrollRenderOwner = Number(this.diagnostics.latestScroll?.renderRafOwner || 0);
+    if (scrollRenderOwner) this.updateScrollDiagnostic(scrollRenderOwner, true);
     for (const { groups, replacedGroups, regroup } of deferredAppends) {
       if (this.appendGroupsNow(groups, replacedGroups)) continue;
       regroup?.();
@@ -1440,15 +1455,38 @@ class VirtualArtistGrid {
                 uniqueAlbums[existingIndex] = album;
             }
         });
-        const ownedAlbums = uniqueAlbums.filter((album) => album?.artist_relationship !== 'featured');
-        const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
+        // A split release belongs to each of its equally main artists, never under Featured On.
+        const isFeaturedOnly = (album) => album?.artist_relationship === 'featured'
+          && !(typeof isGallerySplitAlbum === 'function' && isGallerySplitAlbum(album));
+        const ownedAlbums = uniqueAlbums.filter((album) => !isFeaturedOnly(album));
+        const featuredAlbums = uniqueAlbums.filter(isFeaturedOnly);
+        // Separate: split albums leave the artist's own rows for one section per release type.
+        const splitAlbums = state?.gallery?.mainState?.splitAlbums === 'separate'
+          ? ownedAlbums.filter((album) => isGallerySplitAlbum(album)) : [];
+        const artistAlbums = splitAlbums.length ? ownedAlbums.filter((album) => !splitAlbums.includes(album)) : ownedAlbums;
     const blocks = [];
         const appendRows = (rowAlbums) => {
             for (let start = 0; start < rowAlbums.length; start += this.columns) {
                 blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
             }
         };
-        appendRows(ownedAlbums);
+        // With split sections present, the artist's own releases are labelled by type too ("Studio Albums").
+        if (splitAlbums.length) {
+            GALLERY_RELEASE_TYPES.forEach((type) => {
+                const typedAlbums = artistAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+                if (!typedAlbums.length) return;
+                blocks.push({ kind: 'subheading', title: GALLERY_RELEASE_TYPE_SECTION_TITLES[type], count: typedAlbums.length });
+                appendRows(typedAlbums);
+            });
+        } else {
+            appendRows(artistAlbums);
+        }
+        GALLERY_RELEASE_TYPES.forEach((type) => {
+            const typedSplits = splitAlbums.filter((album) => classifyGalleryReleaseType(album) === type);
+            if (!typedSplits.length) return;
+            blocks.push({ kind: 'subheading', title: `${GALLERY_RELEASE_TYPE_LABELS[type]} Split`, count: typedSplits.length });
+            appendRows(typedSplits);
+        });
         if (featuredAlbums.length) {
             blocks.push({ kind: 'subheading', title: 'Featured On', count: featuredAlbums.length });
             appendRows(featuredAlbums);
@@ -2286,6 +2324,7 @@ class VirtualArtistGrid {
         return;
       }
       const retainedImage = retainedCard.querySelector?.('img[data-production-cover-src]');
+      refreshRetainedAlbumCardActions(retainedCard, nextCard);
       if (retainedCard.getAttribute?.('data-gallery-card-cover-only') === '1') {
         const retainedCover = retainedCard.querySelector?.('.cover');
         const nextCover = nextCard.querySelector?.('.cover');
@@ -2366,6 +2405,7 @@ class VirtualArtistGrid {
           existingCard.innerHTML = nextCard.innerHTML;
         }
       }
+      refreshRetainedAlbumCardActions(existingCard, nextCard);
       nextCard.replaceWith(existingCard);
       existingCardsByIdentity.delete(identity);
     });
@@ -2975,13 +3015,15 @@ function renderArtistGroups(options = {}) {
     renderOptions,
     modeConfig.layoutConfig,
   );
-  if (
-    state.gallery.mainState.familySelectionExplicit === true
-    && state.gallery.mainState.familyArtists.length === 0
-    && virtualGrid.containerEl
-  ) {
+  const mainState = state.gallery.mainState;
+  const emptySelectionMessage = activeGallerySourceCategories(mainState).length === 0
+    ? 'Select at least one of the sources to see the Library'
+    : mainState.familySelectionExplicit === true && mainState.familyArtists.length === 0
+      ? 'Select at least one artist in Artist Family.'
+      : '';
+  if (emptySelectionMessage && virtualGrid.containerEl) {
     rebuildAlbumIndex([]);
-    virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+    virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml(emptySelectionMessage);
   }
   if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }

@@ -6,7 +6,7 @@ import unicodedata
 
 def artist_collation_key(value: object) -> tuple[str, str]:
     folded = str(value or "").strip().casefold()
-    text = folded
+    text = folded.replace("\u2019", "'").replace("\u2018", "'")
     while text and unicodedata.category(text[0]).startswith("P"):
         text = text[1:].lstrip()
     return text, folded

@@ -299,10 +299,8 @@ def test_separate_release_only_repair_path_still_succeeds_and_invalidates_projec
         {"artist::album"},
         {"artist::album", "artist::album::deluxe"},
     ]
-    assert invalidations == [
-        {"database_url": database_url, "kinds": ("problematic-files",)},
-        {"database_url": database_url, "kinds": ("problematic-files",)},
-    ]
+    # Separate releases mark their albums for the Problematic Files index (0188); no cache is dropped.
+    assert invalidations == []
 
 
 def test_handle_edit_tags_request_exception_only_uses_override_and_queues_save(config):
@@ -573,6 +571,7 @@ def test_mixed_media_and_exception_failure_compensates_media_before_returning(
     assert payload["ok"] is False
     assert "exception persistence failed" in payload["error"]
     assert payload["edit_outcome"] == "failed_rolled_back"
+    assert payload.get("failure_stage") != "media_write"
     assert media_title[track_path] == "Old Title"
     assert media_writes == [
         {"title": "New Title"},
@@ -1569,6 +1568,52 @@ def test_album_rename_releases_reservation_when_no_changes_remain(config):
     assert result["changed_count"] == 0
     assert not result["save_task_id"]
     assert lease.released is True
+
+
+def test_failed_edit_restores_a_file_another_process_holds_briefly(config, monkeypatch):
+    monkeypatch.setattr(edit_workflows_module, "sleep", lambda _seconds: None)
+    first, second = (
+        str((config["MUSIC_DIR"] / "ДДТ" / "Ремиксы" / f"{index:02} track.mp3").resolve())
+        for index in (1, 2)
+    )
+    albums = {first: "Ремиксы", second: "Ремиксы"}
+    held_restores = 2
+
+    def apply_repairs(path, repairs):
+        nonlocal held_restores
+        if path == second:
+            raise RuntimeError("second write failed")
+        if repairs["album"] == "Ремиксы" and held_restores:
+            held_restores -= 1
+            try:
+                raise PermissionError("file is in use")
+            except PermissionError as exc:
+                raise RuntimeError(f"Could not save tags for {path}: {exc}") from exc
+        albums[path] = repairs["album"]
+        return path, True, ["album"]
+
+    _changed, _skipped, failure = edit_workflows_module._run_edit_jobs(
+        album={"name": "Ремиксы", "album_artist": "ДДТ", "tracks": [{"path": first}, {"path": second}]},
+        repair_jobs=[
+            (path, {"path": path, "album": "Ремиксы"}, {"album": "Ремиксы 2"})
+            for path in (first, second)
+        ],
+        config=config,
+        logger=_logger_stub(),
+        apply_repairs_worker=apply_repairs,
+        update_cache_entry_after_repairs=lambda *_args: {},
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        updated_file_cache={},
+        action_name="Edit tags",
+        failure_prefix="Failed to edit tags for",
+        edit_write_workers=1,
+    )
+
+    assert albums == {first: "Ремиксы", second: "Ремиксы"}
+    assert failure["edit_outcome"] == "failed_rolled_back"
+    # FTC-TAGS-040: the page names a file that can't be written by this stage, never by the path or error.
+    assert failure["failure_stage"] == "media_write"
 
 
 def test_blank_album_edit_hands_the_finalizer_the_selected_albums_loaded_inventory(config):

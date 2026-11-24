@@ -155,7 +155,22 @@ test('FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремик
           expectedField: 'album',
           expectedValue: SOURCE_ALBUM,
           expectedFilenames: destinationTracks().map((track) => track.filename),
-          readOptimisticState: (stage) => checkpoint(stage, { arm: true }),
+          readOptimisticState: async (stage) => {
+            const sample = await checkpoint(stage, { arm: true });
+            if (stage === 'before-edit-response') {
+              await trackModalActions.closeIfOpen();
+              await galleryActions.selectAlbumDetailsByIdentity({
+                artist: ARTIST,
+                album: SOURCE_ALBUM,
+                year: YEAR,
+              });
+              await expect(trackModalActions.trackModal.title)
+                .toHaveText(albumDetailsTitle(SOURCE_ALBUM));
+              await expect.poll(() => trackModalActions.readTrackTitles())
+                .toEqual(TRACKS.map((track) => track.title));
+            }
+            return sample;
+          },
           readCompletedState: (stage) => checkpoint(stage),
         }));
       expect(String(actionResult.payload?.save_task_id || '').trim()).not.toBe('');

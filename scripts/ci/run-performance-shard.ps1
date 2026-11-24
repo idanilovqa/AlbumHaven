@@ -78,7 +78,9 @@ $failedTargets = [System.Collections.Generic.List[string]]::new()
 $databaseMutatingTargets = @(
     'edit-tags-post-edit',
     'cover-lookup',
-    'notification-history'
+    'notification-history',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive'
 )
 $restorePreparedDatabaseBeforeNextTarget = $false
 $targetIndex = 0
@@ -235,7 +237,8 @@ function Restore-PerformanceDatabase {
         --fixture-root $env:ALBUM_HAVEN_FIXTURE_ROOT `
         --profile $FixtureProfile `
         --database-url $env:DATABASE_MIGRATOR_URL `
-        --replace-existing
+        --replace-existing `
+        --relation-projection ready
     if ($LASTEXITCODE -ne 0) { throw "Fixture restoration failed for $FixtureProfile." }
 }
 

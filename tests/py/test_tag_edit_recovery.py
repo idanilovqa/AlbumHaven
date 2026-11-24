@@ -10,11 +10,12 @@ from music_app.services import (
     cache,
     library_roots,
     metadata,
+    gallery_projection_postgres,
+    relation_projection_postgres,
     scan_cache_persistence,
     tag_edit_intents_postgres,
 )
 from music_app.services.tag_edit_recovery import (
-    _recovery_structural_field,
     reconcile_tag_edit_intents,
     reconcile_unfinished_tag_edit_intents_on_startup,
 )
@@ -58,6 +59,21 @@ def run_recovery(intent_payload, physical):
     return summary, persisted, restored, failed
 
 
+def _forbid_whole_projection_preparation(monkeypatch):
+    """Case 56: recovery saves through the keyed tag-save path. It never requires whole-projection readiness
+    and never runs a whole-library preparation (initialize_gallery_membership, the stray-duplicate refresh of
+    every album); relations may be not ready at all."""
+    def forbidden(name):
+        return lambda *_args, **_kwargs: pytest.fail(f"tag edit recovery called {name}")
+
+    monkeypatch.setattr(relation_projection_postgres, "ensure_relation_projection_ready",
+                        forbidden("ensure_relation_projection_ready"))
+    monkeypatch.setattr(gallery_projection_postgres, "initialize_gallery_membership",
+                        forbidden("initialize_gallery_membership"))
+    monkeypatch.setattr(gallery_projection_postgres, "_refresh_all_stray_duplicate_ownership",
+                        forbidden("_refresh_all_stray_duplicate_ownership"))
+
+
 def run_startup_recovery(
     monkeypatch,
     tmp_path,
@@ -66,6 +82,7 @@ def run_startup_recovery(
     changes,
     physical_values,
     refreshed_entries,
+    physical_accesses=None,
 ):
     structural_calls = []
     generic_calls = []
@@ -96,7 +113,10 @@ def run_startup_recovery(
 
     class SnapshotAdapter:
         def load_snapshot(self, _cache_path, _root_identity):
-            return file_cache, None, {}, None, None
+            pytest.fail("Recovery must not load the full library snapshot")
+
+        def load_file_entries(self, paths):
+            return {path: dict(file_cache[path]) for path in paths if path in file_cache}
 
     monkeypatch.setattr(
         tag_edit_intents_postgres,
@@ -119,12 +139,15 @@ def run_startup_recovery(
         "select_scan_cache_adapter",
         lambda _config: SnapshotAdapter(),
     )
+    _forbid_whole_projection_preparation(monkeypatch)
+    def read_physical(path, fields):
+        if physical_accesses is not None:
+            physical_accesses.append(str(path))
+        return {field: physical_values[str(path)][field] for field in fields}
     monkeypatch.setattr(
         metadata,
         "read_editable_tag_values",
-        lambda path, fields: {
-            field: physical_values[str(path)][field] for field in fields
-        },
+        read_physical,
     )
     monkeypatch.setattr(
         metadata,
@@ -305,23 +328,63 @@ def test_terminal_intents_are_ignored_when_recovery_is_repeated():
     assert calls == []
 
 
-def test_recovery_routes_album_changes_through_structural_persistence():
-    assert _recovery_structural_field(
-        previous_entries={PATH: {"album": "Old", "year": 2026}},
-        updated_entries={PATH: {"album": "New", "year": 2026}},
-    ) == "album"
+def test_startup_recovery_saves_the_edit_while_relations_are_not_ready(monkeypatch, tmp_path):
+    """Case 56 (a) and (c): with relations not ready (startup has not prepared them), recovery still saves
+    the user's edit, raises nothing and fails nothing. It runs no whole-projection preparation (the harness
+    fails on ensure_relation_projection_ready, initialize_gallery_membership and the stray-duplicate refresh of
+    every album) and saves through the keyed tag-save path: no in-transaction relation rebuild, the albums
+    journaled for the relation owner."""
+    path = str(tmp_path / 'selected.mp3')
+    summary, structural, generic = run_startup_recovery(
+        monkeypatch, tmp_path,
+        file_cache={path: {'album': 'Old'}},
+        changes=[{'path': path, 'old_values': {'album': 'Old'}, 'requested_values': {'album': 'New'}}],
+        physical_values={path: {'album': 'New'}}, refreshed_entries={path: {'album': 'New'}},
+    )
+    assert summary == {'completed': 1, 'rolled_back': 0, 'reconciled_external': 0, 'failed': 0}
+    assert generic == []
+    assert len(structural) == 1 and structural[0]['updated_file_entries'] == {path: {'album': 'New'}}
+    assert structural[0]['rebuild_relation_projection'] is False
 
 
-def test_recovery_keeps_exception_only_changes_on_generic_persistence():
-    assert _recovery_structural_field(
-        previous_entries={PATH: {"album": "Old", "exception_type": ""}},
-        updated_entries={
-            PATH: {"album": "Old", "exception_type": "Non-album rarity"},
-        },
-    ) == ""
+def test_startup_recovery_dispatches_external_identity_changes_but_not_file_statistics(monkeypatch, tmp_path):
+    path = str(tmp_path / 'selected.mp3')
+    before = {'title': 'Old', 'album_artist': 'Old artist', 'year': 2026, 'mtime': 1, 'size': 10}
+    after = {**before, 'title': 'Requested', 'album_artist': 'External artist', 'year': 2025,
+             'mtime': 2, 'size': 20, 'cover_revision': 'external'}
+    summary, calls, generic = run_startup_recovery(
+        monkeypatch, tmp_path, file_cache={path: before},
+        changes=[{'path': path, 'old_values': {'title': 'Old'}, 'requested_values': {'title': 'Requested'}}],
+        physical_values={path: {'title': 'Requested'}}, refreshed_entries={path: after},
+    )
+    assert summary['completed'] == 1
+    assert generic == []
+    assert calls[0]['changed_field_names'] == {'title', 'album_artist', 'year'}
+    assert calls[0]['updated_file_entries'] == {path: after}
 
 
-def test_startup_recovery_uses_generic_persistence_for_album_and_year_change(
+def test_startup_recovery_album_artist_uses_only_selected_inventory(monkeypatch, tmp_path):
+    path = str(tmp_path / 'selected.mp3')
+    unrelated = str(tmp_path / 'unrelated.mp3')
+    previous = {'album': 'Album', 'album_artist': 'To', 'artist': 'To/Die/For'}
+    summary, structural, generic = run_startup_recovery(
+        monkeypatch, tmp_path,
+        file_cache={path: previous, unrelated: {'album': 'Unrelated'}},
+        changes=[{'path': path, 'old_values': {'album_artist': 'To'},
+                  'requested_values': {'album_artist': 'To/Die/For'}}],
+        physical_values={path: {'album_artist': 'To/Die/For'}},
+        refreshed_entries={path: {**previous, 'album_artist': 'To/Die/For'}},
+    )
+    assert summary == {'completed': 1, 'rolled_back': 0, 'reconciled_external': 0, 'failed': 0}
+    assert generic == []
+    assert len(structural) == 1
+    assert structural[0]['changed_field_names'] == {'album_artist'}
+    assert structural[0]['previous_file_entries'] == {path: previous}
+    assert set(structural[0]['updated_file_entries']) == {path}
+    assert callable(structural[0]['before_commit'])
+
+
+def test_startup_recovery_uses_scoped_persistence_for_album_and_year_change(
     monkeypatch,
     tmp_path,
 ):
@@ -356,46 +419,43 @@ def test_startup_recovery_uses_generic_persistence_for_album_and_year_change(
     )
 
     assert summary["completed"] == 1
-    assert structural_calls == []
-    assert len(generic_calls) == 1
-    args, kwargs = generic_calls[0]
-    assert args[1] == {track_path: resolved_entry}
-    assert kwargs["baseline_file_cache"] == {track_path: previous_entry}
+    assert generic_calls == []
+    assert len(structural_calls) == 1
+    assert structural_calls[0]["updated_file_entries"] == {track_path: resolved_entry}
+    assert structural_calls[0]["previous_file_entries"] == {track_path: previous_entry}
+    assert structural_calls[0]["changed_field_names"] == {"album", "year"}
 
 
 @pytest.mark.parametrize(
-    ("requested_updates", "expected_targeted_field"),
+    "requested_updates",
     [
-        pytest.param({"album": "New album"}, "album", id="album-only-targeted"),
-        pytest.param({"year": "2025"}, "year", id="year-only-targeted"),
+        pytest.param({"album": "New album"}, id="album"),
+        pytest.param({"year": "2025"}, id="year"),
         pytest.param(
             {"album_artist": "New artist"},
-            None,
-            id="album-artist-only-generic",
+            id="album-artist",
         ),
-        pytest.param({"edition": "Deluxe"}, None, id="edition-only-generic"),
+        pytest.param({"edition": "Deluxe"}, id="edition"),
         pytest.param(
             {"album": "New album", "album_artist": "New artist"},
-            None,
-            id="album-and-album-artist-generic",
+            id="album-and-album-artist",
         ),
         pytest.param(
             {"album": "New album", "exception_type": "Non-album rarity"},
-            "album",
             id="album-and-exception-targeted",
         ),
         pytest.param(
             {"year": "2025", "edition": "Deluxe"},
-            None,
-            id="year-and-edition-generic",
+            id="year-and-edition",
         ),
+        pytest.param({"exception_type": "Non-album rarity"}, id="exception-only"),
+        pytest.param({"exception_type": "Custom Collection", "custom_collection_name": "Mix"}, id="collection"),
     ],
 )
 def test_startup_recovery_dispatches_from_exact_changed_field_set(
     monkeypatch,
     tmp_path,
     requested_updates,
-    expected_targeted_field,
 ):
     track_path = str(tmp_path / "track-01.mp3")
     previous_entry = {
@@ -404,6 +464,7 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         "year": "2024",
         "edition": "",
         "exception_type": "",
+        "custom_collection_name": None,
         "title": "Opening",
         "track_number": "1",
     }
@@ -429,22 +490,17 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
     )
 
     assert summary["completed"] == 1
-    if expected_targeted_field is not None:
-        assert generic_calls == []
-        assert len(structural_calls) == 1
-        call = structural_calls[0]
-        assert call["changed_field_names"] == {expected_targeted_field}
-        assert call["rebuild_relation_projection"] is True
-    else:
-        assert structural_calls == []
-        assert len(generic_calls) == 1
-        args, call = generic_calls[0]
-        assert args[1] == {track_path: resolved_entry}
-        assert call["baseline_file_cache"] == {track_path: previous_entry}
+    assert generic_calls == []
+    assert len(structural_calls) == 1
+    call = structural_calls[0]
+    assert call["changed_field_names"] == set(requested_updates)
+    assert call["rebuild_relation_projection"] is False, "the keyed tag-save path (case 56)"
+    assert call["updated_file_entries"] == {track_path: resolved_entry}
+    assert call["previous_file_entries"] == {track_path: previous_entry}
     assert callable(call["before_commit"])
 
 
-def test_startup_recovery_passes_merged_inventory_for_blank_album_change(
+def test_startup_recovery_leaves_sibling_discovery_to_scoped_persistence_for_blank_album_change(
     monkeypatch,
     tmp_path,
 ):
@@ -491,7 +547,6 @@ def test_startup_recovery_passes_merged_inventory_for_blank_album_change(
     assert structural_calls[0]["changed_paths"] == {changed_path}
     assert structural_calls[0]["updated_file_entries"] == {
         changed_path: resolved_changed_entry,
-        sibling_path: previous_cache[sibling_path],
     }
 
 
@@ -622,7 +677,7 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
 
 
 @pytest.mark.parametrize("busy", [True, False])
-def test_startup_recovery_claims_one_intent_at_a_time_before_loading_inventory(monkeypatch, tmp_path, busy):
+def test_startup_recovery_claims_one_intent_at_a_time_before_reconciling(monkeypatch, tmp_path, busy):
     from contextlib import contextmanager
     from music_app.services import tag_edit_recovery as recovery
     events = []
@@ -642,12 +697,13 @@ def test_startup_recovery_claims_one_intent_at_a_time_before_loading_inventory(m
         def load_snapshot(self, *_args):
             events.append(("snapshot", None))
             return {}, None, {}, None, None
-    def reconcile(_runtime, _repository, claimed, _file_cache):
+    def reconcile(_runtime, _repository, claimed):
         events.append(("reconcile", claimed["id"]))
         return {"completed": 1, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
     monkeypatch.setattr(tag_edit_intents_postgres, "PostgresTagEditIntentRepository", Repository)
     monkeypatch.setattr(library_roots, "library_root_cache_identity", lambda _config: "root")
     monkeypatch.setattr(scan_cache_persistence, "select_scan_cache_adapter", lambda _config: Adapter())
+    _forbid_whole_projection_preparation(monkeypatch)
     monkeypatch.setattr(recovery, "_reconcile_claimed_tag_edit_intent", reconcile, raising=False)
     runtime = SimpleNamespace(config={"CACHE_PATH": tmp_path / "unused"}, logger=SimpleNamespace(info=lambda *_args: None))
     summary = recovery.reconcile_unfinished_tag_edit_intents_on_startup(runtime)
@@ -656,4 +712,4 @@ def test_startup_recovery_claims_one_intent_at_a_time_before_loading_inventory(m
         assert events == [("claim", "one"), ("release", "one"), ("claim", "two"), ("release", "two")]
     else:
         assert summary["completed"] == 2
-        assert events == [("claim", "one"), ("snapshot", None), ("reconcile", "one"), ("release", "one"), ("claim", "two"), ("reconcile", "two"), ("release", "two")]
+        assert events == [("claim", "one"), ("reconcile", "one"), ("release", "one"), ("claim", "two"), ("reconcile", "two"), ("release", "two")]

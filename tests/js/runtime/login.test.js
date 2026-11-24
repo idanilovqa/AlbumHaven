@@ -180,12 +180,13 @@ function loadStartupProgress() {
   const fill = { style: {} };
   const percentLabel = { textContent: '' };
   const bar = element();
+  const meter = element();
   const error = element({ hidden: true });
   const retry = element();
   const content = { inert: false };
   const root = element({ hidden: true, dataset: { startupProgress: '50' },
     querySelector(selector) { return ({ '.progress-fill': fill, '[role="progressbar"]': bar,
-      '[data-startup-percent]': percentLabel,
+      '[data-startup-meter]': meter, '[data-startup-percent]': percentLabel,
       '[data-startup-error]': error, '[data-startup-retry]': retry })[selector]; },
   });
   const events = new Map();
@@ -197,19 +198,19 @@ function loadStartupProgress() {
     addEventListener() {} };
   const source = fs.readFileSync(path.join(path.dirname(sourcePath), 'startup-progress.js'), 'utf8');
   vm.runInNewContext(source, { window, document });
-  return { controller: window.AlbumHavenStartupProgress, root, bar, fill, percentLabel, error, content, frameCallbacks };
+  return { controller: window.AlbumHavenStartupProgress, root, bar, meter, fill, percentLabel, error, content, frameCallbacks };
 }
 
 test('startup stages are accessible, monotonic and permanently complete after first usable view', () => {
   const ui = loadStartupProgress();
   while (ui.frameCallbacks.length) ui.frameCallbacks.shift()();
-  assert.equal(ui.bar.attributes['aria-valuenow'], '50');
+  assert.equal(ui.bar.attributes['aria-valuenow'], '95');
   assert.equal(ui.content.inert, true);
   ui.controller.show(75);
   ui.controller.show(50);
   while (ui.frameCallbacks.length) ui.frameCallbacks.shift()();
-  assert.equal(ui.bar.attributes['aria-valuenow'], '75');
-  assert.equal(ui.percentLabel.textContent, '75%');
+  assert.equal(ui.bar.attributes['aria-valuenow'], '95');
+  assert.equal(ui.percentLabel.textContent, '95%');
   ui.controller.finish();
   while (ui.frameCallbacks.length) ui.frameCallbacks.shift()();
   assert.equal(ui.bar.attributes['aria-valuenow'], '100');
@@ -220,15 +221,19 @@ test('startup stages are accessible, monotonic and permanently complete after fi
   assert.equal(ui.root.hidden, true);
 });
 
-test('signed-in pages continue the bar from the 25% sign-in stage', () => {
+test('signed-in pages continue the bar forward from the server-painted 50% app stage', () => {
   const ui = loadStartupProgress();
-  assert.equal(ui.fill.style.width, '25.000%');
-  assert.equal(ui.percentLabel.textContent, '25%');
+  // The server paints 50 before this script runs (f9b7920cf), so showing the 25% sign-in stage would move back.
+  assert.equal(ui.fill.style.width, '50.000%');
+  assert.equal(ui.percentLabel.textContent, '50%');
 
-  ui.frameCallbacks.shift()(100);
-  ui.frameCallbacks.shift()(450);
-  const midway = Number.parseFloat(ui.fill.style.width);
-  assert.ok(midway > 25 && midway < 50, `expected a glide from 25% to 50%, saw ${midway}%`);
+  const widths = [];
+  for (const time of [100, 600, 950]) {
+    ui.frameCallbacks.shift()(time);
+    widths.push(Number.parseFloat(ui.fill.style.width));
+  }
+  assert.deepEqual(widths, [...widths].sort((left, right) => left - right), 'progress never moves back');
+  assert.ok(widths[0] >= 50 && widths[2] > 50 && widths[2] < 95, `expected a glide onward from 50%, saw ${widths}`);
 });
 
 test('startup bar colors resolve without login tokens or account player tokens', () => {
@@ -263,7 +268,9 @@ test('startup failure provides recovery and reset restores login interactivity',
   ui.controller.fail();
   assert.equal(ui.error.hidden, false);
   assert.equal(ui.root.hidden, false);
+  assert.equal(ui.meter.hidden, true);
   ui.controller.reset();
   assert.equal(ui.root.hidden, true);
+  assert.equal(ui.meter.hidden, false);
   assert.equal(ui.content.inert, false);
 });

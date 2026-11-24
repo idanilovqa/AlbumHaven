@@ -104,20 +104,124 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
     await ui.cards.first().hover();
     await expect(ui.yearWithin(ui.cards.first())).not.toBeVisible();
   });
-  await stepLogger.step('Search keeps artist information in an artist toolbar and in result headings; explicit navigation restores it',async()=>{
-    // Owner review: an artist header always has its i icon, also during search;
-    // a family or Gallery header names no single artist and has none.
-    const kind=await ui.galleryBar.getAttribute('data-gallery-context-kind');
-    if(['artist','single-artist'].includes(kind)) await expect(ui.toolbarInfo).toBeVisible();
-    else await expect(ui.toolbarInfo).not.toBeVisible();
-    await expect(ui.headingInfo).toBeVisible();
-    await expect(ui.infoPanel).not.toBeVisible();
+  // Owner (11-08, UI-SEARCH-INFO): the header "i" shows during a search and must open the artist information when clicked.
+  await stepLogger.step('During a search the header and result-heading info buttons both open the artist information',async()=>{
+    const openAndCloseInfo=async(trigger,artist)=>{
+      await expect(trigger).toBeVisible();
+      await trigger.click();
+      await expect(ui.infoPanel).toBeVisible();
+      await expect(trigger).toHaveAttribute('aria-expanded','true');
+      await expect(ui.infoPanel.getByRole('heading',{name:artist,exact:true})).toBeVisible();
+      await expect(ui.infoSummary).toBeVisible();
+      await expect(ui.infoSummary).not.toHaveText('');
+      await page.keyboard.press('Escape');
+      await expect(ui.infoPanel).not.toBeVisible();
+    };
+    // A search that finds one artist names it in the header, with its "i" (owner example: Dragonland).
+    await searchToolbarActions.search('Mastodon',{submitWithEnter:true});
+    await searchToolbarActions.waitForQuery('Mastodon');
+    await expect(page.locator('[data-gallery-bar-instance="gallery"][data-gallery-context-kind="single-artist"] [data-gallery-context-name]')).toHaveText('Mastodon');
+    await openAndCloseInfo(ui.toolbarInfo,'Mastodon');
+    await searchToolbarActions.search('Neal Morse',{submitWithEnter:true});
+    await searchToolbarActions.waitForQuery('Neal Morse');
+    await openAndCloseInfo(ui.headingInfo,'Neal Morse');
     await searchToolbarActions.clearSearch({submitWithEnter:true});
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForGalleryReady();
     await ui.nealSidebar.click();
     await galleryActions.waitForGalleryReady();
     await expect(ui.nealSidebar).toHaveAttribute('aria-current','true');
+  });
+  await stepLogger.step('UI-ARTIST-INFO-SCROLL clears the player, retains its connector and follows background scrolling',async()=>{
+    const originalViewport=page.viewportSize();
+    await page.setViewportSize({width:1200,height:500});
+    try {
+      await ui.headingInfo.click();
+      await expect(ui.infoPanel).toBeVisible();
+      const readGeometry=()=>ui.infoPanel.evaluate((panel)=>{
+        const trigger=document.querySelector('[data-artist-info-trigger][data-artist="Neal Morse"][aria-expanded="true"]');
+        const player=document.querySelector('[data-shell-slot="bottom_player"]');
+        const panelBounds=panel.getBoundingClientRect();
+        const triggerBounds=trigger?.getBoundingClientRect();
+        const playerBounds=player?.getBoundingClientRect();
+        const connector=getComputedStyle(panel,'::before');
+        return {
+          connectorHeight:parseFloat(connector.height),
+          connectorVisible:connector.display!=='none'&&connector.visibility!=='hidden',
+          connectorWidth:parseFloat(connector.width),
+          panelClipPath:getComputedStyle(panel).clipPath,
+          panelBottom:panelBounds.bottom,
+          panelTop:panelBounds.top,
+          playerTop:playerBounds?.top??window.innerHeight,
+          triggerOwner:trigger?.closest('.family-artist-header')?'divider':(trigger?.closest('[data-gallery-bar-instance="gallery"]')?'header':'unknown'),
+          triggerTop:triggerBounds?.top??null,
+          triggerBottom:triggerBounds?.bottom??null,
+          triggerExpanded:trigger?.getAttribute('aria-expanded')==='true',
+          viewportHeight:window.innerHeight,
+        };
+      });
+      await expect.poll(async()=>{
+        const geometry=await readGeometry();
+        return Math.abs(geometry.panelTop-(geometry.triggerBottom-1));
+      }).toBeLessThanOrEqual(1);
+      const opened=await readGeometry();
+      expect(opened.connectorVisible).toBe(true);
+      expect(opened.connectorWidth).toBeGreaterThan(0);
+      expect(opened.connectorHeight).toBeGreaterThan(0);
+      expect(opened.panelClipPath).toBe('none');
+      expect(opened.panelBottom).toBeLessThanOrEqual(opened.playerTop+1);
+      expect(opened.panelTop).toBeCloseTo(opened.triggerBottom-1,0);
+      expect(opened.triggerOwner).toBe('divider');
+      await expect(ui.headingInfo).toHaveAttribute('aria-expanded','true');
+      await expect(ui.toolbarInfo).toHaveAttribute('aria-expanded','false');
+
+      const galleryBounds=await ui.galleryScroll.boundingBox();
+      expect(galleryBounds).not.toBeNull();
+      await page.mouse.move(galleryBounds.x+galleryBounds.width-24,galleryBounds.y+galleryBounds.height/2);
+      const scrollBefore=await ui.galleryScroll.evaluate(node=>node.scrollTop);
+      await page.mouse.wheel(0,80);
+      await expect.poll(()=>ui.galleryScroll.evaluate(node=>node.scrollTop)).toBeGreaterThan(scrollBefore);
+      await expect(ui.infoPanel).toBeVisible();
+      await expect.poll(async()=>{
+        const geometry=await readGeometry();
+        return Math.abs(geometry.panelTop-(geometry.triggerBottom-1));
+      }).toBeLessThanOrEqual(1);
+      const scrolled=await readGeometry();
+      expect(scrolled.panelTop).toBeLessThan(opened.panelTop);
+      expect(scrolled.panelTop).toBeCloseTo(scrolled.triggerBottom-1,0);
+
+      const farScrollBefore=await ui.galleryScroll.evaluate(node=>node.scrollTop);
+      await page.mouse.wheel(0,900);
+      await expect.poll(()=>ui.galleryScroll.evaluate(node=>node.scrollTop)).toBeGreaterThan(farScrollBefore);
+      await expect(ui.infoPanel).toBeVisible();
+      await expect.poll(async()=>{
+        const geometry=await readGeometry();
+        return Math.abs(geometry.panelTop-(geometry.triggerBottom-1));
+      }).toBeLessThanOrEqual(1);
+      const farScrolled=await readGeometry();
+      expect(farScrolled.triggerExpanded).toBe(true);
+      expect(farScrolled.connectorVisible).toBe(true);
+      expect(farScrolled.connectorWidth).toBeGreaterThan(0);
+      expect(farScrolled.connectorHeight).toBeGreaterThan(0);
+      expect(farScrolled.panelClipPath).toBe('none');
+      expect(farScrolled.triggerTop).toBeGreaterThanOrEqual(0);
+      expect(farScrolled.triggerBottom).toBeLessThanOrEqual(farScrolled.viewportHeight);
+      expect(farScrolled.panelTop).toBeGreaterThanOrEqual(0);
+      expect(farScrolled.panelBottom).toBeLessThanOrEqual(farScrolled.playerTop+1);
+      expect(farScrolled.panelTop).toBeCloseTo(farScrolled.triggerBottom-1,0);
+      expect(farScrolled.triggerOwner).toBe('header');
+      await expect(ui.headingInfo).toHaveAttribute('aria-expanded','false');
+      await expect(ui.toolbarInfo).toHaveAttribute('aria-expanded','true');
+      await expect(ui.infoPanel.getByRole('heading',{name:'Neal Morse',exact:true})).toBeVisible();
+      await expect(ui.infoSummary).toBeInViewport();
+      await page.keyboard.press('Escape');
+      await expect(ui.infoPanel).toBeHidden();
+    } finally {
+      if(await ui.infoPanel.isVisible())await page.keyboard.press('Escape');
+      const scrollTop=await ui.galleryScroll.evaluate(node=>node.scrollTop);
+      if(scrollTop>0)await galleryActions.scrollGalleryBy(-scrollTop);
+      if(originalViewport)await page.setViewportSize(originalViewport);
+    }
   });
   await stepLogger.step('Info text has visible selection during drag and cannot select gallery cards',async()=>{
     await ui.info.click(); await expect(ui.infoPanel).toBeVisible();
@@ -219,6 +323,35 @@ test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,s
       await expect.poll(()=>ui.tracks.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
       expect((await ui.header.boundingBox()).y).toBeCloseTo(header.y,0);
       expect((await ui.art.boundingBox()).y).toBeCloseTo(art.y,0);
+    });
+    // INT-007 / UI-11 (owner, 11-08 evening): the album already linked shows selected; clicking it deselects it and
+    // Save unlinks it, and the gallery updates in the background without the Loading page.
+    await stepLogger.step('Mark As A Version shows the linked album selected and unlinks it in the background',async()=>{
+      await page.setViewportSize({width:1440,height:960});
+      await page.keyboard.press('Escape'); await expect(ui.dialog).toBeHidden();
+      await galleryActions.openAlbumContextMenu('Featured Signal Collection');
+      const menu=galleryActions.galleryPage.albumCard.contextMenu;
+      await expect(menu.getByRole('button',{name:'Unmark as a version',exact:true})).toHaveCount(0);
+      await menu.getByRole('button',{name:'Mark as a version',exact:true}).click();
+      const dialog=page.locator('#app-form-modal');
+      const linked=dialog.locator('[data-version-picker-target]').filter({hasText:'Ordinary Numeric Disc Control'});
+      const save=dialog.locator('#app-form-submit');
+      await expect(dialog).toBeVisible();
+      await expect(linked).toHaveClass(/\bis-selected\b/);
+      await expect(linked).toHaveAttribute('aria-current','true');
+      await expect(save).toBeDisabled();
+      await linked.click();
+      await expect(linked).not.toHaveClass(/\bis-selected\b/);
+      await expect(save).toBeEnabled();
+      // parity-check: allow-read-only-measurement-evaluate -- record whether the Loading page shows on any frame
+      await page.evaluate(()=>{const seen=[];window.__versionLoaderFrames=seen;const read=()=>{const l=document.getElementById('library-loader');seen.push(Boolean(l&&!l.hidden));if(!window.__versionLoaderStop)requestAnimationFrame(read);};requestAnimationFrame(read);});
+      await save.click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText('Album is no longer manually marked as a version.')).toBeVisible();
+      await expect.poll(async()=>{await galleryActions.openAlbumContextMenu('Featured Signal Collection');const offered=await menu.getByRole('button',{name:'Mark as a version',exact:true}).count();await galleryActions.dismissAlbumContextMenu();return offered;},{message:'the link is gone, so nothing is left to mark'}).toBe(0);
+      const loaderFrames=await page.evaluate(()=>{window.__versionLoaderStop=true;return window.__versionLoaderFrames;});
+      expect(loaderFrames.length).toBeGreaterThan(5);
+      expect(loaderFrames.filter(Boolean),'the gallery never goes behind the Loading page').toEqual([]);
     });
   } finally {await fixture.restore();}
 });

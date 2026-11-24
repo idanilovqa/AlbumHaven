@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import replace
+from functools import partial
 from datetime import datetime, timezone
 import inspect
+from io import BytesIO
 from types import MethodType
 import os
 from pathlib import Path
 from threading import Event, Lock
 import time
+
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from music_app.services import cover_provider_matching
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
@@ -20,13 +25,15 @@ from music_app.services.app_logging import log_app_event
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.cover_lookup_jobs import CoverLookupRuntimeJob, build_cover_lookup_job_contract
 from music_app.services.cover_lookup_tasks import (
+    admit_cover_lookup_task,
+    cover_lookup_admission_state,
     cover_lookup_result,
-    create_cover_lookup_task,
     discard_cover_lookup_future,
     finalize_cover_lookup_task_canceled,
     register_cover_lookup_future,
     request_cover_lookup_task_stop,
     update_cover_lookup_task,
+    wait_for_cover_lookup_workers,
 )
 from music_app.services.cover_provider_candidates import (
     SelectedRemoteImage,
@@ -68,6 +75,14 @@ _COVER_LOOKUP_BANDCAMP_EXECUTOR = create_daemon_executor(
     thread_name_prefix="albumhaven-cover-bandcamp",
 )
 _CANDIDATE_LOOKUP_JOB_CONTRACT = build_cover_lookup_job_contract("candidate_lookup")
+_COVER_LOOKUP_ADMISSION_LOCK = Lock()
+_COVER_LOOKUP_FINISH_WAIT_SECONDS = 5.0
+
+
+class CoverLookupFinishingError(RuntimeError):
+    pass
+
+
 _RUNTIME_PHASE_NAMES = ("discovery", "fetch", "scoring", "persistence")
 
 
@@ -138,6 +153,7 @@ def _publish_candidate_runtime_phase_metrics(
     config: Mapping[str, object],
     timings: dict[str, float],
     counts: dict[str, int],
+    expected_search_generation: str = "",
 ) -> None:
     if not cover_lookup_result(task_id):
         return
@@ -145,6 +161,7 @@ def _publish_candidate_runtime_phase_metrics(
         task_id,
         config=config,
         **_runtime_phase_payload(timings, counts),
+        expected_search_generation=expected_search_generation,
     )
 
 
@@ -241,33 +258,51 @@ def queue_cover_lookup_task(
     ]
     | None = None,
 ) -> str:
-    task_id, cancel_event = create_cover_lookup_task(
-        album,
-        requested_track_paths,
-        manual_urls,
-        config=config,
-        preferred_task_id=preferred_task_id,
-        allow_preferred_path_rebind=allow_preferred_path_rebind,
-    )
-    resolved_user_agent = str(user_agent or config["MUSICBRAINZ_USER_AGENT"])
-    runtime_job = CoverLookupRuntimeJob(
-        task_id,
-        config,
-        logger,
-        resolved_user_agent,
-        album,
-        requested_track_paths,
-        cancel_event,
-        manual_urls,
-        build_cover_lookup_job_contract("candidate_lookup"),
-    )
-    future = _COVER_LOOKUP_EXECUTOR.submit(
-        _run_prepared_cover_lookup_job if prepare is not None else _run_cover_lookup_job,
-        runtime_job,
-        *([prepare] if prepare is not None else []),
-    )
-    register_cover_lookup_future(task_id, future, config=config)
-    return task_id
+    deadline = time.monotonic() + _COVER_LOOKUP_FINISH_WAIT_SECONDS
+    while True:
+        with _COVER_LOOKUP_ADMISSION_LOCK:
+            active_task_id, finishing_task_id = cover_lookup_admission_state(
+                requested_track_paths, preferred_task_id=preferred_task_id,
+            )
+            if active_task_id and (
+                not str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+                or not cover_lookup_result(active_task_id).get("search_generation")
+            ):
+                return active_task_id
+            if not finishing_task_id:
+                task_id, cancel_event, claimed = admit_cover_lookup_task(
+                    album,
+                    requested_track_paths,
+                    manual_urls,
+                    config=config,
+                    preferred_task_id=preferred_task_id,
+                    allow_preferred_path_rebind=allow_preferred_path_rebind,
+                )
+                if not claimed:
+                    return task_id
+                resolved_user_agent = str(user_agent or config["MUSICBRAINZ_USER_AGENT"])
+                runtime_job = CoverLookupRuntimeJob(
+                    task_id,
+                    config,
+                    logger,
+                    resolved_user_agent,
+                    album,
+                    requested_track_paths,
+                    cancel_event,
+                    manual_urls,
+                    build_cover_lookup_job_contract("candidate_lookup"),
+                    search_generation=str(cover_lookup_result(task_id).get("search_generation") or ""),
+                )
+                future = _COVER_LOOKUP_EXECUTOR.submit(
+                    _run_prepared_cover_lookup_job if prepare is not None else _run_cover_lookup_job,
+                    runtime_job,
+                    *([prepare] if prepare is not None else []),
+                )
+                register_cover_lookup_future(task_id, future, config=config)
+                return task_id
+        # A terminal worker may still publish metrics; drain it before resetting its task.
+        if not wait_for_cover_lookup_workers(finishing_task_id, max(0.0, deadline - time.monotonic())):
+            raise CoverLookupFinishingError("Previous cover search is still finishing. Try again shortly.")
 
 
 def queue_cover_lookup_save_remote_task(
@@ -332,6 +367,7 @@ def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:
         runtime_job.cancel_event,
         runtime_job.manual_urls,
         provider_deadline_at=provider_deadline_at,
+        search_generation=getattr(runtime_job, "search_generation", ""),
     )
 
 
@@ -360,6 +396,7 @@ def _run_prepared_cover_lookup_job(
         _update_candidate_lookup_task(
             runtime_job.task_id,
             config=runtime_job.config,
+            expected_search_generation=runtime_job.search_generation,
             status="failed",
             progress=100,
             progress_label="Failed",
@@ -372,6 +409,7 @@ def _run_prepared_cover_lookup_job(
     _update_candidate_lookup_task(
         runtime_job.task_id,
         config=runtime_job.config,
+        expected_search_generation=runtime_job.search_generation,
         artist=str(album.get("album_artist") or ""),
         album=str(album.get("name") or album.get("album") or ""),
         year=album.get("year"),
@@ -408,6 +446,74 @@ def fetch_remote_cover_bytes(
     return result.payload, result.mime_type
 
 
+# Every Cover Look Up open downloaded each remote card's image from its
+# provider again. The proxy keeps recent images in a bounded in-process cache
+# (provider images are re-fetchable, so nothing is persisted); failures are not
+# cached, so a retry still reaches the provider.
+_REMOTE_IMAGE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_REMOTE_IMAGE_CACHE: OrderedDict[str, tuple[bytes, str | None]] = OrderedDict()
+_REMOTE_IMAGE_CACHE_BYTES = 0
+_REMOTE_IMAGE_CACHE_LOCK = Lock()
+
+
+# Apple, Deezer and YouTube Music offer no thumbnail, so a REMOTE card received the full original
+# (Apple up to 6 MB). A card asks for this edge instead; the lightbox still opens the original.
+REMOTE_COVER_PREVIEW_EDGE = 480
+
+
+def remote_cover_preview(payload: bytes, mime_type: str | None) -> tuple[bytes, str | None]:
+    """The card-sized preview of a remote image; anything Pillow cannot shrink is served as it came."""
+    edge = REMOTE_COVER_PREVIEW_EDGE
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            if max(image.size) <= edge or getattr(image, "is_animated", False):
+                return payload, mime_type
+            if image.format == "JPEG":
+                image.draft("RGB", (edge, edge))
+            image.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+            # The re-encoded preview carries no EXIF, so it is turned the way a browser shows the original.
+            preview = ImageOps.exif_transpose(image)
+            alpha = "A" in preview.getbands() or "transparency" in preview.info
+            output = BytesIO()
+            if alpha:
+                preview.convert("RGBA").save(output, "WEBP", quality=85)
+                return output.getvalue(), "image/webp"
+            preview.convert("RGB").save(output, "JPEG", quality=85)
+            return output.getvalue(), "image/jpeg"
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
+        return payload, mime_type
+
+
+def _remote_image_cache_key(image_url: str, preview: bool) -> str:
+    key = normalize_remote_image_url(image_url)
+    return f"preview:{key}" if preview else key
+
+
+def cached_remote_cover_image(image_url: str, *, preview: bool = False) -> tuple[bytes, str | None] | None:
+    key = _remote_image_cache_key(image_url, preview)
+    with _REMOTE_IMAGE_CACHE_LOCK:
+        cached = _REMOTE_IMAGE_CACHE.get(key)
+        if cached is not None:
+            _REMOTE_IMAGE_CACHE.move_to_end(key)
+        return cached
+
+
+def remember_remote_cover_image(
+    image_url: str, payload: bytes, mime_type: str | None, *, preview: bool = False,
+) -> None:
+    global _REMOTE_IMAGE_CACHE_BYTES
+    key = _remote_image_cache_key(image_url, preview)
+    with _REMOTE_IMAGE_CACHE_LOCK:
+        previous = _REMOTE_IMAGE_CACHE.pop(key, None)
+        if previous is not None:
+            _REMOTE_IMAGE_CACHE_BYTES -= len(previous[0])
+        _REMOTE_IMAGE_CACHE[key] = (payload, mime_type)
+        _REMOTE_IMAGE_CACHE_BYTES += len(payload)
+        while _REMOTE_IMAGE_CACHE_BYTES > _REMOTE_IMAGE_CACHE_MAX_BYTES and len(_REMOTE_IMAGE_CACHE) > 1:
+            _evicted_key, evicted = _REMOTE_IMAGE_CACHE.popitem(last=False)
+            _REMOTE_IMAGE_CACHE_BYTES -= len(evicted[0])
+
+
 def _callback_accepts_parameter(callback, parameter_name: str) -> bool:
     try:
         signature = inspect.signature(callback)
@@ -440,6 +546,7 @@ def _terminalize_canceled_cover_lookup_task(
     candidate_publisher: object | None,
     candidate_snapshot_published: bool,
     close_candidate_publication: Callable[[], None] | None = None,
+    expected_search_generation: str = "",
 ) -> None:
     if close_candidate_publication is not None:
         close_candidate_publication()
@@ -448,7 +555,9 @@ def _terminalize_canceled_cover_lookup_task(
             candidate_publisher.fail()
         except Exception:
             pass
-    finalize_cover_lookup_task_canceled(task_id, config=config)
+    finalize_cover_lookup_task_canceled(
+        task_id, config=config, expected_search_generation=expected_search_generation,
+    )
 
 
 def _run_provider_call_until_deadline(
@@ -524,13 +633,20 @@ def _run_cover_lookup_task(
     manual_urls: list[str] | None = None,
     *,
     provider_deadline_at: float | None = None,
+    search_generation: str = "",
 ) -> None:
+    update_candidate = partial(_update_candidate_lookup_task, expected_search_generation=search_generation)
+    publish_metrics = partial(_publish_candidate_runtime_phase_metrics, expected_search_generation=search_generation)
+    terminalize_canceled = partial(_terminalize_canceled_cover_lookup_task, expected_search_generation=search_generation)
     phase_timings, phase_counts = _new_runtime_phase_metrics()
     candidate_publisher = None
     candidate_snapshot_published = False
     candidate_snapshot_diagnostic = ""
+    retained_candidates = list(cover_lookup_result(task_id).get("possible_matches") or [])
     try:
-        repository = AlbumCoverCandidateSnapshotRepository(config)
+        repository = AlbumCoverCandidateSnapshotRepository(
+            config, **({"task_id": task_id} if search_generation else {}),
+        )
         album_id = int(album.get("id") or 0)
         if album_id <= 0:
             album_id = int(
@@ -543,7 +659,7 @@ def _run_cover_lookup_task(
             candidate_publisher = AlbumCoverCandidatePublisher(
                 repository,
                 album_id=album_id,
-                search_generation=task_id,
+                search_generation=search_generation or task_id,
                 search_kind="manual",
             )
     except Exception:
@@ -558,7 +674,10 @@ def _run_cover_lookup_task(
             return candidates
         try:
             candidate_snapshot_published = bool(
-                candidate_publisher.publish_candidates(candidates)
+                candidate_publisher.publish_candidates(
+                    merge_lookup_matches(retained_candidates, candidates),
+                    preserve_order=bool(retained_candidates),
+                )
             ) or candidate_snapshot_published
         except Exception:
             candidate_publisher = None
@@ -586,7 +705,7 @@ def _run_cover_lookup_task(
 
     try:
         if cancel_event.is_set():
-            _terminalize_canceled_cover_lookup_task(
+            terminalize_canceled(
                 task_id,
                 config=config,
                 candidate_publisher=candidate_publisher,
@@ -606,7 +725,8 @@ def _run_cover_lookup_task(
             edition=str(album.get("edition") or ""),
             track_count=len(requested_track_paths),
         )
-        _update_candidate_lookup_task(
+        publish_candidate_snapshot(retained_candidates)
+        update_candidate(
             task_id,
             config=config,
             status="running",
@@ -614,7 +734,7 @@ def _run_cover_lookup_task(
             progress_label="Searching music services...",
         )
         if cancel_event.is_set():
-            _terminalize_canceled_cover_lookup_task(
+            terminalize_canceled(
                 task_id,
                 config=config,
                 candidate_publisher=candidate_publisher,
@@ -622,7 +742,7 @@ def _run_cover_lookup_task(
                 close_candidate_publication=close_candidate_publication,
             )
             return
-        _update_candidate_lookup_task(
+        update_candidate(
             task_id,
             config=config,
             progress=52,
@@ -677,10 +797,10 @@ def _run_cover_lookup_task(
                 if cancel_event.is_set() or candidate_publication_closed.is_set():
                     return
                 candidates = publish_candidate_snapshot(candidates)
-                _update_candidate_lookup_task(
+                update_candidate(
                     task_id,
                     config=config,
-                    possible_matches=candidates,
+                    possible_matches=merge_lookup_matches(retained_candidates, candidates),
                     **candidate_snapshot_changes(),
                 )
 
@@ -755,7 +875,7 @@ def _run_cover_lookup_task(
             count=len(service_candidates) + len(manual_candidates),
         )
         if cancel_event.is_set():
-            _terminalize_canceled_cover_lookup_task(
+            terminalize_canceled(
                 task_id,
                 config=config,
                 candidate_publisher=candidate_publisher,
@@ -777,7 +897,7 @@ def _run_cover_lookup_task(
             progressive_service_candidates[:] = combined_service_candidates
         publish_progressive_candidates()
         _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-        _publish_candidate_runtime_phase_metrics(
+        publish_metrics(
             task_id,
             config=config,
             timings=phase_timings,
@@ -794,7 +914,7 @@ def _run_cover_lookup_task(
             candidate_count=len(combined_service_candidates),
             manual_candidate_count=len(manual_candidates),
         )
-        _update_candidate_lookup_task(
+        update_candidate(
             task_id,
             config=config,
             progress=62,
@@ -837,7 +957,7 @@ def _run_cover_lookup_task(
             count=len(bandcamp_candidates),
         )
         if cancel_event.is_set():
-            _terminalize_canceled_cover_lookup_task(
+            terminalize_canceled(
                 task_id,
                 config=config,
                 candidate_publisher=candidate_publisher,
@@ -859,7 +979,7 @@ def _run_cover_lookup_task(
             progressive_service_candidates[:] = combined_service_candidates
         publish_progressive_candidates()
         _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-        _publish_candidate_runtime_phase_metrics(
+        publish_metrics(
             task_id,
             config=config,
             timings=phase_timings,
@@ -876,7 +996,7 @@ def _run_cover_lookup_task(
             candidate_count=len(bandcamp_candidates),
         )
         if cancel_event.is_set():
-            _terminalize_canceled_cover_lookup_task(
+            terminalize_canceled(
                 task_id,
                 config=config,
                 candidate_publisher=candidate_publisher,
@@ -884,7 +1004,7 @@ def _run_cover_lookup_task(
                 close_candidate_publication=close_candidate_publication,
             )
             return
-        _update_candidate_lookup_task(
+        update_candidate(
             task_id,
             config=config,
             progress=72,
@@ -933,7 +1053,7 @@ def _run_cover_lookup_task(
             candidate_count=len(discogs_candidates),
         )
         if cancel_event.is_set():
-            _terminalize_canceled_cover_lookup_task(
+            terminalize_canceled(
                 task_id,
                 config=config,
                 candidate_publisher=candidate_publisher,
@@ -952,15 +1072,15 @@ def _run_cover_lookup_task(
             count=len(combined_candidates),
         )
         combined_candidates = publish_candidate_snapshot(combined_candidates)
-        _update_candidate_lookup_task(
+        update_candidate(
             task_id,
             config=config,
-            possible_matches=combined_candidates,
+            possible_matches=merge_lookup_matches(retained_candidates, combined_candidates),
             **candidate_snapshot_changes(),
         )
         artist_website_candidates: list[dict[str, object]] = []
         if not provider_deadline_exhausted:
-            _update_candidate_lookup_task(
+            update_candidate(
                 task_id,
                 config=config,
                 progress=78,
@@ -994,7 +1114,7 @@ def _run_cover_lookup_task(
                 count=len(artist_website_candidates),
             )
             if cancel_event.is_set():
-                _terminalize_canceled_cover_lookup_task(
+                terminalize_canceled(
                     task_id,
                     config=config,
                     candidate_publisher=candidate_publisher,
@@ -1022,14 +1142,14 @@ def _run_cover_lookup_task(
                 count=len(combined_candidates),
             )
             combined_candidates = publish_candidate_snapshot(combined_candidates)
-            _update_candidate_lookup_task(
+            update_candidate(
                 task_id,
                 config=config,
-                possible_matches=combined_candidates,
+                possible_matches=merge_lookup_matches(retained_candidates, combined_candidates),
                 **candidate_snapshot_changes(),
             )
         if cancel_event.is_set():
-            _terminalize_canceled_cover_lookup_task(
+            terminalize_canceled(
                 task_id,
                 config=config,
                 candidate_publisher=candidate_publisher,
@@ -1048,15 +1168,21 @@ def _run_cover_lookup_task(
                 album=lookup_query.album,
                 candidate_count=len(combined_candidates),
             )
+        # An empty retry has no replacement inventory. Keep already discovered
+        # artwork available when providers return nothing or time out.
+        combined_candidates = combined_candidates or retained_candidates
         caa_empty_notice = not archive_candidates
         close_candidate_publication()
         if candidate_publisher is not None and candidate_snapshot_published:
             try:
-                candidate_publisher.complete()
+                if retained_candidates:
+                    candidate_publisher.complete(final_candidates=combined_candidates)
+                else:
+                    candidate_publisher.complete()
             except Exception:
                 candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
         phase_started = time.perf_counter()
-        _update_candidate_lookup_task(
+        update_candidate(
             task_id,
             config=config,
             status="completed",
@@ -1076,7 +1202,7 @@ def _run_cover_lookup_task(
             **candidate_snapshot_changes(),
         )
         _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-        _publish_candidate_runtime_phase_metrics(
+        publish_metrics(
             task_id,
             config=config,
             timings=phase_timings,
@@ -1100,7 +1226,7 @@ def _run_cover_lookup_task(
             error=str(exc),
         )
         phase_started = time.perf_counter()
-        _update_candidate_lookup_task(
+        update_candidate(
             task_id,
             config=config,
             status="failed",
@@ -1112,7 +1238,7 @@ def _run_cover_lookup_task(
             **candidate_snapshot_changes(),
         )
         _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-        _publish_candidate_runtime_phase_metrics(
+        publish_metrics(
             task_id,
             config=config,
             timings=phase_timings,

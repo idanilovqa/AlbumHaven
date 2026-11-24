@@ -144,6 +144,54 @@ def test_automatic_write_guard_receives_final_encoded_cover_revision(tmp_path):
     }
 
 
+@pytest.mark.parametrize("remote_matches_embedded_art", [False, True])
+def test_automatic_cover_never_replaces_embedded_art_with_another_releases_art(tmp_path, remote_matches_embedded_art):
+    image_module = pytest.importorskip("PIL.Image")
+    image_draw = pytest.importorskip("PIL.ImageDraw")
+    id3 = pytest.importorskip("mutagen.id3")
+
+    def art(size, palette):
+        image = image_module.new("RGB", (size, size), palette[0])
+        draw = image_draw.Draw(image)
+        draw.ellipse((size // 4, size // 4, size * 3 // 4, size * 3 // 4), fill=palette[1])
+        draw.rectangle((0, size * 4 // 5, size, size), fill=palette[2])
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=92)
+        return buffer.getvalue()
+
+    archspire = ((20, 18, 12), (220, 170, 60), (70, 60, 40))
+    yaruga = ((200, 200, 205), (30, 60, 40), (120, 130, 125))
+    folder = tmp_path / "Archspire - The Vessel (2026)"
+    folder.mkdir()
+    track = folder / "01 - Archspire - Liminal Cypher.mp3"
+    track.write_bytes(b"")
+    tags = id3.ID3()
+    tags.add(id3.APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=art(500, archspire)))
+    tags.save(track)
+    remote_bytes = art(1400, archspire if remote_matches_embedded_art else yaruga)
+    candidate = CoverCandidate(
+        source="youtube_music", url="https://images.example/the-vessel.jpg", width=1400, height=1400,
+        score=0.99, matched_artist="Archspire", matched_album="The Vessel",
+    )
+
+    written, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Archspire", "The Vessel", None, 2026, {".jpg"},
+        CoverSearchCache(tmp_path / "cache.json"), "AlbumHavenTests/1.0",
+        cover_selection_origin="automatic",
+        reject_if_user_controlled=True,
+        automatic_write_guard=lambda write_action, **_kwargs: write_action(),
+        search_remote_cover_func=lambda *_args, **_kwargs: (candidate, []),
+        http_get_bytes_func=lambda *_args, **_kwargs: remote_bytes,
+    )
+
+    if remote_matches_embedded_art:
+        assert downloaded is True and written == folder / "cover.jpg"
+    else:
+        assert downloaded is False
+        assert detail["reason"] == "embedded_art_mismatch"
+        assert not (folder / "cover.jpg").exists()
+
+
 def test_satisfactory_local_cover_skips_remote_without_lookup_cache(tmp_path):
     image_module = pytest.importorskip("PIL.Image")
     folder = tmp_path / "Artist" / "Album"

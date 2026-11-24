@@ -142,11 +142,13 @@ const state = {
     relatedFilterDefaultPrimaryGroups: [],
     relatedFilterDefaultFamilyGroups: [],
     mainGalleryVisibleCategories: ['main_library', 'hoard', 'new_arrivals'],
+    sourceTotalsByScope: {},
   },
   utility: {
     activeTab: 'problematic-files',
     problematicFiles: [],
     problematicLoadError: '',
+    problematicIndexing: null,
     libraryWatchHealthProblems: [],
     selectedProblematicKey: '',
     pendingRepairKey: '',
@@ -179,6 +181,23 @@ const state = {
     loadPromise: null,
     completeLoadPromise: null,
     problematicFilesComplete: false,
+      problematicHasMore: false,
+      problematicNextCursor: '',
+      problematicPageLoadPromise: null,
+      problematicArtistItems: [],
+      problematicArtistHasMore: true,
+      problematicArtistNextCursor: '',
+      problematicArtistLoadPromise: null,
+      problematicServerSearchItems: [],
+      problematicServerSearchRequestToken: 0,
+      problematicServerSearchPendingQuery: '',
+      problematicServerSearchSettledQuery: '',
+      problematicServerSearchHasMore: false,
+      problematicServerSearchNextOffset: 0,
+      problematicServerSearchNextCursor: '',
+      problematicServerSearchLoadPromise: null,
+      problematicServerSearchCache: {},
+    completeProblemReasonTypes: [],
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,
@@ -385,7 +404,6 @@ const state = {
       pendingPastedImageId: '',
       selectedRemoteId: '',
       possibleMatches: [],
-      currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
       activeLocalSelectionRef: '',
@@ -406,17 +424,6 @@ const state = {
   modalReleases: [],
   modalReleaseIndex: 0,
   modalDuplicateSourceIndices: {},
-  modalVersionContextMenu: {
-    albumKey: '',
-    x: 0,
-    y: 0,
-    visible: false,
-  },
-  versionPicker: {
-    album: null,
-    selectedTargetKey: '',
-    saving: false,
-  },
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';
@@ -534,6 +541,27 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
+let searchPendingRailFallback = null;
+function releaseSearchPendingRail() {
+  if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+  searchPendingRailFallback = null;
+  const rail = document.getElementById('shell-navigation-rail');
+  rail?.removeAttribute?.('data-search-pending');
+  rail?.setAttribute?.('aria-busy', 'false');
+}
+function holdSearchPendingRail(searching) {
+  const rail = document.getElementById('shell-navigation-rail');
+  if (searching) {
+    if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+    searchPendingRailFallback = null;
+    rail?.setAttribute?.('data-search-pending', '');
+    rail?.setAttribute?.('aria-busy', 'true');
+  } else if (rail?.hasAttribute?.('data-search-pending') && searchPendingRailFallback === null) {
+    // renderSidebar releases it with the new tree; a search whose tree needs no re-render releases it shortly.
+    searchPendingRailFallback = setTimeout(releaseSearchPendingRail, 1000);
+  }
+}
+
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
@@ -610,6 +638,7 @@ function renderSidebar() {
     : v.show_all_artists_sidebar_link !== false;
   el.albumHavenActiveSidebarLink = el.querySelector('.artist-link.active');
   ensureSidebarVirtualScrollListeners(el);
+  if (!state.ui?.pendingGallerySearch) releaseSearchPendingRail();
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
@@ -697,18 +726,20 @@ let detachedGalleryBarParent = null;
 let detachedGalleryBarNextSibling = null;
 
 function buildLibraryStatusBarHtml() {
-  return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
-    <div class="gallery-bar__context">
-      ${ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } })}
-      <div class="library-scan-gallery-copy">
-        <div class="gallery-bar__title"><span>Library State</span></div>
-        <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
-      </div>
-    </div>
-    <div class="gallery-bar__actions library-loader-actions" id="library-loader-actions" hidden>
+  return `<section class="gallery-bar page-gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" data-gallery-bar-layout="mobile-primary" aria-label="Library Status Page controls">
+    ${buildGalleryBarContentsHtml({
+      leadingHtml: ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button page-gallery-bar__back', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } }),
+      titleHtml: '<span>Library State</span>',
+      summary: 'Preparing status...',
+      summaryId: 'library-scan-gallery-summary',
+      summaryLive: 'polite',
+      actionsClassName: 'library-loader-actions',
+      actionsId: 'library-loader-actions',
+      actionsHidden: true,
+      actionsHtml: `
       <button class="button ui-button ui-button--secondary ui-button--medium library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
-      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
-    </div>
+      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>`,
+    })}
   </section>`;
 }
 
@@ -795,6 +826,9 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
+  // NEW-005 (owner): while a search runs, the side panel never shows the previous search's tree (leaving Loose
+  // Tracks briefly showed the old selected artist). The tree shows again once it has rendered the new results.
+  holdSearchPendingRail(searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;

@@ -11,6 +11,7 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
   const galleryHeader = read('music_app/templates/partials/gallery-bar.html');
   const index = read('music_app/templates/index.html');
   const mobileCss = read('music_app/static/css/mobile-layout.css');
+  const mobileNavigation = read('music_app/static/js/runtime/mobile-navigation.js');
 
   assert.match(pageHeader, /from ["']partials\/gallery-bar\.html["'] import gallery_bar/);
   assert.match(pageHeader, /gallery_bar\([^)]*mobile_layout='mobile-primary'/s);
@@ -20,6 +21,10 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
   assert.match(index, /gallery_bar\([^)]*mobile_layout='mobile-primary'[^)]*gallery_context=true/s);
   assert.doesNotMatch(index, /<section class="mobile-page-header gallery-bar"/);
   assert.match(mobileCss, /\[data-gallery-bar-layout="mobile-primary"\]/);
+  // Owner (2026-11-16): every phone page header uses the one GalleryBar layout.
+  assert.match(mobileNavigation, /header\.dataset\.galleryBarLayout = active \? 'mobile-primary' : ''/);
+  assert.doesNotMatch(mobileCss, /\.mobile-page-header \{ display: flex/, 'the page header has no second phone layout');
+  assert.match(mobileCss, /grid-template-columns: \[menu\] auto \[back\] auto \[art\] auto \[text\] minmax\(0, 1fr\) \[actions\] auto \[end\]/);
   assert.doesNotMatch(
     mobileCss,
     /\.settings-outlet \.page-gallery-bar\s*\{[^}]*(?:padding|margin|top):/s,
@@ -32,8 +37,10 @@ test('desktop Settings content uses the Gallery surface header origin and horizo
 
   assert.match(
     chromeCss,
-    /\.settings-host \.settings-main\s*\{[^}]*padding:\s*6px 24px 60px/s,
+    /\.settings-host \.settings-main\s*\{[^}]*margin-inline:\s*-4px;\s*padding:\s*0 4px 60px/s,
   );
+  // Owner (2026-11-22): the Settings bar sits outside the scroller on the Gallery's surface, so it needs no pinning.
+  assert.doesNotMatch(read('music_app/static/css/mobile-layout.css'), /\.settings-host \.page-gallery-bar\s*\{/);
   assert.match(
     chromeCss,
     /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{[^}]*padding-top:\s*var\(--app-page-header-top\)/s,

@@ -1,4 +1,7 @@
-"""A cover change racing a projection build or reload is never lost."""
+"""A cover change racing a projection build or reload is never lost.
+
+Rules is the cached projection that shows covers; Problematic Files reads its
+persisted index, which the database journal keeps current per album."""
 
 from __future__ import annotations
 
@@ -7,7 +10,7 @@ import pytest
 from music_app.services import library_browse_postgres as browse
 
 URL = "postgresql://album_haven_app@localhost/cover_changes"
-KEY = (URL, "problematic-files")
+KEY = (URL, "rules")
 
 
 @pytest.fixture
@@ -24,24 +27,6 @@ def _save(*paths):
     browse.record_cover_change_in_utility_projections(database_url=URL, track_paths=set(paths))
 
 
-def test_a_change_during_the_complete_build_is_applied_on_the_next_read(repository, monkeypatch):
-    def build():
-        _save("a")  # commits after the build took its snapshot
-        return {"items": ["before"]}
-
-    reloaded = []
-    monkeypatch.setattr(repository, "_build_problematic_files_payload_uncached", build)
-    monkeypatch.setattr(
-        repository, "_problematic_files_with_reloaded_albums",
-        lambda payload, paths: reloaded.append(paths) or {"items": ["after"]},
-    )
-
-    assert repository.build_problematic_files_payload()["projection_cache_status"] == "rebuilt"
-    assert repository.build_problematic_files_payload()["items"] == ["after"]
-    assert repository.build_problematic_files_payload()["items"] == ["after"]
-    assert reloaded == [{"a"}]
-
-
 def test_a_change_during_a_reload_waits_for_the_next_read(repository):
     browse._UTILITY_PROJECTION_CACHE[KEY] = {"saves": 0}
     _save("a")
@@ -54,7 +39,7 @@ def test_a_change_during_a_reload_waits_for_the_next_read(repository):
         return {"saves": payload["saves"] + 1}
 
     for _read in range(3):
-        repository._apply_cover_changes("problematic-files", reload)
+        repository._apply_cover_changes("rules", reload)
 
     assert reloaded == [{"a"}, {"a"}]
     assert browse._UTILITY_PROJECTION_CACHE[KEY] == {"saves": 2}
@@ -69,7 +54,7 @@ def test_a_reload_never_overwrites_a_rebuild_that_finished_meanwhile(repository)
             browse._UTILITY_PROJECTION_CACHE[KEY] = {"build": 2}
         return {**payload, "reloaded": True}
 
-    repository._apply_cover_changes("problematic-files", reload)
+    repository._apply_cover_changes("rules", reload)
 
     assert browse._UTILITY_PROJECTION_CACHE[KEY] == {"build": 2, "reloaded": True}
 
@@ -85,54 +70,8 @@ def test_a_change_during_a_rules_build_is_applied_on_the_next_read(repository, m
     assert repository.build_utility_rules_payload()["reloaded"] == {"a"}
 
 
-def test_a_split_release_listed_from_two_album_rows_is_reloaded_whole(repository, monkeypatch):
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-
-    connection = SimpleNamespace(execute=lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(repository, "_browse_connection_context", lambda: nullcontext(connection))
-    reads = []
-
-    def albums_of_tracks(_connection, paths):
-        reads.append(paths)
-        album = {"key": "release::year::2001", "name": "Release", "album_artist": "Artist", "year": 2001,
-                 "tracks": [{"path": path} for path in sorted(paths)]}
-        return [album], [({**album, "track_paths": sorted(paths)}, album)]
-
-    monkeypatch.setattr(repository, "_problematic_albums_of_tracks", albums_of_tracks)
-    monkeypatch.setattr(repository, "_problematic_initial_detail", lambda _connection, album: {"key": album["key"]})
-    listed = {"key": "release::year::2001", "name": "Release", "album_artist": "Artist", "year": 2001,
-              "track_paths": ["a", "b"]}
-
-    reloaded = repository._problematic_files_with_reloaded_albums({"items": [listed]}, {"a"})
-
-    assert reads == [{"a"}, {"a", "b"}]
-    assert [item["track_paths"] for item in reloaded["items"]] == [["a", "b"]]
-
-
-def test_a_first_album_fixed_during_the_reload_opens_the_list_without_failing(repository, monkeypatch):
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-
-    connection = SimpleNamespace(execute=lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(repository, "_browse_connection_context", lambda: nullcontext(connection))
-    # Its rows are still there, but a save committed meanwhile left it without a problem.
-    albums = {path: [{"key": path, "name": path, "tracks": [{"path": path}]}] for path in ("a", "b")}
-    monkeypatch.setattr(
-        repository, "_problematic_albums_of_tracks", lambda _connection, paths: (albums[min(paths)], []),
-    )
-    monkeypatch.setattr(repository, "build_problematic_file_detail_payload", lambda _key: {"key": "another"})
-    items = [{"key": key, "name": key, "track_paths": [key]} for key in ("a", "b")]
-
-    reloaded = repository._problematic_files_with_reloaded_albums(
-        {"items": items, "initial_detail": {"key": "a"}}, {"a"},
-    )
-
-    assert reloaded["items"] == items[1:] and reloaded["initial_detail"] is None
-
-
 def test_a_full_invalidation_discards_the_noted_changes(repository):
-    browse._UTILITY_PROJECTION_CACHE[KEY] = {"items": []}
+    browse._UTILITY_PROJECTION_CACHE[KEY] = {"rules": []}
     _save("a")
 
     browse.invalidate_postgres_utility_projection_cache(database_url=URL)
@@ -140,12 +79,12 @@ def test_a_full_invalidation_discards_the_noted_changes(repository):
     assert KEY not in browse._UTILITY_COVER_CHANGES
 
 
-def test_a_change_drops_only_the_unpatchable_first_pages(repository):
-    page = (URL, browse._PROBLEMATIC_FILES_PAGE_KIND)
+def test_a_change_keeps_every_projection_cached(repository):
     other = (URL, "duplicate-identities")
-    browse._UTILITY_PROJECTION_CACHE.update({KEY: {}, page: {}, other: {}})
+    browse._UTILITY_PROJECTION_CACHE.update({KEY: {}, other: {}})
 
     _save("a")
 
-    assert page not in browse._UTILITY_PROJECTION_CACHE
     assert KEY in browse._UTILITY_PROJECTION_CACHE and other in browse._UTILITY_PROJECTION_CACHE
+    assert browse._UTILITY_COVER_CHANGES[KEY].keys() == {"a"}
+    assert other not in browse._UTILITY_COVER_CHANGES

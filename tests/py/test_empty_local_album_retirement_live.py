@@ -84,6 +84,7 @@ def test_live_partial_move_keeps_source_album(watcher_repair_inventory):
 def test_live_missing_album_with_stale_tracks_is_not_retired(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     source = _seed_edition_album(fixture)
+    _rate(fixture, source["album_key"], 8, "explicit_import")
 
     fixture.seed()
 
@@ -92,6 +93,9 @@ def test_live_missing_album_with_stale_tracks_is_not_retired(watcher_repair_inve
 
 
 _USER_STATE = {
+    "additional_artwork": """insert into library.local_album_additional_artworks (
+        album_id, slot, source_kind, remote_url)
+        values (%(album_id)s, 1, 'remote', 'https://example.test/owner-art.jpg')""",
     "cover_origin": """update library.local_albums set metadata = metadata
         || '{"cover_selection_origin": "user"}' where id = %(album_id)s""",
     "explicit_cover": """update library.local_albums set metadata = metadata
@@ -286,3 +290,24 @@ def test_live_every_album_child_table_is_classified(watcher_repair_inventory):
             """).fetchall()
         }
     assert children == SCAN_OWNED_ALBUM_CHILD_TABLES | GUARDED_ALBUM_CHILD_TABLES
+
+
+def test_live_missing_candidates_query_is_an_anti_join_not_a_per_file_rescan(watcher_repair_inventory):
+    # Owner (11-16): a quick scan sat 25 minutes in "Refreshing artist relations": an OR beside the
+    # NOT EXISTS made Postgres rescan the whole current-path array for every one of 163k files.
+    from music_app.services.scan_cache_persistence import _SOURCE, _scan_missing_candidates_sql
+
+    fixture = watcher_repair_inventory
+    fixture.seed(*_edition_entries(fixture, "Bonus EP"))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        roots = [row["root_id"] for row in connection.execute(
+            "select coalesce(nullif(metadata ->> 'root_id', ''), '') as root_id from library.library_roots"
+        ).fetchall()]
+        plan = "\n".join(next(iter(row.values())) for row in connection.execute(
+            "explain " + _scan_missing_candidates_sql(),
+            {"current_paths": ["C:/Music/a.flac", "C:/Music/b.flac"], "source": _SOURCE,
+             "observed_root_ids": roots, "unreachable_root_ids": []},
+        ).fetchall())
+
+    assert "Anti Join" in plan, plan
+    assert "SubPlan" not in plan, plan

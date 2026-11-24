@@ -1088,7 +1088,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
-              "case": "FTC-TAGS-008 keeps an accepted terminal failure readable without false success",
+              "case": "FTC-TAGS-008 keeps a failed file write readable without false success and leaves both files unchanged",
               "area": "tag-edit"
             },
             {

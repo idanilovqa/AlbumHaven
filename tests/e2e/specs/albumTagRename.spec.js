@@ -1,9 +1,10 @@
 import { expect, test } from '../support/baseFixtures.js';
 import {
+  changedId3Frames,
   readGeneratedMp3AlbumTags,
   readGeneratedMp3TagSnapshots,
+  temporarilyMakeGeneratedMp3Unavailable,
 } from '../helpers/physicalTagHelpers.js';
-import { temporarilyRevokeRuntimeDeletePrivileges } from '../helpers/postgresPrivilegeHelpers.js';
 import { holdStructuralSavePersistence } from '../helpers/structuralSavePollWindowHelpers.js';
 import {
   defineTimingBudget,
@@ -704,7 +705,7 @@ test('FTC-TAGS-008 returns one terminal saved response after optimistic rename p
   }
 });
 
-test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', { tag: '@area:tag-edit' }, async ({
+test('FTC-TAGS-008 keeps a failed file write readable without false success and leaves both files unchanged', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   settingsModalAppBarActions,
@@ -727,34 +728,45 @@ test('FTC-TAGS-008 keeps an accepted terminal failure readable without false suc
     });
   });
 
-  await stepLogger.step('Keep the failed task readable after compensation', async () => {
-    const privilegeGuard = await temporarilyRevokeRuntimeDeletePrivileges([
-      'library.ignored_versions',
-      'library.manual_versions',
-    ]);
+  await stepLogger.step('A failed file write stays readable, with its details in log history and both files unchanged', async () => {
+    // Edits always save once their files are written, so a save can no longer fail after it is accepted; a file
+    // that cannot be written fails it at the media_write stage, before anything is kept.
+    const filesBefore = await readGeneratedMp3TagSnapshots({ artist: FIXTURE_ARTIST, album: FAILURE_FIXTURE_ALBUM });
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+    await tagEditorActions.selectTrackByFilename(FAILURE_FIXTURE_TRACK);
+    await tagEditorActions.setAlbumName('Rejected Album Rename Fixture');
+    const unwritableTrack = temporarilyMakeGeneratedMp3Unavailable({
+      artist: FIXTURE_ARTIST, album: FAILURE_FIXTURE_ALBUM, filename: FAILURE_FIXTURE_TRACK,
+    });
+    let failure;
     try {
-      await trackModalActions.openTagEditor();
-      await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
-      await tagEditorActions.selectTrackByFilename(FAILURE_FIXTURE_TRACK);
-      await tagEditorActions.setAlbumName('Rejected Album Rename Fixture');
-      const failure = await tagEditorActions.applyAndWaitForAsyncFailure();
-      expect(failure.task.error).toContain('ignored_versions');
-      expect(failure.alertText).toContain('ignored_versions');
-      await tagEditorActions.expectTerminalFailureRemainsReadable(failure.task.error);
-      await tagEditorActions.openLogHistoryFromFailure();
-      await utilityLogHistoryActions.waitForReady();
-      expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.task.error);
-      await settingsModalAppBarActions.closeSettings();
-      await trackModalActions.waitForExactAlbumDetails({
-        title: albumDetailsTitle(FAILURE_FIXTURE_ALBUM),
-        trackTitles: ['Apply Rarity Here', 'Remain Editable'],
-      });
+      // The page names the stage in the owner's words; the path and raw error stay in log history.
+      failure = await tagEditorActions.applyAndWaitForFailure({ expectedErrorPattern: /^Save failed: Read-only files$/u });
     } finally {
-      await privilegeGuard.restore();
+      unwritableTrack.restore();
     }
+    expect(failure.status).toBe(500);
+    expect(failure.payload.failure_stage).toBe('media_write');
+    const failureError = String(failure.payload.error || '').trim();
+    expect(failureError).toContain(FAILURE_FIXTURE_TRACK);
+    expect(failure.alertText).not.toContain(FAILURE_FIXTURE_TRACK);
+    await tagEditorActions.openLogHistoryFromFailure();
+    await utilityLogHistoryActions.waitForReady();
+    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failureError);
+    await settingsModalAppBarActions.closeSettings();
+    await trackModalActions.waitForExactAlbumDetails({
+      title: albumDetailsTitle(FAILURE_FIXTURE_ALBUM),
+      trackTitles: ['Apply Rarity Here', 'Remain Editable'],
+    });
+    const filesAfter = await readGeneratedMp3TagSnapshots({ artist: FIXTURE_ARTIST, album: FAILURE_FIXTURE_ALBUM });
+    expect(changedId3Frames(filesBefore, filesAfter)).toEqual(
+      [FAILURE_FIXTURE_TRACK, FAILURE_FIXTURE_SECOND_TRACK].sort((left, right) => left.localeCompare(right))
+        .map((filename) => ({ filename, changedFrames: [] })),
+    );
   });
 
-  await stepLogger.step('Reload the compensated rarity fixture as one exact two-track album', async () => {
+  await stepLogger.step('Reload the unchanged rarity fixture as one exact two-track album', async () => {
     await trackModalActions.closeIfOpen();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await galleryActions.waitForGalleryReady();

@@ -710,6 +710,63 @@ test('applyUpdatedAlbumsToCurrentView removes a source album with no optimistic 
   assert.equal(context.state.view.album_count, 0);
 });
 
+// FTC-TAGS-043's reload: mounting a view lays each finishing save over it (applyViewPayload's tail), and laying
+// one commits the patched view. That commit is the laid view plus this save, so it never runs the overlay
+// again: no save is laid twice or skipped, and the page never recurses until the stack overflows.
+test('a view mount lays each finishing save exactly once, and committing a laid save never re-runs the overlay', () => {
+  const context = loadHelpers();
+  const trackPath = 'C:\\Music\\Mono\\Queued\\01 Queued.flac';
+  const album = { key: 'mono::queued::2026', name: 'Queued', album_artist: 'Mono', year: 2026, tracks: [{ path: trackPath }] };
+  const primaryGroup = { artist: 'Mono', albums: [album] };
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Mono',
+    artist_groups: [primaryGroup],
+    primary_artist_groups: [primaryGroup],
+    family_artist_groups: [],
+  };
+  const stored = [{
+    id: '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b',
+    payload: { confirmed: true, updates: { [trackPath]: { album: 'Finished' } } },
+    album: { key: album.key, name: album.name, album_artist: 'Mono', year: 2026 },
+    display_album: album,
+    state: 'finishing',
+    created_at: Date.now(),
+  }];
+  Object.assign(context, {
+    getLocalStorageItem: (key, fallback) => (key === 'albumHaven.pendingTagEdits' ? JSON.stringify(stored) : fallback),
+    setLocalStorageItem() {},
+    setTimeout: () => 0,
+    clearTimeout() {},
+    addEventListener() {},
+    dispatchEvent() {},
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
+    buildOptimisticUpdatedAlbumsFromEdits: (source, updates) => [{
+      ...source, key: 'mono::finished::2026', name: Object.values(updates)[0].album,
+      tracks: source.tracks.map((track) => ({ ...track, ...updates[track.path] })),
+    }],
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'pending-tag-edits.js'), 'utf8'), context);
+  const overlay = context.AlbumHavenPendingTagEdits.overlayCurrentView;
+  const laidPerOverlay = [];
+  // applyViewPayload's tail, as in response-state-helpers.js: a mount lays the open saves over the view
+  // unless the caller says the view it commits is already laid.
+  context.mergeViewPayload = (payload, options = {}) => {
+    context.state.view = { ...context.state.view, ...payload };
+    if (options.overlayPendingTagEdits !== false) laidPerOverlay.push(overlay());
+    return context.state.view;
+  };
+
+  laidPerOverlay.push(overlay());
+
+  assert.deepEqual(laidPerOverlay, [1], 'one overlay per mount, laying the one finishing save');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.state.view.primary_artist_groups[0].albums.map((shown) => shown.name))),
+    ['Finished'],
+  );
+  assert.equal(context.state.view.album_count, 1);
+});
+
 test('applyUpdatedAlbumsToCurrentView inserts an album restored from selected-artist loose tracks', () => {
   const context = loadHelpers();
   const existingAlbum = {

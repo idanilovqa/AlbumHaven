@@ -2788,3 +2788,17 @@ test('manual rule mutation is authoritative even while empty-shell exclusions ar
   assert.equal(context.state.view.version_rules_loaded.ignored, false);
   assert.equal(context.state.view.manual_version_links.child, 'parent');
 });
+
+// FTC-TAGS-043's reload: every view mount lays the finishing saves over the view once. A commit of a view the
+// overlay already laid (its own patch) says so and is not laid again, so the two never call each other.
+test('a view mount lays the finishing saves once, and a commit of an already laid view does not lay them again', () => {
+  const context = loadHelpers();
+  let overlays = 0;
+  context.window = { AlbumHavenPendingTagEdits: { overlayCurrentView: () => { overlays += 1; return 0; } } };
+  context.applyViewPayload({ selected_artist: 'Broadcast' });
+  assert.equal(overlays, 1, 'a mount lays the finishing saves');
+  context.mergeViewPayload({ album_count: 1 }, { overlayPendingTagEdits: false });
+  assert.equal(overlays, 1, 'a commit of an already laid view is not laid again');
+  context.mergeViewPayload({ album_count: 2 });
+  assert.equal(overlays, 2, 'any other merge still lays them');
+});

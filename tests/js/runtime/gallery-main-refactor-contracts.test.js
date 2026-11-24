@@ -912,6 +912,43 @@ test('artist GalleryBar moves controls down before allowing the name to ellipsiz
   assert.equal(classes.has('is-name-wrapping'), false, 'artist names never create a third metadata row');
 });
 
+test('a hidden artist GalleryBar keeps its fitted rows for the frame it is shown again', () => {
+  // FTC-GALLERY-NAV-033: a mobile page hides the gallery bar; measuring it at zero size dropped
+  // the controls row, so on Back the gallery started 42 px higher for a frame.
+  const classes = new Set();
+  const context = loadRuntime({ window: { innerWidth: 390 } });
+  let laidOut = true;
+  const bar = {
+    get clientWidth() { return laidOut ? 390 : 0; },
+    getClientRects: () => (laidOut ? [{}] : []),
+    dataset: { galleryContextKind: 'artist' },
+    classList: {
+      add: value => classes.add(value),
+      remove: value => classes.delete(value),
+    },
+    querySelector: selector => ({
+      '[data-artist-info-trigger]': {},
+      '[data-gallery-context-metadata]': { textContent: '' },
+      '[data-gallery-context-summary]': { textContent: '8 albums' },
+    }[selector] || null),
+  };
+  const name = {
+    textContent: 'Synthetic Scale Artist 0207',
+    get scrollWidth() { return laidOut ? 260 : 0; },
+    get clientWidth() { return laidOut ? 180 : 0; },
+  };
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), true);
+
+  laidOut = false;
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), true, 'a bar without a layout box is not measured');
+
+  laidOut = true;
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), true);
+});
+
 test('GalleryBar name fit cache includes artist metadata that changes available title width', () => {
   const classes = new Set();
   let removals = 0;

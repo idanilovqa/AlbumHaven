@@ -4763,3 +4763,28 @@ test('a resume that had to ask for the claim sends no extra renewal', async () =
   assert.equal(order.includes('playing renewal'), false);
   assert.equal(order[0], 'claim asked');
 });
+
+test('pausing shows Play as soon as the sound stops, before the session and ownership round trips', async () => {
+  const snapshot = {
+    currentTime: 12, duration: 60, paused: false, ended: false, src: '/track?path=song.flac',
+  };
+  let finishSave;
+  const pendingSave = new Promise((resolve) => { finishSave = resolve; });
+  const { context, playButton } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: async () => { snapshot.paused = true; },
+    maybeScrobbleListenSession: async () => false,
+    persistPausedListenSession: () => pendingSave,
+    releasePlaybackOwnership: async () => true,
+  });
+  context.state.player.listenSession = { id: 'session' };
+
+  const pause = context.pausePlayerPlaybackForHandoff();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(playButton.getAttribute('aria-label'), 'Play',
+    'the control must not keep saying Pause while the listen session is still saving');
+  finishSave(true);
+  assert.equal(await pause, true);
+  assert.equal(playButton.getAttribute('aria-label'), 'Play');
+});

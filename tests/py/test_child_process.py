@@ -70,6 +70,58 @@ def test_stdin_is_empty_so_a_child_never_waits_for_input():
     on_selector_loop(scenario())
 
 
+def test_piped_stdin_is_opt_in_and_closing_it_ends_the_childs_input():
+    async def scenario():
+        process = await start_child_process(
+            *python_child("data = sys.stdin.buffer.read(); print(len(data), data[:5].decode())"),
+            stdin=subprocess.PIPE,
+        )
+        assert process.stdin is not None
+        process.stdin.write(b"hello")
+        process.stdin.write(b" " * MEBIBYTE)  # far past what a pipe holds before the child reads
+        await process.stdin.drain()
+        process.stdin.close()
+        assert (await process.stdout.read()).split() == [str(5 + MEBIBYTE).encode(), b"hello"]
+        assert await process.wait() == 0
+
+    on_selector_loop(scenario())
+
+
+def test_writing_to_a_child_that_exited_fails_the_caller():
+    async def scenario():
+        process = await start_child_process(*python_child("sys.exit(0)"), stdin=subprocess.PIPE)
+        assert await process.wait() == 0
+        process.stdin.write(b"x" * MEBIBYTE)
+        with pytest.raises(OSError):
+            await process.stdin.drain()
+        process.stdin.close()
+
+    on_selector_loop(scenario())
+
+
+def test_closing_stdin_during_a_blocked_write_waits_for_that_write():
+    async def scenario():
+        process = await start_child_process(*python_child("time.sleep(60)"), stdin=subprocess.PIPE)
+        process.stdin.write(b"x" * (8 * MEBIBYTE))
+        writing = asyncio.create_task(process.stdin.drain())
+        await asyncio.sleep(0.2)
+        process.stdin.close()  # the write is still blocked on the full pipe
+        process.kill()
+        with pytest.raises(OSError):
+            await writing
+        assert await process.wait() != 0
+
+    on_selector_loop(scenario())
+
+
+def test_only_devnull_or_a_pipe_can_be_a_childs_stdin():
+    async def scenario():
+        with pytest.raises(ValueError):
+            await start_child_process(*python_child("pass"), stdin=subprocess.STDOUT)
+
+    on_selector_loop(scenario())
+
+
 def test_an_unread_stream_holds_the_child_back_and_loses_nothing_when_read():
     async def scenario():
         process = await start_child_process(

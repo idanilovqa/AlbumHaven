@@ -5931,32 +5931,25 @@
     },
     {
       "id": "js:runtime/player-waveform-peaks.js#loadWaveformPeaks",
-      "action": "fetch requests, setTimeout timers installed by loadWaveformPeaks",
+      "action": "abort listener installed by loadWaveformPeaks",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-waveform-peaks.js#loadWaveformPeaks:request:fetch",
-        "js:music_app/static/js/runtime/player-waveform-peaks.js#loadWaveformPeaks:timer:setTimeout"
+        "js:music_app/static/js/runtime/player-waveform-peaks.js#loadWaveformPeaks:event:abort"
       ],
       "owners": [
         "music_app/static/js/runtime/player-waveform-peaks.js"
       ],
       "rules": [
-        "BI-03",
-        "BI-13"
+        "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/playback/waveform"
-        ],
-        "forbidden": []
-      }
+      "proof": "static"
     },
     {
-      "id": "js:runtime/player-waveform-peaks.js#probeCachedWaveformPeaks",
-      "action": "fetch requests installed by probeCachedWaveformPeaks",
+      "id": "js:runtime/player-waveform-peaks.js#fetchWaveformPeaks",
+      "action": "fetch requests, setTimeout timers installed by fetchWaveformPeaks",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-waveform-peaks.js#probeCachedWaveformPeaks:request:fetch"
+        "js:music_app/static/js/runtime/player-waveform-peaks.js#fetchWaveformPeaks:request:fetch",
+        "js:music_app/static/js/runtime/player-waveform-peaks.js#fetchWaveformPeaks:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/player-waveform-peaks.js"
@@ -14947,10 +14940,10 @@
       "proof": "static"
     },
     {
-      "id": "py:services/waveform_peaks.py#WaveformPeaksRegistry._schedule_completed_task_release",
-      "action": "Run scheduler WaveformPeaksRegistry._schedule_completed_task_release",
+      "id": "py:services/waveform_peaks.py#_BuildJob.publish",
+      "action": "Run publisher _BuildJob.publish",
       "entrypoints": [
-        "py:music_app/services/waveform_peaks.py#WaveformPeaksRegistry._schedule_completed_task_release:scheduler:name"
+        "py:music_app/services/waveform_peaks.py#_BuildJob.publish:publisher:name"
       ],
       "owners": [
         "music_app/services/waveform_peaks.py"

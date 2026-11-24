@@ -19,7 +19,11 @@ import pytest
 from music_app.routes import playback_stream_asgi
 from music_app.services import mp3_gapless
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
-from music_app.services.waveform_peaks import WaveformPeaksRegistry, build_waveform_peaks
+from music_app.services.waveform_peaks import (
+    WaveformDecoderPool,
+    WaveformPeaksRegistry,
+    build_waveform_peaks,
+)
 from tests.py.asgi_testing import run_asgi_request_async
 from tests.py.asgi_websocket_testing import websocket_session
 from tests.py.selector_loop_testing import children, on_selector_loop  # noqa: F401
@@ -246,6 +250,99 @@ def test_a_cancelled_waveform_reaps_its_decoder(media, children):
     on_selector_loop(scenario())
 
     assert children and all(child.poll() is not None for child in children)
+
+
+def test_the_playing_songs_cold_build_decodes_above_normal_priority(media, children):
+    peaks = on_selector_loop(
+        build_waveform_peaks(media["mp3"], bins=720, cancel_event=asyncio.Event(), current=True)
+    )
+
+    assert len(peaks.left) == len(peaks.right) == 720
+    assert min(peaks.left[:700]) > 0
+    assert children and all(child.poll() is not None for child in children)
+
+
+def test_a_started_decoder_builds_the_playing_songs_waveform_and_the_pool_reaps_the_rest(
+    media, children
+):
+    async def scenario():
+        pool = WaveformDecoderPool(size=2)
+        pool.fill()
+        while len(pool._idle) < 2:
+            await asyncio.sleep(0.01)
+        started = len(children)
+        progress = []
+        peaks = await build_waveform_peaks(
+            media["flac"], bins=720, cancel_event=asyncio.Event(), current=True,
+            decoders=pool, progress=progress.append,
+        )
+        assert len(children) == started, "the build used a decoder that had already started"
+        await pool.close()
+        return peaks, progress
+
+    peaks, progress = on_selector_loop(scenario())
+
+    assert len(peaks.left) == 720
+    assert min(peaks.left[:700]) > 0
+    assert all(len(partial.left) == 720 for partial in progress)
+    assert len(children) == 2
+    assert all(child.poll() is not None for child in children)
+
+
+def test_a_cancelled_build_on_a_started_decoder_reaps_it(media, children):
+    async def scenario():
+        pool = WaveformDecoderPool(size=1)
+        pool.fill()
+        while not pool._idle:
+            await asyncio.sleep(0.01)
+        cancel = asyncio.Event()
+        building = asyncio.create_task(build_waveform_peaks(
+            media["wav"], bins=720, cancel_event=cancel, current=True, decoders=pool,
+        ))
+        while pool._idle:
+            await asyncio.sleep(0.005)
+        cancel.set()
+        with pytest.raises(asyncio.CancelledError):
+            await building
+        await pool.close()
+
+    on_selector_loop(scenario())
+
+    assert children and all(child.poll() is not None for child in children)
+
+
+def test_the_playing_songs_progressive_waveform_streams_on_a_started_decoder(
+    playback_app, library_track, monkeypatch, children
+):
+    path = library_track("m4a")
+
+    async def stays_connected(_request):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(playback_stream_asgi, "_wait_for_http_disconnect", stays_connected)
+
+    async def scenario():
+        pool = WaveformDecoderPool(size=1)
+        playback_app.state.waveform_peaks_registry = WaveformPeaksRegistry(decoder_pool=pool)
+        pool.fill()
+        while not pool._idle:
+            await asyncio.sleep(0.01)
+        try:
+            return await run_asgi_request_async(
+                playback_app, "GET", "/playback/waveform",
+                query={"path": str(path), "bins": "720", "priority": "current", "progressive": "1"},
+            )
+        finally:
+            await pool.close()
+
+    status, _headers, body = on_selector_loop(scenario())
+
+    assert status == 200
+    # A finished build answers as one JSON document, a running one as NDJSON ending in the full one.
+    final = [json.loads(line) for line in body.splitlines() if line.strip()][-1]
+    assert final["sampleCount"] == len(final["left"]) == 720
+    assert max(final["left"]) > 0
+    assert all(child.poll() is not None for child in children)
 
 
 def test_a_disconnect_mid_stream_reaps_the_decoder(playback_app, library_track, children):

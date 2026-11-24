@@ -349,7 +349,7 @@ function createEngineHarness(options = {}) {
     },
     window,
     createStreamingDecoder: options.createStreamingDecoder,
-    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
+    loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
     handleStreamingPlaybackFirstFrame: options.handleStreamingPlaybackFirstFrame,
     handleStreamingPlaybackBoundary: options.handleStreamingPlaybackBoundary,
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
@@ -365,7 +365,7 @@ function createEngineHarness(options = {}) {
     settlePlaybackHandover: options.settlePlaybackHandover,
     yieldPausedPlaybackClaim: options.yieldPausedPlaybackClaim,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
-    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
+    loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
     ...(options.document ? { document: options.document } : {}),
     ...(options.requestAnimationFrame ? { requestAnimationFrame: options.requestAnimationFrame } : {}),
   };
@@ -4282,10 +4282,10 @@ test('one buffering episode requests one coarse refill and preserves play intent
   assert.equal(harness.engine.diagnostics.buffering, false);
 });
 
-test('a new current generation starts its cached waveform probe before playback readiness', async () => {
+test('a new current generation asks for its waveform when its stream opens, before playback readiness', async () => {
   const probes = [];
   const harness = createEngineHarness({
-    probeCachedWaveformPeaks: (path, generation) => {
+    loadPlayingWaveformPeaks: (path, generation) => {
       probes.push({ path, generation });
       return Promise.resolve(null);
     },
@@ -7221,10 +7221,10 @@ test('audio output details are reported once and again only when dropouts grow',
   assert.equal(report.statsAvailable, true);
 });
 
-test('a prepared replacement checks the waveform cache before audio is ready', async () => {
+test('a prepared replacement asks for its waveform before audio is ready', async () => {
   const probes = [];
   const harness = createEngineHarness({
-    probeCachedWaveformPeaks: (path, generation) => probes.push({ path, generation }),
+    loadPlayingWaveformPeaks: (path, generation) => probes.push({ path, generation }),
   });
   await harness.api.start(makeTrack('01.flac'));
   const open = harness.sent('open')[0];

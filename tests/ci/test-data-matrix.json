@@ -2564,6 +2564,52 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/loops.functional.spec.js",
+    "case": "FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "waveform:playing-song-preempts-prefetch"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:waveform-prefetch-priority"
+    ],
+    "expectedContracts": [
+      "playing-waveform-preempts-prefetch"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:waveform-prefetch-priority",
+      "filesystemCopy": "media/cases/waveform-prefetch-priority"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/loops.functional.spec.js",
+    "case": "FTC-PLAYER-025 the first song played right after sign-in draws its own waveform about a second after it starts",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "auth:fresh-sign-in-session",
+      "waveform:first-song-after-sign-in"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "first-song-waveform-with-playback"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:first-song-after-sign-in"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
     "case": "FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History",
     "profile": "functional-core",

@@ -40,12 +40,23 @@ def strict_multi_album_folders(entries: Iterable[Mapping[str, object]]) -> set[s
                 break  # a loose song: the folder is a collection, not several albums
             albums[identity].append(entry)
         else:
-            if len(albums) >= 2 and all(
+            if len(albums) >= 2 and not discs_of_one_release(albums) and all(
                 folders_by_album[identity] == {folder} and album_is_complete(tracks)
                 for identity, tracks in albums.items()
             ):
                 strict.add(folder)
     return strict
+
+
+def discs_of_one_release(albums: Mapping[tuple[str, str], list[Mapping[str, object]]]) -> bool:
+    """The MusicBrainz seam (owner, 2026-11-24): True once enrichment knows the folder's albums are discs of one
+    release, which excludes the folder.
+
+    Signal, per the MusicBrainz line: library.local_album_musicbrainz_releases (library_id, album_key) with
+    release_mbid and disc_position. Two or more albums sharing one release_mbid with different disc_position
+    values are discs of one release. disc_position is empty today and the contract is not final, so this
+    reads nothing yet."""
+    return False
 
 
 def _album_identity(entry: Mapping[str, object]) -> tuple[str, str] | None:

@@ -40,9 +40,18 @@ export function observePlaybackClaimRequests(page) {
   page.on('request', onRequest);
   page.on('requestfinished', onFinished);
   page.on('requestfailed', onFailed);
+  const since = (mark) => records.slice(mark).map((record) => ({ ...record }));
   return {
     mark: () => records.length,
-    since: (mark) => records.slice(mark).map((record) => ({ ...record })),
+    since,
+    /** The requests since [mark] once each has settled, or as they stand after [timeoutMs]. */
+    async settledSince(mark, timeoutMs) {
+      const end = Date.now() + timeoutMs;
+      while (records.slice(mark).some((record) => !record.settled) && Date.now() < end) {
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
+      }
+      return since(mark);
+    },
     stop() {
       page.off('request', onRequest);
       page.off('requestfinished', onFinished);
@@ -137,7 +146,8 @@ export async function measureResumeToSound({
 
   const pressedAtEpochMs = before.timeOrigin + pressedAtMs;
   const soundedAtEpochMs = before.timeOrigin + frame.resumeFirstFrameAtMs;
-  const requests = claimRequests.since(claimMark);
+  // A renewal the page sends once it plays again may still be in flight here; it is waited for, not skipped.
+  const requests = await claimRequests.settledSince(claimMark, 10000);
   const unsettled = requests.filter((record) => !record.settled);
   if (unsettled.length) throw new Error(`Play after Pause (${kind}): claim requests still pending (${JSON.stringify(unsettled)}).`);
   const beforeSound = requests.filter((record) => (

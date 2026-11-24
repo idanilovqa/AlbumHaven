@@ -9897,14 +9897,31 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#create_problem_ignores:route:POST /utilities/rules/problem-ignores"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/ignored_repairs.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 40,
+        "lock_wait_ms": 1000
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "testIdentity": "test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "rollback": "Deadlock part 3: the write waits at most 500 ms for a held publication, then keeps an intent and answers pending. Restoring an unbounded lock wait makes lock_wait_ms exceed 1000."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#ignore_album_version",
@@ -10176,14 +10193,31 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#revert_problem_ignore:route:POST /utilities/rules/problem-ignores/revert"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/ignored_repairs.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 20,
+        "lock_wait_ms": 1000
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "testIdentity": "test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "rollback": "Deadlock part 3: the write waits at most 500 ms for a held publication, then keeps an intent and answers pending. Restoring an unbounded lock wait makes lock_wait_ms exceed 1000."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#revert_version_exception",
@@ -16277,6 +16311,38 @@
       ],
       "workClass": "affected-set",
       "proof": "static"
+    },
+    {
+      "id": "py:services/ignored_repair_intents.py#_drain_queued",
+      "action": "Apply the ignored-repair intents a held publication kept back, in order, under the inventory publication lock, on a connection no request reuses",
+      "entrypoints": [
+        "py:music_app/services/ignored_repair_intents.py#_drain_queued:background:executor"
+      ],
+      "owners": [
+        "music_app/services/ignored_repair_intents.py",
+        "music_app/services/rule_state_postgres.py"
+      ],
+      "rules": [
+        "BI-05",
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 12
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_drain_applies_only_the_kept_intents",
+      "testIdentity": "test_live_drain_applies_only_the_kept_intents",
+      "rollback": "The drain reads only the kept intents; reading or rewriting every ignored repair makes sql_statements grow."
     }
   ]
 }

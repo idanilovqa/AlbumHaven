@@ -50,6 +50,9 @@ class OperationCounts:
     provider_calls: int = 0
     transactions: int = 0
     worker_wakes: int = 0
+    # Time a request spent waiting for a lock another transaction holds (a held inventory publication):
+    # 6.5's ruling allows no unbounded wait on a request (deadlock part 3).
+    lock_wait_ms: float = 0.0
 
     def count(self, field_name: str, amount: int | float = 1) -> None:
         if field_name not in _FIELD_NAMES:

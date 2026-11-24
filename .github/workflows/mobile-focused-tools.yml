@@ -27,7 +27,9 @@ jobs:
           git archive --format=tar HEAD | gzip -n > offline/application-source.tar.gz
           git rev-parse HEAD > offline/source-commit.txt
           docker run --rm -v "$PWD/offline/deb:/out" debian:trixie-slim sh -ec 'apt-get update -qq; apt-get -y --download-only install postgresql-17 postgresql-client-17 >/dev/null; cp /var/cache/apt/archives/*.deb /out/'
-          python -m pip download --dest offline/wheels --only-binary=:all: -r requirements.txt
+          # unidic-lite and mojimoji publish no cp313 Linux wheel: build theirs from the pins first.
+          python -m pip wheel --no-deps --wheel-dir offline/wheels $(grep -E '^(unidic-lite|mojimoji)==' requirements.txt)
+          python -m pip download --dest offline/wheels --only-binary=:all: --find-links offline/wheels -r requirements.txt
           npm ci --ignore-scripts
           tar -czf offline/node-modules.tar.gz node_modules
           python - <<'PY'

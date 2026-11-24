@@ -468,9 +468,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
     # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-78:] == [
-        "0042_track_distinct_cover_improvement_alerts.sql",
-        "0043_create_local_track_waveform_peaks.sql",
+    assert migration_names[-95:] == [
         "0044_create_tag_edit_intents.sql",
         "0045_add_non_album_candidate_index.sql",
         "0046_add_local_auth_lifecycle.sql",
@@ -544,9 +542,28 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
         "0178_add_musicbrainz_associated_artists.sql",
+        "0190_create_musicbrainz_release_identity.sql",
+        "0191_create_discogs_fallback_identity.sql",
+        "0192_create_musicbrainz_album_credits_and_artist_groups.sql",
+        "0193_create_musicbrainz_series.sql",
+        "0194_create_musicbrainz_lookup_queue.sql",
+        "0195_add_tracklist_sections.sql",
+        "0196_create_musicbrainz_data_correction_queue.sql",
+        "0197_add_musicbrainz_edition_track_order.sql",
+        "0198_add_musicbrainz_correction_rows_and_decisions.sql",
+        "0199_add_musicbrainz_series_size_checks.sql",
         "0200_create_cover_references.sql",
         "0201_backfill_cover_references.sql",
         "0210_create_schema_migration_attestations.sql",
+        "0252_create_musicbrainz_release_transliterations.sql",
+        "0253_create_musicbrainz_series_wikipedia.sql",
+        "0254_add_musicbrainz_corrected_album_search_indexes.sql",
+        "0255_add_track_latin_titles_and_release_language.sql",
+        "0256_add_album_latin_titles.sql",
+        "0257_add_musicbrainz_artist_area.sql",
+        "0258_invalidate_gallery_on_split_labels.sql",
+        "0270_add_latin_title_reading_evidence.sql",
+        "0275_index_credited_album_artist_names.sql",
     ]
 
 
@@ -3390,3 +3407,29 @@ def test_schema_migration_attestations_are_append_only_and_owner_written():
                       "insert into ops.schema_migrations", "truncate ops.schema_migrations"):
         assert statement not in sql
 
+
+SERIES_WIKIPEDIA_MIGRATION = MIGRATIONS_DIR / "0253_create_musicbrainz_series_wikipedia.sql"
+
+
+def test_series_wikipedia_migration_stores_only_a_found_link_with_its_capped_introduction():
+    """Owner 2026-11-17: a series shows general information only from Wikipedia."""
+    text = SERIES_WIKIPEDIA_MIGRATION.read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "-- depends on: 0193_create_musicbrainz_series.sql"
+    sql = _normalized_sql(text)
+    assert "create table if not exists integration.musicbrainz_series_wikipedia" in sql
+    assert "series_mbid uuid primary key references integration.musicbrainz_series(mbid) on delete cascade" in sql
+    # A row is a found link with its text: never a type, an edition or a count.
+    for column in ("language text not null", "title text not null", "url text not null",
+                   "extract text not null", "fetched_at timestamptz not null"):
+        assert column in sql
+    assert "char_length(extract) between 1 and 2000" in sql
+    assert "url ~ '^https://[a-z0-9-]+\.wikipedia\.org/wiki/.'" in sql
+    # The lookup state lives on the series: last success, failures and the next try.
+    for column in ("wikipedia_checked_at timestamptz", "wikipedia_failure_count integer not null default 0",
+                   "wikipedia_next_attempt_at timestamptz"):
+        assert f"add column if not exists {column}" in sql
+    assert "revoke all on table integration.musicbrainz_series_wikipedia from public" in sql
+    assert "grant select on table integration.musicbrainz_series_wikipedia to album_haven_readonly" in sql
+    for role in ("album_haven_app", "album_haven_migrator"):
+        assert f"grant select, insert, update, delete on table integration.musicbrainz_series_wikipedia to {role}" in sql
+    assert "drop " not in sql and "delete from" not in sql and "update integration" not in sql

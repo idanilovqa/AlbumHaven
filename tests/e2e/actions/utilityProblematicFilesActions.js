@@ -441,19 +441,41 @@ export class UtilityProblematicFilesActions {
   }
 
   async openEnteredMusicBrainzArtist(expectedUrl) {
-    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
-    await this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton.click();
-    const popup = await opened;
-    await popup.waitForURL(expectedUrl, { timeout: 60000 });
-    await popup.close();
+    await this.openMusicBrainzPopup(this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton, expectedUrl);
   }
 
   async openMusicBrainzManualSearch(expectedUrl) {
-    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
-    await this.utilityProblematicFilesTab.musicBrainzFindManuallyButton.click();
-    const popup = await opened;
-    await popup.waitForURL(expectedUrl, { timeout: 60000 });
-    await popup.close();
+    await this.openMusicBrainzPopup(this.utilityProblematicFilesTab.musicBrainzFindManuallyButton, expectedUrl);
+  }
+
+  // The app's part ends when the popup navigates to the exact MusicBrainz URL. Waiting for the live
+  // musicbrainz.org page to load made CI depend on a third-party site, so the popup's first
+  // navigation request is asserted instead and the popup closes before any response matters.
+  async openMusicBrainzPopup(trigger, expectedUrl) {
+    const page = this.utilityProblematicFilesTab.page;
+    const context = page.context();
+    const appOrigin = new URL(page.url()).origin;
+    let openedUrl = null;
+    // A popup's first navigation has no frame yet (request.frame() throws), so it is told apart by
+    // leaving the app's origin.
+    const recordPopupNavigation = (request) => {
+      if (openedUrl === null && request.isNavigationRequest() && new URL(request.url()).origin !== appOrigin) {
+        openedUrl = request.url();
+      }
+    };
+    context.on('request', recordPopupNavigation);
+    try {
+      const opened = page.waitForEvent('popup');
+      await trigger.click();
+      const popup = await opened;
+      try {
+        await expect.poll(() => openedUrl, { timeout: 30000 }).toBe(expectedUrl);
+      } finally {
+        await popup.close();
+      }
+    } finally {
+      context.off('request', recordPopupNavigation);
+    }
   }
 
   async selectMusicBrainzCandidate(name) {
@@ -489,11 +511,7 @@ export class UtilityProblematicFilesActions {
   }
 
   async openMusicBrainzCandidate(name, expectedUrl) {
-    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
-    await this.utilityProblematicFilesTab.musicBrainzArtistLink(name).click();
-    const popup = await opened;
-    await popup.waitForURL(expectedUrl, { timeout: 60000 });
-    await popup.close();
+    await this.openMusicBrainzPopup(this.utilityProblematicFilesTab.musicBrainzArtistLink(name), expectedUrl);
   }
 
   async assignSelectedMusicBrainzIdentity(artistName) {
@@ -774,6 +792,19 @@ export class UtilityProblematicFilesActions {
 
   async readExcludeProblemEnabled() {
     return this.utilityProblematicFilesTab.excludeProblemButton.isEnabled();
+  }
+
+  async waitForMusicBrainzCorrectionRows(options = {}) {
+    await this.utilityProblematicFilesTab.musicBrainzCorrectionListItems.first()
+      .waitFor({ state: 'visible', timeout: options.timeout || 60000 });
+  }
+
+  async expectMusicBrainzHasNoInfo({ key, title }) {
+    // An album listed only for this has no detail to load (its detail is built from the row).
+    await this.utilityProblematicFilesTab.listItemByKey(key).click();
+    await expect(this.utilityProblematicFilesTab.listItemByKey(key)).toHaveClass(/is-active/, { timeout: 60000 });
+    await expect(this.utilityProblematicFilesTab.detailTitle).toHaveText(title, { timeout: 60000 });
+    await expect(this.utilityProblematicFilesTab.detailMusicBrainzHasNoInfoLabel).toBeVisible({ timeout: 60000 });
   }
 
   async readAlbumProblemReasons() {

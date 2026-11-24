@@ -26,6 +26,14 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
         "library.local_tracks",
         "library.local_album_featured_artists",
         "library.local_album_cover_candidate_snapshots",
+        # Automatic MusicBrainz release decisions and Discogs fallback releases (Delivery 2);
+        # an owner's manual release choice is guarded below.
+        "library.local_album_discogs_releases",
+        # Data correction summaries (S4), recomputed from tags and the release decision.
+        "library.local_album_musicbrainz_corrections",
+        "library.local_album_musicbrainz_correction_rows",
+        # Album Latin titles (S7, 0256), remade from the title by the background refresh.
+        "library.local_album_latin_titles",
     }
 )
 # Tables whose foreign key to library.local_albums may hold a user decision;
@@ -36,6 +44,13 @@ GUARDED_ALBUM_CHILD_TABLES = frozenset(
         "app.album_disc_ratings",
         "library.local_album_artist_identities",
         "library.local_mbid_assertions",
+        "library.local_album_musicbrainz_releases",
+        "library.musicbrainz_contribution_flags",
+        # The owner's MusicBrainz lookups (S5) and approved data corrections (S4).
+        "ops.musicbrainz_lookup_requests",
+        "ops.musicbrainz_correction_queue",
+        # The owner's undo, skip and approval of data corrections (S4).
+        "library.local_album_musicbrainz_correction_decisions",
     }
 )
 
@@ -69,6 +84,18 @@ RETIREMENT_GUARDS: tuple[tuple[str, str], ...] = (
       select 1 from library.local_album_artist_identities as identity
       where identity.library_id = album.library_id
         and identity.album_key = album.album_key)"""),
+    # Automatic release decisions go with the row; an owner's choice keeps it.
+    ("musicbrainz_release_decision", """not exists (
+      select 1 from library.local_album_musicbrainz_releases as release_decision
+      where release_decision.library_id = album.library_id
+        and release_decision.album_key = album.album_key
+        and release_decision.decision_source = 'manual')"""),
+    # An album the owner marked "MBID: Remote info update needed" keeps its row.
+    ("contribution_flag", """not exists (
+      select 1 from library.musicbrainz_contribution_flags as flag
+      where flag.library_id = album.library_id
+        and flag.album_key = album.album_key
+        and flag.source = 'manual')"""),
     ("version_decision", """not exists (
       select 1 from library.manual_versions as version
       where version.library_id = album.library_id
@@ -81,6 +108,23 @@ RETIREMENT_GUARDS: tuple[tuple[str, str], ...] = (
       select 1 from library.separate_releases as separate_release
       where separate_release.library_id = album.library_id
         and separate_release.release_key = album.album_key)"""),
+    # A lookup the owner asked for that has not finished; a finished one is batch history
+    # and goes with the row.
+    ("musicbrainz_lookup_request", """not exists (
+      select 1 from ops.musicbrainz_lookup_requests as lookup_request
+      where lookup_request.library_id = album.library_id
+        and lookup_request.album_key = album.album_key
+        and lookup_request.state in ('queued', 'running'))"""),
+    # A data correction the owner added to the Edits Queue.
+    ("musicbrainz_correction", """not exists (
+      select 1 from ops.musicbrainz_correction_queue as correction
+      where correction.library_id = album.library_id
+        and correction.album_key = album.album_key)"""),
+    # An undo, skip or approval of a data correction.
+    ("musicbrainz_correction_decision", """not exists (
+      select 1 from library.local_album_musicbrainz_correction_decisions as correction_decision
+      where correction_decision.library_id = album.library_id
+        and correction_decision.album_key = album.album_key)"""),
     ("cover_lookup_task", """not exists (
       select 1 from ops.cover_lookup_tasks as cover_task
       where cover_task.library_id = album.library_id

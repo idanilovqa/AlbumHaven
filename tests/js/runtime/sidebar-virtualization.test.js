@@ -257,6 +257,26 @@ test('window replacement restores keyboard focus to the same artist link', () =>
   assert.equal(focused, true);
 });
 
+test('original-script artists show their romanized name in parentheses and re-render when it arrives (J3)', () => {
+  const context = loadHelpers();
+  const source = [{ artist: '天門', artist_display: '天門', count: 5 }, { artist: 'Angra', artist_display: 'Angra', count: 16 }];
+  const before = context.buildSidebarStructureSignature(source);
+  context.setRomanizedArtistNames({ '天門': 'Tenmon' });
+  const html = context.buildSidebarHtml({ surface: { active: 'albums' } }, source, {});
+  assert.match(html, /天門 <span class="navigation-tree-label-secondary">\(Tenmon\)<\/span>/);
+  assert.equal((html.match(/navigation-tree-label-secondary/g) || []).length, 1);
+  assert.notEqual(context.buildSidebarStructureSignature(source), before);
+  assert.equal(context.romanizedArtistLabel(' 天門 '), '(Tenmon)');
+  assert.equal(context.romanizedArtistLabel('Angra'), '');
+});
+
+test('the romanized name lookup gives the bare Latin form for hover text (J3)', () => {
+  const context = loadHelpers();
+  context.setRomanizedArtistNames({ '天門': 'Tenmon' });
+  assert.equal(context.romanizedArtistName('天門'), 'Tenmon');
+  assert.equal(context.romanizedArtistName('Кипелов'), '');
+});
+
 // One sidebar scroll that moves the virtual window. `frameOnly` measures just the
 // animation frame the scroll schedules, which renders the new window.
 async function sidebarWindowScroll(cardinality, { frameOnly = false } = {}) {

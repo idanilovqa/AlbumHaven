@@ -3012,6 +3012,28 @@
       }
     },
     {
+      "id": "js:runtime/gallery-main-components.js#refreshRomanizedArtistNames",
+      "action": "fetch requests installed by refreshRomanizedArtistNames",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-components.js#refreshRomanizedArtistNames:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-components.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/artists/romanized-names"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/gallery-main-interactions.js#closeGalleryMainSurface",
       "action": "transitionend listeners, setTimeout timers installed by closeGalleryMainSurface",
       "entrypoints": [
@@ -3096,6 +3118,54 @@
       "rollback": "Revert the scroll-only gallery bar update; retain this contract."
     },
     {
+      "id": "js:runtime/gallery-main-interactions.js#initGalleryMain#2",
+      "action": "fetchAndRender requests installed by initGalleryMain",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#initGalleryMain:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/",
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/gallery-main-interactions.js#navigate",
+      "action": "fetchAndRender requests installed by navigate",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#navigate:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/",
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/gallery-main-interactions.js#observeArtistFamilyPanelBounds",
       "action": "ResizeObserver observers installed by observeArtistFamilyPanelBounds",
       "entrypoints": [
@@ -3109,6 +3179,68 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-main-interactions.js#openSeriesGallery",
+      "action": "Press a series link repeatedly, also from a phone album page that closes through history; from a fresh page, press the series already shown",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#openSeriesGallery:event:popstate",
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#openSeriesGallery:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a series link requests its gallery once, also after a phone album page closes, and never the series already shown",
+      "rollback": "A series link keeps the series gallery already on screen. Reverting that reloads it, which this contract's alreadyShown pass rejects; keep the contract.",
+      "alreadyShown": true
+    },
+    {
+      "id": "js:runtime/gallery-main-interactions.js#saveSeriesKind",
+      "action": "fetch requests installed by saveSeriesKind",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#saveSeriesKind:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/series/*/kind"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/gallery-main-interactions.js#transitionGalleryMain",
@@ -4430,6 +4562,380 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/musicbrainz-corrections.js#approveEditsQueueKind",
+      "action": "sendEditsQueueChange requests installed by approveEditsQueueKind",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#approveEditsQueueKind:request:sendEditsQueueChange"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/kinds/*/approve"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#decideEditsQueueAlbum",
+      "action": "sendEditsQueueChange requests installed by decideEditsQueueAlbum",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#decideEditsQueueAlbum:request:sendEditsQueueChange"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/albums/*"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#loadEditsQueueKindPage",
+      "action": "readEditsQueueJson requests installed by loadEditsQueueKindPage",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#loadEditsQueueKindPage:request:readEditsQueueJson"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/edits/*"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#loadMusicBrainzCorrectionDetail",
+      "action": "fetch requests installed by loadMusicBrainzCorrectionDetail",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#loadMusicBrainzCorrectionDetail:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#loadNextMusicBrainzCorrectionPage",
+      "action": "fetch requests installed by loadNextMusicBrainzCorrectionPage",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#loadNextMusicBrainzCorrectionPage:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/albums"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#loadUtilityEditsQueue",
+      "action": "readEditsQueueJson requests installed by loadUtilityEditsQueue",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#loadUtilityEditsQueue:request:readEditsQueueJson"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/edits",
+          "/api/musicbrainz/lookups"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#readEditsQueueJson",
+      "action": "Read the Edits Queue sections, its look ups and one page of a kind",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#readEditsQueueJson:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/edits",
+          "/api/musicbrainz/corrections/edits/*",
+          "/api/musicbrainz/lookups"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 500
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/musicbrainz-corrections.test.js",
+      "performanceTargets": [],
+      "budgets": {
+        "requests": 3
+      },
+      "testIdentity": "request capture: the Edits Queue reads only its queue endpoints, one page per open",
+      "rollback": "Test-only request-capture contract; the Edits Queue is unchanged. Reverting returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#removeEditsQueueLookup",
+      "action": "sendEditsQueueChange requests installed by removeEditsQueueLookup",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#removeEditsQueueLookup:request:sendEditsQueueChange"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/lookups/*"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#sendEditsQueueChange",
+      "action": "Send one Edits Queue change: auto submit, an album decision, a kind approval or a removed look up",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#sendEditsQueueChange:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/settings",
+          "/api/musicbrainz/corrections/albums/*",
+          "/api/musicbrainz/corrections/kinds/*/approve",
+          "/api/musicbrainz/lookups/*"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 500
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/musicbrainz-corrections.test.js",
+      "performanceTargets": [],
+      "budgets": {
+        "requests": 4
+      },
+      "testIdentity": "request capture: Edits Queue changes reach only their own endpoints, once per action",
+      "rollback": "Test-only request-capture contract; the Edits Queue is unchanged. Reverting returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:runtime/musicbrainz-corrections.js#setEditsQueueAutoSubmit",
+      "action": "sendEditsQueueChange requests installed by setEditsQueueAutoSubmit",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-corrections.js#setEditsQueueAutoSubmit:request:sendEditsQueueChange"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-corrections.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/corrections/settings"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-lookups.js#appendAlbumMenuMusicBrainzSearchItems",
+      "action": "fetch requests installed by appendAlbumMenuMusicBrainzSearchItems",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-lookups.js#appendAlbumMenuMusicBrainzSearchItems:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-lookups.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/lookups/target"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-lookups.js#dismissMusicBrainzLookupBatch",
+      "action": "fetch requests installed by dismissMusicBrainzLookupBatch",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-lookups.js#dismissMusicBrainzLookupBatch:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-lookups.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/lookups/batches/*/dismiss"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-lookups.js#openMusicBrainzLookupResults",
+      "action": "fetch requests installed by openMusicBrainzLookupResults",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-lookups.js#openMusicBrainzLookupResults:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-lookups.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/lookups/batches/*"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-lookups.js#refreshMusicBrainzLookupNotifications",
+      "action": "fetch requests installed by refreshMusicBrainzLookupNotifications",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-lookups.js#refreshMusicBrainzLookupNotifications:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-lookups.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/lookups"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/musicbrainz-lookups.js#requestMusicBrainzLookup",
+      "action": "fetch requests installed by requestMusicBrainzLookup",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/musicbrainz-lookups.js#requestMusicBrainzLookup:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/musicbrainz-lookups.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/musicbrainz/lookups"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/notification-ui-helpers.js#dismissLibraryWatcherWarning",
       "action": "fetch requests installed by dismissLibraryWatcherWarning",
       "entrypoints": [
@@ -5601,6 +6107,28 @@
       ],
       "workClass": "delta",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/shell-navigation-drawer.js#loadSeriesTree",
+      "action": "fetch requests installed by loadSeriesTree",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/shell-navigation-drawer.js#loadSeriesTree:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/shell-navigation-drawer.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/series-tree"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/shell-navigation-drawer.js#scheduleArtistTreeResizeAfterTransition",
@@ -8729,6 +9257,22 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/api_read_asgi_routes.py#series_tree",
+      "action": "Serve GET /series-tree",
+      "entrypoints": [
+        "py:music_app/routes/api_read_asgi_routes.py#series_tree:route:GET /series-tree"
+      ],
+      "owners": [
+        "music_app/routes/api_read_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/api_read_asgi_routes.py#soundtracks_read_reserved",
       "action": "Serve GET /soundtracks/{soundtrack_ref}",
       "entrypoints": [
@@ -10873,6 +11417,118 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/musicbrainz_corrections_asgi.py#approve_kind",
+      "action": "Serve POST /kinds/{kind}/approve",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_corrections_asgi.py#approve_kind:route:POST /kinds/{kind}/approve"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_corrections_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_corrections_asgi.py#decide_album",
+      "action": "Serve POST /albums/{action}",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_corrections_asgi.py#decide_album:route:POST /albums/{action}"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_corrections_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_corrections_asgi.py#get_album_correction",
+      "action": "Serve GET ",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_corrections_asgi.py#get_album_correction:route:GET "
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_corrections_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_corrections_asgi.py#get_edits_queue",
+      "action": "Serve GET /edits",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_corrections_asgi.py#get_edits_queue:route:GET /edits"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_corrections_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_corrections_asgi.py#get_edits_queue_page",
+      "action": "Serve GET /edits/{kind}",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_corrections_asgi.py#get_edits_queue_page:route:GET /edits/{kind}"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_corrections_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_corrections_asgi.py#list_correction_albums",
+      "action": "Serve GET /albums",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_corrections_asgi.py#list_correction_albums:route:GET /albums"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_corrections_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_corrections_asgi.py#save_correction_settings",
+      "action": "Serve PUT /settings",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_corrections_asgi.py#save_correction_settings:route:PUT /settings"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_corrections_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/musicbrainz_enrichment_asgi.py#assign_artist_match",
       "action": "Serve PUT /{local_artist_id}/match",
       "entrypoints": [
@@ -10889,10 +11545,42 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#dismiss_lookup_batch",
+      "action": "Serve POST /batches/{batch_id}/dismiss",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#dismiss_lookup_batch:route:POST /batches/{batch_id}/dismiss"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/musicbrainz_enrichment_asgi.py#get_artist_problem",
       "action": "Serve GET /{local_artist_id}",
       "entrypoints": [
         "py:music_app/routes/musicbrainz_enrichment_asgi.py#get_artist_problem:route:GET /{local_artist_id}"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#get_lookup_batch",
+      "action": "Serve GET /batches/{batch_id}",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#get_lookup_batch:route:GET /batches/{batch_id}"
       ],
       "owners": [
         "music_app/routes/musicbrainz_enrichment_asgi.py"
@@ -10937,6 +11625,54 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#list_lookups",
+      "action": "Serve GET ",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#list_lookups:route:GET "
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#list_romanized_artist_names",
+      "action": "Serve GET /romanized-names",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#list_romanized_artist_names:route:GET /romanized-names"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#load_problematic_album_items",
+      "action": "Run background load_problematic_album_items",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#load_problematic_album_items:background:executor"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/musicbrainz_enrichment_asgi.py#load_problematic_artist_items",
       "action": "Load the owner's unresolved MusicBrainz artist rows for Problematic Files on an executor",
       "entrypoints": [
@@ -10950,6 +11686,54 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#lookup_target",
+      "action": "Serve GET /target",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#lookup_target:route:GET /target"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#remove_queued_lookup",
+      "action": "Serve DELETE /{request_id}",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#remove_queued_lookup:route:DELETE /{request_id}"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#request_lookup",
+      "action": "Serve POST ",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#request_lookup:route:POST "
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
       "proof": "static"
     },
     {
@@ -10992,6 +11776,22 @@
       ],
       "owners": [
         "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/musicbrainz_series_asgi.py#set_series_kind",
+      "action": "Serve PUT /{mbid}/kind",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_series_asgi.py#set_series_kind:route:PUT /{mbid}/kind"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_series_asgi.py"
       ],
       "rules": [
         "BI-04",
@@ -11735,6 +12535,22 @@
         "BI-14"
       ],
       "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/browse_query_diagnostics.py#_Watchdog._run",
+      "action": "TEMPORARY CI-only FTC-OPS-016 diagnostics: report a slow browse statement once a second over one probe connection (remove before PR 80 merges)",
+      "entrypoints": [
+        "py:music_app/services/browse_query_diagnostics.py#_Watchdog._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/browse_query_diagnostics.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
     },
     {
@@ -12929,6 +13745,22 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:services/gallery_projection_postgres.py#refresh_gallery_projection_if_out_of_date",
+      "action": "After a busy MusicBrainz pass, queue one gallery refresh when the published gallery is out of date",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#refresh_gallery_projection_if_out_of_date:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh",
       "action": "Run scheduler schedule_gallery_projection_refresh",
       "entrypoints": [
@@ -13348,6 +14180,86 @@
       "rollback": "Revert fix(move) per-folder cover lookup, with its contract."
     },
     {
+      "id": "py:services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository.refresh",
+      "action": "Run refresh MusicBrainzCorrectionsPostgresRepository.refresh",
+      "entrypoints": [
+        "py:music_app/services/musicbrainz_corrections_postgres.py#MusicBrainzCorrectionsPostgresRepository.refresh:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/musicbrainz_corrections_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/musicbrainz_corrections_postgres.py#_refresh_until_settled",
+      "action": "Refresh stored data corrections in the background, one running and one trailing pass",
+      "entrypoints": [
+        "py:music_app/services/musicbrainz_corrections_postgres.py#_refresh_until_settled:background:while"
+      ],
+      "owners": [
+        "music_app/services/musicbrainz_corrections_postgres.py"
+      ],
+      "rules": [
+        "BI-05",
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 2,
+        "pool_leases": 2
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_musicbrainz_corrections_bounded_contracts.py::test_correction_refresh_contract_folds_any_trigger_burst_into_two_passes_at_production_trigger_count",
+      "testIdentity": "test_correction_refresh_contract_folds_any_trigger_burst_into_two_passes_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:services/musicbrainz_corrections_postgres.py#enable_background_correction_refresh",
+      "action": "Run refresh enable_background_correction_refresh",
+      "entrypoints": [
+        "py:music_app/services/musicbrainz_corrections_postgres.py#enable_background_correction_refresh:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/musicbrainz_corrections_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/musicbrainz_corrections_postgres.py#schedule_correction_refresh",
+      "action": "Run scheduler schedule_correction_refresh",
+      "entrypoints": [
+        "py:music_app/services/musicbrainz_corrections_postgres.py#schedule_correction_refresh:scheduler:name"
+      ],
+      "owners": [
+        "music_app/services/musicbrainz_corrections_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/musicbrainz_enrichment.py#MusicBrainzEnrichmentScheduler.schedule",
       "action": "Run scheduler MusicBrainzEnrichmentScheduler.schedule",
       "entrypoints": [
@@ -13547,6 +14459,22 @@
       ],
       "owners": [
         "music_app/services/musicbrainz_enrichment_triggers.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/musicbrainz_release_identity_postgres.py#MusicBrainzReleaseIdentityPostgresRepository.refresh_latin_titles",
+      "action": "Run refresh MusicBrainzReleaseIdentityPostgresRepository.refresh_latin_titles",
+      "entrypoints": [
+        "py:music_app/services/musicbrainz_release_identity_postgres.py#MusicBrainzReleaseIdentityPostgresRepository.refresh_latin_titles:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/musicbrainz_release_identity_postgres.py"
       ],
       "rules": [
         "BI-07",
@@ -14366,6 +15294,38 @@
         "BI-08"
       ],
       "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/track_transliteration.py#refresh_album_latin_titles",
+      "action": "Run refresh refresh_album_latin_titles",
+      "entrypoints": [
+        "py:music_app/services/track_transliteration.py#refresh_album_latin_titles:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/track_transliteration.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/track_transliteration.py#refresh_latin_titles",
+      "action": "Run refresh refresh_latin_titles",
+      "entrypoints": [
+        "py:music_app/services/track_transliteration.py#refresh_latin_titles:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/track_transliteration.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
     },
     {

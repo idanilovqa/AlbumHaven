@@ -120,6 +120,48 @@ function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
   };
 }
 
+// Romanized artist names (owner-approved J3): the Latin form MusicBrainz gives an
+// original-script name, shown in parentheses beside it. Display only.
+let romanizedArtistNames = new Map();
+// Bumped whenever either label map is replaced, so a drawn tree knows to redraw.
+let artistDisplayLabelsVersion = 0;
+
+function setRomanizedArtistNames(names = {}) {
+  romanizedArtistNames = new Map(Object.entries(names || {}).map(([name, latin]) => [String(name).trim(), String(latin || '').trim()]));
+  artistDisplayLabelsVersion += 1;
+}
+
+// "Tenmon" for "天門" (hover text); empty for every other name.
+function romanizedArtistName(name) {
+  return romanizedArtistNames.get(String(name || '').trim()) || '';
+}
+
+// "(Tenmon)" for "天門" (visible text); empty for every other name.
+function romanizedArtistLabel(name) {
+  const latin = romanizedArtistName(name);
+  return latin ? `(${latin})` : '';
+}
+
+// Same-name artists MusicBrainz splits per album (approved D2 batch 3, 3): the server names
+// each group "Amarok (Poland)" and lists its qualifier here, dimmed like a romanized name.
+let splitArtistQualifiers = new Map();
+
+function setSplitArtistQualifiers(qualifiers = {}) {
+  splitArtistQualifiers = new Map(Object.entries(qualifiers || {}).map(([label, qualifier]) => [String(label).trim(), String(qualifier || '').trim()]));
+  artistDisplayLabelsVersion += 1;
+}
+
+// The one way an artist name is drawn: { name: 'Amarok', qualifier: '(Poland)', secondary:
+// the dimmed text after the name } for a split group label, which ends in " (qualifier)";
+// any other name is drawn whole, with its romanized form (if any) as the dimmed text.
+function artistDisplayParts(artist) {
+  const label = String(artist ?? '');
+  const qualifier = splitArtistQualifiers.get(label.trim());
+  if (!qualifier) return { name: label, qualifier: '', secondary: romanizedArtistLabel(label) };
+  const name = label.trim().slice(0, -(qualifier.length + 3));
+  return { name, qualifier: `(${qualifier})`, secondary: [romanizedArtistLabel(name), `(${qualifier})`].filter(Boolean).join(' ') };
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -144,7 +186,8 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    label: artistDisplayParts(item.artist_display || item.artist).name,
+    secondaryLabel: artistDisplayParts(item.artist_display || item.artist).secondary, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -163,6 +206,41 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="after" aria-hidden="true" style="height:${virtualWindow.after}px"></div>`;
   }
   return html;
+}
+
+// The Series tree (approved mockups 2 and 4B): the artist tree's own items in two groups,
+// Series then Featured In, each under a collapsible heading made from the same item and never
+// selected. A separator comes before Featured In where NavigationTree draws one.
+const SERIES_TREE_GROUPS = [['series', 'Series'], ['featured_in', 'Featured In']];
+
+// A Series view brings its own tree; any other gallery shows the one the Series button loaded.
+function resolveSeriesTreeItems(view = state.view) {
+  const items = String(view?.selected_series || '') ? view.series_sidebar : state.ui?.seriesTree;
+  return Array.isArray(items) ? items : [];
+}
+
+function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTreeCollapsedGroups || {}) {
+  const tree = window.NavigationTree;
+  const series = resolveSeriesTreeItems(view);
+  const selected = String(view.selected_series || '');
+  // The artist tree's own fold arrow, turned to show whether a group is open.
+  const chevron = document.getElementById('artist-tree-fold-button')?.querySelector?.('svg')?.outerHTML || '';
+  const browse = { surface_request: 'albums', visible_library_categories: view.visible_library_categories };
+  return SERIES_TREE_GROUPS.reduce((html, [kind, label]) => {
+    const members = series.filter((item) => (item.kind === 'featured_in' ? 'featured_in' : 'series') === kind);
+    if (!members.length) return html;
+    const collapsed = collapsedGroups[kind] === true;
+    const separator = html && typeof tree.renderSeparator === 'function' ? tree.renderSeparator({ label }) : '';
+    return html + separator + tree.renderItem({
+      label, key: `series-group:${kind}`, action: true, variant: 'panel', expanded: !collapsed,
+      className: 'navigation-tree-group-heading', attributes: { 'data-series-tree-group': kind },
+      trailingHtml: chevron && `<span class="navigation-tree-group-heading__chevron">${chevron}</span>`,
+    }) + (collapsed ? '' : members.map((item) => tree.renderItem({
+      label: item.name, href: buildUrl({ ...browse, selected_series: item.mbid }), key: `series:${item.mbid}`,
+      count: item.count, selected: item.mbid === selected,
+      attributes: { 'data-nav': '1', 'data-sidebar-series': item.mbid },
+    })).join(''));
+  }, '');
 }
 
 // Sidebar artist lists are replaced, never edited in place, so each list's
@@ -198,7 +276,8 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}:${sidebarArtistGeneration(sidebarArtists)}:${virtualWindow}`;
+  // The dimmed text (romanized names, split qualifiers) arrives apart from the list.
+  return `${showAllArtistsLink}:${sidebarArtistGeneration(sidebarArtists)}:${artistDisplayLabelsVersion}:${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {

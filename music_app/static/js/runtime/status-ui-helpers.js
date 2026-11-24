@@ -203,6 +203,7 @@ function triggerMusicBrainzArtistSync() {
       const count = Math.max(0, Number(payload?.enqueued_count || 0));
       setMusicBrainzSyncFeedback('info', `MusicBrainz sync queued ${count} ${count === 1 ? 'artist' : 'artists'}.`);
       if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus({ force: true });
+      if (typeof refreshMusicBrainzLookupNotifications === 'function') void refreshMusicBrainzLookupNotifications({ force: true });
       return payload;
     })
     .catch((error) => {
@@ -343,6 +344,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
   if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus();
+  if (typeof refreshMusicBrainzLookupNotifications === 'function') void refreshMusicBrainzLookupNotifications();
   const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
   if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);

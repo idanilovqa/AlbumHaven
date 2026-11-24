@@ -231,6 +231,9 @@ updateStatusIndicator({
   ...(Number.isSafeInteger(bootstrap.inventoryMutationRevision)
     ? { inventory_mutation_revision: bootstrap.inventoryMutationRevision }
     : {}),
+  ...(Number.isSafeInteger(bootstrap.galleryPublicationRevision)
+    ? { gallery_publication_revision: bootstrap.galleryPublicationRevision }
+    : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);
@@ -333,6 +336,12 @@ window.AlbumHavenAppCopy?.onServerAnswer(() => {
 });
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarSeries = event.target.closest('[data-sidebar-series]');
+  if (sidebarSeries && typeof canReviewMusicBrainzCorrections === 'function' && canReviewMusicBrainzCorrections()
+      && showSeriesTreeContextMenu(event.clientX, event.clientY, sidebarSeries.getAttribute('data-sidebar-series') || '')) {
+    event.preventDefault();
+    return;
+  }
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
   if (sidebarArtist) {
     event.preventDefault();

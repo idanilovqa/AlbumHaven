@@ -3728,6 +3728,93 @@ test('pollStatus does not reload a foreground view already read at the advanced 
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
 });
 
+function galleryPublicationFixture(knownRevision) {
+  const fixture = createContext();
+  fixture.context.scheduleBrowserTimeout = () => {};
+  fixture.context.buildApiUrl = () => '/view-data?surface=albums';
+  fixture.context.state.view = {
+    ...fixture.context.state.view,
+    artists_sidebar: [{ artist: 'Amarok', artist_display: 'Amarok', count: 7 }],
+    artist_groups: [{ artist: 'Amarok', albums: [{ key: 'amarok::neo' }] }],
+  };
+  fixture.context.state.status = {
+    scan_in_progress: false, relations_in_progress: false, covers_in_progress: false,
+    inventory_mutation_revision: 12,
+    ...(knownRevision === undefined ? {} : { gallery_publication_revision: knownRevision }),
+  };
+  fixture.poll = async (galleryRevision, view = null) => {
+    const first = fixture.pendingRequests.length;
+    const statusRequest = fixture.context.pollStatus();
+    fixture.pendingRequests[first].resolveWith({
+      scan_in_progress: false, relations_in_progress: false, covers_in_progress: false,
+      inventory_mutation_revision: 12, gallery_publication_revision: galleryRevision,
+    });
+    for (let attempt = 0; attempt < 5 && fixture.pendingRequests.length === first + 1; attempt += 1) {
+      await flushMicrotasks();
+    }
+    if (fixture.pendingRequests.length > first + 1) {
+      fixture.pendingRequests[first + 1].resolveWith(view);
+    }
+    await statusRequest;
+    await flushMicrotasks();
+  };
+  return fixture;
+}
+
+test('a republished gallery reloads an open tree once, with no inventory change', async () => {
+  const { context, calls, poll } = galleryPublicationFixture(4);
+  await poll(5, {
+    artists_sidebar: [
+      { artist: 'Amarok', artist_display: 'Amarok (Poland)', count: 4 },
+      { artist: 'Amarok', artist_display: 'Amarok (Spain)', count: 3 },
+    ],
+    artist_groups: [{ artist: 'Amarok', albums: [{ key: 'amarok::neo' }] }],
+    album_count: 7,
+    payload_tier: 'full',
+    inventory_mutation_revision: 12,
+  });
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, entry => [entry.artist_display, entry.count]),
+    [['Amarok (Poland)', 4], ['Amarok (Spain)', 3]],
+  );
+  await poll(5);
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), [
+    '/status', '/view-data?surface=albums', '/status',
+  ]);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+test('a republication waits for the gallery page in flight, then reloads once', async () => {
+  const { context, calls, poll } = galleryPublicationFixture(4);
+  vm.runInContext('rootGalleryPageRequest = { controller: { abort() { globalThis.continuationAborted = true; } } };', context);
+  await poll(5);
+  assert.equal(context.continuationAborted, undefined, 'the continuation is never cancelled by the reload');
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), ['/status']);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+
+  vm.runInContext('rootGalleryPageRequest = null;', context); // The page settled.
+  await poll(5, {
+    artists_sidebar: [{ artist: 'Amarok', artist_display: 'Amarok (Poland)', count: 4 }],
+    artist_groups: [{ artist: 'Amarok', albums: [{ key: 'amarok::neo' }] }],
+    album_count: 4,
+    payload_tier: 'full',
+    inventory_mutation_revision: 12,
+  });
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), ['/status', '/status', '/view-data?surface=albums']);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+test('an unchanged gallery publication count, or a first one, never refetches the view', async () => {
+  for (const known of [4, undefined]) {
+    const { context, calls, poll } = galleryPublicationFixture(known);
+    await poll(4);
+    await poll(4);
+    assert.deepEqual(calls.fetchRequests.map(request => request.url), ['/status', '/status'], String(known));
+    assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+    assert.equal(context.state.view.artists_sidebar[0].count, 7);
+  }
+});
+
 test('pollStatus refreshes an open Album Details after applying an inventory mutation', async () => {
   const { context, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};
@@ -7744,4 +7831,55 @@ test('a refreshed root window anchors on the section of the card on screen, not 
   assert.equal(context.rootGalleryViewportArtists(groups, anchor, 900).artists[0], 'Control Signal Partner');
   // Without a known section the first group holding the album still anchors the window.
   assert.equal(context.rootGalleryViewportArtists(groups, { albumKey: 'joint-album' }, 900).artists[0], 'Compilation Signal Guest');
+});
+
+test('request capture: a series link requests its gallery once, also after a phone album page closes, and never the series already shown', async () => {
+  const id = 'js:runtime/gallery-main-interactions.js#openSeriesGallery';
+  const galleryMainPath = path.join(path.dirname(helperPath), 'gallery-main-interactions.js');
+  const galleryMainSource = fs.readFileSync(galleryMainPath, 'utf8');
+  const seriesView = {
+    surface_request: 'albums', surface: { active: 'albums' }, query: '', selected_artist: '', selected_series: 'series-a',
+    payload_tier: 'full', artist_groups: [],
+  };
+  const seriesPage = (view) => {
+    const gallery = capturedGallery(() => jsonResponse(seriesView));
+    const { context } = gallery;
+    vm.runInContext(galleryEventHandlersSource, context, { filename: galleryEventHandlersPath });
+    vm.runInContext(galleryMainSource, context, { filename: galleryMainPath });
+    context.state.view = { ...context.state.view, ...view };
+    const albumPage = { hidden: true };
+    const getElementById = context.document.getElementById;
+    context.document.getElementById = name => (name === 'track-modal' ? albumPage : getElementById(name));
+    context.closeTrackModal = () => { albumPage.hidden = true; };
+    context.hasActiveMobilePage = () => true;
+    const historySteps = [];
+    context.window.addEventListener = (type, listener) => { if (type === 'popstate') historySteps.push(listener); };
+    // A phone's album page closes through history; the link can also be pressed again with no page open.
+    const openRepeatedly = async (presses) => {
+      albumPage.hidden = false;
+      context.openSeriesGallery('series-a');
+      historySteps.splice(0).forEach(listener => listener());
+      gallery.timers.splice(0).forEach(callback => callback());
+      for (let press = 1; press < presses; press += 1) context.openSeriesGallery('series-a');
+      await settleRequests();
+    };
+    return { gallery, openRepeatedly };
+  };
+  await measureInteractionContract(id, {
+    async alreadyShown(presses) {
+      const { gallery, openRepeatedly } = seriesPage(seriesView);
+      await openRepeatedly(presses);
+      assert.equal(gallery.context.state.ui.navigationTree, 'series');
+      assert.ok(gallery.calls.renderSidebar > 0, 'the Series tree is shown without a request');
+      return { requests: gallery.capture.urls() };
+    },
+    setup: presses => ({ ...seriesPage({ surface_request: 'albums', selected_series: '', selected_artist: 'Broadcast' }), presses }),
+    async act({ gallery, openRepeatedly, presses }, pass) {
+      const captured = await capturedPass(gallery, () => openRepeatedly(presses));
+      if (pass === 1) {
+        assert.deepEqual(captured.requests.map(url => new URL(url, 'http://localhost').searchParams.get('series')), ['series-a']);
+      }
+      return captured;
+    },
+  });
 });

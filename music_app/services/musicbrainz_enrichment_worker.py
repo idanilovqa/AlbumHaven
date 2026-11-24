@@ -4,7 +4,9 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 
+from music_app.services.gallery_projection_postgres import refresh_gallery_projection_if_out_of_date
 from music_app.services.musicbrainz_client import MusicBrainzClient
 from music_app.services.musicbrainz_enrichment import (
     MusicBrainzArtistEnrichmentProcessor,
@@ -14,6 +16,16 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     MusicBrainzEnrichmentPostgresRepository,
 )
 from music_app.services.musicbrainz_http import _set_block
+from music_app.services.musicbrainz_lookup_queue_postgres import (
+    MANUAL_LOOKUP_PRIORITY,
+    MusicBrainzLookupQueuePostgresRepository,
+)
+from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
+from music_app.services.musicbrainz_release_identity_postgres import (
+    MusicBrainzReleaseIdentityPostgresRepository,
+)
+from music_app.services.musicbrainz_series_wikipedia import SeriesWikipediaProcessor
+from music_app.services.musicbrainz_series_wikipedia_postgres import SeriesWikipediaPostgresRepository
 
 
 class MusicBrainzEnrichmentWorker:
@@ -27,6 +39,7 @@ class MusicBrainzEnrichmentWorker:
         set_provider_cooldown: Callable[[float], None] | None = None,
         logger=None,
         concurrency: int = 1,
+        after_busy_pass: Callable[[], object] | None = None,
     ) -> None:
         if (
             isinstance(batch_size, bool)
@@ -49,6 +62,7 @@ class MusicBrainzEnrichmentWorker:
         self._poll_seconds = float(poll_seconds)
         self._set_provider_cooldown = set_provider_cooldown or (lambda _seconds: None)
         self._logger = logger or logging.getLogger(__name__)
+        self._after_busy_pass = after_busy_pass
         self._stopping = asyncio.Event()
         self.task: asyncio.Task | None = None
 
@@ -113,6 +127,8 @@ class MusicBrainzEnrichmentWorker:
                 summary = await self.run_once()
                 # Work was found and nothing asked to back off: claim the next batch at once.
                 busy = summary["processed"] > 0 and not summary["rate_limited"]
+                if summary["processed"] and self._after_busy_pass is not None:
+                    await asyncio.to_thread(self._after_busy_pass)
             except Exception as error:
                 # Name the error type only: its message can carry a provider payload.
                 self._logger.warning(
@@ -129,16 +145,66 @@ class MusicBrainzEnrichmentWorker:
                 pass
 
 
+class MusicBrainzEnrichmentChain:
+    """Artists first (Delivery 1), then their albums (Delivery 2), then the Discogs fallback
+    for artists MusicBrainz lacks, then the Wikipedia introductions of the library's series,
+    in one enrichment queue. The owner's manual lookups (S5)
+    go first: each step starts the due lookup queue and settles finished lookups, manual
+    album jobs run before the artist backlog, and manual artist jobs lead it by priority."""
+
+    def __init__(self, artist_processor, album_processor, fallback_processor=None, lookups=None,
+                 now: Callable[[], datetime] | None = None, series_processor=None) -> None:
+        self._artists = artist_processor
+        self._albums = album_processor
+        self._fallback = fallback_processor
+        self._series = series_processor
+        self._lookups = lookups
+        self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def process_next(self, *, worker_id: str) -> dict[str, object]:
+        if self._lookups is not None:
+            self._lookups.advance(observed_at=self._now())
+            result = self._albums.process_next(worker_id=worker_id, min_priority=MANUAL_LOOKUP_PRIORITY)
+            if result.get("processed"):
+                return result
+        result = self._artists.process_next(worker_id=worker_id)
+        if result.get("processed"):
+            if result.get("state") == "succeeded" and result.get("local_artist_id"):
+                self._albums.queue_artist(int(result["local_artist_id"]))
+            return result
+        result = self._albums.process_next(worker_id=worker_id)
+        if result.get("processed"):
+            return result
+        for idle_step in (self._fallback, self._series):
+            if idle_step is not None:
+                result = idle_step.process_next(worker_id=worker_id)
+                if result.get("processed"):
+                    return result
+        return result
+
+
 def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
     repository = MusicBrainzEnrichmentPostgresRepository(config)
     client = MusicBrainzClient(
         base_url=str(config.get("MUSICBRAINZ_BASE_URL") or ""),
         user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven"),
     )
-    processor = MusicBrainzArtistEnrichmentProcessor(
-        repository=repository,
-        client=client,
-        resolve_artist=resolve_artist,
+    discogs = _discogs_client(config)
+    processor = MusicBrainzEnrichmentChain(
+        MusicBrainzArtistEnrichmentProcessor(
+            repository=repository,
+            client=client,
+            resolve_artist=resolve_artist,
+        ),
+        MusicBrainzAlbumReleaseProcessor(
+            repository=MusicBrainzReleaseIdentityPostgresRepository(config),
+            client=client,
+            discogs=discogs,
+        ),
+        _discogs_fallback_processor(config, client, discogs),
+        MusicBrainzLookupQueuePostgresRepository(config),
+        series_processor=SeriesWikipediaProcessor(repository=SeriesWikipediaPostgresRepository(config),
+                                                  musicbrainz=client),
     )
     return MusicBrainzEnrichmentWorker(
         processor=processor,
@@ -150,7 +216,30 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
             "rate_limited",
             cooldown_seconds=seconds,
         ),
+        # A match can label a split name ("Amarok (Poland)"); republish the tree for open pages.
+        after_busy_pass=lambda: refresh_gallery_projection_if_out_of_date(config),
     )
+
+
+def _discogs_client(config: Mapping[str, object]):
+    """Only with the operator's Discogs key: Discogs is asked only about what MusicBrainz lacks."""
+    if not (str(config.get("DISCOGS_CONSUMER_KEY") or "").strip()
+            and str(config.get("DISCOGS_CONSUMER_SECRET") or "").strip()):
+        return None
+    from music_app.services.discogs_metadata import DiscogsMetadataClient, discogs_get_json
+
+    user_agent = str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven")
+    return DiscogsMetadataClient(lambda path, params: discogs_get_json(path, params, user_agent=user_agent))
+
+
+def _discogs_fallback_processor(config: Mapping[str, object], client: MusicBrainzClient, discogs):
+    if discogs is None:
+        return None
+    from music_app.services.musicbrainz_discogs_fallback import DiscogsFallbackProcessor
+    from music_app.services.musicbrainz_discogs_fallback_postgres import DiscogsFallbackPostgresRepository
+
+    return DiscogsFallbackProcessor(repository=DiscogsFallbackPostgresRepository(config), discogs=discogs,
+                                    musicbrainz=client)
 
 
 def start_musicbrainz_enrichment_worker(app):

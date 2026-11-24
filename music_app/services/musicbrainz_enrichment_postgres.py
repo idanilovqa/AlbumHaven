@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from music_app.services.musicbrainz_matching import romanized_name
 from music_app.services.postgres_connections import pooled_connection
 
 
@@ -295,6 +296,42 @@ class MusicBrainzEnrichmentPostgresRepository:
         row = self._execute_one(sql, params)
         return row or None
 
+    def load_album_folders(self, *, job_id: int, worker_id: str) -> dict[int, list[str]]:
+        """Each album of the leased job's artist: the folders holding its files, as "<root id>:
+        <path under that root>" with forward slashes, for a split name's folder fallback (owner
+        2026-11-18). Kept apart from the artist context, which carries no file paths; this
+        returns no absolute path either."""
+        params = {
+            "job_id": _positive_id(job_id),
+            "worker_id": _bounded_text(worker_id, 128, required=True),
+        }
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_active_library_cte() + """
+                select album_tracks.album_id,
+                       json_agg(distinct roots.id::text || ':' || case
+                         when strpos(under_root.rest, '/') > 0
+                         then regexp_replace(under_root.rest, '/[^/]*$', '') else '' end) as folders
+                from active_library
+                join ops.metadata_enrichment_jobs jobs
+                  on jobs.library_id = active_library.library_id and jobs.id = %(job_id)s
+                 and jobs.target_kind = 'artist' and jobs.state = 'leased' and jobs.lease_owner = %(worker_id)s
+                join library.local_albums albums
+                  on albums.library_id = jobs.library_id and albums.artist_id = jobs.local_artist_id
+                join library.local_tracks album_tracks
+                  on album_tracks.library_id = albums.library_id and album_tracks.album_id = albums.id
+                join library.local_track_files files
+                  on files.track_id = album_tracks.id and files.scan_cache_stale is false
+                join library.library_roots roots on roots.id = files.library_root_id
+                cross join lateral (
+                  select substr(translate(files.private_path, chr(92), '/'),
+                                length(rtrim(translate(roots.root_path, chr(92), '/'), '/')) + 2) as rest
+                ) under_root
+                where starts_with(lower(translate(files.private_path, chr(92), '/')),
+                                  lower(rtrim(translate(roots.root_path, chr(92), '/'), '/')) || '/')
+                group by album_tracks.album_id
+            """, params).fetchall()
+        return {int(_row_mapping(row)["album_id"]): list(_row_mapping(row)["folders"] or []) for row in rows}
+
     def load_artist_context(
         self,
         *,
@@ -350,9 +387,16 @@ class MusicBrainzEnrichmentPostgresRepository:
               select json_agg(json_build_object(
                        'id', album_rows.id, 'title', album_rows.title, 'year', album_rows.release_year,
                        'lastfm_release_mbid', album_rows.lastfm_release_mbid,
-                       'tracks', album_rows.tracks) order by album_rows.title) as albums
+                       'tracks', album_rows.tracks,
+                       'identity', album_rows.identity) order by album_rows.title) as albums
               from (
                 select local_albums.id, local_albums.title, local_albums.release_year,
+                       -- The album's stored artist identity, so an owner's choice is kept and counts
+                       -- as a decided neighbour.
+                       (select json_build_object('mbid', identity.artist_mbid::text, 'source', identity.decision_source)
+                        from library.local_album_artist_identities identity
+                        where identity.library_id = local_albums.library_id
+                          and identity.album_key = local_albums.album_key) as identity,
                        -- An album-level identifier counts only once its title agrees.
                        case when local_albums.evidence_source = 'lastfm.public.albums'
                             then local_albums.mbid::text end as lastfm_release_mbid,
@@ -398,9 +442,17 @@ class MusicBrainzEnrichmentPostgresRepository:
               ) sibling_rows
             ) siblings on true
             left join lateral (
-              -- A stored local artist MBID (Last.fm) is a search hint, not embedded evidence.
-              select array[artists.mbid::text] as hinted_artist_mbids
-              where artists.mbid is not null
+              -- A stored local artist MBID (Last.fm) and the MusicBrainz artists the Discogs
+              -- fallback led to (barcodes first) are search hints, not embedded evidence.
+              select array_agg(hint order by rank) as hinted_artist_mbids
+              from (
+                select artists.mbid::text as hint, 0 as rank where artists.mbid is not null
+                union all
+                select item->>'artist_mbid', case when item->>'via' = 'barcode' then 1 else 2 end
+                from library.local_artist_discogs_identities discogs
+                cross join jsonb_array_elements(discogs.musicbrainz_hints) item
+                where discogs.library_id = artists.library_id and discogs.local_artist_id = artists.id
+              ) hints
             ) identifiers on true
             left join lateral (
               select assertions.mbid::text as artist_mbid, assertions.confidence
@@ -534,6 +586,21 @@ class MusicBrainzEnrichmentPostgresRepository:
                         provider_context=provider_context,
                     ))
         return bool(row.get("updated"))
+
+    def artist_mbids_without_details(self, mbids: list[str]) -> set[str]:
+        """Those of the artists with no stored lookup or search answer (a release credit stores
+        a name alone, never a sort name)."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(
+                """
+                select requested.mbid::text as mbid
+                from unnest(%(mbids)s::uuid[]) as requested(mbid)
+                left join integration.musicbrainz_artists artists on artists.mbid = requested.mbid
+                where artists.sort_name is null
+                """,
+                {"mbids": [_mbid(mbid) for mbid in mbids]},
+            ).fetchall()
+        return {str(_row_mapping(row)["mbid"]) for row in rows}
 
     def replace_candidates(
         self,
@@ -704,6 +771,13 @@ class MusicBrainzEnrichmentPostgresRepository:
             rows = connection.execute(_artist_attention_sql(), {}).fetchall()
         return [_attention_row(row) for row in rows]
 
+    def list_album_attention(self, *, album_key: str | None = None) -> list[dict[str, object]]:
+        """Present albums MusicBrainz has no info on (an automatic contribution flag, S5),
+        all or one: the owner's Problematic Files "MusicBrainz has no info" album rows."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_ALBUM_ATTENTION_SQL, {"album_key": album_key}).fetchall()
+        return [_row_mapping(row) for row in rows]
+
     def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
         params = {"local_artist_id": _positive_id(local_artist_id)}
         with self._connect(self._database_url) as connection:
@@ -714,6 +788,57 @@ class MusicBrainzEnrichmentPostgresRepository:
         result = _review_row(row)
         result["candidates"] = [_candidate_review_row(candidate) for candidate in candidates]
         return result
+
+    def list_romanized_artist_names(self) -> dict[str, str]:
+        """Each matched original-script local artist name and its Latin form (J3), read from
+        the stored MusicBrainz artist. The pattern only skips names written wholly in Latin
+        or Cyrillic letters; ``romanized_name`` decides the rest."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_active_library_cte() + r"""
+                select artists.name as local_artist_name, remote.canonical_name, remote.sort_name,
+                       coalesce((
+                         select jsonb_agg(jsonb_build_object(
+                                  'name', aliases.alias_name, 'locale', aliases.locale,
+                                  'primary', aliases.is_primary_for_locale, 'kind', aliases.alias_kind))
+                         from integration.musicbrainz_artist_aliases aliases
+                         where aliases.artist_mbid = remote.mbid
+                       ), '[]'::jsonb) as aliases
+                from active_library
+                join library.local_artists artists on artists.library_id = active_library.library_id
+                join library.local_artist_musicbrainz_matches matches
+                  on matches.library_id = artists.library_id and matches.local_artist_id = artists.id
+                 and matches.state = 'matched'
+                join integration.musicbrainz_artists remote on remote.mbid = matches.artist_mbid
+                where artists.name ~ '[^\x01-\u024F\u0400-\u052F\u1E00-\u1EFF]'
+                """).fetchall()
+        names = {}
+        for row in map(_row_mapping, rows):
+            aliases = row.get("aliases")
+            romanized = romanized_name(row.get("local_artist_name"), {
+                **row, "aliases": json.loads(aliases) if isinstance(aliases, str) else aliases})
+            if romanized:
+                names[str(row["local_artist_name"])] = romanized
+        return names
+
+    def list_split_artist_qualifiers(self) -> dict[str, str]:
+        """Each group label of a name MusicBrainz splits per album (D2 S2) and its qualifier,
+        {"Amarok (Poland)": "Poland"}, so the tree and gallery dim the qualifier. Display only.
+        It reads the browse queries' narrow split groups, never the whole 0192 view."""
+        from music_app.services.library_browse_postgres import _split_album_groups_cte_sql
+
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_active_library_cte() + ", "
+                                      + _split_album_groups_cte_sql("select library_id from active_library") + """
+                select distinct artists.name as local_artist_name, split_album_groups.group_label
+                from split_album_groups
+                join library.local_artists artists on artists.id = split_album_groups.artist_id
+                """).fetchall()
+        qualifiers = {}
+        for row in map(_row_mapping, rows):
+            name, label = str(row["local_artist_name"]), str(row["group_label"])
+            if label.startswith(f"{name} (") and label.endswith(")"):
+                qualifiers[label] = label[len(name) + 2:-1]
+        return qualifiers
 
     def list_accepted_artist_mbids(self) -> list[str]:
         """MBIDs of artists matched automatically or assigned by the owner."""
@@ -844,6 +969,8 @@ PROBLEM_LABELS = {
 }
 # Every other app surface, such as the Gallery, says only "Metadata pending".
 APP_PROBLEM_LABELS = {**PROBLEM_LABELS, **{reason: "Metadata pending" for reason in _PENDING_REASONS}}
+# Owner decision 2026-11-15 (C2): an artist MusicBrainz lacks (an automatic contribution flag).
+MUSICBRAINZ_HAS_NO_INFO_LABEL = "MusicBrainz has no info"
 
 
 def _problem_label_sql() -> str:
@@ -893,7 +1020,15 @@ def _artist_attention_sql() -> str:
             from library.local_albums local_albums
             where local_albums.library_id = active_library.library_id
               and local_albums.artist_id = artists.id
-          ) as local_album_count
+          ) as local_album_count,
+          exists (
+            select 1
+            from library.musicbrainz_contribution_flags flags
+            where flags.library_id = active_library.library_id
+              and flags.target_kind = 'artist'
+              and flags.local_artist_id = artists.id
+              and flags.source = 'automatic'
+          ) as musicbrainz_has_no_info
         from active_library
         join wanted problem on true
         join library.local_artists artists
@@ -1036,7 +1171,24 @@ _ATTENTION_FIELDS = (
     "problem_reason_code",
     "unresolved_reason",
     "local_album_count",
+    "musicbrainz_has_no_info",
 )
+
+
+_ALBUM_ATTENTION_SQL = _active_library_cte() + """
+    select albums.album_key, albums.title as album_title, albums.release_year as year, albums.cover_path,
+           artists.id as local_artist_id, artists.name as artist_name
+    from active_library
+    join library.musicbrainz_contribution_flags flags
+      on flags.library_id = active_library.library_id and flags.target_kind = 'album'
+     and flags.source = 'automatic' and flags.reason = 'missing_from_musicbrainz'
+     and (%(album_key)s::text is null or flags.album_key = %(album_key)s::text)
+    join library.local_albums albums on albums.library_id = flags.library_id and albums.album_key = flags.album_key
+    join library.local_artists artists on artists.library_id = albums.library_id and artists.id = albums.artist_id
+    where exists (select 1 from library.local_tracks tracks
+                  where tracks.library_id = albums.library_id and tracks.album_id = albums.id)
+    order by albums.title, albums.album_key;
+"""
 
 
 def _attention_row(row: object) -> dict[str, object]:
@@ -1105,6 +1257,14 @@ def _mbid(value: object) -> str:
     return text
 
 
+def _optional_mbid(value: object) -> str | None:
+    """A secondary identifier (an artist's area): None when missing or malformed, never an error."""
+    try:
+        return _mbid(value) if value else None
+    except ValueError:
+        return None
+
+
 def _match_state(value: object) -> str:
     state = str(value or "").strip().casefold()
     if state not in {"pending", "matched", "ambiguous", "not_found", "conflict", "manual_review"}:
@@ -1146,6 +1306,9 @@ def _artist_projection(
         "disambiguation": _bounded_text(artist.get("disambiguation"), 1024) or None,
         "country_code": _bounded_text(artist.get("country_code"), 8).upper() or None,
         "country_name": _bounded_text(artist.get("country_name"), 128) or None,
+        # 0257: where MusicBrainz names no country, the area it gives ("Chico") labels a split name.
+        "area_mbid": _optional_mbid(artist.get("area_mbid")),
+        "area_name": _bounded_text(artist.get("area_name"), 256) or None,
         "discogs_artist_id": _discogs_artist_id(artist.get("discogs_artist_id")),
         "aliases": _alias_rows(artist.get("aliases")),
         "tags": _artist_tag_rows(artist),
@@ -1243,6 +1406,9 @@ def _candidate_rows(value: object) -> list[dict[str, object]]:
             "disambiguation": _bounded_text(raw.get("disambiguation"), 1024) or None,
             "artist_kind": _bounded_text(raw.get("artist_kind") or raw.get("artist_type"), 64) or None,
             "country_code": _country_code(raw.get("country_code")),
+            "sort_name": _bounded_text(raw.get("sort_name"), 512) or None,
+            "area_mbid": _optional_mbid(raw.get("area_mbid")),
+            "area_name": _bounded_text(raw.get("area_name"), 256) or None,
             "score": _confidence(score),
             "evidence": _bounded_text(raw.get("evidence_summary"), 2048, required=True),
             "rejection": _bounded_text(raw.get("rejection_reason"), 512) or None,
@@ -1263,6 +1429,8 @@ def _projection_params(projection: dict[str, object] | None) -> dict[str, object
         "disambiguation": projection.get("disambiguation"),
         "country_code": projection.get("country_code"),
         "country_name": projection.get("country_name"),
+        "area_mbid": projection.get("area_mbid"),
+        "area_name": projection.get("area_name"),
         "discogs_artist_id": projection.get("discogs_artist_id"),
     }
 
@@ -1300,6 +1468,9 @@ def _candidate_array_params(rows: list[dict[str, object]]) -> dict[str, object]:
         "candidate_disambiguations": [row["disambiguation"] for row in rows],
         "candidate_kinds": [row["artist_kind"] for row in rows],
         "candidate_countries": [row["country_code"] for row in rows],
+        "candidate_sort_names": [row["sort_name"] for row in rows],
+        "candidate_area_mbids": [row["area_mbid"] for row in rows],
+        "candidate_area_names": [row["area_name"] for row in rows],
         "candidate_scores": [row["score"] for row in rows],
         "candidate_evidence": [row["evidence"] for row in rows],
         "candidate_rejections": [row["rejection"] for row in rows],
@@ -1350,9 +1521,33 @@ def _album_identities(identities: object) -> str:
                 "release_mbid": _optional_mbid(item.get("release_mbid")),
                 "disc_position": _integer(item.get("disc_position")) or None,
                 "signals": sorted({str(signal) for signal in item.get("signals") or () if str(signal) in _ALBUM_SIGNALS}),
+                # A split name's undecided album (owner 2026-11-18): how it was decided.
+                **_undecided_album_evidence(item),
             },
         })
     return json.dumps(rows)
+
+
+_UNDECIDED_ALBUM_METHODS = frozenset({"recordings", "release", "folder"})
+
+
+def _undecided_album_evidence(item: Mapping[str, object]) -> dict[str, object]:
+    """The recordings sample and the counts it found, or the artist folder relative to its
+    library root (never an absolute path)."""
+    method = str(item.get("method") or "")
+    if method not in _UNDECIDED_ALBUM_METHODS:
+        return {}
+    evidence: dict[str, object] = {"method": method}
+    if method == "folder":
+        folder = _bounded_text(item.get("folder"), 512)
+        if folder and not (folder.startswith(("/", "\\")) or ":" in folder[:3]):
+            evidence["folder"] = folder
+        return evidence
+    found = item.get("found") if isinstance(item.get("found"), Mapping) else {}
+    evidence["sampled_titles"] = [_bounded_text(title, 512) for title in list(item.get("sampled_titles") or [])[:3]]
+    evidence["found"] = {mbid: int(count) for mbid, count in
+                         ((_optional_mbid(key), _integer(value)) for key, value in found.items()) if mbid}
+    return evidence
 
 
 def _optional_mbid(value: object) -> str | None:
@@ -1471,30 +1666,48 @@ def _sync_problem_sql() -> str:
 
 
 def _upsert_identity_artists_sql() -> str:
-    """The MusicBrainz artists a split artist's albums belong to, so their identities resolve."""
+    """The MusicBrainz artists a split artist's albums belong to, so their identities resolve,
+    with their country codes (the "Amarok (Poland)" label needs it). A re-check that brings no
+    country never removes a stored one."""
     return """
-        insert into integration.musicbrainz_artists (
-          mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-          disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+        with rows as (
+          select * from jsonb_to_recordset(%(identity_artists)s::jsonb) as rows(
+            mbid uuid, canonical_name text, sort_name text, preferred_native_name text, artist_kind text,
+            disambiguation text, discogs_artist_id bigint, country_code text, area_mbid uuid, area_name text)
+        ), upserted as (
+          insert into integration.musicbrainz_artists (
+            mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
+            disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
+          )
+          select rows.mbid, rows.canonical_name, rows.sort_name, rows.preferred_native_name, rows.artist_kind,
+                 rows.disambiguation, rows.discogs_artist_id, rows.area_mbid, rows.area_name,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
+          from rows
+          on conflict (mbid) do update
+          -- A listing from album credits alone never blanks what a full lookup stored.
+          set canonical_name = excluded.canonical_name,
+              sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
+              artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
+              disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
+              updated_at = excluded.updated_at
+          returning mbid
         )
-        select rows.mbid, rows.canonical_name, rows.sort_name, rows.preferred_native_name, rows.artist_kind,
-               rows.disambiguation, rows.discogs_artist_id, %(observed_at)s, %(observed_at)s, %(observed_at)s
-        from jsonb_to_recordset(%(identity_artists)s::jsonb) as rows(
-          mbid uuid, canonical_name text, sort_name text, preferred_native_name text, artist_kind text,
-          disambiguation text, discogs_artist_id bigint)
-        on conflict (mbid) do update
-        -- A listing from album credits alone never blanks what a full lookup stored.
-        set canonical_name = excluded.canonical_name,
-            sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
-            artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
-            disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
-            updated_at = excluded.updated_at;
+        insert into integration.musicbrainz_artist_countries (artist_mbid, country_code, provenance, observed_at)
+        select rows.mbid, rows.country_code, 'musicbrainz', %(observed_at)s
+        from rows
+        join upserted on upserted.mbid = rows.mbid
+        where rows.country_code is not null
+        on conflict (artist_mbid, country_code) do nothing;
     """
 
 
 def _replace_album_identities_sql() -> str:
     """An artist's automatic album identities become exactly this re-check's certain albums;
-    an owner's own album choice is kept."""
+    an owner's own album choice is kept. Only rows that change are written: 0258 marks the
+    gallery out of date when an identity is added, removed or names another artist, so a
+    re-check that decides the same albums must leave them untouched."""
     return _active_library_cte() + """
         , artist_albums as (
           select albums.id, albums.library_id, albums.album_key
@@ -1502,31 +1715,39 @@ def _replace_album_identities_sql() -> str:
           join library.local_albums albums
             on albums.library_id = active_library.library_id
            and albums.artist_id = %(local_artist_id)s
+        ), wanted as (
+          select artist_albums.library_id, artist_albums.album_key, rows.artist_mbid, rows.evidence, rows.tag_differs
+          from jsonb_to_recordset(%(album_identities)s::jsonb)
+            as rows(local_album_id bigint, artist_mbid uuid, tag_differs boolean, evidence jsonb)
+          join artist_albums on artist_albums.id = rows.local_album_id
         ), removed as (
           delete from library.local_album_artist_identities identities
           using artist_albums
           where identities.library_id = artist_albums.library_id
             and identities.album_key = artist_albums.album_key
             and identities.decision_source = 'automatic'
+            and not exists (select 1 from wanted where wanted.library_id = identities.library_id
+                                                   and wanted.album_key = identities.album_key)
           returning 1
         )
         insert into library.local_album_artist_identities (
           library_id, album_key, artist_mbid, decision_source, evidence, tag_differs,
           matcher_version, created_at, updated_at
         )
-        select artist_albums.library_id, artist_albums.album_key, rows.artist_mbid, 'automatic',
-               rows.evidence, rows.tag_differs, %(matcher_version)s, %(observed_at)s, %(observed_at)s
+        select wanted.library_id, wanted.album_key, wanted.artist_mbid, 'automatic',
+               wanted.evidence, wanted.tag_differs, %(matcher_version)s, %(observed_at)s, %(observed_at)s
         from (select count(*) from removed) removed_count
-        cross join jsonb_to_recordset(%(album_identities)s::jsonb)
-          as rows(local_album_id bigint, artist_mbid uuid, tag_differs boolean, evidence jsonb)
-        join artist_albums on artist_albums.id = rows.local_album_id
+        cross join wanted
         on conflict (library_id, album_key) do update
         set artist_mbid = excluded.artist_mbid,
             evidence = excluded.evidence,
             tag_differs = excluded.tag_differs,
             matcher_version = excluded.matcher_version,
             updated_at = excluded.updated_at
-        where library.local_album_artist_identities.decision_source <> 'manual';
+        where library.local_album_artist_identities.decision_source <> 'manual'
+          and (library.local_album_artist_identities.artist_mbid, library.local_album_artist_identities.evidence,
+               library.local_album_artist_identities.tag_differs, library.local_album_artist_identities.matcher_version)
+              is distinct from (excluded.artist_mbid, excluded.evidence, excluded.tag_differs, excluded.matcher_version);
     """
 
 
@@ -1562,20 +1783,25 @@ def _upsert_candidate_artists_sql() -> str:
           cross join unnest(
             %(candidate_mbids)s::uuid[], %(candidate_names)s::text[],
             %(candidate_disambiguations)s::text[], %(candidate_kinds)s::text[],
-            %(candidate_countries)s::text[]
-          ) as rows(mbid, canonical_name, disambiguation, artist_kind, country_code)
+            %(candidate_countries)s::text[], %(candidate_sort_names)s::text[],
+            %(candidate_area_mbids)s::uuid[], %(candidate_area_names)s::text[]
+          ) as rows(mbid, canonical_name, disambiguation, artist_kind, country_code,
+                    sort_name, area_mbid, area_name)
         ), upserted as (
           insert into integration.musicbrainz_artists (
-            mbid, canonical_name, disambiguation, artist_kind,
+            mbid, canonical_name, disambiguation, artist_kind, sort_name, area_mbid, area_name,
             refreshed_at, created_at, updated_at
           )
-          select mbid, canonical_name, disambiguation, artist_kind,
+          select mbid, canonical_name, disambiguation, artist_kind, sort_name, area_mbid, area_name,
                  %(observed_at)s, %(observed_at)s, %(observed_at)s
           from candidate_rows
           on conflict (mbid) do update
           set canonical_name = excluded.canonical_name,
               disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
               artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
+              sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning mbid
@@ -1678,11 +1904,12 @@ def _automatic_outcome_sql() -> str:
         ), upsert_artist as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+            disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
           )
           select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
                  %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-                 %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+                 %(discogs_artist_id)s::bigint, %(area_mbid)s::uuid, %(area_name)s,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
           from active_artist
           where %(artist_mbid)s::uuid is not null
           on conflict (mbid) do update
@@ -1692,6 +1919,9 @@ def _automatic_outcome_sql() -> str:
               artist_kind = excluded.artist_kind,
               disambiguation = excluded.disambiguation,
               discogs_artist_id = excluded.discogs_artist_id,
+              -- 0257: a lookup without an area never blanks a stored one.
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning mbid
@@ -1811,11 +2041,12 @@ def _manual_artist_sql() -> str:
     return _authorized_artist_cte() + """
         insert into integration.musicbrainz_artists (
           mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-          disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+          disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
         )
         select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
                %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-               %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+               %(discogs_artist_id)s::bigint, %(area_mbid)s::uuid, %(area_name)s,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
         from authorized_artist
         on conflict (mbid) do update
         set canonical_name = excluded.canonical_name,
@@ -1824,6 +2055,9 @@ def _manual_artist_sql() -> str:
             artist_kind = excluded.artist_kind,
             disambiguation = excluded.disambiguation,
             discogs_artist_id = excluded.discogs_artist_id,
+            -- 0257: a lookup without an area never blanks a stored one.
+            area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+            area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
             refreshed_at = excluded.refreshed_at,
             updated_at = excluded.updated_at;
     """
@@ -1848,11 +2082,12 @@ def _refresh_artist_sql() -> str:
         , refreshed_artist as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+            disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
           )
           select artist_mbid, %(canonical_name)s, %(sort_name)s,
                  %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-                 %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+                 %(discogs_artist_id)s::bigint, %(area_mbid)s::uuid, %(area_name)s,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
           from matched_artist
           on conflict (mbid) do update
           set canonical_name = excluded.canonical_name,
@@ -1861,6 +2096,9 @@ def _refresh_artist_sql() -> str:
               artist_kind = excluded.artist_kind,
               disambiguation = excluded.disambiguation,
               discogs_artist_id = excluded.discogs_artist_id,
+              -- 0257: a lookup without an area never blanks a stored one.
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning true as refreshed

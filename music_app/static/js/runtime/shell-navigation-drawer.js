@@ -106,8 +106,9 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (button) {
     button.hidden = !canFold || isFolded;
     button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
-    button.setAttribute('aria-label', 'Collapse Artist Tree');
-    button.setAttribute('title', 'Collapse Artist Tree');
+    const label = showsSeriesTree() ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
   }
   if (navigationButton) {
     navigationButton.hidden = !(isFolded || isExpanding);
@@ -158,6 +159,38 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
   fallbackTimer = setTimeout(finish, duration + 50);
   cancelPendingArtistTreeResize = cleanup;
+}
+
+// MusicBrainz Delivery 2, S6: the navigation tree lists series once the rail's Series button
+// (or a series opened from album details) chose it. A phone's drawer keeps its artists (how a
+// phone reaches the Series list is open).
+function showsSeriesTree() {
+  return state.ui.navigationTree === 'series' && !isArtistsDrawerMobileViewport();
+}
+
+// The folded rail's Series and Artist Tree buttons switch the tree and unfold it; the gallery
+// keeps what it shows and nothing in the tree is newly selected (owner 2026-11-17).
+function openNavigationTree(kind) {
+  state.ui.navigationTree = kind === 'series' ? 'series' : 'artists';
+  if (kind === 'series') void loadSeriesTree();
+  renderSidebar();
+  syncArtistTreeFoldVisibility();
+  if (state.ui.artistTreeFolded) toggleArtistTreeFold();
+}
+
+// The Series tree for any gallery; a Series view brings its own.
+async function loadSeriesTree() {
+  const params = new URLSearchParams();
+  (state.view?.visible_library_categories || []).forEach((category) => params.append('category', category));
+  try {
+    const response = await fetch(`/series-tree?${params}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return false;
+    state.ui.seriesTree = (await response.json()).series_sidebar || [];
+  } catch (_error) {
+    return false;
+  }
+  if (showsSeriesTree()) renderSidebar();
+  return true;
 }
 
 function toggleArtistTreeFold() {
@@ -228,10 +261,17 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const seriesButton = event.target.closest('[data-open-series-tree="1"]');
+  if (seriesButton) {
+    event.preventDefault();
+    openNavigationTree('series');
+    return true;
+  }
   const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
   if (foldButton) {
     event.preventDefault();
-    toggleArtistTreeFold();
+    if (foldButton.id === 'artist-tree-navigation-button' && showsSeriesTree()) openNavigationTree('artists');
+    else toggleArtistTreeFold();
     return true;
   }
 

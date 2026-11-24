@@ -6,15 +6,25 @@ import hashlib
 import json
 import logging
 from threading import Lock
+import time
 
 from psycopg.types.json import Jsonb
 
+from music_app.services import browse_query_diagnostics  # TEMPORARY FTC-OPS-016 diagnostics
 from music_app.services.library_roots import library_category_slugs
 
-BUILDER_VERSION = "root-gallery-v4"
+BUILDER_VERSION = "root-gallery-v5"
+# Earlier builders whose stored occurrences and sidebar this code still reads. While a new
+# builder's first snapshot is prepared, the newest of theirs keeps serving (marked stale), so a
+# builder bump never answers "Gallery is being prepared." when a snapshot exists. A bump that
+# changes what an occurrence or sidebar entry holds leaves its predecessor out.
+SERVABLE_PREVIOUS_BUILDER_VERSIONS = ("root-gallery-v4",)
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()
+# Counts the queued runs that published a snapshot in this process. /status reports it, so an
+# open page reloads its tree once per publication, whatever changed the gallery's sources.
+_PUBLICATION_REVISION = 0
 _PREPARATIONS: dict[str | tuple[str, str], Future] = {}
 _PREPARATIONS_LOCK = Lock()
 _OCCURRENCE_FIELDS = frozenset({
@@ -23,9 +33,9 @@ _OCCURRENCE_FIELDS = frozenset({
 })
 
 
-def gallery_projection_scope_key(view_state):
+def gallery_projection_scope_key(view_state, builder_version=None):
     scope = {
-        "builder_version": BUILDER_VERSION,
+        "builder_version": builder_version or BUILDER_VERSION,
         **{key: view_state.get(key) for key in ("gallery_scope", "visible_library_categories")},
     }
     selected_categories = set(scope.get("visible_library_categories") or ())
@@ -88,7 +98,8 @@ def _ready_header(connection, context, view_state):
     """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
 
 
-def _latest_compatible_header(connection, context, view_state):
+def _latest_compatible_header(connection, context, view_state, builder_version=None):
+    builder_version = builder_version or BUILDER_VERSION
     return _first(connection.execute("""
         select source_generation, revision, sidebar, album_count, occurrence_count
         from library.gallery_projection_snapshots
@@ -96,19 +107,38 @@ def _latest_compatible_header(connection, context, view_state):
           and builder_version = %(builder_version)s
         order by source_generation desc
         limit 1
-    """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
+    """, {**context, "scope_key": gallery_projection_scope_key(view_state, builder_version),
+          "builder_version": builder_version}))
 
 
-def load_gallery_projection_sidebar(connection, view_state, *, context=None):
+def _servable_header(connection, context, view_state, *, allow_stale):
+    """The snapshot to serve, its scope key and whether it is stale: the current one, else (when
+    stale is allowed) this builder's newest, else the newest of a servable previous builder."""
+    header = _ready_header(connection, context, view_state)
+    if header or not allow_stale:
+        return header, gallery_projection_scope_key(view_state), False
+    for builder_version in (BUILDER_VERSION, *SERVABLE_PREVIOUS_BUILDER_VERSIONS):
+        header = _latest_compatible_header(connection, context, view_state, builder_version)
+        if header:
+            return header, gallery_projection_scope_key(view_state, builder_version), True
+    return None, gallery_projection_scope_key(view_state), False
+
+
+def load_gallery_projection_sidebar(connection, view_state, *, context=None, allow_stale=False):
+    """The sidebar and album count of the snapshot to serve, and whether it is stale. A stale
+    sidebar is served only from the current library generation (a previous builder's snapshot
+    while the new builder's is prepared): the tree never lists another generation's artists
+    (FTC-GALLERY-STARTUP-005Q)."""
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
         return None
-    header = _ready_header(connection, context, view_state)
-    if not header:
+    header, _scope_key, stale = _servable_header(connection, context, view_state, allow_stale=allow_stale)
+    if not header or (stale and header.get("source_generation") != context.get("generation")):
         return None
     return (
         [dict(item) for item in list(header.get("sidebar") or [])],
         int(header["album_count"]),
+        stale,
     )
 
 
@@ -138,11 +168,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
         return None
-    header = _ready_header(connection, context, view_state)
-    stale = False
-    if not header and allow_stale:
-        header = _latest_compatible_header(connection, context, view_state)
-        stale = header is not None
+    header, scope_key, stale = _servable_header(connection, context, view_state, allow_stale=allow_stale)
     if not header:
         return None
     count = int(header["occurrence_count"])
@@ -162,7 +188,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
               and payload->>'artist_name' = %(anchor_artist)s
         """, {
             "library_id": context["library_id"],
-            "scope_key": gallery_projection_scope_key(view_state),
+            "scope_key": scope_key,
             "revision": header["revision"],
             "anchor_artist": anchor_artist,
         }))
@@ -176,7 +202,6 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
         count,
         anchor_offset=anchor_offset,
     )
-    scope_key = gallery_projection_scope_key(view_state)
 
     def artist_bounds(ordinal):
         if not count:
@@ -207,7 +232,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
           and revision = %(revision)s
           and ordinal >= %(offset)s and ordinal < %(end)s
         order by ordinal
-    """, {"library_id": context["library_id"], "scope_key": gallery_projection_scope_key(view_state),
+    """, {"library_id": context["library_id"], "scope_key": scope_key,
             "revision": header["revision"], "offset": offset, "end": end}).fetchall()
     page = [dict(row["payload"]) for row in rows]
     if len(page) != end - offset:
@@ -255,39 +280,87 @@ def publish_gallery_projection(config, context, view_state, snapshot, *, connect
         )
 
 
-def _queue(config, key, action, *, trailing=False, generation=None):
+def _run_callbacks(callbacks):
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception:
+            _LOGGER.exception("Gallery projection completion callback failed")
+
+
+def _queue(config, key, action, *, trailing=False, generation=None, on_done=None):
+    """Run ``action`` once per key at a time; a trailing call replaces the run that follows.
+
+    ``on_done`` runs once a run that started after this call has finished (successfully or
+    not), or at once when nothing is queued, so a caller can wait for the publication that
+    includes its change."""
+    callbacks = [on_done] if on_done is not None else []
     if config.get("SHARED_LIBRARY_BROWSE_ONLY") or not config.get("ALBUM_HAVEN_APP_DATABASE_URL"):
+        _run_callbacks(callbacks)
         return None
     from music_app.services.cache import _CACHE_WRITE_EXECUTOR
     identity = (config["ALBUM_HAVEN_APP_DATABASE_URL"], key)
     with _PENDING_LOCK:
         if identity in _PENDING:
-            _, pending_generation = _PENDING[identity]
+            following, pending_generation, following_callbacks = _PENDING[identity]
             if trailing and (generation is None or generation >= pending_generation):
-                _PENDING[identity] = (action, generation)
+                following, pending_generation = action, generation
+            _PENDING[identity] = (following, pending_generation, following_callbacks + callbacks)
             return None
-        _PENDING[identity] = (None, generation)
+        _PENDING[identity] = (None, generation, [])
     try:
         future = _CACHE_WRITE_EXECUTOR.submit(action)
     except Exception:
         with _PENDING_LOCK:
             _PENDING.pop(identity, None)
         _LOGGER.exception("Gallery projection could not be queued; a later request may retry")
+        _run_callbacks(callbacks)
         return None
 
     def finished(completed):
+        global _PUBLICATION_REVISION
         with _PENDING_LOCK:
-            following, following_generation = _PENDING.pop(identity)
+            following, following_generation, following_callbacks = _PENDING.pop(identity)
+        _run_callbacks(callbacks)
         try:
-            completed.result()
+            result = completed.result()
+            # After the callbacks: a page that sees this publication also sees the inventory
+            # revision whose hold the publication released.
+            if (result.get("built") if isinstance(result, dict) else result):
+                with _PENDING_LOCK:
+                    _PUBLICATION_REVISION += 1
         except Exception:
             _LOGGER.exception("Gallery projection publication failed; a later request may retry")
             if key == "refresh" or (isinstance(key, tuple) and key[0] == "refresh"):
+                _run_callbacks(following_callbacks)
                 return
         if following is not None:
-            _queue(config, key, following, trailing=trailing, generation=following_generation)
+            _queue(config, key, following, trailing=trailing, generation=following_generation,
+                   on_done=lambda: _run_callbacks(following_callbacks))
+        else:
+            _run_callbacks(following_callbacks)
     future.add_done_callback(finished)
     return future
+
+
+def gallery_publication_revision() -> int:
+    """Lock-free, for /status: read it before the inventory revision (see ``_queue``)."""
+    return _PUBLICATION_REVISION
+
+
+def refresh_gallery_projection_if_out_of_date(config, *, connect=None) -> bool:
+    """Queue a refresh when the library gallery's sources changed since it was published, as a
+    MusicBrainz match that labels a split name does. Three small reads when it is current."""
+    from music_app.services.library_browse_postgres import _connect, _root_sidebar_view_state
+
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") or not config.get("ALBUM_HAVEN_APP_DATABASE_URL"):
+        return False
+    with (connect or _connect)(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+        context = gallery_projection_context(connection)
+        if not context or _ready_header(connection, context, _root_sidebar_view_state({})):
+            return False
+    schedule_gallery_projection_refresh(config, connect=connect)
+    return True
 
 
 def queue_gallery_projection_snapshot(config, context, view_state, snapshot, *, connect=None):
@@ -298,7 +371,9 @@ def queue_gallery_projection_snapshot(config, context, view_state, snapshot, *, 
         config, context, view_state, snapshot, connect=connect), trailing=True, generation=context["generation"])
 
 
-def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None):
+def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None, on_published=None):
+    """Queue the refresh; ``on_published`` runs once a refresh that includes the current source
+    has finished (see ``_queue``)."""
     from music_app.services.library_browse_postgres import _root_sidebar_view_state
 
     key = "refresh"
@@ -313,7 +388,8 @@ def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None
         if scope_key not in common_keys:
             key = ("refresh", scope_key)
             options["view_state"] = scope
-    return _queue(config, key, lambda: ensure_gallery_projection_ready(config, **options), trailing=True)
+    return _queue(config, key, lambda: ensure_gallery_projection_ready(config, **options), trailing=True,
+                  on_done=on_published)
 
 
 def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None, view_state=None):
@@ -372,6 +448,7 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
         built = 0
         for state in scopes:
             _raise_if_projection_cancelled(cancel_requested)
+            started_at = time.perf_counter()  # TEMPORARY FTC-OPS-016 diagnostics; remove before PR 80 merges
             with repository._connect_to_database() as connection:
                 connection.execute("set transaction isolation level repeatable read, read only")
                 context = gallery_projection_context(connection)
@@ -388,7 +465,13 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
                 missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
                 snapshot = browse._prepare_root_gallery_snapshot(rows, missing, root_aliases, state)
             _raise_if_projection_cancelled(cancel_requested)
+            prepared_at = time.perf_counter()
             built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect))
+            if browse_query_diagnostics.enabled():  # TEMPORARY FTC-OPS-016 diagnostics
+                _LOGGER.warning(
+                    "BROWSE-DIAG gallery projection rebuilt: scope=%s albums=%s occurrences=%s prepare_ms=%.0f publish_ms=%.0f",
+                    state.get("gallery_scope") or "all", snapshot.get("album_count"), len(snapshot.get("ordered") or ()),
+                    (prepared_at - started_at) * 1000, (time.perf_counter() - prepared_at) * 1000)
         return built
 
     built = 0

@@ -25,6 +25,8 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.searchSection = new UtilitySearchSection(page, testInfo);
     this.mainBody = new UtilityMainBody(page, testInfo);
     this.listItems = page.locator(this.listItemSelector);
+    // Albums listed only for a MusicBrainz data correction (Delivery 2, S4).
+    this.musicBrainzCorrectionListItems = page.locator('[data-problematic-album-key^="musicbrainz-correction:"]');
     this.activeListItem = page.locator(this.activeListItemSelector);
     this.listEmptyState = page.locator(this.listEmptyStateSelector).first();
     this.detailEmptyState = page.locator('#utility-problematic-detail .utility-empty-state').first();
@@ -391,5 +393,15 @@ export class UtilityProblematicFilesTab extends BasePage {
     return this.listItems.filter({
       has: this.page.locator(this.listItemTitleSelector).filter({ hasText: albumTitleWithOptionalYear(albumTitle) }),
     }).first();
+  }
+
+  listItemByKey(key) {
+    return this.page.locator(`[data-problematic-album-key="${key}"]`).first();
+  }
+
+  // The selected album's "MusicBrainz has no info" label (S5); list rows carry no issue line.
+  get detailMusicBrainzHasNoInfoLabel() {
+    return this.page.locator('#utility-problematic-detail .utility-album-problem-labels .alert-label')
+      .filter({ hasText: 'MusicBrainz has no info' });
   }
 }

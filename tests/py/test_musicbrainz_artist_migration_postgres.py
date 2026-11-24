@@ -94,6 +94,22 @@ def _apply_pre_delivery_migrations(setup_url: str) -> None:
                 connection.execute(migration_sql)
 
 
+@pytest.fixture(scope="module")
+def leave_setup_database_migrated():
+    """Modules that seed from raw migrations leave schemas without ledger rows, so the next
+    ``prepare_isolated_database`` on this shared setup database would re-run every migration.
+    Afterwards, rebuild it fully migrated with its ledger."""
+    yield
+    if not str(os.environ.get(isolatedPostgres.SETUP_DATABASE_ENV) or "").strip():
+        return
+    setup_url, _runtime_url = isolatedPostgres.resolve_isolated_database_urls()
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.apply_all_migrations(setup_url)
+
+
+pytestmark = pytest.mark.usefixtures("leave_setup_database_migrated")
+
+
 def test_delivery_1_migration_is_next_and_lexically_ordered():
     names = sorted(path.name for path in MIGRATIONS_ROOT.glob("*.sql") if path.is_file())
 

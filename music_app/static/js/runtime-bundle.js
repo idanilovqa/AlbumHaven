@@ -1235,6 +1235,19 @@ function resolveMainGalleryCategorySelection(fallbackCategories = null) {
   );
 }
 
+// The Series view (MusicBrainz Delivery 2, S6) comes only with a series payload: any other
+// view the server sends clears it, while local patches of the current view keep it.
+function resolveRuntimeSeriesFields(source, base) {
+  const owns = (key) => Object.prototype.hasOwnProperty.call(source, key);
+  const replacesView = ['artist_groups', 'selected_artist', 'query'].some(owns);
+  const from = owns('selected_series') ? source : (replacesView ? {} : base);
+  return {
+    selected_series: normalizeRuntimeString(from.selected_series, ''),
+    series: isRuntimePlainObject(from.series) ? { ...from.series } : null,
+    series_sidebar: cloneRuntimeArray(from.series_sidebar, []),
+  };
+}
+
 function normalizeViewPayload(payload, fallbackView = null) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
@@ -1349,6 +1362,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       initialViewPartialFallback,
     ),
     gallery_page: isRuntimePlainObject(source.gallery_page) ? { ...source.gallery_page } : null,
+    ...resolveRuntimeSeriesFields(source, base),
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
@@ -2239,6 +2253,11 @@ function appendPlaylistStateParams(params, view, resolvedSurface) {
   }
 }
 
+// The Series view (MusicBrainz Delivery 2, S6) belongs to unsearched, artist-less browsing.
+function resolveViewSeries(view = {}) {
+  return view.query || view.selected_artist ? '' : String(view.selected_series || '').trim();
+}
+
 function buildUrl(view) {
   const params = new URLSearchParams();
   const resolvedSurface = resolveViewSurface(view);
@@ -2252,6 +2271,7 @@ function buildUrl(view) {
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
+  if (resolveViewSeries(view)) params.set('series', resolveViewSeries(view));
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);
@@ -2284,6 +2304,7 @@ function buildApiUrl(view, options = {}) {
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
+  if (resolveViewSeries(view)) params.set('series', resolveViewSeries(view));
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);
@@ -2296,6 +2317,8 @@ function buildApiUrl(view, options = {}) {
   (view.visible_library_categories || []).forEach((category) => {
     if (category) params.append('category', category);
   });
+  // A series is one bounded view: never paged, tiered, anchored or filtered like artists.
+  if (resolvedSurface === 'albums' && resolveViewSeries(view)) return `/view-data?${params.toString()}`;
   (view.related_filter_artists || []).forEach((artist) => {
     if (artist) params.append('related_artist', artist);
   });
@@ -2334,6 +2357,7 @@ function parseUrlStateFromUrl(url, baseOrigin) {
     playlist_id: u.searchParams.get('playlist_id') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',
+    selected_series: u.searchParams.get('series') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
     gallery_scope: u.searchParams.get('gallery_scope') || 'all',
     gallery_display_mode: normalizeGalleryDisplayMode(u.searchParams.get('gallery_display')),
@@ -3570,6 +3594,7 @@ function triggerMusicBrainzArtistSync() {
       const count = Math.max(0, Number(payload?.enqueued_count || 0));
       setMusicBrainzSyncFeedback('info', `MusicBrainz sync queued ${count} ${count === 1 ? 'artist' : 'artists'}.`);
       if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus({ force: true });
+      if (typeof refreshMusicBrainzLookupNotifications === 'function') void refreshMusicBrainzLookupNotifications({ force: true });
       return payload;
     })
     .catch((error) => {
@@ -3710,6 +3735,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
   if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus();
+  if (typeof refreshMusicBrainzLookupNotifications === 'function') void refreshMusicBrainzLookupNotifications();
   const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
   if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
@@ -4389,6 +4415,48 @@ function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
   };
 }
 
+// Romanized artist names (owner-approved J3): the Latin form MusicBrainz gives an
+// original-script name, shown in parentheses beside it. Display only.
+let romanizedArtistNames = new Map();
+// Bumped whenever either label map is replaced, so a drawn tree knows to redraw.
+let artistDisplayLabelsVersion = 0;
+
+function setRomanizedArtistNames(names = {}) {
+  romanizedArtistNames = new Map(Object.entries(names || {}).map(([name, latin]) => [String(name).trim(), String(latin || '').trim()]));
+  artistDisplayLabelsVersion += 1;
+}
+
+// "Tenmon" for "天門" (hover text); empty for every other name.
+function romanizedArtistName(name) {
+  return romanizedArtistNames.get(String(name || '').trim()) || '';
+}
+
+// "(Tenmon)" for "天門" (visible text); empty for every other name.
+function romanizedArtistLabel(name) {
+  const latin = romanizedArtistName(name);
+  return latin ? `(${latin})` : '';
+}
+
+// Same-name artists MusicBrainz splits per album (approved D2 batch 3, 3): the server names
+// each group "Amarok (Poland)" and lists its qualifier here, dimmed like a romanized name.
+let splitArtistQualifiers = new Map();
+
+function setSplitArtistQualifiers(qualifiers = {}) {
+  splitArtistQualifiers = new Map(Object.entries(qualifiers || {}).map(([label, qualifier]) => [String(label).trim(), String(qualifier || '').trim()]));
+  artistDisplayLabelsVersion += 1;
+}
+
+// The one way an artist name is drawn: { name: 'Amarok', qualifier: '(Poland)', secondary:
+// the dimmed text after the name } for a split group label, which ends in " (qualifier)";
+// any other name is drawn whole, with its romanized form (if any) as the dimmed text.
+function artistDisplayParts(artist) {
+  const label = String(artist ?? '');
+  const qualifier = splitArtistQualifiers.get(label.trim());
+  if (!qualifier) return { name: label, qualifier: '', secondary: romanizedArtistLabel(label) };
+  const name = label.trim().slice(0, -(qualifier.length + 3));
+  return { name, qualifier: `(${qualifier})`, secondary: [romanizedArtistLabel(name), `(${qualifier})`].filter(Boolean).join(' ') };
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -4413,7 +4481,8 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    label: artistDisplayParts(item.artist_display || item.artist).name,
+    secondaryLabel: artistDisplayParts(item.artist_display || item.artist).secondary, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -4432,6 +4501,41 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="after" aria-hidden="true" style="height:${virtualWindow.after}px"></div>`;
   }
   return html;
+}
+
+// The Series tree (approved mockups 2 and 4B): the artist tree's own items in two groups,
+// Series then Featured In, each under a collapsible heading made from the same item and never
+// selected. A separator comes before Featured In where NavigationTree draws one.
+const SERIES_TREE_GROUPS = [['series', 'Series'], ['featured_in', 'Featured In']];
+
+// A Series view brings its own tree; any other gallery shows the one the Series button loaded.
+function resolveSeriesTreeItems(view = state.view) {
+  const items = String(view?.selected_series || '') ? view.series_sidebar : state.ui?.seriesTree;
+  return Array.isArray(items) ? items : [];
+}
+
+function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTreeCollapsedGroups || {}) {
+  const tree = window.NavigationTree;
+  const series = resolveSeriesTreeItems(view);
+  const selected = String(view.selected_series || '');
+  // The artist tree's own fold arrow, turned to show whether a group is open.
+  const chevron = document.getElementById('artist-tree-fold-button')?.querySelector?.('svg')?.outerHTML || '';
+  const browse = { surface_request: 'albums', visible_library_categories: view.visible_library_categories };
+  return SERIES_TREE_GROUPS.reduce((html, [kind, label]) => {
+    const members = series.filter((item) => (item.kind === 'featured_in' ? 'featured_in' : 'series') === kind);
+    if (!members.length) return html;
+    const collapsed = collapsedGroups[kind] === true;
+    const separator = html && typeof tree.renderSeparator === 'function' ? tree.renderSeparator({ label }) : '';
+    return html + separator + tree.renderItem({
+      label, key: `series-group:${kind}`, action: true, variant: 'panel', expanded: !collapsed,
+      className: 'navigation-tree-group-heading', attributes: { 'data-series-tree-group': kind },
+      trailingHtml: chevron && `<span class="navigation-tree-group-heading__chevron">${chevron}</span>`,
+    }) + (collapsed ? '' : members.map((item) => tree.renderItem({
+      label: item.name, href: buildUrl({ ...browse, selected_series: item.mbid }), key: `series:${item.mbid}`,
+      count: item.count, selected: item.mbid === selected,
+      attributes: { 'data-nav': '1', 'data-sidebar-series': item.mbid },
+    })).join(''));
+  }, '');
 }
 
 // Sidebar artist lists are replaced, never edited in place, so each list's
@@ -4467,7 +4571,8 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}:${sidebarArtistGeneration(sidebarArtists)}:${virtualWindow}`;
+  // The dimmed text (romanized names, split qualifiers) arrives apart from the list.
+  return `${showAllArtistsLink}:${sidebarArtistGeneration(sidebarArtists)}:${artistDisplayLabelsVersion}:${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -4747,23 +4852,49 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
+// The romanized form of an original-script artist name (approved J3); see render-markup-helpers.
+function galleryRomanizedArtistName(name) {
+  return typeof romanizedArtistName === 'function' ? romanizedArtistName(name) : '';
+}
+
+// The page's Gallery Bar is the server template (partials/gallery-bar.html), which has no
+// romanized slot; it gets one right after the name the first time it is needed.
+function galleryContextRomanizedElement(bar) {
+  const existing = bar?.querySelector?.('[data-gallery-context-romanized]');
+  if (existing) return existing;
+  const name = bar?.querySelector?.('[data-gallery-context-name]');
+  if (typeof name?.insertAdjacentHTML !== 'function') return null;
+  name.insertAdjacentHTML('afterend', '<span class="gallery-artist-romanized" data-gallery-context-romanized hidden></span>');
+  return bar.querySelector('[data-gallery-context-romanized]');
+}
+
+function galleryRomanizedArtistLabel(name) {
+  return typeof romanizedArtistLabel === 'function' ? romanizedArtistLabel(name) : '';
+}
+
+// The name and its dimmed text ("Amarok" "(Poland)"; "天門" "(Tenmon)"); see render-markup-helpers.
+function galleryArtistDisplayParts(name) {
+  return typeof artistDisplayParts === 'function'
+    ? artistDisplayParts(name)
+    : { name: String(name ?? ''), qualifier: '', secondary: galleryRomanizedArtistLabel(name) };
+}
+
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
     : {};
   const country = galleryCountryName(projection.country);
+  // No genre shows no pill: the server's "Genre unavailable" placeholder
+  // for a matched artist without genres is not a genre.
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())
-    .filter(Boolean)
+    .filter((genre) => genre && genre !== 'Genre unavailable')
     .slice(0, 3);
   const countryHtml = country
     ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>`
     : '';
-  const genreHtml = genres.map((genre) => (
-    genre === 'Genre unavailable'
-      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
-      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
-  )).join('');
+  const genreHtml = genres
+    .map((genre) => `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`).join('');
   return `${countryHtml}${genreHtml}`;
 }
 
@@ -4834,6 +4965,10 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
           JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
         )))
         : new Set();
+      // A match that changed after the first read can bring a romanized name or split label.
+      if (galleryArtistMusicBrainzStatus.loadedAt > 0 && typeof refreshRomanizedArtistNames === 'function') {
+        void refreshRomanizedArtistNames();
+      }
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
       galleryArtistMusicBrainzStatus.pending = [...next.values()].some((value) => value.state === 'pending');
@@ -4873,6 +5008,41 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
       galleryArtistMusicBrainzStatus.promise = null;
     });
   return galleryArtistMusicBrainzStatus.promise;
+}
+
+// Romanized artist names change only when MusicBrainz matches an artist: the gallery loads
+// them at start, and a changed artist status asks again, at most every ten minutes. A
+// change redraws the tree and the gallery.
+const ROMANIZED_ARTIST_NAMES_REFRESH_MS = 600000;
+const romanizedArtistNamesLoad = { loadedAt: 0, signature: '{}{}', promise: null };
+
+function refreshRomanizedArtistNames() {
+  if (romanizedArtistNamesLoad.promise) return romanizedArtistNamesLoad.promise;
+  if (romanizedArtistNamesLoad.loadedAt && Date.now() - romanizedArtistNamesLoad.loadedAt < ROMANIZED_ARTIST_NAMES_REFRESH_MS) {
+    return Promise.resolve(false);
+  }
+  romanizedArtistNamesLoad.promise = fetch('/api/musicbrainz/artists/romanized-names', { headers: { Accept: 'application/json' } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => {
+      const names = payload?.names && typeof payload.names === 'object' ? payload.names : null;
+      // Split same-name groups' qualifiers ride along (D2 S2); absent when nothing is split.
+      const splitArtists = payload?.split_artists && typeof payload.split_artists === 'object' ? payload.split_artists : {};
+      const signature = JSON.stringify(names) + JSON.stringify(splitArtists);
+      if (!names || signature === romanizedArtistNamesLoad.signature) return false;
+      romanizedArtistNamesLoad.signature = signature;
+      setRomanizedArtistNames(names);
+      if (typeof setSplitArtistQualifiers === 'function') setSplitArtistQualifiers(splitArtists);
+      if (typeof renderSidebar === 'function') renderSidebar();
+      if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
+      if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      romanizedArtistNamesLoad.loadedAt = Date.now();
+      romanizedArtistNamesLoad.promise = null;
+    });
+  return romanizedArtistNamesLoad.promise;
 }
 
 function buildGalleryArtistStatusHtml(config = {}) {
@@ -4975,13 +5145,30 @@ function buildGalleryBarHtml(config = {}) {
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
   const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
+  const display = isArtist ? galleryArtistDisplayParts(title) : { name: title, secondary: '' };
+  const romanized = display.secondary;
+  const romanizedHtml = `<span class="gallery-artist-romanized" data-gallery-context-romanized${romanized ? '' : ' hidden'}>${escapeHtml(romanized)}</span>`;
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(display.name)}</span>${romanizedHtml}${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
       <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
     </div>`;
+}
+
+// The Series view's Gallery Bar (approved 2 and 4B). One series: its name and i, then
+// "Album series • N albums" under it; a phone keeps the band header's "• N albums" and no
+// subheader. All series: "Series" with its totals, like the artist gallery.
+function resolveSeriesGalleryBarContent({ series = null, seriesCount = 0, albumCount = 0, mobile = false } = {}) {
+  if (!series) {
+    return { name: 'Series', inlineTotal: '', metadataHtml: '', summary: `${Math.max(0, Number(seriesCount || 0))} series · ${galleryMainPlural(albumCount, 'album')}` };
+  }
+  const total = galleryMainPlural(albumCount, 'album');
+  return mobile
+    ? { name: series.name || '', inlineTotal: total, metadataHtml: '', summary: '' }
+    : { name: series.name || '', inlineTotal: '', summary: '',
+      metadataHtml: `<span class="gallery-bar__summary">${escapeHtml(series.type_label || 'Series')}</span><span class="gallery-bar__artist-total">${escapeHtml(total)}</span>` };
 }
 
 function buildArtistFamilyPanelHtml(config = {}) {
@@ -5001,10 +5188,18 @@ function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
+// A series has an i only with a stored Wikipedia introduction (approved D2 batch 3, 4);
+// an artist always has one.
+function gallerySeriesHasInfo(series) {
+  return Boolean(series?.wikipedia?.extract && series.wikipedia.url);
+}
+
 function buildFamilyArtistHeaderHtml(config = {}) {
+  const display = galleryArtistDisplayParts(config.artist || '');
+  const romanized = display.secondary;
   const status = buildGalleryArtistStatusHtml(config);
-  const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  const info = config.series && !gallerySeriesHasInfo(config.series) ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(display.name)}${romanized ? ` <span class="gallery-artist-romanized">${escapeHtml(romanized)}</span>` : ''}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -5019,12 +5214,23 @@ function buildGalleryRatingHtml(config = {}) {
 
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
-  const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  // J3 (owner 2026-11-15): the artist's romanized name is hover text on desktop. On phones
+  // it reads "天門 (Tenmon) · 2007", dimmed in parentheses right after the artist, so the row
+  // keeps its height (approved D2 batch 3, 1D-3; mobile-layout.css shows it).
+  const romanized = String(config.artistRomanized || '').trim();
+  const artist = String(config.artist ?? '').trim();
+  const romanizedHtml = romanized && artist ? `<span class="gallery-artist-romanized gallery-card__romanized"> (${escapeHtml(romanized)})</span>` : '';
+  const metadataHtml = [artist && `${escapeHtml(artist)}${romanizedHtml}`, escapeHtml(String(config.year ?? '').trim())].filter(Boolean).join(' · ');
+  // The album's MusicBrainz genre (approved A2), beside artist and year.
+  const genre = String(config.genre || '').trim();
+  // An album title's Latin form (0256): on phones a small dimmed line in parentheses under
+  // the title, inside the same row height (approved b3-1d3); desktop shows nothing yet.
+  const titleLatin = String(config.titleLatin || '').trim();
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row">${titleLatin ? `<div class="album-subtitle gallery-card__title-latin"><span class="gallery-artist-romanized">(${escapeHtml(titleLatin)})</span></div>` : ''}<div class="album-subtitle"${romanized ? ` title="${escapeHtml(romanized)}"` : ''}><span data-gallery-metadata-text>${metadataHtml}</span></div>${genre ? `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>` : ''}</div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -5389,21 +5595,35 @@ function normalizeAlbumDetailsLayout(value) {
 }
 
 // The MusicBrainz artist an album certainly belongs to replaces a tag that names someone
-// else. Display only: the tag itself changes only through an approved tag edit.
-function albumDisplayArtist(album) {
+// else, unless the album's release credits another name (display_artist wins, below).
+// Display only: the tag itself changes only through an approved tag edit.
+function albumIdentityArtist(album) {
   const tagged = album?.album_artist || album?.artist || '';
   const identity = album?.musicbrainz_artist;
   return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
 }
 
-function albumTaggedArtistNote(album) {
-  const tagged = album?.album_artist || album?.artist || '';
-  if (albumDisplayArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
-  // A name shared by several MusicBrainz artists (Amarok): say which one this album is.
-  const identity = album?.musicbrainz_artist;
-  return identity?.split && identity.canonical_name
-    ? `MusicBrainz: ${[identity.canonical_name, identity.disambiguation ? `(${identity.disambiguation})` : ''].filter(Boolean).join(' ')}`
-    : '';
+// An applied MusicBrainz data correction (S4), else the name the album's release credits
+// shows in place of the album artist tag; a split
+// same-name artist's album shows its group, "Amarok (Poland)" (D2 S2).
+function albumDisplayArtist(album) {
+  return album?.display_artist || album?.musicbrainz_artist?.group_label || albumIdentityArtist(album);
+}
+
+// The romanized form of the album's original-script artist name (J3), or empty.
+function albumDetailsRomanizedArtist(album) {
+  return typeof romanizedArtistName === 'function' ? romanizedArtistName(albumDisplayArtist(album)) : '';
+}
+
+// J3 (owner 2026-11-15): hover text on desktop; on phones its own line, shown by mobile-layout.css.
+function buildAlbumDetailsRomanizedArtistHtml(romanized) {
+  const latin = String(romanized || '').trim();
+  return latin ? `<div class="album-details-header__romanized">(${escapeHtml(latin)})</div>` : '';
+}
+
+// MusicBrainz's release type ("Live", "EP • Live"; owner 2026-11-15) wins over the local tag.
+function albumDetailsReleaseType(album) {
+  return album?.musicbrainz_release?.type_label || album?.release_type || 'ALBUM';
 }
 
 function buildAlbumDetailsHeaderHtml(config = {}) {
@@ -5424,10 +5644,21 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
     const eyebrow = escapeHtml(config.eyebrow || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>${buildAlbumDetailsRomanizedArtistHtml(config.eyebrowRomanized)}` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
-  const artist = escapeHtml(config.artist || '');
-  const album = escapeHtml(config.album || 'Album');
+  const artistRomanized = String(config.artistRomanized || '').trim();
+  // A split group's qualifier is dimmed after the name: "Amarok (Poland)".
+  const artistParts = typeof artistDisplayParts === 'function' ? artistDisplayParts(config.artist || '') : { name: config.artist || '', qualifier: '' };
+  const artistName = artistRomanized && config.artist
+    ? `<span title="${escapeHtml(artistRomanized)}">${escapeHtml(artistParts.name)}</span>`
+    : escapeHtml(artistParts.name);
+  const artist = artistParts.qualifier
+    ? `${artistName} <span class="album-details-header__aka">${escapeHtml(artistParts.qualifier)}</span>`
+    : artistName;
+  // "Title (a.k.a. Other title)", dimmed, after the title and before the year.
+  const alternatives = Array.isArray(config.alternativeTitles) ? config.alternativeTitles.filter(Boolean) : [];
+  const album = `${escapeHtml(config.album || 'Album')}${alternatives.length
+    ? ` <span class="album-details-header__aka">(a.k.a. ${escapeHtml(alternatives.join(', '))})</span>` : ''}`;
   const year = escapeHtml(config.year || '');
   const releaseType = escapeHtml(config.releaseType || 'ALBUM');
   const tags = Array.isArray(config.tags) ? config.tags.filter(Boolean) : [];
@@ -5447,7 +5678,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${buildAlbumDetailsRomanizedArtistHtml(artistRomanized)}${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -5521,6 +5752,33 @@ function buildMissingAlbumDetailsHtml(config = {}) {
   });
 }
 
+// The MusicBrainz series the album is part of: a Series line for real series and a Featured
+// In line for the lists, awards and collections that name the album (owner 2026-11-15).
+// Each shows only when it has an entry; every name is a link to that series' gallery.
+// Web: one line, "Series: <name>" (owner 2026-11-15). Several names are comma-separated and,
+// when they do not fit, wrap left-aligned under the first name (owner 2026-11-16). Phone
+// (approved 4A): the label above its names.
+function buildAlbumDetailsSeriesHtml(album, { inline = false } = {}) {
+  const series = Array.isArray(album?.musicbrainz_series) ? album.musicbrainz_series.filter((item) => item?.mbid) : [];
+  return [['series', 'Series'], ['featured_in', 'Featured In']].map(([kind, label]) => {
+    const links = series.filter((item) => (item.kind === 'featured_in' ? 'featured_in' : 'series') === kind)
+      .map((item) => `<button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${escapeHtml(item.mbid)}">${escapeHtml(item.name || '')}</button>`);
+    if (!links.length) return '';
+    return inline
+      ? `<div class="album-details-series album-details-series--inline" data-album-details-series="${kind}"><span class="album-details-series__label">${label}:</span> <span class="album-details-series__names">${links.join(', ')}</span></div>`
+      : `<div class="album-details-series" data-album-details-series="${kind}"><div class="section-split-label">${label}</div>${links.join('')}</div>`;
+  }).join('');
+}
+
+// Web: under the cover. Phone: below the track table; the header never grows.
+function syncAlbumDetailsSeries(album, { cover, list, mobile } = {}) {
+  document.querySelectorAll('#track-modal [data-album-details-series]').forEach((block) => block.remove());
+  const html = buildAlbumDetailsSeriesHtml(album, { inline: !mobile });
+  if (!html) return;
+  if (mobile) list?.insertAdjacentHTML('afterend', html);
+  else cover?.insertAdjacentHTML('beforeend', html);
+}
+
 /* Inline album metadata and the pinned Gallery Bar never own visible identity
    simultaneously. A taller wrapped identity must finish scrolling out too. */
 function resolveMobileAlbumHeaderState({ albumPage, hasInlineIdentity, hasCover,
@@ -5586,8 +5844,9 @@ function syncMobileAlbumComposition(album) {
       const artist = albumDisplayArtist(album);
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
-        title: album.display_name || album.name || 'Album',
+        title: album.display_title || album.display_name || album.name || 'Album',
         eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
+        eyebrowRomanized: albumDetailsRomanizedArtist(album),
         subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
         poorArtQuality: album.poor_art_quality === true,
       });
@@ -5620,6 +5879,9 @@ function syncMobileAlbumComposition(album) {
     if (identity) overview.before(identity);
     overview.remove();
   }
+  // Here rather than at render time: album details render before the phone page is presented,
+  // and this also runs after presentation and on every breakpoint change (approved 1B / 4A).
+  syncAlbumDetailsSeries(album, { cover, list: document.getElementById('track-modal-list'), mobile });
   if (mobile) {
     const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
     if (descriptor) Object.assign(descriptor, mobilePageDescriptor('album', album));
@@ -6167,10 +6429,40 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
+// The Series tree replaces the artists once the rail chose it (approved mockup 2; owner
+// 2026-11-17: the tree switches, the gallery stays).
+function renderSeriesSidebar(el, view) {
+  const series = typeof showsSeriesTree === 'function' && showsSeriesTree();
+  const kind = series ? 'series' : 'artists';
+  // The heading and fold button change only when the tree does; a scroll frame reads neither.
+  if (el.dataset.navigationTree !== kind) {
+    const heading = document.querySelector('.desktop-artists-heading');
+    const label = series ? 'Series' : 'Artists';
+    if (heading && heading.textContent !== label) heading.textContent = label;
+    const fold = document.getElementById('artist-tree-fold-button');
+    const foldLabel = series ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+    if (fold && fold.getAttribute('aria-label') !== foldLabel) {
+      fold.setAttribute('aria-label', foldLabel);
+      fold.setAttribute('title', foldLabel);
+    }
+    el.dataset.navigationTree = kind;
+  }
+  if (!series) return false;
+  const html = buildSeriesSidebarHtml(view);
+  if (el.dataset.sidebarStructureSignature !== html) {
+    el.innerHTML = html;
+    // The artist tree rebuilds from scratch when it returns.
+    el.dataset.sidebarStructureSignature = html;
+    el.albumHavenSidebarVirtualWindow = null;
+  }
+  return true;
+}
+
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
   if (!el) return;
+  if (renderSeriesSidebar(el, v)) return;
   const sidebarOverride = Array.isArray(state.gallery.sidebarArtistsOverride) ? state.gallery.sidebarArtistsOverride : null;
   const sidebarShowAllArtistsOverride = Object.prototype.hasOwnProperty.call(state.gallery, 'sidebarShowAllArtistsOverride')
     ? state.gallery.sidebarShowAllArtistsOverride
@@ -7708,14 +8000,25 @@ function buildGalleryMainRootPageGroups(groups) {
 
 function renderGalleryMainContext(bar, context) {
   const name = bar.querySelector('[data-gallery-context-name]');
+  const romanized = galleryContextRomanizedElement(bar);
+  // The info button follows the romanized name, which follows the name (approved J3).
+  const infoAnchor = romanized || name;
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const metadata = bar.querySelector('[data-gallery-context-metadata]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
   const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
-  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
+  const series = state.view.series || null;
+  // One series owns its header while scrolling; All series follows the artist gallery.
+  const seriesHeader = !mobileHome && Boolean(String(state.view.selected_series || '').trim())
+    && Boolean(series || context.kind === 'gallery');
+  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : (seriesHeader ? 'series' : context.kind);
   summary.hidden = false;
+  if (romanized) {
+    romanized.hidden = true;
+    romanized.textContent = '';
+  }
   if (metadata) {
     metadata.hidden = true;
     metadata.innerHTML = '';
@@ -7729,13 +8032,40 @@ function renderGalleryMainContext(bar, context) {
     name.textContent = document.getElementById('mobile-home')?.dataset.accountName || 'My music';
     summary.textContent = '';
     oldInfo?.remove();
+  } else if (seriesHeader) {
+    const content = resolveSeriesGalleryBarContent({
+      series, seriesCount: model.groups.length, albumCount: model.totals.albumCount,
+      mobile: typeof usesMobilePageLayout === 'function' && usesMobilePageLayout(),
+    });
+    name.textContent = content.name;
+    summary.hidden = !content.summary;
+    summary.textContent = content.summary;
+    if (inlineTotal) {
+      inlineTotal.hidden = !content.inlineTotal;
+      inlineTotal.textContent = content.inlineTotal;
+    }
+    if (metadata) {
+      metadata.hidden = !content.metadataHtml;
+      metadata.innerHTML = content.metadataHtml;
+    }
+    if (!gallerySeriesHasInfo(series)) oldInfo?.remove();
+    else if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    else {
+      oldInfo.dataset.artist = series.name;
+      oldInfo.setAttribute('aria-label', `Information about ${series.name}`);
+    }
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
     // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
-    name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
+    const display = galleryArtistDisplayParts(galleryArtistDisplayName(context.artist, context.artist_musicbrainz));
+    name.textContent = display.name;
+    if (romanized) {
+      romanized.textContent = display.secondary;
+      romanized.hidden = !romanized.textContent;
+    }
     summary.hidden = true;
     summary.textContent = '';
     if (inlineTotal) {
@@ -7746,7 +8076,7 @@ function renderGalleryMainContext(bar, context) {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
     }
-    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
@@ -7853,26 +8183,34 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
   return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
+// A series' i (approved D2 batch 3, 4): only its stored Wikipedia introduction and the
+// Wikipedia link. A series has no picture of its own, so there is no art box; a series
+// without a Wikipedia page has no i (gallerySeriesHasInfo).
+function renderGallerySeriesInfo(overlay, series) {
+  const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close series information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
+  const link = ButtonComponent.renderExternalServiceLink({ service: 'wikipedia', href: series.wikipedia?.url });
+  overlay.setAttribute('aria-label', `Information about ${series.name}`);
+  overlay.innerHTML = `${closeAction}<header><div><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(series.wikipedia?.extract || '')}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
+  return overlay;
+}
+
 function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
   const group = findGalleryMainGroup(artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return null;
+  if (group.series) return renderGallerySeriesInfo(overlay, group.series);
   const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
   const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
   const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz);
-  // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the
-  // title, and the tag is named beside the links (display only).
+  // Matched under another name: the MusicBrainz name is the title.
   const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);
-  const credit = displayName !== artist
-    ? `<p class="artist-info-overlay__source" data-artist-info-credit>Tagged as ${escapeHtml(artist)} in your files.</p>`
-    : '';
   const identities = buildGalleryArtistIdentitiesHtml(group.artist_musicbrainz);
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(displayName)}</h2>${metadata ? `<div class="artist-info-overlay__metadata">${metadata}</div>` : ''}</div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${identities}${credit}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(displayName)}</h2>${metadata ? `<div class="artist-info-overlay__metadata">${metadata}</div>` : ''}</div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${identities}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
   // A long biography that still fits in five lines needs no clamp or fade.
   const summaryElement = overlay.querySelector('[data-artist-info-long]');
   if (summaryElement && summaryElement.scrollHeight <= summaryElement.clientHeight + 1) summaryElement.removeAttribute('data-artist-info-long');
@@ -7952,7 +8290,56 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
+// A SERIES or FEATURED IN link in album details opens that series' gallery (approved 1B, 4A),
+// in the Series tree.
+function openSeriesGallery(mbid) {
+  state.ui.navigationTree = 'series';
+  const navigate = () => {
+    const view = state.view || {};
+    // The series gallery already shown stays: only its tree is brought up (owner, 11-18).
+    if (resolveViewSurface(view) === 'albums' && resolveViewSeries(view) === mbid && isMountedViewSettled()) {
+      renderSidebar();
+      return;
+    }
+    fetchAndRender(buildUrl({
+      surface_request: 'albums',
+      visible_library_categories: view.visible_library_categories || [],
+      selected_series: mbid,
+    }), true);
+  };
+  if (document.getElementById('track-modal')?.hidden === false) {
+    closeTrackModal();
+    // A phone's album page closes through history: open the series once it has.
+    if (typeof hasActiveMobilePage === 'function' && hasActiveMobilePage()) {
+      window.addEventListener('popstate', () => setTimeout(navigate, 0), { once: true });
+      return;
+    }
+  }
+  navigate();
+}
+
+// The Series tree menu's choice (owner 2026-11-17, 5B): Series, Featured In, or null for the
+// MusicBrainz default. Once saved the tree regroups in place: a Series view reloads (its
+// header names the kind), any other gallery stays and only the tree is read again.
+async function saveSeriesKind(mbid, kind) {
+  try {
+    const response = await fetch(`/api/musicbrainz/series/${encodeURIComponent(mbid)}/kind`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.detail || '');
+  } catch (error) {
+    showToast(error?.message || 'The series could not be saved.', 'error', 3200);
+    return false;
+  }
+  return String(state.view?.selected_series || '')
+    ? refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true })
+    : loadSeriesTree();
+}
+
 function handleGalleryMainClick(event) {
+  const seriesLink = event.target.closest?.('[data-open-series]');
+  if (seriesLink) { event.preventDefault(); openSeriesGallery(seriesLink.dataset.openSeries); return true; }
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
@@ -8094,6 +8481,15 @@ function initGalleryMain() {
   const recentSearch = document.getElementById('recent-search-popover');
   if (recentSearch) recentSearch.dataset.anchoredSurface = 'search-suggestions';
   updateGalleryMainChrome();
+  // Romanized names and split qualifiers load once here; a changed artist status reloads them.
+  if (typeof refreshRomanizedArtistNames === 'function') void refreshRomanizedArtistNames();
+  // The page renders unsearched browsing first; a Series view URL (reload, shared link)
+  // then opens its series.
+  const locationState = typeof parseBrowserUrlState === 'function' ? parseBrowserUrlState(window.location.href) : {};
+  if (typeof resolveViewSeries === 'function' && resolveViewSeries(locationState) && !state.view.selected_series) {
+    state.ui.navigationTree = 'series';
+    void fetchAndRender(buildUrl(locationState), false);
+  }
 }
 
 function createGalleryFamilyPaintController(toggle) {
@@ -11850,8 +12246,9 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (button) {
     button.hidden = !canFold || isFolded;
     button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
-    button.setAttribute('aria-label', 'Collapse Artist Tree');
-    button.setAttribute('title', 'Collapse Artist Tree');
+    const label = showsSeriesTree() ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
   }
   if (navigationButton) {
     navigationButton.hidden = !(isFolded || isExpanding);
@@ -11902,6 +12299,38 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
   fallbackTimer = setTimeout(finish, duration + 50);
   cancelPendingArtistTreeResize = cleanup;
+}
+
+// MusicBrainz Delivery 2, S6: the navigation tree lists series once the rail's Series button
+// (or a series opened from album details) chose it. A phone's drawer keeps its artists (how a
+// phone reaches the Series list is open).
+function showsSeriesTree() {
+  return state.ui.navigationTree === 'series' && !isArtistsDrawerMobileViewport();
+}
+
+// The folded rail's Series and Artist Tree buttons switch the tree and unfold it; the gallery
+// keeps what it shows and nothing in the tree is newly selected (owner 2026-11-17).
+function openNavigationTree(kind) {
+  state.ui.navigationTree = kind === 'series' ? 'series' : 'artists';
+  if (kind === 'series') void loadSeriesTree();
+  renderSidebar();
+  syncArtistTreeFoldVisibility();
+  if (state.ui.artistTreeFolded) toggleArtistTreeFold();
+}
+
+// The Series tree for any gallery; a Series view brings its own.
+async function loadSeriesTree() {
+  const params = new URLSearchParams();
+  (state.view?.visible_library_categories || []).forEach((category) => params.append('category', category));
+  try {
+    const response = await fetch(`/series-tree?${params}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return false;
+    state.ui.seriesTree = (await response.json()).series_sidebar || [];
+  } catch (_error) {
+    return false;
+  }
+  if (showsSeriesTree()) renderSidebar();
+  return true;
 }
 
 function toggleArtistTreeFold() {
@@ -11972,10 +12401,17 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const seriesButton = event.target.closest('[data-open-series-tree="1"]');
+  if (seriesButton) {
+    event.preventDefault();
+    openNavigationTree('series');
+    return true;
+  }
   const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
   if (foldButton) {
     event.preventDefault();
-    toggleArtistTreeFold();
+    if (foldButton.id === 'artist-tree-navigation-button' && showsSeriesTree()) openNavigationTree('artists');
+    else toggleArtistTreeFold();
     return true;
   }
 
@@ -12256,6 +12692,7 @@ const GALLERY_DISPLAY_PREFERENCES_STORAGE_KEY = 'albumhaven.galleryDisplayPrefer
 const GALLERY_PLAYBACK_PREFERENCES_STORAGE_KEY = 'albumhaven.galleryPlaybackPreferences.v1';
 const ALBUM_OPEN_MODE_STORAGE_KEY = 'albumhaven.albumOpenMode.v1';
 const SHELL_LAYOUT_PREFERENCES_STORAGE_KEY = 'albumhaven.shellLayoutPreferences.v1';
+const SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY = 'albumhaven.seriesTreeCollapsedGroups.v1';
 
 function loadPersistedJsonObject(key) {
   try {
@@ -12418,6 +12855,23 @@ function loadShellLayoutPreferences() {
   );
 }
 
+// The Series tree's collapsed groups (owner 2026-11-17, 4B), kept per account and client
+// like the artist tree's fold.
+function loadSeriesTreeCollapsedGroups() {
+  const saved = loadPersistedJsonObject(SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY);
+  return { series: saved.series === true, featured_in: saved.featured_in === true };
+}
+
+function toggleSeriesTreeGroup(kind) {
+  const current = state.ui.seriesTreeCollapsedGroups || {};
+  const groups = { series: current.series === true, featured_in: current.featured_in === true };
+  if (!Object.hasOwn(groups, kind)) return false;
+  groups[kind] = !groups[kind];
+  state.ui.seriesTreeCollapsedGroups = groups;
+  setLocalStorageItem(SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(groups));
+  return true;
+}
+
 function loadAlbumOpenMode() {
   return normalizeAlbumOpenMode(getLocalStorageItem(ALBUM_OPEN_MODE_STORAGE_KEY));
 }
@@ -12527,6 +12981,7 @@ function restorePersistedClientPreferences() {
     state.ui = {};
   }
   state.ui.shellLayoutPreferences = loadShellLayoutPreferences();
+  state.ui.seriesTreeCollapsedGroups = loadSeriesTreeCollapsedGroups();
   restorePlayerAppearance();
 }
 
@@ -14658,10 +15113,14 @@ function showAlbumCardContextMenu(x, y, album) {
     isMarkedVersion
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
+    ...(typeof buildAlbumMenuMusicBrainzItems === 'function' ? buildAlbumMenuMusicBrainzItems() : []),
   ].join('');
   menu.hidden = false;
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  }
+  if (typeof appendAlbumMenuMusicBrainzSearchItems === 'function') {
+    void appendAlbumMenuMusicBrainzSearchItems(menu, menu.dataset.albumKey);
   }
 }
 
@@ -14672,7 +15131,6 @@ function ensureArtistTreeContextMenu() {
   menu.id = 'artist-tree-context-menu';
   menu.className = 'album-card-context-menu';
   menu.hidden = true;
-  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>';
   document.body.appendChild(menu);
   return menu;
 }
@@ -14682,18 +15140,37 @@ function hideArtistTreeContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.artist = '';
+  menu.dataset.series = '';
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
-function showArtistTreeContextMenu(x, y, artist) {
+// The tree's one context menu, for an artist or (Series tree) a series.
+function openTreeContextMenu(x, y, itemsHtml, { artist = '', series = '' } = {}) {
   const menu = ensureArtistTreeContextMenu();
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
+  menu.innerHTML = itemsHtml;
   menu.dataset.artist = String(artist || '');
+  menu.dataset.series = String(series || '');
   menu.hidden = false;
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
+}
+
+function showArtistTreeContextMenu(x, y, artist) {
+  openTreeContextMenu(x, y, '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>', { artist });
+}
+
+// Right-clicking a series in the Series tree (owner 2026-11-17, 5B): Series or Featured In,
+// its current kind disabled; the MusicBrainz default comes back only after an owner's choice.
+function showSeriesTreeContextMenu(x, y, mbid) {
+  const series = resolveSeriesTreeItems().find((item) => item.mbid === mbid);
+  if (!series) return false;
+  const choice = (kind, label) => `<button type="button" class="album-card-context-menu-item" data-series-tree-kind="${kind}"${series.kind === kind ? ' disabled aria-disabled="true"' : ''}>${label}</button>`;
+  openTreeContextMenu(x, y, choice('series', 'Mark as Series') + choice('featured_in', 'Mark as Featured In')
+    + (series.owner_kind ? choice('', 'Use MusicBrainz default') : ''), { series: mbid });
+  return true;
 }
 
 function ensureVersionPickerModal() {
@@ -14759,7 +15236,7 @@ function renderVersionPickerModal() {
   if (!(description instanceof HTMLElement) || !(list instanceof HTMLElement) || !(saveButton instanceof HTMLButtonElement)) return;
   const candidates = getVersionPickerCandidates(album);
   description.textContent = album
-    ? `Choose which ${album.album_artist} album should own "${album.name}" as a version.`
+    ? `Choose which ${album.display_artist || album.album_artist} album should own "${album.name}" as a version.`
     : '';
   list.innerHTML = candidates.length
     ? candidates.map((item) => {
@@ -16215,10 +16692,16 @@ function albumRequiresHydration(album) {
   return declaredTrackCounts.length > 0 && !declaredTrackCounts.includes(tracks.length);
 }
 
+// The details request returns what only album details carry (MusicBrainz type, Series and
+// Featured In, a.k.a. titles); gallery payloads never do, even with every track.
+function albumHasLoadedDetails(album) {
+  return album?.album_details_loaded === true;
+}
+
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
+  const headerParts = [album.display_artist || album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
   els.title.textContent = headerParts.join(' - ');
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
@@ -16654,7 +17137,45 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     if (Array.isArray(payload?.current_releases)) error.currentReleases = payload.current_releases;
     throw error;
   }
+  // Marked on the parsed response itself, which the details caches keep by identity.
+  payload.album.album_details_loaded = true;
   return payload.album;
+}
+
+function sameAlbumTrackPaths(first, second) {
+  const paths = (album) => (Array.isArray(album?.tracks) ? album.tracks : [])
+    .map((track) => String(track?.path || '')).sort();
+  const [left, right] = [paths(first), paths(second)];
+  return left.length === right.length && left.every((path, index) => path === right[index]);
+}
+
+// A gallery album opened with all its tracks renders at once; the details request every other
+// album makes then adds what the gallery payload lacks, if this album is still the one open.
+function completeOpenTrackModalAlbumDetails(album) {
+  const albumKey = String(getAlbumRequestKey(album) || '').trim();
+  // Only by the album's own id: a key alone can name several releases (a first-paint card
+  // carries none, and completes when opened again from the loaded gallery).
+  const albumId = Number(album?.album_id || album?.id || 0);
+  if (!albumKey || !(albumId > 0) || albumHasLoadedDetails(album) || album.inventory_status === 'missing') return;
+  const generation = trackModalCleanupGeneration;
+  loadTrackModalAlbumDetails(albumKey, { albumId }).then((details) => {
+    const els = getTrackModalElements();
+    if (generation !== trackModalCleanupGeneration || !els.overlay || els.overlay.hidden) return;
+    if (!albumHasLoadedDetails(details) || albumRequiresHydration(details)) return;
+    const shown = getCurrentTrackModalAlbum();
+    if (String(getAlbumRequestKey(shown) || '') !== albumKey) return;
+    // Details add what the gallery lacks, never membership: details cached before a move
+    // or split still list the old tracks, and the gallery album is the current one.
+    if (!sameAlbumTrackPaths(details, shown)) return;
+    // Re-render in place (it recomposes the phone page too): the modal, its page and its player
+    // are already open. An edition tab keeps its label.
+    const withContext = attachGalleryPlaybackContextToAlbum(details);
+    const completed = shown.tabLabel === undefined ? withContext : { ...withContext, tabLabel: shown.tabLabel };
+    state.modalReleases[state.modalReleaseIndex] = completed;
+    renderTrackModalRelease(completed);
+  }).catch(() => {
+    // The album stays as the gallery showed it; opening it again retries.
+  });
 }
 
 // A gallery album that is gone was split or merged meanwhile. The refreshed gallery shows every
@@ -16965,6 +17486,7 @@ function openTrackModal(album, options = {}) {
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
+  completeOpenTrackModalAlbumDetails(albumWithPlaybackContext);
 }
 
 function getCurrentTrackModalAlbum() {
@@ -21116,6 +21638,7 @@ async function pollStatus() {
     'inventory_mutation_revision',
   );
   const knownInventoryRevision = Number(knownStatus.inventory_mutation_revision || 0);
+  const knownGalleryRevision = knownStatus.gallery_publication_revision;
   const knownBusy = Boolean(
     knownStatus.scan_in_progress
     || knownStatus.relations_in_progress
@@ -21178,6 +21701,13 @@ async function pollStatus() {
         || appliedViewInventoryRevision < currentInventoryRevision) {
         state.ui.pendingInventoryMutationViewRefresh = true;
       }
+    }
+    // A republished gallery (a MusicBrainz label for a split name, say) reloads the tree once.
+    // Any change counts: the server's count restarts with its process.
+    if (Number.isSafeInteger(knownGalleryRevision)
+      && Number.isSafeInteger(normalizedStatus.gallery_publication_revision)
+      && normalizedStatus.gallery_publication_revision !== knownGalleryRevision) {
+      state.ui.pendingInventoryMutationViewRefresh = true;
     }
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== null
@@ -21340,6 +21870,8 @@ async function pollStatus() {
       && !busyNow
       && !coverBusyNow
       && !state.busy
+      // The reload would cancel a gallery page in flight: a later poll runs it.
+      && !isRootGalleryPageRequestLoading()
       && !hasPendingSidebarNavigation()
     ) {
       state.ui.pendingInventoryMutationViewRefresh = false;
@@ -22294,7 +22826,12 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   if (track.isSearchMatch) classes.push('album-track-table__row--search-match');
   if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
+  // A title in another script than Latin or Cyrillic: its Latin form after a dot (owner 2026-11-17, 1A).
+  const latin = String(track.titleTransliteration || '').trim();
+  const latinHtml = latin
+    ? `<span class="album-track-table__transliteration"><span aria-hidden="true">•</span>${escapeHtml(latin)}</span>`
+    : '';
+  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${latinHtml}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
@@ -22335,6 +22872,26 @@ function buildDiscRatingHtml(group, groupIndex, albumRating) {
   });
 }
 
+// A provider sub-section ("Where Dead Angels Lie", S8) splits a disc's rows wherever
+// track.section changes; the disc itself stays one disc.
+function splitAlbumTrackSections(tracks) {
+  const segments = [];
+  tracks.forEach((track, index) => {
+    const section = String(track?.section || '').trim();
+    const last = segments.at(-1);
+    if (last?.section === section) last.rows.push([track, index]);
+    else segments.push({ section, rows: [[track, index]] });
+  });
+  return segments.length ? segments : [{ section: '', rows: [] }];
+}
+
+function buildAlbumTrackLengthHtml(className, label, rows) {
+  const seconds = rows.reduce((total, [track]) => total + Math.max(0, Number(track?.durationSeconds) || 0), 0);
+  return seconds > 0
+    ? `<div class="${className}">${escapeHtml(label)}: ${escapeHtml(formatTrackDuration(seconds))}</div>`
+    : '';
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
@@ -22344,34 +22901,57 @@ function buildAlbumTrackTableHtml(config = {}) {
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
+  const segmentedGroups = groups.map((group) => splitAlbumTrackSections(Array.isArray(group?.tracks) ? group.tracks : []));
+  const segments = segmentedGroups.flat();
+  const firstSection = segments.findIndex((segment) => segment.section);
+  // With sub-sections every part ends with its length (approved look): the main album
+  // (everything before the first sub-section), then each sub-section.
+  const lengthAfter = (position) => {
+    const segment = segments[position];
+    if (firstSection < 0) return '';
+    if (segment.section) return buildAlbumTrackLengthHtml('album-track-table__section-total', `${segment.section} Length`, segment.rows);
+    if (position !== firstSection - 1) return '';
+    return buildAlbumTrackLengthHtml('album-track-table__main-total', 'Total Main Album Length',
+      segments.slice(0, firstSection).flatMap((part) => part.rows));
+  };
+  let position = -1;
+  const columnsConfig = [
+    { key: 'number', label: '#' },
+    { key: 'title', label: 'Track' },
+    ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
+    { key: 'problem', label: 'Problem', header: 'absent', action: true },
+    { key: 'duration', label: 'Length', action: true },
+  ];
   const tableSections = groups.map((group, groupIndex) => {
-    const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
     const showLabel = Boolean(label) && (
       forceGroupLabels
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
-    const columnsConfig = [
-      { key: 'number', label: '#' },
-      { key: 'title', label: 'Track' },
-      ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
-      { key: 'problem', label: 'Problem', header: 'absent', action: true },
-      { key: 'duration', label: 'Length', action: true },
-    ];
-    const table = buildCompactDataTable({
-      id: `${idPrefix}-tracks-${groupIndex + 1}`,
-      ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
-      headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: showPath
-        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
-      columnsConfig,
-      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
-      density: 'compact',
-      frame: 'outline',
-      overflow: 'none',
-      mobile: 'preserve',
-    });
+    const table = segmentedGroups[groupIndex].map((segment, segmentIndex) => {
+      position += 1;
+      const tableLabel = segment.section || label;
+      const tableHtml = buildCompactDataTable({
+        id: `${idPrefix}-tracks-${groupIndex + 1}${segmentIndex ? `-${segmentIndex + 1}` : ''}`,
+        ariaLabel: tableLabel ? `${ariaLabel} — ${tableLabel}` : ariaLabel,
+        headers: groupIndex === 0 && segmentIndex === 0 ? 'visible' : 'absent',
+        columns: showPath
+          ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
+          : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+        columnsConfig,
+        rows: segment.rows.map(([track, index]) => buildAlbumTrackTableRow(track, index, config)),
+        density: 'compact',
+        frame: 'outline',
+        overflow: 'none',
+        mobile: 'preserve',
+      });
+      const sectionHeading = segment.section
+        ? `<h4 class="album-track-table__disc-heading">${escapeHtml(segment.section)}</h4>`
+        : '';
+      // The last part's length joins the album totals below.
+      const length = position < segments.length - 1 ? lengthAfter(position) : '';
+      return `${sectionHeading}${tableHtml}${length ? `<div class="album-track-table__total">${length}</div>` : ''}`;
+    }).join('');
     if (collapsibleGroups && showLabel) {
       return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
     }
@@ -22385,9 +22965,11 @@ function buildAlbumTrackTableHtml(config = {}) {
     return `<section class="album-track-table__disc">${heading}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();
-  const mainLength = String(config.mainLength || '').trim();
+  // With sub-sections the main album's length already follows its rows.
+  const mainLength = firstSection < 0 ? String(config.mainLength || '').trim() : '';
   const bonusLength = String(config.bonusLength || '').trim();
   const summaries = [
+    lengthAfter(segments.length - 1),
     totalLength ? `<div class="album-track-table__aggregate-total">Total Length: ${escapeHtml(totalLength)}</div>` : '',
     mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
     bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
@@ -22981,6 +23563,8 @@ function buildProblematicAlbumDetail(album) {
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
+    ${album.musicbrainz_album_key ? buildMusicBrainzAlbumLookupHtml(album) : ''}
+    ${album.musicbrainz_correction ? buildMusicBrainzCorrectionHtml(album) : ''}
   `;
 }
 
@@ -25087,18 +25671,9 @@ async function watchSaveTask(taskId, context = {}) {
           context.tagEditAlert?.completionMessage || '',
         ).trim();
         if (completionMessage) {
-          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-            .map((warning) => String(warning || '').trim())
-            .filter(Boolean);
-          const hasCompletionWarning = completionWarnings.length > 0;
-          showRepairAlert(
-            [completionMessage, ...completionWarnings].join(' '),
-            hasCompletionWarning ? 'warning' : 'success',
-            hasCompletionWarning ? 8000 : 2000,
-            {
-              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-            },
-          );
+          const completion = buildTagEditCompletionAlert(context.tagEditAlert, data);
+          showRepairAlert(completion.message, completion.severity,
+            completion.severity === 'warning' ? 8000 : 2000, { title: completion.title });
         } else if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
@@ -25423,6 +25998,10 @@ function getProblemReasonTypes() {
       if (reason) reasons.add(reason);
     });
   });
+  // Albums needing a MusicBrainz correction load only through this filter.
+  if (Number(state.utility.musicBrainzCorrectionAlbumCount) > 0 && typeof MUSICBRAINZ_DATA_CORRECTION_LABEL === 'string') {
+    reasons.add(normalizeProblemFilterReason(MUSICBRAINZ_DATA_CORRECTION_LABEL));
+  }
   return Array.from(reasons).sort((a, b) => a.localeCompare(b));
 }
 
@@ -25502,6 +26081,7 @@ function getFilteredProblematicAlbums() {
 
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
+    if (typeof isMusicBrainzCorrectionRowShown === 'function' && !isMusicBrainzCorrectionRowShown(album)) return false;
     if (!query) return true;
     const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
     const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];
@@ -25920,8 +26500,12 @@ function buildMusicBrainzManualResolutionHtml(detail, ui) {
       <p class="utility-detail-meta">Find the correct artist on MusicBrainz, then paste the artist page URL or bare artist MBID here. Album Haven verifies the entity before assignment.</p>
       <label class="musicbrainz-manual-field-label" for="musicbrainz-manual-artist">MusicBrainz artist URL or MBID</label>
       <div class="musicbrainz-manual-field-row">
-        <input id="musicbrainz-manual-artist" class="musicbrainz-manual-field" type="text" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1"${actionsAvailable ? '' : ' disabled'}>
-        ${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid })}
+        <div class="search-field musicbrainz-manual-field">
+          <div class="search-field-control ui-input-action">
+            <input id="musicbrainz-manual-artist" type="search" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1"${actionsAvailable ? '' : ' disabled'}>
+            <span class="search-field-action">${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid, className: 'search-field-button' })}</span>
+          </div>
+        </div>
         ${ButtonComponent.renderButton({ label: 'Find manually', attributes: { 'data-open-musicbrainz-url': searchUrl } })}
       </div>
       <div class="musicbrainz-manual-helper${ui.validationError ? ' is-error' : ''}" role="status" aria-live="polite">${escapeHtml(helper)}</div>
@@ -25947,6 +26531,9 @@ function buildMusicBrainzProviderStatusHtml(detail, view) {
     <p class="utility-detail-meta">${escapeHtml(guidance)}</p>`;
 }
 
+// An artist MusicBrainz lacks (owner decision 2026-11-15, C2); the server adds it to problem_reasons.
+const MUSICBRAINZ_HAS_NO_INFO_LABEL = 'MusicBrainz has no info';
+
 function buildMusicBrainzArtistProblemDetail(item) {
   const detail = item?.musicbrainz_detail;
   if (item?.musicbrainz_detail_failed) {
@@ -25957,6 +26544,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
   const actionsAvailable = detail.actions_available !== false;
   const view = getMusicBrainzArtistProblemView(detail);
   const label = String(detail.unresolved_reason || item.problem_reasons?.[0] || '');
+  const hasNoInfo = Boolean(item.problem_reasons?.includes(MUSICBRAINZ_HAS_NO_INFO_LABEL));
   const albumCount = Number(detail.local_album_count || item.local_album_count || 0);
   const lastChecked = formatMusicBrainzAttemptTime(detail.last_checked_at);
   const artwork = buildAlbumArtboxHtml({ state: 'missing', label: `Artist ${detail.local_artist_name || ''}` });
@@ -25975,6 +26563,9 @@ function buildMusicBrainzArtistProblemDetail(item) {
     body = buildMusicBrainzProviderStatusHtml(detail, view);
     actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: !actionsAvailable || ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
   }
+  actions = `${actionsAvailable ? buildMusicBrainzLookupButtonsHtml({
+    subject: 'artist', hasMbid: Boolean(detail.artist_mbid), disabled: ui.busy,
+  }) : ''}${actions}`;
   const pendingDots = view === 'pending'
     ? '<span class="artist-musicbrainz-pending" aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span>'
     : '';
@@ -25985,12 +26576,50 @@ function buildMusicBrainzArtistProblemDetail(item) {
         <div class="utility-detail-meta">Artist</div>
         <div class="utility-detail-meta">${escapeHtml(`${albumCount} local album${albumCount === 1 ? '' : 's'}`)}</div>
         ${lastChecked ? `<div class="utility-detail-meta">Last checked: ${escapeHtml(lastChecked)}</div>` : ''}
-        <div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: view === 'pending' ? 'info' : 'warning', message: label })}${pendingDots}</div>
+        <div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: view === 'pending' ? 'info' : 'warning', message: label })}${pendingDots}${hasNoInfo ? buildAlertLabelHtml({ severity: 'info', message: MUSICBRAINZ_HAS_NO_INFO_LABEL }) : ''}</div>
       </div>
     </div>
     ${body}
     ${ui.error ? buildOnPageAlertHtml({ severity: 'error', title: 'MusicBrainz action failed', message: ui.error }) : ''}
     <div class="utility-detected-actions">${actions}</div>`;
+}
+
+// G: the album menu's lookups for an artist or album entry: queue it, or search now while it
+// has no MBID.
+function buildMusicBrainzLookupButtonsHtml({ subject, hasMbid = false, disabled = false, attributes = {} }) {
+  if (typeof canRequestMusicBrainzLookups !== 'function' || !canRequestMusicBrainzLookups()) return '';
+  const button = (mode, label) => ButtonComponent.renderButton({
+    label, disabled, attributes: { ...attributes, 'data-musicbrainz-lookup': mode },
+  });
+  return `${hasMbid ? '' : button('search', `Search MusicBrainz for the ${subject}`)}${button('queue', `Queue MusicBrainz lookup for the ${subject}`)}`;
+}
+
+function isMusicBrainzAlbumProblem(item) {
+  return item?.entity_kind === 'musicbrainz_album';
+}
+
+// An album MusicBrainz has no info on (S5): its label and lookups. A listed album shows
+// them beneath its detected problems; an album listed only for this has this detail.
+function buildMusicBrainzAlbumLookupHtml(album) {
+  return `<div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: 'info', message: MUSICBRAINZ_HAS_NO_INFO_LABEL })}</div>
+    <p class="utility-detail-meta">No release of this artist on MusicBrainz has this album's title. Search MusicBrainz again after fixing its tags, or queue it for the next MusicBrainz sync.</p>
+    <div class="utility-detected-actions">${buildMusicBrainzLookupButtonsHtml({
+      subject: 'album', attributes: { 'data-musicbrainz-lookup-album': album.musicbrainz_album_key },
+    })}</div>`;
+}
+
+function buildMusicBrainzAlbumProblemDetail(item) {
+  const title = String(item.name || 'Unknown Album');
+  return `<div class="utility-detail-header">
+      <div class="utility-detail-cover">${buildUtilityAlbumArtbox(item, { label: `Album cover for ${title}` })}</div>
+      <div class="utility-detail-summary">
+        <h3 class="utility-detail-title">${escapeHtml(title)}</h3>
+        <div class="utility-detail-meta">${escapeHtml(item.album_artist || 'Unknown Artist')}</div>
+        <div class="utility-detail-meta">Year: ${escapeHtml(item.year ?? 'Unknown')}</div>
+      </div>
+    </div>
+    <h4 class="utility-detail-section-title">Detected problems</h4>
+    ${buildMusicBrainzAlbumLookupHtml(item)}`;
 }
 
 async function loadMusicBrainzArtistProblemDetail(item, { force = false, render = true } = {}) {
@@ -26165,6 +26794,14 @@ function handleMusicBrainzArtistProblemEvent(event) {
       'MusicBrainz retry queued.',
       { refreshSurvivingDetail: true },
     );
+    return true;
+  }
+  const lookup = target?.closest?.('[data-musicbrainz-lookup]');
+  if (lookup) {
+    event.preventDefault();
+    void requestMusicBrainzLookup({
+      targetKind: 'artist', mode: lookup.dataset.musicbrainzLookup, localArtistId: item.local_artist_id,
+    });
     return true;
   }
   if (target?.closest?.('[data-musicbrainz-keep-current]')) {
@@ -27928,6 +28565,8 @@ function mountAlertsAppearanceEditor(detail) {
     renderRow,
     rowStride = DEFAULT_ROW_STRIDE,
     overscan = DEFAULT_OVERSCAN,
+    // Called after each render with the rendered end and the row count (paging ahead).
+    onRangeRendered = null,
   }) {
     if (!list || typeof renderRow !== 'function') {
       throw new TypeError('Problematic Files virtualization requires a list and row renderer.');
@@ -28015,6 +28654,7 @@ function mountAlertsAppearanceEditor(detail) {
       for (const [key, value] of Object.entries(metadata)) {
         if (list.dataset[key] !== value) list.dataset[key] = value;
       }
+      if (typeof onRangeRendered === 'function') onRangeRendered(range.end, items.length);
     };
 
     const schedule = () => {
@@ -28408,6 +29048,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
+  if (typeof syncMusicBrainzCorrectionRows === 'function') syncMusicBrainzCorrectionRows();
   const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
@@ -28417,12 +29058,17 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onRangeRendered: (end, count) => {
+          if (typeof loadMoreMusicBrainzCorrectionRows === 'function') loadMoreMusicBrainzCorrectionRows(end, count);
+        },
       });
     }
     if (problematicFilesVirtualList) {
       problematicFilesVirtualList.render(items, selectedKey);
     } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
+      // Without virtualization every row is rendered: the next page follows.
+      if (typeof loadMoreMusicBrainzCorrectionRows === 'function') loadMoreMusicBrainzCorrectionRows(items.length, items.length);
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
       const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
@@ -28548,6 +29194,17 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     els.detail.innerHTML = buildMusicBrainzArtistProblemDetail(selectedAlbum);
     if (!selectedAlbum.musicbrainz_detail && !selectedAlbum.musicbrainz_detail_failed) {
       void loadMusicBrainzArtistProblemDetail(selectedAlbum);
+    }
+    return;
+  }
+  if (typeof isMusicBrainzAlbumProblem === 'function' && isMusicBrainzAlbumProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzAlbumProblemDetail(selectedAlbum);
+    return;
+  }
+  if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzCorrectionProblemDetail(selectedAlbum);
+    if (!selectedAlbum.musicbrainz_correction?.corrections && !selectedAlbum.musicbrainz_correction_failed) {
+      void loadMusicBrainzCorrectionDetail(selectedAlbum);
     }
     return;
   }
@@ -29263,6 +29920,8 @@ function renderUtilityModalContent(options = {}) {
     renderUtilityAppearance();
   } else if (activeTab === 'android') {
     renderUtilityAndroid();
+  } else if (activeTab === 'edits-queue') {
+    renderUtilityEditsQueue();
   } else {
     renderProblematicFiles(options);
   }
@@ -30681,6 +31340,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
         });
         state.utility.libraryWatchHealthProblems = operationalItems;
+        state.utility.musicBrainzCorrectionAlbumCount = Number(data.musicbrainz_correction_album_count || 0);
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
         previousSummaryItems = summaryItems.map(item => ({ ...item }));
@@ -30809,8 +31469,14 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (currentAlbum?.detail_loaded === true && !force) {
     return currentAlbum;
   }
-  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
-  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API; an album row
+  // listed only because MusicBrainz has no info on it is its own detail.
+  if (typeof isMusicBrainzArtistProblem === 'function'
+      && (isMusicBrainzArtistProblem(currentAlbum) || isMusicBrainzAlbumProblem(currentAlbum))) {
+    return currentAlbum;
+  }
+  // An album listed only for its data correction is its own detail.
+  if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(currentAlbum)) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {
@@ -31757,6 +32423,7 @@ function loadActiveUtilityTab(force = false) {
     renderUtilityModalContent();
     return null;
   }
+  if (state.utility.activeTab === 'edits-queue') return loadUtilityEditsQueue(force);
   return loadProblematicFiles(force);
 }
 
@@ -33627,9 +34294,10 @@ function getCoverLookupDeleteConfirmElements() {
 
 function buildCoverLookupAlbumSubtitleHtml(album) {
   if (!album) return '';
+  const artist = album.display_artist || album.album_artist;
   return [
-    album.album_artist
-      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.album_artist)}</span>` : '',
+    artist
+      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(artist)}</span>` : '',
     album.name
       ? `<button class="cover-lookup-modal-album-link" type="button" data-open-cover-lookup-album-details="1">${escapeHtml(album.name)}</button>` : '',
     album.year
@@ -33658,7 +34326,7 @@ function openCoverLookupAlbumDetails() {
 
 function buildCoverLookupCurrentReleaseLabel(release) {
   return [
-    release?.album_artist || '',
+    release?.display_artist || release?.album_artist || '',
     release?.name || '',
     release?.year || '',
     release?.edition || '',
@@ -35115,6 +35783,8 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
   });
 }
 
+let renderedMusicBrainzCardMarkup = '';
+
 function renderCoverLookupDrawer({
   preserveInteraction = true,
   taskIds = [],
@@ -35128,6 +35798,7 @@ function renderCoverLookupDrawer({
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const musicBrainzBatches = typeof getMusicBrainzLookupBatches === 'function' ? getMusicBrainzLookupBatches() : [];
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -35151,15 +35822,17 @@ function renderCoverLookupDrawer({
   const loadedActionedCount = tasks.filter((task) => isActionedCoverLookupNotification(task)).length;
   const counts = state.coverLookup.notificationCounts;
   const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
-  const activeCount = hasAuthoritativeCounts
+  const musicBrainzActiveCount = musicBrainzBatches.filter((batch) => !batch.finished_at).length;
+  const activeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.active_count || 0), loadedActiveCount)
-    : loadedActiveCount;
-  const terminalCount = hasAuthoritativeCounts
+    : loadedActiveCount) + musicBrainzActiveCount;
+  const terminalCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
-    : loadedTerminalCount;
-  const badgeCount = hasAuthoritativeCounts
+    : loadedTerminalCount) + musicBrainzBatches.length - musicBrainzActiveCount;
+  const badgeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.total_count || 0), tasks.length)
-    : tasks.length;
+    : tasks.length) + musicBrainzBatches.length;
+  const musicBrainzCards = document.getElementById('musicbrainz-lookup-cards');
   if (summary) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
@@ -35179,6 +35852,15 @@ function renderCoverLookupDrawer({
     body.classList?.toggle('is-clearing', clearInProgress);
     body.setAttribute?.('aria-busy', String(clearInProgress));
     body.inert = clearInProgress;
+  }
+  if (musicBrainzCards) {
+    musicBrainzCards.hidden = !state.coverLookup.drawerOpen || !musicBrainzBatches.length;
+    // Repainted only when a card changed, so a pressed or focused card survives cover polling.
+    const markup = musicBrainzCards.hidden ? '' : musicBrainzBatches.map(buildMusicBrainzLookupCardHtml).join('');
+    if (renderedMusicBrainzCardMarkup !== markup) {
+      musicBrainzCards.innerHTML = markup;
+      renderedMusicBrainzCardMarkup = markup;
+    }
   }
   if (!state.coverLookup.drawerOpen) {
     body.innerHTML = '';
@@ -35212,7 +35894,9 @@ function renderCoverLookupDrawer({
                 <span class="cover-lookup-task-loading-line"></span>
               </span>
             </div>`
-          : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
+          : musicBrainzBatches.length
+            ? ''
+            : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
       state.coverLookup.drawerRenderedTerminalSignatures = {};
     }
     syncCoverLookupElapsedTimer();
@@ -35318,20 +36002,18 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
     const coverMarkup = coverUrl
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
-    return `
-      <div class="cover-lookup-task-card ${taskStateClass}">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
-          ${coverMarkup}
-          <span class="cover-lookup-task-copy">
-            <span class="cover-lookup-task-title">${escapeHtml(albumTitle)}</span>
-            <span class="cover-lookup-task-byline">${escapeHtml(albumByline)}</span>
-            <span class="cover-lookup-task-meta">
-              <span class="cover-lookup-task-status-label ${taskStateClass}">${escapeHtml(statusLabel)}</span>
-              <span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
-            </span>
-          </span>
-        </div>
-      <div class="cover-lookup-task-actions">
+    return buildNotificationTaskCardHtml({
+      kind: 'cover',
+      stateClass: taskStateClass,
+      openAttributes: `data-open-cover-lookup-task="${escapeHtml(task.id || '')}"`,
+      openLabel,
+      coverHtml: coverMarkup,
+      subject: albumTitle,
+      byline: albumByline,
+      statusLabel,
+      elapsedHtml: `<span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>`,
+      progress,
+      actionsHtml: `
         ${status === 'failed' && task?.album_payload
           ? ButtonComponent.renderActionButton({
             icon: 'refresh',
@@ -35360,10 +36042,8 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
               attributes: { 'data-clear-cover-lookup-task': task.id || '' },
             })
             : ''}
-      </div>
-      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
-      </div>
-    `;
+      `,
+    });
   }).join('');
   const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
   const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
@@ -35392,6 +36072,29 @@ function renderCoverLookupDrawerScrollWindow() {
     state.coverLookup.drawerRenderedTerminalSignatures || {},
     buildCoverLookupDrawerTerminalSignatures(visibleTasks),
   );
+}
+
+// One notification card for every kind: its kind is its title (owner, 2026-11-16), and the
+// second line names what it is about (the album) before the rest of its byline.
+const NOTIFICATION_CARD_TITLES = { cover: 'Cover lookups', musicbrainz: 'MusicBrainz lookup' };
+
+function buildNotificationTaskCardHtml({
+  kind, stateClass, openAttributes, openLabel, coverHtml, subject = '', byline = '', statusLabel, elapsedHtml,
+  actionsHtml, progress,
+}) {
+  const title = NOTIFICATION_CARD_TITLES[kind];
+  const secondLine = [subject, byline].filter(Boolean).join(' · ');
+  // No indentation inside the markup: the drawer repaints up to 60 cards per frame.
+  return `<div class="cover-lookup-task-card ${stateClass}">`
+    + `<div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" ${openAttributes}>`
+    + `${coverHtml}<span class="cover-lookup-task-copy">`
+    + `<span class="cover-lookup-task-title">${escapeHtml(title)}</span>`
+    + `<span class="cover-lookup-task-byline">${escapeHtml(secondLine)}</span>`
+    + `<span class="cover-lookup-task-meta"><span class="cover-lookup-task-status-label ${stateClass}">${escapeHtml(statusLabel)}</span>${elapsedHtml}</span>`
+    + '</span></div>'
+    + `<div class="cover-lookup-task-actions">${actionsHtml}</div>`
+    + `<div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>`
+    + '</div>';
 }
 
 async function clearCompletedCoverLookupTasks() {
@@ -37441,6 +38144,792 @@ async function saveCoverFromLookup() {
 
 // END js/runtime/cover-lookup-modal-and-drawer.js
 
+// BEGIN js/runtime/musicbrainz-lookups.js
+
+// The owner's manual MusicBrainz lookups (Delivery 2, S5). The album menu and Problematic
+// Files queue or search one artist or album; each batch is one "MusicBrainz lookup" card in
+// the notification drawer (the cover-lookup card component), and opening it shows the
+// results popup.
+const MUSICBRAINZ_LOOKUP_REFRESH_MS = { running: 10000, queued: 60000, idle: 300000 };
+const musicBrainzLookups = { batches: [], queuedCount: 0, signature: '', loadedAt: 0, promise: null };
+
+function canRequestMusicBrainzLookups() {
+  return state.status?.allowed_actions?.['catalogue.enrichment.request'] === true;
+}
+
+function getMusicBrainzLookupBatches() {
+  return musicBrainzLookups.batches;
+}
+
+// Piggybacks on the status poll: soon while a batch runs, every minute while lookups wait.
+function refreshMusicBrainzLookupNotifications({ force = false } = {}) {
+  if (!canRequestMusicBrainzLookups()) return Promise.resolve(false);
+  if (musicBrainzLookups.promise) return musicBrainzLookups.promise;
+  const interval = musicBrainzLookups.batches.some((batch) => !batch.finished_at)
+    ? MUSICBRAINZ_LOOKUP_REFRESH_MS.running
+    : musicBrainzLookups.queuedCount ? MUSICBRAINZ_LOOKUP_REFRESH_MS.queued : MUSICBRAINZ_LOOKUP_REFRESH_MS.idle;
+  if (!force && Date.now() - musicBrainzLookups.loadedAt < interval) return Promise.resolve(false);
+  musicBrainzLookups.promise = fetch('/api/musicbrainz/lookups', { headers: { Accept: 'application/json' } })
+    .then(async (response) => {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return false;
+      const batches = Array.isArray(payload.batches) ? payload.batches : [];
+      musicBrainzLookups.queuedCount = Array.isArray(payload.queued) ? payload.queued.length : 0;
+      const signature = JSON.stringify(batches);
+      if (signature === musicBrainzLookups.signature) return false;
+      musicBrainzLookups.signature = signature;
+      musicBrainzLookups.batches = batches;
+      if (typeof renderCoverLookupDrawer === 'function') renderCoverLookupDrawer();
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      musicBrainzLookups.loadedAt = Date.now();
+      musicBrainzLookups.promise = null;
+    });
+  return musicBrainzLookups.promise;
+}
+
+async function requestMusicBrainzLookup({ targetKind, mode, albumKey = '', localArtistId = null }) {
+  const target = albumKey ? { album_key: String(albumKey) } : { local_artist_id: Number(localArtistId) };
+  try {
+    const response = await fetch('/api/musicbrainz/lookups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ target_kind: targetKind, mode, ...target }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.detail || 'MusicBrainz lookup failed. Try again shortly.');
+    const subject = targetKind === 'artist' ? 'artist' : 'album';
+    showToast(mode === 'search'
+      ? `Searching MusicBrainz for the ${subject}. The result appears in notifications.`
+      : `MusicBrainz lookup for the ${subject} queued. It starts within an hour, or with the next MusicBrainz sync.`,
+    'info', 3200);
+    void refreshMusicBrainzLookupNotifications({ force: true });
+    return payload;
+  } catch (error) {
+    showToast(error?.message || 'MusicBrainz lookup failed. Try again shortly.', 'error', 3200);
+    return null;
+  }
+}
+
+// Album menu (F): the queue items always; "Search …" only for what has no MBID yet, once
+// the server says so. The menu is the shared album-card menu.
+function buildAlbumMenuMusicBrainzItems() {
+  if (!canRequestMusicBrainzLookups()) return [];
+  return [
+    '<div class="account-menu-separator" role="separator"></div>',
+    '<button type="button" class="album-card-context-menu-item" data-album-card-action="musicbrainz-queue-artist">Queue MusicBrainz lookup for the artist</button>',
+    '<button type="button" class="album-card-context-menu-item" data-album-card-action="musicbrainz-queue-album">Queue MusicBrainz lookup for the album</button>',
+  ];
+}
+
+async function appendAlbumMenuMusicBrainzSearchItems(menu, albumKey) {
+  if (!canRequestMusicBrainzLookups() || !albumKey) return;
+  try {
+    const response = await fetch(`/api/musicbrainz/lookups/target?album_key=${encodeURIComponent(albumKey)}`,
+      { headers: { Accept: 'application/json' } });
+    const target = response.ok ? (await response.json())?.target : null;
+    if (!target || menu.hidden || menu.dataset.albumKey !== albumKey) return;
+    const items = [
+      target.artist_has_mbid ? '' : '<button type="button" class="album-card-context-menu-item" data-album-card-action="musicbrainz-search-artist">Search MusicBrainz for the artist</button>',
+      target.album_has_mbid ? '' : '<button type="button" class="album-card-context-menu-item" data-album-card-action="musicbrainz-search-album">Search MusicBrainz for the album</button>',
+    ].join('');
+    if (items) menu.insertAdjacentHTML('beforeend', items);
+  } catch {
+    // Without the status the menu keeps its queue items.
+  }
+}
+
+const ALBUM_MENU_MUSICBRAINZ_ACTIONS = {
+  'musicbrainz-queue-artist': ['artist', 'queue'],
+  'musicbrainz-queue-album': ['album', 'queue'],
+  'musicbrainz-search-artist': ['artist', 'search'],
+  'musicbrainz-search-album': ['album', 'search'],
+};
+
+function runAlbumMenuMusicBrainzAction(action, album) {
+  const request = ALBUM_MENU_MUSICBRAINZ_ACTIONS[action];
+  if (!request) return false;
+  if (album?.key) void requestMusicBrainzLookup({ targetKind: request[0], mode: request[1], albumKey: album.key });
+  return true;
+}
+
+// Notification card (H1): the shared card; its kind is its title.
+function buildMusicBrainzLookupCardHtml(batch) {
+  const total = Math.max(0, Number(batch.total || 0));
+  const matched = Math.max(0, Number(batch.matched || 0));
+  const notMatched = Math.max(0, Number(batch.not_matched || 0));
+  const running = !batch.finished_at;
+  const single = total === 1;
+  const noun = Number(batch.albums) === total ? 'releases ' : Number(batch.artists) === total ? 'artists ' : '';
+  const byline = single
+    ? [batch.single_title, batch.single_target_kind === 'album' ? batch.single_artist_name : 'Artist'].filter(Boolean).join(' · ')
+    : `${matched} ${noun}matched, ${notMatched} not matched`;
+  const singleMissed = single && batch.single_outcome === 'not_matched';
+  const statusLabel = running
+    ? `Looking up${single ? '' : ` ${matched + notMatched} of ${total}`}`
+    : single ? (singleMissed ? (batch.single_problem_label || 'Not matched') : 'MBID found') : `${total} looked up`;
+  const stateClass = running ? 'is-running' : singleMissed ? 'is-failed' : 'is-completed';
+  const elapsed = formatCoverLookupTaskElapsedLabel({
+    status: running ? 'running' : 'completed', created_at: batch.started_at, finished_at: batch.finished_at,
+  });
+  return buildNotificationTaskCardHtml({
+    kind: 'musicbrainz',
+    stateClass,
+    openAttributes: `data-open-musicbrainz-lookup-batch="${escapeHtml(batch.batch_id)}"`,
+    openLabel: `Open ${NOTIFICATION_CARD_TITLES.musicbrainz} results: ${byline}`,
+    coverHtml: '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>',
+    byline,
+    statusLabel,
+    elapsedHtml: elapsed ? `<span class="cover-lookup-task-elapsed ${running ? 'is-active' : stateClass}">${escapeHtml(elapsed)}</span>` : '',
+    actionsHtml: running ? '' : ButtonComponent.renderActionButton({
+      icon: 'delete', semantic: 'destructive', ariaLabel: 'Delete notification', title: 'Delete notification',
+      className: 'cover-lookup-task-clear', attributes: { 'data-dismiss-musicbrainz-lookup-batch': String(batch.batch_id) },
+    }),
+    progress: running ? Math.round(((matched + notMatched) / Math.max(1, total)) * 100) : 100,
+  });
+}
+
+async function dismissMusicBrainzLookupBatch(batchId) {
+  const previous = musicBrainzLookups.batches;
+  musicBrainzLookups.batches = previous.filter((batch) => String(batch.batch_id) !== String(batchId));
+  renderCoverLookupDrawer({ preserveInteraction: false });
+  try {
+    const response = await fetch(`/api/musicbrainz/lookups/batches/${encodeURIComponent(batchId)}/dismiss`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: '{}',
+    });
+    if (!response.ok) throw new Error('Failed to delete notification.');
+    musicBrainzLookups.signature = '';
+  } catch (error) {
+    musicBrainzLookups.batches = previous;
+    renderCoverLookupDrawer({ preserveInteraction: false });
+    showToast(error.message, 'error', 2800);
+  }
+}
+
+// Results popup (H2): the app's modal header and close button; rows are navigation-tree
+// items, as in Problematic Files.
+function buildMusicBrainzLookupResultRowHtml(item) {
+  const isAlbum = item.target_kind === 'album';
+  const title = (isAlbum ? item.album_title : item.artist_name) || 'Unknown';
+  const loadedAlbum = isAlbum && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(item.album_key) : null;
+  const artworkLabel = isAlbum ? `Artwork for ${title}` : `Artist ${title}`;
+  const artworkHtml = loadedAlbum
+    ? buildUtilityAlbumArtbox(loadedAlbum, { label: artworkLabel })
+    : buildAlbumArtboxHtml({ state: 'missing', label: artworkLabel });
+  const mbid = String(item.result_mbid || '');
+  const result = item.outcome === 'matched'
+    ? `<span class="musicbrainz-lookup-result-mbid">${mbid ? `MBID ${escapeHtml(`${mbid.slice(0, 8)}…${mbid.slice(-4)}`)}` : 'MBID per album'}</span>`
+    : item.outcome === 'not_matched'
+      ? buildAlertLabelHtml({ severity: 'warning', message: item.problem_label || 'Not matched' })
+      : '<span class="musicbrainz-lookup-result-mbid">Looking up…</span>';
+  const attributes = item.outcome === 'matched' && mbid
+    ? { 'data-open-musicbrainz-url': `https://musicbrainz.org/${item.result_entity || 'artist'}/${mbid}` }
+    : item.outcome === 'not_matched'
+      ? { 'data-open-musicbrainz-lookup-problem': String(item.problem_occurrence_id || '') }
+      : {};
+  return window.NavigationTree.renderItem({
+    variant: 'wide', action: true, key: String(item.request_id), label: title,
+    subtitle: isAlbum ? item.artist_name || '' : 'Artist', year: isAlbum && item.year ? String(item.year) : '',
+    artworkHtml, artworkLabel, count: null, attributes,
+    className: 'musicbrainz-lookup-result', trailingHtml: `<span class="musicbrainz-lookup-result-detail">${result}</span>`,
+  });
+}
+
+function renderMusicBrainzLookupResults(batch) {
+  const modal = document.getElementById('musicbrainz-lookup-results-modal');
+  if (!modal) return;
+  const matched = Number(batch.matched || 0);
+  const notMatched = Number(batch.not_matched || 0);
+  modal.querySelector('#musicbrainz-lookup-results-summary').textContent = [
+    `${matched} matched, ${notMatched} not matched.`,
+    notMatched ? 'Not matched items are in Problematic Files.' : '',
+    batch.finished_at ? '' : 'Still looking up…',
+  ].filter(Boolean).join(' ');
+  modal.querySelector('#musicbrainz-lookup-results-list').innerHTML = (batch.items || [])
+    .map(buildMusicBrainzLookupResultRowHtml).join('');
+}
+
+async function openMusicBrainzLookupResults(batchId) {
+  const modal = document.getElementById('musicbrainz-lookup-results-modal');
+  if (!modal) return;
+  try {
+    const response = await fetch(`/api/musicbrainz/lookups/batches/${encodeURIComponent(batchId)}`,
+      { headers: { Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.batch) throw new Error(payload?.detail || 'Lookup results are unavailable.');
+    renderMusicBrainzLookupResults(payload.batch);
+    bindOverlayPointerOrigin(modal);
+    modal.hidden = false;
+    document.body.classList.add('modal-open');
+    modal.querySelector('[data-close-musicbrainz-lookup-results]')?.focus?.();
+  } catch (error) {
+    showToast(error.message, 'error', 2800);
+  }
+}
+
+function closeMusicBrainzLookupResults() {
+  const modal = document.getElementById('musicbrainz-lookup-results-modal');
+  if (!modal || modal.hidden) return false;
+  modal.hidden = true;
+  const otherModalOpen = ['track-modal', 'utility-modal', 'image-lightbox']
+    .some((id) => document.getElementById(id)?.hidden === false);
+  if (!otherModalOpen) document.body.classList.remove('modal-open');
+  return true;
+}
+
+function openProblematicFilesFromMusicBrainzLookup(occurrenceId = '') {
+  closeMusicBrainzLookupResults();
+  state.coverLookup.drawerOpen = false;
+  renderCoverLookupDrawer();
+  if (occurrenceId) {
+    void openMusicBrainzArtistProblem(occurrenceId);
+    return;
+  }
+  setUtilityActiveTab('problematic-files');
+  openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: true });
+}
+
+function handleMusicBrainzLookupEvent(event) {
+  const target = event.target;
+  if (event.type === 'keydown') {
+    if (event.key === 'Escape' && closeMusicBrainzLookupResults()) {
+      event.preventDefault();
+      return true;
+    }
+    if (event.key !== 'Enter' && event.key !== ' ') return false;
+  } else if (event.type !== 'click') {
+    return false;
+  }
+  const albumLookup = target?.closest?.('[data-musicbrainz-lookup-album]');
+  if (albumLookup && event.type === 'click') {
+    event.preventDefault();
+    void requestMusicBrainzLookup({
+      targetKind: 'album', mode: albumLookup.dataset.musicbrainzLookup,
+      albumKey: albumLookup.dataset.musicbrainzLookupAlbum,
+    });
+    return true;
+  }
+  const dismiss = target?.closest?.('[data-dismiss-musicbrainz-lookup-batch]');
+  if (dismiss && event.type === 'click') {
+    event.preventDefault();
+    event.stopPropagation();
+    void dismissMusicBrainzLookupBatch(dismiss.getAttribute('data-dismiss-musicbrainz-lookup-batch'));
+    return true;
+  }
+  const open = target?.closest?.('[data-open-musicbrainz-lookup-batch]');
+  if (open) {
+    event.preventDefault();
+    void openMusicBrainzLookupResults(open.getAttribute('data-open-musicbrainz-lookup-batch'));
+    return true;
+  }
+  if (event.type !== 'click') return false;
+  const modal = document.getElementById('musicbrainz-lookup-results-modal');
+  if (target?.closest?.('[data-close-musicbrainz-lookup-results]')
+      || (modal && typeof overlayClickStartedOnOverlay === 'function' && overlayClickStartedOnOverlay(modal, event))) {
+    event.preventDefault();
+    closeMusicBrainzLookupResults();
+    return true;
+  }
+  const problem = target?.closest?.('[data-open-musicbrainz-lookup-problem]');
+  if (problem || target?.closest?.('[data-open-problematic-files-from-lookup]')) {
+    event.preventDefault();
+    openProblematicFilesFromMusicBrainzLookup(problem?.getAttribute('data-open-musicbrainz-lookup-problem') || '');
+    return true;
+  }
+  return false;
+}
+
+// END js/runtime/musicbrainz-lookups.js
+
+// BEGIN js/runtime/musicbrainz-corrections.js
+
+// MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4).
+// Problematic Files shows an album's "Data Correction Needed" label and
+// its changes. Trivial ones apply to the display automatically ("Applied automatically", Undo per
+// album); the rest wait for approval. Display only: nothing here writes tags (Bulk Correction needs PR 65).
+const MUSICBRAINZ_DATA_CORRECTION_LABEL = 'Data Correction Needed';
+const EDITS_QUEUE_TABS = { 'data-correction': 'Data Correction', 'musicbrainz-lookup': 'MusicBrainz Look Up' };
+const editsQueue = { tab: 'data-correction', section: 'applied', kinds: null, pages: {}, openKind: null,
+  settings: null, lookups: null, queueStartsAt: null, loading: null, failed: false, lookupsFailed: false, busy: false };
+
+// Owner 2026-11-16: albums listed only for a correction show only under the "Data Correction
+// Needed" filter; true shows them by default.
+const MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT = false;
+
+function isMusicBrainzCorrectionProblem(item) {
+  return item?.entity_kind === 'musicbrainz_correction';
+}
+
+function musicBrainzCorrectionRowsWanted(selectedFilters = state.utility.selectedProblemFilters || []) {
+  const normalize = typeof normalizeProblemFilterReason === 'function' ? normalizeProblemFilterReason : (reason) => reason;
+  return MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT
+    || selectedFilters.some((reason) => normalize(reason) === normalize(MUSICBRAINZ_DATA_CORRECTION_LABEL));
+}
+
+function isMusicBrainzCorrectionRowShown(item, selectedFilters = state.utility.selectedProblemFilters || []) {
+  return !isMusicBrainzCorrectionProblem(item) || musicBrainzCorrectionRowsWanted(selectedFilters);
+}
+
+// Albums listed only for a correction are not in the Problematic Files response; they come
+// in pages from /api/musicbrainz/corrections/albums once they are wanted, the next page as
+// the list scrolls near its end. A reloaded list (without them) starts again from page 1.
+// Paging waits for the complete Problematic Files list: its first bounded page is replaced
+// moments later, and rows appended to it would be dropped and fetched again.
+const MUSICBRAINZ_CORRECTION_PAGE_SIZE = 100;
+const MUSICBRAINZ_CORRECTION_PAGE_AHEAD = 20;
+const musicBrainzCorrectionPages = { keys: new Set(), nextOffset: 0, loading: null };
+
+function syncMusicBrainzCorrectionRows() {
+  if (state.utility.problematicFilesComplete !== true) return;
+  const pages = musicBrainzCorrectionPages;
+  const items = state.utility.problematicFiles || [];
+  if (pages.keys.size && !pages.loading && !items.some((item) => pages.keys.has(item?.key))) {
+    pages.keys = new Set();
+    pages.nextOffset = 0;
+  }
+  if (pages.nextOffset === 0 && !pages.keys.size) void loadNextMusicBrainzCorrectionPage();
+}
+
+function loadMoreMusicBrainzCorrectionRows(renderedEnd, count) {
+  if (renderedEnd >= count - MUSICBRAINZ_CORRECTION_PAGE_AHEAD) void loadNextMusicBrainzCorrectionPage();
+}
+
+function loadNextMusicBrainzCorrectionPage() {
+  const pages = musicBrainzCorrectionPages;
+  if (pages.loading || pages.nextOffset === null || state.utility.problematicFilesComplete !== true
+      || !musicBrainzCorrectionRowsWanted() || !(Number(state.utility.musicBrainzCorrectionAlbumCount) > 0)) {
+    return pages.loading || Promise.resolve(false);
+  }
+  const offset = pages.nextOffset;
+  pages.loading = fetch(`/api/musicbrainz/corrections/albums?offset=${offset}&limit=${MUSICBRAINZ_CORRECTION_PAGE_SIZE}`,
+    { headers: { Accept: 'application/json' } })
+    .then(async (response) => {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !Array.isArray(payload.items)) return false;
+      const items = state.utility.problematicFiles || [];
+      // An album already listed keeps its own row, labelled.
+      const listed = new Set(items.map((item) => item?.musicbrainz_correction?.album_key || '').filter(Boolean));
+      const rows = payload.items.filter((row) => !listed.has(row.musicbrainz_correction?.album_key));
+      rows.forEach((row) => pages.keys.add(row.key));
+      pages.nextOffset = payload.next_offset ?? null;
+      state.utility.problematicFiles = [...items, ...rows];
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      pages.loading = null;
+      if (state.utility.activeTab === 'problematic-files') renderProblematicFiles({ preserveProblematicTree: true });
+    });
+  return pages.loading;
+}
+
+function canReviewMusicBrainzCorrections() {
+  return window.AlbumHavenCapabilities?.allows?.('library.metadata_matches.review') === true;
+}
+
+// The kinds, how they are named, and which are
+// approved per album only (artist changes, and albums sent to review whole).
+const MUSICBRAINZ_CORRECTION_KINDS = Object.freeze({
+  case: 'Case only', spacing: 'Spacing only', case_spacing: 'Case and spacing', punctuation: 'Punctuation and symbols',
+  accents: 'Accents', small_edit: 'Small edit (2 letters or fewer)', edition_suffix: 'Edition or version suffix',
+  track_title: 'Track title: substantial change', album_title: 'Album title: substantial change',
+  track_artist_renamed: 'Track artist: a different name', track_artist_joined: 'Track artist: featured or joined credit',
+  album_artist_renamed: 'Album artist: a different name', album_artist_joined: 'Album artist: featured or joined credit',
+  whole_album: 'Whole albums to review',
+});
+const MUSICBRAINZ_PER_ALBUM_ONLY = new Set(['track_artist_renamed', 'track_artist_joined', 'album_artist_renamed',
+  'album_artist_joined', 'whole_album']);
+const MUSICBRAINZ_ROW_STATES = Object.freeze({
+  applied: 'Applied', undone: 'Undone', pending: 'Waiting for approval', skipped: 'Skipped' });
+
+function describeMusicBrainzCorrection(correction) {
+  const auto = Number(correction.auto_count || 0);
+  const review = Number(correction.review_count || 0);
+  if (correction.review_whole) {
+    return 'Many titles differ from MusicBrainz, so nothing was applied automatically: review the whole album in Settings → Edits Queue.';
+  }
+  return [
+    auto ? `${auto} change${auto === 1 ? ' was' : 's were'} applied automatically (display only; your files are unchanged).` : '',
+    review ? `${review} change${review === 1 ? ' waits' : 's wait'} for your approval in Settings → Edits Queue.` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function buildMusicBrainzCorrectionTableHtml(rows, id = 'musicbrainz-data-correction') {
+  return buildUtilityCompactTable({
+    id,
+    ariaLabel: 'Data correction',
+    columns: 'minmax(140px,.8fr) minmax(160px,1fr) minmax(160px,1fr) minmax(110px,.6fr)',
+    columnsConfig: [
+      { key: 'tag', label: 'Tag' }, { key: 'now', label: 'In your files' }, { key: 'mb', label: 'MusicBrainz' },
+      { key: 'state', label: 'Status' },
+    ],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', selection: 'none',
+    rows: rows.map((row, index) => ({
+      key: `${row.field}-${row.disc_number}-${row.track_number}-${index}`,
+      cells: {
+        tag: escapeHtml(row.label),
+        now: escapeHtml(row.current_value),
+        mb: buildAlertLabelHtml({ severity: 'info', message: row.proposed_value }),
+        state: escapeHtml(MUSICBRAINZ_ROW_STATES[row.state] || ''),
+      },
+    })),
+  });
+}
+
+// The label, what happened, and the rows. Problematic Files has no action of its own: changes
+// apply automatically or wait in Settings → Edits Queue (no "Add to queue").
+function buildMusicBrainzCorrectionHtml(album, { heading = false } = {}) {
+  const correction = album.musicbrainz_correction;
+  const rows = Array.isArray(correction?.corrections) ? correction.corrections : [];
+  if (!rows.length) return '';
+  const summary = { ...correction, auto_count: rows.filter((row) => row.mode === 'auto').length,
+    review_count: rows.filter((row) => row.mode === 'review').length };
+  return `<div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: 'warning', message: MUSICBRAINZ_DATA_CORRECTION_LABEL })}</div>
+    ${heading ? '<h4 class="utility-detail-section-title">Detected problems</h4>' : ''}
+    <p class="utility-detail-meta">${escapeHtml(describeMusicBrainzCorrection(summary))}</p>
+    <div class="utility-detected-table">${buildMusicBrainzCorrectionTableHtml(rows)}</div>`;
+}
+
+// An album listed only because it needs a correction: the row's facts, then its stored rows,
+// loaded when it is opened.
+function buildMusicBrainzCorrectionProblemDetail(item) {
+  if (item.musicbrainz_correction_failed) {
+    return buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load this data correction.' });
+  }
+  if (!Array.isArray(item.musicbrainz_correction?.corrections)) {
+    return '<div class="utility-empty-state">Loading the data correction…</div>';
+  }
+  const title = String(item.name || 'Unknown Album');
+  return `<div class="utility-detail-header">
+      <div class="utility-detail-cover">${buildUtilityAlbumArtbox(item, { label: `Album cover for ${title}` })}</div>
+      <div class="utility-detail-summary">
+        <h3 class="utility-detail-title">${escapeHtml(title)}</h3>
+        <div class="utility-detail-meta">${escapeHtml(item.album_artist || 'Unknown Artist')}</div>
+        <div class="utility-detail-meta">Year: ${escapeHtml(item.year ?? 'Unknown')}</div>
+      </div>
+    </div>
+    ${buildMusicBrainzCorrectionHtml(item, { heading: true })}`;
+}
+
+async function loadMusicBrainzCorrectionDetail(item) {
+  if (!isMusicBrainzCorrectionProblem(item) || item.musicbrainz_correction_loading) return;
+  item.musicbrainz_correction_loading = true;
+  try {
+    const response = await fetch(`/api/musicbrainz/corrections?album_key=${encodeURIComponent(item.musicbrainz_correction.album_key)}`,
+      { headers: { Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.correction) throw new Error('unavailable');
+    Object.assign(item, { musicbrainz_correction: { ...item.musicbrainz_correction, ...payload.correction },
+      musicbrainz_correction_failed: false });
+  } catch {
+    item.musicbrainz_correction_failed = true;
+  } finally {
+    item.musicbrainz_correction_loading = false;
+  }
+  if (state.utility.activeTab === 'problematic-files') renderProblematicFiles({ preserveProblematicTree: true });
+}
+
+function formatEditsQueueTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return date.toDateString() === new Date().toDateString()
+    ? `today ${time}` : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+// The album-versions list (E1/E2): cover, name and one line, then the entry's own actions.
+function buildEditsQueueEntryHtml({ title, subtitle, album = null, attributes = {}, actionsHtml = '', bodyHtml = '' }) {
+  // Responses name covers by reference (cover_ref), never by path.
+  const cover = album?.cover_ref
+    ? buildUtilityAlbumArtbox(album, { label: `Artwork for ${title}` })
+    : '<span class="version-picker-option-cover-placeholder">No cover</span>';
+  return `<div class="version-picker-option edits-queue-entry" ${Object.entries(attributes)
+    .map(([name, value]) => `${name}="${escapeHtml(value)}"`).join(' ')}>
+    <span class="version-picker-option-cover">${cover}</span>
+    <span class="version-picker-option-meta">
+      <span class="version-picker-option-name">${escapeHtml(title)}</span>
+      <span class="version-picker-option-subtitle">${escapeHtml(subtitle)}</span>
+      ${bodyHtml}
+    </span>
+    <span class="version-picker-option-actions">${actionsHtml}</span>
+  </div>`;
+}
+
+function buildEditsQueueAlbumHtml(album, section, kind) {
+  const busy = editsQueue.busy || !canReviewMusicBrainzCorrections();
+  const button = (action, label, variant = 'secondary') => ButtonComponent.renderButton({
+    label, variant, size: 'small', disabled: busy,
+    attributes: { 'data-edits-queue-album-action': action, 'data-edits-queue-album': album.album_key } });
+  const applied = album.rows.some((row) => row.state === 'applied');
+  const actions = section === 'applied'
+    ? (applied ? button('undo', 'Undo') : '')
+    : `${button('approve', 'Approve', 'primary')}${button('skip', 'Skip')}`;
+  return buildEditsQueueEntryHtml({
+    title: album.album_title || 'Unknown Album', album,
+    subtitle: [album.artist_name, album.year].filter(Boolean).join(' · '),
+    attributes: { 'data-edits-queue-album-row': album.album_key },
+    actionsHtml: actions,
+    bodyHtml: buildMusicBrainzCorrectionTableHtml(album.rows, `edits-queue-${section}-${kind}-${album.album_key}`),
+  });
+}
+
+function buildEditsQueueKindHtml(section, group) {
+  const open = editsQueue.openKind === group.kind;
+  const page = editsQueue.pages[`${section}:${group.kind}`];
+  const approveKind = section === 'review' && !MUSICBRAINZ_PER_ALBUM_ONLY.has(group.kind) && canReviewMusicBrainzCorrections()
+    ? ButtonComponent.renderButton({ label: 'Approve kind', variant: 'primary', size: 'small', disabled: editsQueue.busy,
+      attributes: { 'data-edits-queue-approve-kind': group.kind } }) : '';
+  const albums = open && page
+    ? `<div class="version-picker-list">${page.albums.map((album) => buildEditsQueueAlbumHtml(album, section, group.kind)).join('')}</div>
+      ${page.nextOffset !== null ? ButtonComponent.renderButton({ label: 'Show more', disabled: editsQueue.busy,
+    attributes: { 'data-edits-queue-more': group.kind } }) : ''}`
+    : open ? '<div class="utility-empty-state">Loading…</div>' : '';
+  return `<section class="edits-queue-kind" data-edits-queue-kind-group="${escapeHtml(group.kind)}">
+    <div class="edits-queue-kind-heading">
+      ${ButtonComponent.renderButton({ label: `${MUSICBRAINZ_CORRECTION_KINDS[group.kind] || group.kind} · ${group.albums} album${group.albums === 1 ? '' : 's'}, ${group.rows} change${group.rows === 1 ? '' : 's'}`,
+    quiet: true, attributes: { 'data-edits-queue-open-kind': group.kind, 'aria-expanded': String(open) } })}
+      ${approveKind}
+    </div>
+    ${albums}
+  </section>`;
+}
+
+function buildEditsQueueCorrectionsHtml() {
+  const settings = editsQueue.settings || {};
+  const nextRun = settings.auto_submit_bulks ? formatEditsQueueTime(settings.next_run_at) : '';
+  const section = editsQueue.section;
+  const groups = editsQueue.kinds || [];
+  const sections = `<div class="in-page-tabs edits-queue-sections" role="tablist" aria-label="Data Correction">${[
+    ['applied', 'Applied automatically'], ['review', 'Waiting for approval']]
+    .map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === section}" data-edits-queue-section="${key}">${label}</button>`).join('')}</div>`;
+  const intro = section === 'applied'
+    ? 'Trivial changes (case, spacing, punctuation, accents, small typos) are shown in place of your tags automatically. Your files are unchanged until Bulk Correction writes them. Undo an album to show its tags again.'
+    : 'These changes wait for you. Approve a whole kind, or approve or skip album by album; artist changes are approved per album only.';
+  return `${sections}<p class="utility-detail-meta">${escapeHtml(intro)}</p>
+    <div class="utility-detected-actions edits-queue-controls">
+      <div class="edits-queue-auto-submit">
+        ${buildGallerySwitchHtml({ id: 'edits-queue-auto-submit', label: 'Auto submit bulks',
+    checked: settings.auto_submit_bulks === true, disabled: editsQueue.busy || !canReviewMusicBrainzCorrections() })}
+        <span class="utility-detail-meta">${escapeHtml(settings.auto_submit_bulks
+    ? `Runs every hour${nextRun ? `. Next run: ${nextRun}` : ''}.` : 'Off: Bulk Correction runs only when you click it.')}</span>
+      </div>
+      <span title="Bulk Correction arrives soon.">${ButtonComponent.renderButton({
+    label: 'Bulk Correction', variant: 'primary', disabled: true, title: 'Bulk Correction arrives soon.' })}</span>
+    </div>
+    ${groups.length ? groups.map((group) => buildEditsQueueKindHtml(section, group)).join('')
+    : `<div class="utility-empty-state">${section === 'applied' ? 'Nothing has been applied automatically.' : 'Nothing is waiting for approval.'}</div>`}`;
+}
+
+function buildEditsQueueLookupsHtml() {
+  const items = editsQueue.lookups || [];
+  const startsAt = formatEditsQueueTime(editsQueue.queueStartsAt);
+  const intro = items.length
+    ? 'Queued look ups start together an hour after the oldest was added. When you run Library → MusicBrainz sync, they go first.'
+    : 'No MusicBrainz look ups are waiting. Queue one from an album’s menu or from Problematic Files.';
+  return `<p class="utility-detail-meta">${escapeHtml(intro)}</p>
+    <div class="version-picker-list">${items.map((item) => {
+    const album = item.target_kind === 'album';
+    const facts = album ? ['Release', item.artist_name, item.year] : ['Artist'];
+    const when = [`queued ${formatEditsQueueTime(item.requested_at)}`, startsAt ? `starts by itself at ${startsAt}` : '']
+      .filter(Boolean).join(', ');
+    const cover = album && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(item.album_key) : null;
+    const title = (album ? item.album_title : item.artist_name) || 'Unknown';
+    const entry = { 'data-edits-queue-lookup': String(item.request_id) };
+    return buildEditsQueueEntryHtml({
+      title, album: cover, subtitle: `${facts.filter(Boolean).join(' · ')} — ${when}`,
+      attributes: { ...entry, 'data-open-edits-queue-lookup': '1' },
+      actionsHtml: `${ButtonComponent.renderActionButton({ ariaLabel: `Open ${title}`, title: 'Open', icon: 'external',
+        presentation: 'bare', attributes: { ...entry, 'data-open-edits-queue-lookup': '1' } })}
+        ${ButtonComponent.renderActionButton({ ariaLabel: `Remove ${title} from the queue`, title: 'Remove from queue',
+        icon: 'delete', semantic: 'destructive', disabled: editsQueue.busy,
+        attributes: { ...entry, 'data-remove-edits-queue-lookup': '1' } })}`,
+    });
+  }).join('')}</div>`;
+}
+
+function buildEditsQueueHtml() {
+  const tabs = `<div class="in-page-tabs" role="tablist" aria-label="Edits Queue">${Object.entries(EDITS_QUEUE_TABS)
+    .map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === editsQueue.tab}" data-edits-queue-tab="${key}">${escapeHtml(label)}</button>`)
+    .join('')}</div>`;
+  // Each tab stands alone: MusicBrainz look ups need the enrichment service, data corrections do not.
+  const corrections = editsQueue.tab === 'data-correction';
+  let body;
+  if (corrections ? editsQueue.failed : editsQueue.lookupsFailed) {
+    body = buildOnPageAlertHtml({ severity: 'error', title: 'Edits Queue unavailable', message: 'Unable to load the Edits Queue. Try again shortly.' });
+  } else if (!(corrections ? editsQueue.kinds : editsQueue.lookups)) {
+    body = '<div class="utility-empty-state">Loading the Edits Queue…</div>';
+  } else {
+    body = corrections ? buildEditsQueueCorrectionsHtml() : buildEditsQueueLookupsHtml();
+  }
+  return `<div class="edits-queue">${tabs}<div class="edits-queue-body">${body}</div></div>`;
+}
+
+function renderUtilityEditsQueue() {
+  const els = getUtilityModalElements();
+  if (!els.overlay || !els.detail) return;
+  if (els.sidebarLabel) els.sidebarLabel.textContent = 'Edits Queue';
+  if (els.list) els.list.innerHTML = '';
+  els.detail.innerHTML = buildEditsQueueHtml();
+}
+
+const readEditsQueueJson = (url) => fetch(url, { headers: { Accept: 'application/json' } }).then(async (response) => {
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.detail || 'Unavailable');
+  return payload;
+});
+
+async function loadUtilityEditsQueue(force = false) {
+  if (editsQueue.loading) return editsQueue.loading;
+  if (!force && editsQueue.kinds && editsQueue.lookups) {
+    renderUtilityEditsQueue();
+    return null;
+  }
+  renderUtilityEditsQueue();
+  editsQueue.loading = Promise.allSettled([
+    readEditsQueueJson(`/api/musicbrainz/corrections/edits?section=${editsQueue.section}`),
+    readEditsQueueJson('/api/musicbrainz/lookups'),
+  ])
+    .then(([queue, lookups]) => {
+      editsQueue.failed = queue.status === 'rejected';
+      if (!editsQueue.failed) {
+        editsQueue.kinds = Array.isArray(queue.value.kinds) ? queue.value.kinds : [];
+        editsQueue.settings = queue.value.settings || {};
+        editsQueue.pages = {};
+      }
+      editsQueue.lookupsFailed = lookups.status === 'rejected';
+      if (!editsQueue.lookupsFailed) {
+        editsQueue.lookups = Array.isArray(lookups.value.queued) ? lookups.value.queued : [];
+        editsQueue.queueStartsAt = lookups.value.queue_starts_at || null;
+      }
+    })
+    .finally(() => {
+      editsQueue.loading = null;
+      if (state.utility.activeTab === 'edits-queue') renderUtilityEditsQueue();
+    });
+  const loading = editsQueue.loading;
+  await loading;
+  if (editsQueue.openKind && editsQueue.kinds?.some((group) => group.kind === editsQueue.openKind)) {
+    await loadEditsQueueKindPage(editsQueue.openKind);
+  }
+  return loading;
+}
+
+const EDITS_QUEUE_PAGE_SIZE = 50;
+
+async function loadEditsQueueKindPage(kind, { more = false } = {}) {
+  const key = `${editsQueue.section}:${kind}`;
+  const previous = more ? editsQueue.pages[key] : null;
+  const offset = previous?.nextOffset ?? 0;
+  try {
+    const payload = await readEditsQueueJson(`/api/musicbrainz/corrections/edits/${encodeURIComponent(kind)}?section=${editsQueue.section}&offset=${offset}&limit=${EDITS_QUEUE_PAGE_SIZE}`);
+    editsQueue.pages[key] = { albums: [...(previous?.albums || []), ...(payload.albums || [])],
+      nextOffset: payload.next_offset ?? null };
+  } catch (error) {
+    showToast(error?.message || 'Unable to load these changes.', 'error', 3200);
+  }
+  if (state.utility.activeTab === 'edits-queue') renderUtilityEditsQueue();
+}
+
+async function sendEditsQueueChange(url, options, failure) {
+  editsQueue.busy = true;
+  renderUtilityEditsQueue();
+  try {
+    const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.detail || failure);
+    return payload;
+  } catch (error) {
+    showToast(error?.message || failure, 'error', 3200);
+    return null;
+  } finally {
+    editsQueue.busy = false;
+  }
+}
+
+async function setEditsQueueAutoSubmit(on) {
+  const payload = await sendEditsQueueChange('/api/musicbrainz/corrections/settings',
+    { method: 'PUT', body: JSON.stringify({ auto_submit_bulks: on }) }, 'Auto submit bulks could not be saved.');
+  if (payload?.settings) editsQueue.settings = payload.settings;
+  renderUtilityEditsQueue();
+}
+
+// Undo, approve or skip one album; approve a whole kind (never artist kinds). Remembered.
+async function decideEditsQueueAlbum(action, albumKey) {
+  const done = await sendEditsQueueChange(`/api/musicbrainz/corrections/albums/${action}`,
+    { method: 'POST', body: JSON.stringify({ album_key: albumKey }) }, 'The change could not be saved.');
+  if (done) showToast({ undo: 'Undone: the tags show again.', approve: 'Approved.', skip: 'Skipped.' }[action], 'info', 2400);
+  await loadUtilityEditsQueue(true);
+}
+
+async function approveEditsQueueKind(kind) {
+  if (MUSICBRAINZ_PER_ALBUM_ONLY.has(kind)) return;
+  const done = await sendEditsQueueChange(`/api/musicbrainz/corrections/kinds/${encodeURIComponent(kind)}/approve`,
+    { method: 'POST', body: '{}' }, 'The kind could not be approved.');
+  if (done) showToast(`Approved ${done.decided} change${done.decided === 1 ? '' : 's'}.`, 'info', 2400);
+  await loadUtilityEditsQueue(true);
+}
+
+async function removeEditsQueueLookup(id) {
+  const removed = await sendEditsQueueChange(`/api/musicbrainz/lookups/${encodeURIComponent(id)}`,
+    { method: 'DELETE' }, 'The entry could not be removed.');
+  if (removed && typeof refreshMusicBrainzLookupNotifications === 'function') {
+    void refreshMusicBrainzLookupNotifications({ force: true });
+  }
+  await loadUtilityEditsQueue(true);
+}
+
+// Open: an album in album details; an artist at its Problematic Files entry.
+function openEditsQueueLookup(id) {
+  const item = (editsQueue.lookups || []).find((entry) => String(entry.request_id) === String(id));
+  if (!item) return;
+  if (item.target_kind === 'album') {
+    openTrackModal({ key: item.album_key, name: item.album_title, album_artist: item.artist_name, year: item.year, preview_only: true, tracks: [] });
+  } else if (typeof openMusicBrainzArtistProblem === 'function') {
+    void openMusicBrainzArtistProblem(`musicbrainz-artist:${item.local_artist_id}`);
+  }
+}
+
+function handleMusicBrainzCorrectionEvent(event) {
+  const target = event.target;
+  if (!target?.closest?.('.edits-queue')) return false;
+  const control = (selector) => target.closest(selector);
+  const actions = [
+    ['[data-edits-queue-tab]', (node) => { editsQueue.tab = node.getAttribute('data-edits-queue-tab'); renderUtilityEditsQueue(); }],
+    ['[data-edits-queue-section]', (node) => {
+      editsQueue.section = node.getAttribute('data-edits-queue-section');
+      editsQueue.openKind = null;
+      void loadUtilityEditsQueue(true);
+    }],
+    ['#edits-queue-auto-submit', (node) => { if (!node.disabled) void setEditsQueueAutoSubmit(node.getAttribute('aria-checked') !== 'true'); }],
+    ['[data-edits-queue-open-kind]', (node) => {
+      const kind = node.getAttribute('data-edits-queue-open-kind');
+      editsQueue.openKind = editsQueue.openKind === kind ? null : kind;
+      renderUtilityEditsQueue();
+      if (editsQueue.openKind) void loadEditsQueueKindPage(kind);
+    }],
+    ['[data-edits-queue-more]', (node) => { void loadEditsQueueKindPage(node.getAttribute('data-edits-queue-more'), { more: true }); }],
+    ['[data-edits-queue-approve-kind]', (node) => { void approveEditsQueueKind(node.getAttribute('data-edits-queue-approve-kind')); }],
+    ['[data-edits-queue-album-action]', (node) => {
+      void decideEditsQueueAlbum(node.getAttribute('data-edits-queue-album-action'), node.getAttribute('data-edits-queue-album'));
+    }],
+    ['[data-remove-edits-queue-lookup]', (node) => { if (!node.disabled) void removeEditsQueueLookup(node.getAttribute('data-edits-queue-lookup')); }],
+    ['[data-open-edits-queue-lookup]', (node) => openEditsQueueLookup(node.getAttribute('data-edits-queue-lookup'))],
+  ];
+  for (const [selector, run] of actions) {
+    const node = control(selector);
+    if (node) {
+      event.preventDefault();
+      run(node);
+      return true;
+    }
+  }
+  return false;
+}
+
+// END js/runtime/musicbrainz-corrections.js
+
 // BEGIN js/runtime/tag-editor-and-optimistic-updates.js
 
 let tagEditorCleanupGeneration = 0;
@@ -37688,6 +39177,27 @@ function scheduleTagEditorRenderAfterPaint(tagEditor, els) {
     return;
   }
   scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(render));
+}
+
+// Owner 2026-11-18: files that left the album since it was opened are skipped and left
+// untouched; the save says so in amber, with the files it did write.
+function buildMovedFilesAlertMessage(savedCount, movedFiles) {
+  const count = Math.max(0, Number(savedCount) || 0);
+  return `Saved ${count} ${count === 1 ? 'file' : 'files'}. These files are no longer in this album and were not changed: `
+    + `${[...movedFiles].sort().join(', ')}. Reopen the album to edit them.`;
+}
+
+function buildTagEditCompletionAlert(tagEditAlert, data) {
+  const warnings = (Array.isArray(data?.warnings) ? data.warnings : [])
+    .map((warning) => String(warning || '').trim())
+    .filter(Boolean);
+  const moved = String(tagEditAlert?.movedMessage || '').trim();
+  const hasWarning = Boolean(moved) || warnings.length > 0;
+  return {
+    message: [moved || String(tagEditAlert?.completionMessage || '').trim(), ...warnings].filter(Boolean).join(' '),
+    severity: hasWarning ? 'warning' : 'success',
+    title: hasWarning ? 'Tags saved with warning' : 'Tags updated',
+  };
 }
 
 function openTagEditor(album, options = {}) {
@@ -38354,6 +39864,8 @@ async function confirmManualTagEdit() {
       ) {
         failedSaveTaskError = String(data.error || '').trim();
       }
+      // Every edited file left this album since it was opened: nothing was changed; say which.
+      if (data.error_code === 'tag_edit_files_moved') failedSaveTaskError = String(data.error || '').trim();
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {
@@ -38366,6 +39878,8 @@ async function confirmManualTagEdit() {
         && data.edit_outcome === 'failed_rolled_back';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
+    const movedFiles = (Array.isArray(data.moved_files) ? data.moved_files : []).map(String).filter(Boolean);
+    if (movedFiles.length) tagEditAlert.movedMessage = buildMovedFilesAlertMessage(editedPaths.length - movedFiles.length, movedFiles);
     const updatedAlbums = Array.isArray(data.updated_albums)
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
@@ -38444,18 +39958,8 @@ async function confirmManualTagEdit() {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
     if (responseIsTerminal && !terminalResponseNeedsCanonicalRefresh) {
-      const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-        .map((warning) => String(warning || '').trim())
-        .filter(Boolean);
-      const hasCompletionWarning = completionWarnings.length > 0;
-      showRepairAlert(
-        [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
-        hasCompletionWarning ? 'warning' : 'success',
-        8000,
-        {
-          title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-        },
-      );
+      const completion = buildTagEditCompletionAlert(tagEditAlert, data);
+      showRepairAlert(completion.message, completion.severity, 8000, { title: completion.title });
     }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
@@ -39403,10 +40907,12 @@ function renderTrackModalRelease(album) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
-      album: album.display_name || album.name || 'Album',
+      artistRomanized: albumDetailsRomanizedArtist(album),
+      album: album.display_title || album.display_name || album.name || 'Album',
+      alternativeTitles: album.musicbrainz_release?.alternative_titles,
       year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
-      tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
+      releaseType: albumDetailsReleaseType(album),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
@@ -39548,7 +41054,7 @@ function renderTrackModalRelease(album) {
   const tracks = Array.isArray(activeDuplicateSource?.tracks)
     ? activeDuplicateSource.tracks
     : (Array.isArray(album.tracks) ? album.tracks : []);
-  const grouped = groupAlbumTracks(tracks);
+  const grouped = groupAlbumTracks(tracks, album);
   const bonusGroups = grouped.groups.filter((group) => group.isBonus);
   const mainGroups = grouped.groups.filter((group) => !group.isBonus);
   const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
@@ -39654,8 +41160,11 @@ function isBonusDiscTrack(track) {
 }
 
 
-function groupAlbumTracks(tracks) {
+function groupAlbumTracks(tracks, album = null) {
   const safeTracks = orderAlbumTracks(tracks);
+  // The matched MusicBrainz release decides where the main album ends; without it the
+  // disc labels and tags are the local guess.
+  const lastMainDisc = Number(album?.musicbrainz_release?.last_main_disc_number) || 0;
 
   const explicitDiscs = Array.from(new Set(
     safeTracks
@@ -39724,7 +41233,9 @@ function groupAlbumTracks(tracks) {
       discNumber: groups.get(key).discNumber,
       discLabel: groups.get(key).discLabel,
       discSubtitle: groups.get(key).discSubtitle,
-      isBonus: Boolean(groups.get(key).isBonus),
+      isBonus: lastMainDisc
+        ? (groups.get(key).discNumber || 1) > lastMainDisc
+        : Boolean(groups.get(key).isBonus),
       tracks: groups.get(key).tracks,
     })),
   };
@@ -39732,7 +41243,7 @@ function groupAlbumTracks(tracks) {
 
 
 function buildTrackListHtml(tracks, album = null, totalLength = null) {
-  const grouped = groupAlbumTracks(tracks);
+  const grouped = groupAlbumTracks(tracks, album);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
   const trackRows = Array.isArray(album?.track_rows) ? album.track_rows : [];
@@ -39773,8 +41284,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         : duration;
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
-      const displayTitle = String(trackRow?.title || track.title || '').trim();
-      const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
+      // An applied MusicBrainz data correction (S4) shows in place of the tag; the tag stays.
+      const displayTitle = String(track.display_title || trackRow?.title || track.title || '').trim();
+      const taggedSecondary = String(trackRow?.secondary_artist || '').trim();
+      const secondaryArtist = taggedSecondary && track.display_artist ? String(track.display_artist) : taggedSecondary;
       return {
         path: trackPath,
         src,
@@ -39789,6 +41302,11 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         originalDuration: duration,
         trackNumber: trackValue,
         secondaryArtist,
+        // The tag title's Latin form (S7); none beside a corrected title it was not made for.
+        titleTransliteration: displayTitle === String(trackRow?.title || '').trim()
+          ? String(trackRow?.title_transliteration || '').trim() : '',
+        // The matched release's sub-section heading (S8); never a tag.
+        section: String(trackRow?.section || '').trim(),
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
@@ -42705,7 +44223,8 @@ function getAlbumCardVersionKey(album) {
 }
 
 function albumCardHtml(album, options = {}) {
-  const displayName = album?.display_name || album?.name || '';
+  // An applied MusicBrainz data correction (display_title, S4) shows in place of the tag.
+  const displayName = album?.display_title || album?.display_name || album?.name || '';
   const displayYear = album?.display_year || album?.year || '';
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
@@ -42777,8 +44296,11 @@ function albumCardHtml(album, options = {}) {
     albumFallback,
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
-    artist: album.album_artist,
+    titleLatin: album?.title_latin,
+    artist: album.display_artist || album.album_artist,
     year: displayYear,
+    genre: album?.musicbrainz_genre,
+    artistRomanized: galleryRomanizedArtistName(album.album_artist),
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
@@ -42814,6 +44336,9 @@ function getAlbumCardRenderKey(album) {
     String(album?.album_artist || ''),
     String(album?.year || ''),
     String(album?.display_year || ''),
+    String(album?.musicbrainz_genre || ''),
+    String(album?.title_latin || ''),
+    galleryRomanizedArtistName(album?.album_artist),
     getAlbumCardRating(album),
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
@@ -45505,7 +47030,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, series: group.series, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -45551,7 +47076,7 @@ function buildArtistSectionHtml(
   const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, series: safeGroup.series, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;
@@ -45661,7 +47186,10 @@ function renderArtistGroups(options = {}) {
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
   const renderOptions = {
     ...options,
-    showArtistSectionHeaders: !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
+    // A series shows its albums alone; All series heads each series like an artist.
+    showArtistSectionHeaders: String(state.view.selected_series || '').trim()
+      ? state.view.selected_series === 'all'
+      : !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
   };
   modeConfig.renderer(
     { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },
@@ -45753,6 +47281,19 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
   rows.forEach(row => globalPlayerMetadataMotion.update(row));
 }
 
+// The artist the player names, as the card does: the track's applied correction, else the album's
+// display_artist in place of its tag. Display only: the track, scrobbles and identities keep the tag.
+function playerShownArtist(track) {
+  const artist = track?.artist || '';
+  const album = typeof state === 'undefined' ? null : state.player?.playbackQueue?.albumSnapshot;
+  const albumTrack = Array.isArray(album?.tracks)
+    ? album.tracks.find((item) => item?.path === track?.path)
+    : null;
+  if (!albumTrack) return artist;
+  return albumTrack.display_artist
+    || (album.display_artist && artist === album.album_artist ? album.display_artist : artist);
+}
+
 function renderGlobalPlayerMetadata(els, track) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
   const setText = (row, text) => {
@@ -45763,9 +47304,9 @@ function renderGlobalPlayerMetadata(els, track) {
   };
   if (els.artist) {
     els.artist.hidden = !mobile || !track;
-    setText(els.artist, track?.artist || '');
+    setText(els.artist, playerShownArtist(track));
   }
-  const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
+  const parts = (mobile ? [track?.title] : [playerShownArtist(track), track?.title]).filter(Boolean);
   setText(els.title, parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '');
   if (els.albumLink) {
     setText(els.albumLink, track?.album || '');
@@ -47805,6 +49346,8 @@ function waitForUtilityTabPaint() {
 
 async function handleUtilityBootstrapClick(event) {
   if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
+  if (typeof handleMusicBrainzLookupEvent === 'function' && handleMusicBrainzLookupEvent(event)) return;
+  if (typeof handleMusicBrainzCorrectionEvent === 'function' && handleMusicBrainzCorrectionEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
     event.preventDefault();
@@ -47898,6 +49441,8 @@ async function handleUtilityBootstrapClick(event) {
       if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
+    } else if (state.utility.activeTab === 'edits-queue') {
+      loadUtilityEditsQueue(true);
     } else if (!['appearance', 'android'].includes(state.utility.activeTab)) {
       const navigationToken = {};
       state.utility.problematicNavigationActiveToken = navigationToken;
@@ -48542,6 +50087,7 @@ async function handleUtilityBootstrapClick(event) {
     state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
     ensureCoverLookupPolling();
     loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+    if (state.coverLookup.drawerOpen) void refreshMusicBrainzLookupNotifications({ force: true });
     renderCoverLookupDrawer();
     return;
   }
@@ -49119,6 +50665,7 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  if (typeof handleMusicBrainzLookupEvent === 'function' && handleMusicBrainzLookupEvent(event)) return true;
   const exceptionInput = event.target?.closest?.('#tag-editor-form [data-tag-field="exception_type"]');
   const exceptionOption = event.target?.closest?.('[data-tag-editor-exception-option]');
   if (exceptionInput || exceptionOption) {
@@ -49402,6 +50949,24 @@ function handleGalleryBootstrapClick(event) {
     void scrollRootGalleryToArtist(artist);
     return;
   }
+  const seriesKind = event.target.closest('#artist-tree-context-menu [data-series-tree-kind]');
+  if (seriesKind) {
+    event.preventDefault();
+    const mbid = seriesKind.closest('#artist-tree-context-menu').dataset.series || '';
+    hideArtistTreeContextMenu();
+    void saveSeriesKind(mbid, seriesKind.getAttribute('data-series-tree-kind') || null);
+    return;
+  }
+  const seriesGroup = event.target.closest('[data-series-tree-group]');
+  if (seriesGroup) {
+    event.preventDefault();
+    const kind = seriesGroup.getAttribute('data-series-tree-group');
+    if (toggleSeriesTreeGroup(kind)) {
+      renderSidebar();
+      document.querySelector(`[data-series-tree-group="${kind}"]`)?.focus({ preventScroll: true });
+    }
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -49532,6 +51097,8 @@ function handleGalleryBootstrapClick(event) {
       unmarkAlbumVersion(album?.key || '');
       return;
     }
+
+    if (typeof runAlbumMenuMusicBrainzAction === 'function') runAlbumMenuMusicBrainzAction(action, album);
 
     return;
   }
@@ -49957,7 +51524,9 @@ function stabilizeRootGalleryArtistAlignment(artist) {
     );
     const aligned = Boolean(scroll && rows)
       && Math.abs(rows.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1
-      && String(chromeName?.textContent || '').trim() === targetArtist;
+      // A split group's chrome shows "Amarok" with the "(Poland)" beside it.
+      && String(chromeName?.textContent || '').trim() === (typeof galleryArtistDisplayParts === 'function'
+        ? galleryArtistDisplayParts(targetArtist).name.trim() : targetArtist);
     if (aligned) stableFrames += 1;
     else {
       stableFrames = 0;
@@ -52097,12 +53666,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// The view on screen can stand in for a navigation toward it: it is complete and none is replacing it.
+function isMountedViewSettled() {
+  if (state.ui?.activeViewRequestController || state.ui?.pendingViewRequest) return false;
+  if (state.view?.initial_view_partial) return false;
+  return String(state.view?.payload_tier || '').trim().toLowerCase() !== 'sidebar';
+}
+
 // A history step onto the address of the view already shown (a duplicate history entry) keeps
 // that view: reloading it is navigation that changes nothing (owner, 11-18).
 function historyStepShowsCurrentView(href) {
-  if (state.ui?.activeViewRequestController || state.ui?.pendingViewRequest) return false;
-  if (state.view?.initial_view_partial) return false;
-  if (String(state.view?.payload_tier || '').trim().toLowerCase() === 'sidebar') return false;
+  if (!isMountedViewSettled()) return false;
   return buildUrl(parseBrowserUrlState(href)) === buildUrl(state.view || {});
 }
 
@@ -52133,9 +53707,12 @@ function isMobileClient() {
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
-  const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
+  const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.display_artist || album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
-    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
+    subtitle,
+    // J3 (owner 2026-11-15): the artist's romanized name on its own line under the album page header.
+    romanized: kind === 'album' && album && typeof albumDetailsRomanizedArtist === 'function' ? albumDetailsRomanizedArtist(album) : '',
+    coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
@@ -52159,6 +53736,7 @@ function syncMobilePageShell() {
     document.getElementById('mobile-page-title').textContent = active.title;
     const summary = document.getElementById('mobile-page-summary');
     summary.textContent = active.subtitle;
+    if (active.romanized) { const romanized = document.createElement('span'); romanized.className = 'mobile-page-romanized'; romanized.textContent = `(${active.romanized})`; summary.appendChild(romanized); }
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
     document.title = `${active.title} — Album Haven`;
   }
@@ -52885,6 +54463,8 @@ function initMobileNavigation() {
 
 const MOBILE_UTILITY_SECTIONS = Object.freeze({
   'problematic-files': { label: 'Problematic Files', action: 'library.problems.read' },
+  // Owner 2026-11-16: phones too.
+  'edits-queue': { label: 'Edits Queue', action: 'library.metadata_matches.review' },
   rules: { label: 'Rules', action: 'library.rules.read' },
   loops: { label: 'Loops', action: 'library.loops.read' },
   'log-history': { label: 'Log History', action: 'library.logs.read' },
@@ -53196,6 +54776,7 @@ function shouldShowMobileHome() {
   return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1'
     && !state.ui?.pendingViewTransition
     && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
+    && !String(state.view.selected_series || '').trim()
     && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
 }
 function renderMobileHome() {
@@ -53639,6 +55220,9 @@ updateStatusIndicator({
   ...(Number.isSafeInteger(bootstrap.inventoryMutationRevision)
     ? { inventory_mutation_revision: bootstrap.inventoryMutationRevision }
     : {}),
+  ...(Number.isSafeInteger(bootstrap.galleryPublicationRevision)
+    ? { gallery_publication_revision: bootstrap.galleryPublicationRevision }
+    : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);
@@ -53741,6 +55325,12 @@ window.AlbumHavenAppCopy?.onServerAnswer(() => {
 });
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarSeries = event.target.closest('[data-sidebar-series]');
+  if (sidebarSeries && typeof canReviewMusicBrainzCorrections === 'function' && canReviewMusicBrainzCorrections()
+      && showSeriesTreeContextMenu(event.clientX, event.clientY, sidebarSeries.getAttribute('data-sidebar-series') || '')) {
+    event.preventDefault();
+    return;
+  }
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
   if (sidebarArtist) {
     event.preventDefault();

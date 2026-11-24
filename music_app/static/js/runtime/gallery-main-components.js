@@ -34,23 +34,49 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
+// The romanized form of an original-script artist name (approved J3); see render-markup-helpers.
+function galleryRomanizedArtistName(name) {
+  return typeof romanizedArtistName === 'function' ? romanizedArtistName(name) : '';
+}
+
+// The page's Gallery Bar is the server template (partials/gallery-bar.html), which has no
+// romanized slot; it gets one right after the name the first time it is needed.
+function galleryContextRomanizedElement(bar) {
+  const existing = bar?.querySelector?.('[data-gallery-context-romanized]');
+  if (existing) return existing;
+  const name = bar?.querySelector?.('[data-gallery-context-name]');
+  if (typeof name?.insertAdjacentHTML !== 'function') return null;
+  name.insertAdjacentHTML('afterend', '<span class="gallery-artist-romanized" data-gallery-context-romanized hidden></span>');
+  return bar.querySelector('[data-gallery-context-romanized]');
+}
+
+function galleryRomanizedArtistLabel(name) {
+  return typeof romanizedArtistLabel === 'function' ? romanizedArtistLabel(name) : '';
+}
+
+// The name and its dimmed text ("Amarok" "(Poland)"; "天門" "(Tenmon)"); see render-markup-helpers.
+function galleryArtistDisplayParts(name) {
+  return typeof artistDisplayParts === 'function'
+    ? artistDisplayParts(name)
+    : { name: String(name ?? ''), qualifier: '', secondary: galleryRomanizedArtistLabel(name) };
+}
+
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
     : {};
   const country = galleryCountryName(projection.country);
+  // No genre shows no pill: the server's "Genre unavailable" placeholder
+  // for a matched artist without genres is not a genre.
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())
-    .filter(Boolean)
+    .filter((genre) => genre && genre !== 'Genre unavailable')
     .slice(0, 3);
   const countryHtml = country
     ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>`
     : '';
-  const genreHtml = genres.map((genre) => (
-    genre === 'Genre unavailable'
-      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
-      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
-  )).join('');
+  const genreHtml = genres
+    .map((genre) => `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`).join('');
   return `${countryHtml}${genreHtml}`;
 }
 
@@ -121,6 +147,10 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
           JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
         )))
         : new Set();
+      // A match that changed after the first read can bring a romanized name or split label.
+      if (galleryArtistMusicBrainzStatus.loadedAt > 0 && typeof refreshRomanizedArtistNames === 'function') {
+        void refreshRomanizedArtistNames();
+      }
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
       galleryArtistMusicBrainzStatus.pending = [...next.values()].some((value) => value.state === 'pending');
@@ -160,6 +190,41 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
       galleryArtistMusicBrainzStatus.promise = null;
     });
   return galleryArtistMusicBrainzStatus.promise;
+}
+
+// Romanized artist names change only when MusicBrainz matches an artist: the gallery loads
+// them at start, and a changed artist status asks again, at most every ten minutes. A
+// change redraws the tree and the gallery.
+const ROMANIZED_ARTIST_NAMES_REFRESH_MS = 600000;
+const romanizedArtistNamesLoad = { loadedAt: 0, signature: '{}{}', promise: null };
+
+function refreshRomanizedArtistNames() {
+  if (romanizedArtistNamesLoad.promise) return romanizedArtistNamesLoad.promise;
+  if (romanizedArtistNamesLoad.loadedAt && Date.now() - romanizedArtistNamesLoad.loadedAt < ROMANIZED_ARTIST_NAMES_REFRESH_MS) {
+    return Promise.resolve(false);
+  }
+  romanizedArtistNamesLoad.promise = fetch('/api/musicbrainz/artists/romanized-names', { headers: { Accept: 'application/json' } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => {
+      const names = payload?.names && typeof payload.names === 'object' ? payload.names : null;
+      // Split same-name groups' qualifiers ride along (D2 S2); absent when nothing is split.
+      const splitArtists = payload?.split_artists && typeof payload.split_artists === 'object' ? payload.split_artists : {};
+      const signature = JSON.stringify(names) + JSON.stringify(splitArtists);
+      if (!names || signature === romanizedArtistNamesLoad.signature) return false;
+      romanizedArtistNamesLoad.signature = signature;
+      setRomanizedArtistNames(names);
+      if (typeof setSplitArtistQualifiers === 'function') setSplitArtistQualifiers(splitArtists);
+      if (typeof renderSidebar === 'function') renderSidebar();
+      if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
+      if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      romanizedArtistNamesLoad.loadedAt = Date.now();
+      romanizedArtistNamesLoad.promise = null;
+    });
+  return romanizedArtistNamesLoad.promise;
 }
 
 function buildGalleryArtistStatusHtml(config = {}) {
@@ -262,13 +327,30 @@ function buildGalleryBarHtml(config = {}) {
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
   const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
+  const display = isArtist ? galleryArtistDisplayParts(title) : { name: title, secondary: '' };
+  const romanized = display.secondary;
+  const romanizedHtml = `<span class="gallery-artist-romanized" data-gallery-context-romanized${romanized ? '' : ' hidden'}>${escapeHtml(romanized)}</span>`;
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(display.name)}</span>${romanizedHtml}${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
       <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
     </div>`;
+}
+
+// The Series view's Gallery Bar (approved 2 and 4B). One series: its name and i, then
+// "Album series • N albums" under it; a phone keeps the band header's "• N albums" and no
+// subheader. All series: "Series" with its totals, like the artist gallery.
+function resolveSeriesGalleryBarContent({ series = null, seriesCount = 0, albumCount = 0, mobile = false } = {}) {
+  if (!series) {
+    return { name: 'Series', inlineTotal: '', metadataHtml: '', summary: `${Math.max(0, Number(seriesCount || 0))} series · ${galleryMainPlural(albumCount, 'album')}` };
+  }
+  const total = galleryMainPlural(albumCount, 'album');
+  return mobile
+    ? { name: series.name || '', inlineTotal: total, metadataHtml: '', summary: '' }
+    : { name: series.name || '', inlineTotal: '', summary: '',
+      metadataHtml: `<span class="gallery-bar__summary">${escapeHtml(series.type_label || 'Series')}</span><span class="gallery-bar__artist-total">${escapeHtml(total)}</span>` };
 }
 
 function buildArtistFamilyPanelHtml(config = {}) {
@@ -288,10 +370,18 @@ function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
+// A series has an i only with a stored Wikipedia introduction (approved D2 batch 3, 4);
+// an artist always has one.
+function gallerySeriesHasInfo(series) {
+  return Boolean(series?.wikipedia?.extract && series.wikipedia.url);
+}
+
 function buildFamilyArtistHeaderHtml(config = {}) {
+  const display = galleryArtistDisplayParts(config.artist || '');
+  const romanized = display.secondary;
   const status = buildGalleryArtistStatusHtml(config);
-  const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  const info = config.series && !gallerySeriesHasInfo(config.series) ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(display.name)}${romanized ? ` <span class="gallery-artist-romanized">${escapeHtml(romanized)}</span>` : ''}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -306,10 +396,21 @@ function buildGalleryRatingHtml(config = {}) {
 
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
-  const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  // J3 (owner 2026-11-15): the artist's romanized name is hover text on desktop. On phones
+  // it reads "天門 (Tenmon) · 2007", dimmed in parentheses right after the artist, so the row
+  // keeps its height (approved D2 batch 3, 1D-3; mobile-layout.css shows it).
+  const romanized = String(config.artistRomanized || '').trim();
+  const artist = String(config.artist ?? '').trim();
+  const romanizedHtml = romanized && artist ? `<span class="gallery-artist-romanized gallery-card__romanized"> (${escapeHtml(romanized)})</span>` : '';
+  const metadataHtml = [artist && `${escapeHtml(artist)}${romanizedHtml}`, escapeHtml(String(config.year ?? '').trim())].filter(Boolean).join(' · ');
+  // The album's MusicBrainz genre (approved A2), beside artist and year.
+  const genre = String(config.genre || '').trim();
+  // An album title's Latin form (0256): on phones a small dimmed line in parentheses under
+  // the title, inside the same row height (approved b3-1d3); desktop shows nothing yet.
+  const titleLatin = String(config.titleLatin || '').trim();
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row">${titleLatin ? `<div class="album-subtitle gallery-card__title-latin"><span class="gallery-artist-romanized">(${escapeHtml(titleLatin)})</span></div>` : ''}<div class="album-subtitle"${romanized ? ` title="${escapeHtml(romanized)}"` : ''}><span data-gallery-metadata-text>${metadataHtml}</span></div>${genre ? `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>` : ''}</div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }

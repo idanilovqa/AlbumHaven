@@ -199,6 +199,18 @@ test('external service links render safe plain anchors with a decorative icon sl
   assert.throws(() => button.renderExternalServiceLink({ service: 'invented', href: 'https://example.com' }), /Unknown external service/);
 });
 
+test('a Wikipedia article link is text only, for any Wikipedia language; other hosts and shapes render nothing', () => {
+  const button = require(componentPath);
+  assert.equal(button.renderExternalServiceLink({ service: 'wikipedia', href: 'https://en.wikipedia.org/wiki/Halo_(series)' }),
+    '<a class="ui-external-link ui-external-link--wikipedia" href="https://en.wikipedia.org/wiki/Halo_(series)" target="_blank" rel="noopener noreferrer" aria-label="Open on Wikipedia">'
+      + '<span class="ui-external-link__text">Wikipedia</span></a>');
+  assert.match(button.renderExternalServiceLink({ service: 'wikipedia', href: 'https://ja.wikipedia.org/wiki/%E5%A4%A9%E9%96%80' }), /href="https:\/\/ja\.wikipedia\.org\/wiki\//);
+  for (const href of ['https://en.wikipedia.org.evil.example/wiki/X', 'http://en.wikipedia.org/wiki/X', 'https://en.wikipedia.org/w/index.php?title=X',
+    'https://en.wikipedia.org/wiki/X" onclick="x', 'https://en.wikiquote.org/wiki/X', '', undefined]) {
+    assert.equal(button.renderExternalServiceLink({ service: 'wikipedia', href }), '', String(href));
+  }
+});
+
 test('external service link CSS uses panel text, a non-colour cue and the real service favicons', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
   const rules = new Map([...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]

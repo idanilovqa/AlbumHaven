@@ -776,7 +776,10 @@
   display: none;
 }
 
+/* Block items: the menu's width ends after its longest item (inline-block items would add
+   up their widths side by side while the fixed menu sizes itself). */
 .album-card-context-menu-item {
+  display: block;
   width: 100%;
   appearance: none;
   border: 0;

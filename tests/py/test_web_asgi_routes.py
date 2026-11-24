@@ -2142,14 +2142,17 @@ def test_active_scan_keeps_persisted_root_gallery_in_bootstrap(monkeypatch):
     assert startup_preview["mode"] == "full_view"
 
 
-def test_bootstrap_reports_the_inventory_revision_read_before_its_view(monkeypatch):
+def test_bootstrap_reports_the_revisions_read_before_its_view(monkeypatch):
     from music_app.routes import web_asgi
+    from music_app.services import gallery_projection_postgres as gallery
     from starlette.datastructures import QueryParams
 
     library_state = {"inventory_mutation_revision": 41}
+    monkeypatch.setattr(gallery, "_PUBLICATION_REVISION", 7)
 
     def build_view_while_a_mutation_commits(**_kwargs):
         library_state["inventory_mutation_revision"] = 42
+        gallery._PUBLICATION_REVISION = 8  # a stale tree served here is republished meanwhile
         return {"artist_groups": [], "album_count": 0, "artist_count": 0}, None, 1.0
 
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
@@ -2170,8 +2173,9 @@ def test_bootstrap_reports_the_inventory_revision_read_before_its_view(monkeypat
         request_started_epoch_ms=1,
     )
 
-    # The first status poll then sees 42 as newer and refreshes the rendered view.
+    # The first status poll then sees 42 (or publication 8) as newer and refreshes the rendered view.
     assert payload["bootstrap"]["inventoryMutationRevision"] == 41
+    assert payload["bootstrap"]["galleryPublicationRevision"] == 7
 
 
 def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):

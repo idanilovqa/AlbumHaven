@@ -355,6 +355,40 @@ def _authoritative_tag_editor_track_paths(
     return authoritative_paths
 
 
+def _file_names(paths: list[str]) -> list[str]:
+    """What a message may show of local files: their names, never their paths."""
+    return [Path(path).name for path in paths]
+
+
+def _edit_tags_files_outside_album(
+    album: Mapping[str, object],
+    edited_paths: set[str],
+    current_albums: list[Mapping[str, object]],
+) -> list[str]:
+    """Edited files (sorted paths) that are now in another album than the one the editor was
+    opened for: an album shown from details loaded before a move or split still lists them.
+
+    ``current_albums`` are grouped the way the gallery groups them, so an album made of
+    several stored rows keeps all its files. The opened album is found by its key, then by
+    its id (an optimistic album can carry its source's id under its own key). An album that
+    no longer exists, or a file outside every album, is left to the save's own checks."""
+    album_key = str(album.get("key") or album.get("album_key") or "").strip()
+    album_id = str(album.get("album_id") or album.get("id") or "").strip()
+    if not edited_paths or not (album_key or album_id):
+        return []
+    # Every album that answers to the key (or, without one, the id) counts as the opened one.
+    opened = [candidate for candidate in current_albums
+              if album_key and str(candidate.get("key") or "") == album_key] or [
+        candidate for candidate in current_albums
+        if album_id and str(candidate.get("album_id") or "") == album_id]
+    if not opened:
+        return []
+    in_opened = set().union(*(_album_track_paths(candidate) for candidate in opened))
+    elsewhere = set().union(*(_album_track_paths(candidate) for candidate in current_albums
+                              if not any(candidate is match for match in opened)))
+    return sorted(path for path in edited_paths if path not in in_opened and path in elsewhere)
+
+
 def _json_response(value: ResponseValue) -> JSONResponse:
     if isinstance(value, tuple):
         payload, status_code = value
@@ -1229,7 +1263,10 @@ def _is_postgres_edit_tags_exception_only_response_request(
 def _postgres_exception_only_edit_state(
     request: Request,
     payload: Mapping[str, object],
+    moved_out: list[str] | None = None,
 ) -> dict[str, object]:
+    """``moved_out``, when given, receives the edited files that are now in another album
+    than the one the editor was opened for (the save skips them)."""
     requested_paths = {
         str(path or "").strip()
         for path in (payload.get("updates") or {})
@@ -1239,8 +1276,16 @@ def _postgres_exception_only_edit_state(
     repository = PostgresLibraryBrowseRepository(_app_config(request))
     inventory_paths = set(requested_paths)
     if _has_edit_tags_media_write_fields(payload):
+        opened = payload.get("album") if isinstance(payload.get("album"), Mapping) else {}
+        checks_membership = moved_out is not None and not payload.get("problematic_files_origin")
+        # The opened album's own tracks come along, so a stale album is found even when only
+        # a moved file is edited; for a current album they are the same rows.
+        current_albums = repository.build_album_payloads_by_track_paths(
+            requested_paths | (_album_track_paths(opened) if checks_membership else set()))
+        if checks_membership:
+            moved_out.extend(_edit_tags_files_outside_album(opened, requested_paths, current_albums))
         # Blank Album inference needs sibling evidence from the selected albums.
-        for album in repository.build_album_payloads_by_track_paths(requested_paths):
+        for album in current_albums:
             inventory_paths.update(
                 str(track.get("path") or "").strip()
                 for track in album.get("tracks", [])
@@ -1845,14 +1890,32 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     if needs_postgres_edit_state or "proposal_ids" in payload:
         # Request-scoped overlays replace this copy's file cache, never the live one.
         get_state = lambda: dict(library_state)
+    moved_paths: list[str] = []
     if needs_postgres_edit_state and "proposal_ids" not in payload:
         try:
             postgres_edit_state = await run_in_threadpool(
-                _postgres_exception_only_edit_state, request, payload
+                _postgres_exception_only_edit_state, request, payload, moved_paths
             )
         except ValueError as exc:
             return _json_response(({"ok": False, "error": str(exc)}, 400))
         get_state = lambda: postgres_edit_state
+    # Owner 2026-11-18: files that left the album since it was opened are skipped and left
+    # untouched; the rest of the save goes ahead.
+    moved_file_names = _file_names(moved_paths)
+    if moved_paths:
+        skipped = set(moved_paths)
+        updates = {path: edits for path, edits in updates.items() if str(path or "").strip() not in skipped}
+        if not updates:
+            return _json_response(({
+                "ok": False, "error_code": "tag_edit_files_moved", "moved_files": moved_file_names,
+                # Owner-approved wording (2026-11-18).
+                "error": ("These files are no longer in this album, so nothing was changed: "
+                          + ", ".join(moved_file_names) + ". Reopen the album to edit them."),
+            }, 409))
+        album = {**album, "tracks": [track for track in album.get("tracks", [])
+                                     if str((track or {}).get("path") or "").strip() not in skipped]}
+        requested_track_paths -= skipped
+        payload = {**payload, "album": album, "updates": updates}
     build_affected_album_dicts = _edit_tags_affected_album_dicts_builder(request, payload)
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
         build_affected_album_dicts = _empty_affected_album_dicts
@@ -1981,4 +2044,6 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         result = _selected_postgres_media_write_response(result)
     if isinstance(payload.get("proposal_ids"), list):
         result = _with_problem_suggestion_outcomes(result, payload["proposal_ids"])
+    if moved_file_names and isinstance(result, dict):
+        result = {**result, "moved_files": moved_file_names}
     return _json_response(result)

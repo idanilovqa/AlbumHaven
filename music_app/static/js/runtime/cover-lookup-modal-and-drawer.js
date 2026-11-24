@@ -311,9 +311,10 @@ function getCoverLookupDeleteConfirmElements() {
 
 function buildCoverLookupAlbumSubtitleHtml(album) {
   if (!album) return '';
+  const artist = album.display_artist || album.album_artist;
   return [
-    album.album_artist
-      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.album_artist)}</span>` : '',
+    artist
+      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(artist)}</span>` : '',
     album.name
       ? `<button class="cover-lookup-modal-album-link" type="button" data-open-cover-lookup-album-details="1">${escapeHtml(album.name)}</button>` : '',
     album.year
@@ -342,7 +343,7 @@ function openCoverLookupAlbumDetails() {
 
 function buildCoverLookupCurrentReleaseLabel(release) {
   return [
-    release?.album_artist || '',
+    release?.display_artist || release?.album_artist || '',
     release?.name || '',
     release?.year || '',
     release?.edition || '',
@@ -1799,6 +1800,8 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
   });
 }
 
+let renderedMusicBrainzCardMarkup = '';
+
 function renderCoverLookupDrawer({
   preserveInteraction = true,
   taskIds = [],
@@ -1812,6 +1815,7 @@ function renderCoverLookupDrawer({
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const musicBrainzBatches = typeof getMusicBrainzLookupBatches === 'function' ? getMusicBrainzLookupBatches() : [];
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -1835,15 +1839,17 @@ function renderCoverLookupDrawer({
   const loadedActionedCount = tasks.filter((task) => isActionedCoverLookupNotification(task)).length;
   const counts = state.coverLookup.notificationCounts;
   const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
-  const activeCount = hasAuthoritativeCounts
+  const musicBrainzActiveCount = musicBrainzBatches.filter((batch) => !batch.finished_at).length;
+  const activeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.active_count || 0), loadedActiveCount)
-    : loadedActiveCount;
-  const terminalCount = hasAuthoritativeCounts
+    : loadedActiveCount) + musicBrainzActiveCount;
+  const terminalCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
-    : loadedTerminalCount;
-  const badgeCount = hasAuthoritativeCounts
+    : loadedTerminalCount) + musicBrainzBatches.length - musicBrainzActiveCount;
+  const badgeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.total_count || 0), tasks.length)
-    : tasks.length;
+    : tasks.length) + musicBrainzBatches.length;
+  const musicBrainzCards = document.getElementById('musicbrainz-lookup-cards');
   if (summary) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
@@ -1863,6 +1869,15 @@ function renderCoverLookupDrawer({
     body.classList?.toggle('is-clearing', clearInProgress);
     body.setAttribute?.('aria-busy', String(clearInProgress));
     body.inert = clearInProgress;
+  }
+  if (musicBrainzCards) {
+    musicBrainzCards.hidden = !state.coverLookup.drawerOpen || !musicBrainzBatches.length;
+    // Repainted only when a card changed, so a pressed or focused card survives cover polling.
+    const markup = musicBrainzCards.hidden ? '' : musicBrainzBatches.map(buildMusicBrainzLookupCardHtml).join('');
+    if (renderedMusicBrainzCardMarkup !== markup) {
+      musicBrainzCards.innerHTML = markup;
+      renderedMusicBrainzCardMarkup = markup;
+    }
   }
   if (!state.coverLookup.drawerOpen) {
     body.innerHTML = '';
@@ -1896,7 +1911,9 @@ function renderCoverLookupDrawer({
                 <span class="cover-lookup-task-loading-line"></span>
               </span>
             </div>`
-          : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
+          : musicBrainzBatches.length
+            ? ''
+            : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
       state.coverLookup.drawerRenderedTerminalSignatures = {};
     }
     syncCoverLookupElapsedTimer();
@@ -2002,20 +2019,18 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
     const coverMarkup = coverUrl
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
-    return `
-      <div class="cover-lookup-task-card ${taskStateClass}">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
-          ${coverMarkup}
-          <span class="cover-lookup-task-copy">
-            <span class="cover-lookup-task-title">${escapeHtml(albumTitle)}</span>
-            <span class="cover-lookup-task-byline">${escapeHtml(albumByline)}</span>
-            <span class="cover-lookup-task-meta">
-              <span class="cover-lookup-task-status-label ${taskStateClass}">${escapeHtml(statusLabel)}</span>
-              <span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
-            </span>
-          </span>
-        </div>
-      <div class="cover-lookup-task-actions">
+    return buildNotificationTaskCardHtml({
+      kind: 'cover',
+      stateClass: taskStateClass,
+      openAttributes: `data-open-cover-lookup-task="${escapeHtml(task.id || '')}"`,
+      openLabel,
+      coverHtml: coverMarkup,
+      subject: albumTitle,
+      byline: albumByline,
+      statusLabel,
+      elapsedHtml: `<span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>`,
+      progress,
+      actionsHtml: `
         ${status === 'failed' && task?.album_payload
           ? ButtonComponent.renderActionButton({
             icon: 'refresh',
@@ -2044,10 +2059,8 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
               attributes: { 'data-clear-cover-lookup-task': task.id || '' },
             })
             : ''}
-      </div>
-      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
-      </div>
-    `;
+      `,
+    });
   }).join('');
   const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
   const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
@@ -2076,6 +2089,29 @@ function renderCoverLookupDrawerScrollWindow() {
     state.coverLookup.drawerRenderedTerminalSignatures || {},
     buildCoverLookupDrawerTerminalSignatures(visibleTasks),
   );
+}
+
+// One notification card for every kind: its kind is its title (owner, 2026-11-16), and the
+// second line names what it is about (the album) before the rest of its byline.
+const NOTIFICATION_CARD_TITLES = { cover: 'Cover lookups', musicbrainz: 'MusicBrainz lookup' };
+
+function buildNotificationTaskCardHtml({
+  kind, stateClass, openAttributes, openLabel, coverHtml, subject = '', byline = '', statusLabel, elapsedHtml,
+  actionsHtml, progress,
+}) {
+  const title = NOTIFICATION_CARD_TITLES[kind];
+  const secondLine = [subject, byline].filter(Boolean).join(' · ');
+  // No indentation inside the markup: the drawer repaints up to 60 cards per frame.
+  return `<div class="cover-lookup-task-card ${stateClass}">`
+    + `<div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" ${openAttributes}>`
+    + `${coverHtml}<span class="cover-lookup-task-copy">`
+    + `<span class="cover-lookup-task-title">${escapeHtml(title)}</span>`
+    + `<span class="cover-lookup-task-byline">${escapeHtml(secondLine)}</span>`
+    + `<span class="cover-lookup-task-meta"><span class="cover-lookup-task-status-label ${stateClass}">${escapeHtml(statusLabel)}</span>${elapsedHtml}</span>`
+    + '</span></div>'
+    + `<div class="cover-lookup-task-actions">${actionsHtml}</div>`
+    + `<div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>`
+    + '</div>';
 }
 
 async function clearCompletedCoverLookupTasks() {

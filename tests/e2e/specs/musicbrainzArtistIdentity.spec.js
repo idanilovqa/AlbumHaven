@@ -16,7 +16,7 @@ const PERSON_BAND = 'Control Signal Lead';
 const NATIVE_ARTISTS = ['ДДТ', 'Ария'];
 const HYDRATING = 'Compilation Signal Guest';
 const ZERO_VOTE = 'Zero Vote Artist';
-const SHAMAANI = 'Shamaani Duo';
+const CREDITED_DUO = 'Quillmere Duo';
 const OUTAGE = 'Provider Outage Artist';
 const CONFLICT_ASSIGN = 'Control Signal Partner';
 // Its own artist, so the Problematic Files case never shares rows with the Gallery cases.
@@ -35,7 +35,7 @@ const MBID = {
   hydrating: '0e2e0001-0000-4000-8000-000000000013',
   zeroVote: '0e2e0001-0000-4000-8000-000000000016',
   conflictAssign: '0e2e0001-0000-4000-8000-000000000018',
-  korpiklaani: 'd6b3e0a2-7c1d-4f7c-90bc-73c8bd2ac431',
+  renamedMain: 'd6b3e0a2-7c1d-4f7c-90bc-73c8bd2ac431',
 };
 
 async function openArtist({ galleryActions, searchToolbarActions }, artist, expectedTitle = artist) {
@@ -96,7 +96,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
         await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
           expect.objectContaining({
             heading: nativeCase.name,
-            credit: [],
+            taggedAsLines: [],
             identityRows: [],
           }),
         );
@@ -164,7 +164,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
-          credit: [],
+          taggedAsLines: [],
           countries: ['Finland'],
           genres: ['ambient', 'dark wave'],
           links: expect.arrayContaining([
@@ -175,36 +175,38 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       );
     });
 
-    await stepLogger.step('MBD1-38: an artist matched under another name shows that name and how it is tagged', async () => {
+    await stepLogger.step('MBD1-38: an artist matched under another name shows that name', async () => {
       await openArtist({ galleryActions, searchToolbarActions }, CREDITED, 'Signal Guest Collective');
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
           heading: 'Signal Guest Collective',
-          credit: [`Tagged as ${CREDITED} in your files.`],
+          taggedAsLines: [],
         }),
       );
     });
 
-    await stepLogger.step('MBD1-40: Shamaani Duo resolves through Hunka lunka to Korpiklaani', async () => {
-      await openArtist({ galleryActions, searchToolbarActions }, SHAMAANI, 'Korpiklaani');
+    await stepLogger.step('MBD1-40: Quillmere Duo resolves through First Embers to Brackenfold Choir', async () => {
+      await openArtist({ galleryActions, searchToolbarActions }, CREDITED_DUO, 'Brackenfold Choir');
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
-          heading: 'Korpiklaani',
-          credit: [`Tagged as ${SHAMAANI} in your files.`],
-          links: expect.arrayContaining([`https://musicbrainz.org/artist/${MBID.korpiklaani}`]),
+          heading: 'Brackenfold Choir',
+          taggedAsLines: [],
+          links: expect.arrayContaining([`https://musicbrainz.org/artist/${MBID.renamedMain}`]),
         }),
       );
       await galleryActions.closeArtistInfoPanel();
-      expect(await albumDetailsTags({ galleryActions, trackModalActions }, 'Korpiklaani', 'Hunka lunka'))
-        .toContain('Tagged as Shamaani Duo');
+      // No artist notes in the Album Details header.
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, 'Brackenfold Choir', 'First Embers');
+      expect(tags.filter((tag) => tag.startsWith('Tagged as'))).toEqual([]);
       await trackModalActions.closeIfOpen();
     });
 });
 
 test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists', { tag: '@area:album-details' }, async ({
   galleryActions,
+  navigationPanelActions,
   searchToolbarActions,
   stepLogger,
   trackModalActions,
@@ -228,9 +230,22 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
       await galleryActions.closeArtistInfoPanel();
     });
 
-    await stepLogger.step('MBD1-37: Album Details names which band an album belongs to', async () => {
+    await stepLogger.step('Album Details of a split name\'s album shows that band, with no MusicBrainz: label', async () => {
+      // Owner 2026-11-18: the search lands on the plain name (its undecided albums); the
+      // Swedish band's albums are under its own tree row, so the step switches to it.
+      const band = `${LEAD} (Swedish band)`;
+      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
+      await navigationPanelActions.waitForSidebarSelection(LEAD);
+      expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(LEAD);
+      await navigationPanelActions.selectSidebarArtistByName(band);
+      await navigationPanelActions.waitForSidebarSelection(band);
+      expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(band);
+      // The band's own gallery names it "Compilation Signal Lead", its qualifier dimmed beside.
       const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 250');
-      expect(tags).toContain('MusicBrainz: Compilation Signal Lead (Swedish band)');
+      const { title } = await trackModalActions.readSummary();
+      expect(title).toContain(band);
+      expect(title).toContain('Functional Fixture Album 250');
+      expect(tags.filter((tag) => tag.startsWith('MusicBrainz:'))).toEqual([]);
       await trackModalActions.closeIfOpen();
     });
 
@@ -308,7 +323,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, UNCONFIRMED);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['Finland'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -330,7 +345,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, CREDITED);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['United States'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -401,7 +416,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, LEAD);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['United Kingdom'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -420,7 +435,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
         expect.objectContaining({
           heading: CONFLICT_ASSIGN,
           countries: ['Finland'],
-          genres: ['Genre unavailable'],
+          genres: [], // No genre shows no pill or text (owner 2026-11-16).
           links: expect.arrayContaining([
             `https://musicbrainz.org/artist/${MBID.conflictAssign}`,
           ]),
@@ -443,7 +458,18 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await utilityProblematicFilesActions.retryMusicBrainzIdentity(OUTAGE);
       await utilityProblematicFilesActions.clearProblemFilter('MusicBrainz: Provider unavailable');
       await utilityProblematicFilesActions.search(OUTAGE);
-      await utilityProblematicFilesActions.waitForNoSearchResults(OUTAGE);
+      // The artist's row is gone. Once its identity resolves, Delivery 2 compares its albums with
+      // MusicBrainz, so albums it has no release for stay listed under the artist with their own
+      // album label ("MusicBrainz has no info", owner decision C2, 2026-11-15).
+      await utilityProblematicFilesActions.waitForSearchResults(OUTAGE);
+      const remaining = await utilityProblematicFilesActions.readVisibleListItems();
+      expect(remaining.filter((item) => item.key.startsWith('musicbrainz-artist:'))).toEqual([]);
+      // List rows carry no issue line, so each remaining album's label is read from its detail.
+      expect(remaining.length).toBeGreaterThan(0);
+      for (const item of remaining) {
+        expect(item.meta.startsWith(OUTAGE)).toBe(true);
+        await utilityProblematicFilesActions.expectMusicBrainzHasNoInfo(item);
+      }
       await settingsModalAppBarActions.closeSettings();
       await openArtist({ galleryActions, searchToolbarActions }, OUTAGE);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({

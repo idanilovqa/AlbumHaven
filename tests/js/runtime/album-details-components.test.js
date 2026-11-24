@@ -328,34 +328,79 @@ test('missing Album Details host does not draw a second alert surface', () => {
 
 test('an album whose tag names another artist shows its MusicBrainz artist, display only', () => {
   const context = loadComponents();
-  const greyAlbum = {
-    album_artist: 'Jay-Z',
-    musicbrainz_artist: { canonical_name: 'Danger Mouse', tag_differs: true },
+  const retaggedAlbum = {
+    album_artist: 'Stage Name',
+    musicbrainz_artist: { canonical_name: 'Main Name', tag_differs: true },
   };
 
-  assert.equal(context.albumDisplayArtist(greyAlbum), 'Danger Mouse');
-  assert.equal(context.albumTaggedArtistNote(greyAlbum), 'Tagged as Jay-Z');
-  // An identity that agrees with the tag, or none, keeps the tag and adds no note.
-  // A split artist's album names its own MusicBrainz artist.
-  assert.equal(context.albumTaggedArtistNote({ album_artist: 'Amarok', musicbrainz_artist: {
-    canonical_name: 'Amarok', disambiguation: 'Spanish fusion band', tag_differs: false, split: true } }),
-  'MusicBrainz: Amarok (Spanish fusion band)');
-  for (const album of [{ album_artist: 'Amarok', musicbrainz_artist: { canonical_name: 'Amarok', tag_differs: false } },
-    { album_artist: 'Amarok' }]) {
-    assert.equal(context.albumDisplayArtist(album), 'Amarok');
-    assert.equal(context.albumTaggedArtistNote(album), '');
+  assert.equal(context.albumDisplayArtist(retaggedAlbum), 'Main Name');
+  // An identity that agrees with the tag, or none, keeps the tag.
+  for (const album of [{ album_artist: 'Twin Name', musicbrainz_artist: { canonical_name: 'Twin Name', tag_differs: false } },
+    { album_artist: 'Twin Name' }]) {
+    assert.equal(context.albumDisplayArtist(album), 'Twin Name');
   }
 });
 
+// The Album Details header carries no artist notes, in any layout.
+function renderReleaseHeader(layout, album) {
+  const context = loadComponents();
+  const source = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js'), 'utf8',
+  ).replaceAll('\r\n', '\n');
+  const start = source.indexOf('function renderTrackModalRelease(album) {');
+  const els = { overlay: {}, header: {}, cover: {}, list: {} };
+  Object.assign(context, {
+    document: { documentElement: { getAttribute: () => layout } },
+    syncMobileAlbumComposition: () => {},
+    state: { modalReleases: [], ui: {} },
+    getTrackModalElements: () => els,
+    getTrackModalAlbumRequestKey: () => 'album-key',
+    buildAlbumCoverSourceMarkersHtml: () => '',
+    buildAlbumArtboxHtml: () => '',
+    albumHasDisplayCover: () => false,
+    getAlbumDuplicateSources: () => [],
+    getTrackModalDuplicateSourceIndex: () => 0,
+    groupAlbumTracks: () => ({ groups: [] }),
+    formatAlbumDuration: () => '',
+    buildTrackListHtml: () => '',
+    renderTrackModalTabs: () => {},
+    refreshTrackModalPlaybackState: () => {},
+  });
+  vm.runInContext(source.slice(start, source.indexOf('\n}\n', start) + 3), context);
+  context.renderTrackModalRelease(album);
+  return els.header.innerHTML;
+}
+
+for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
+  for (const [name, identity, tagged, shown] of [
+    ['split', { canonical_name: 'Twin Name', disambiguation: 'northern band', split: true, tag_differs: false }, 'Twin Name', 'Twin Name'],
+    ['retagged', { canonical_name: 'Main Name', tag_differs: true }, 'Stage Name', 'Main Name'],
+  ]) {
+    test(`a ${name} album's details show no artist note in the ${layout} layout`, () => {
+      const html = renderReleaseHeader(layout, {
+        album_artist: tagged, name: 'First Album', edition: 'Deluxe', year: '2005', musicbrainz_artist: identity,
+      });
+
+      assert.ok(html.includes(`data-album-details-layout="${layout}"`), html);
+      assert.ok(html.includes(shown) && html.includes('First Album'), html);
+      assert.deepEqual(
+        [...html.matchAll(/<span class="album-details-header__tag[^"]*">([^<]*)</g)].map((match) => match[1]),
+        ['Deluxe'],
+      );
+      assert.doesNotMatch(html, /MusicBrainz:|Tagged as/);
+    });
+  }
+}
+
 test('an artist matched under another name is titled with its MusicBrainz name, display only', () => {
   const context = loadComponents();
-  const credited = { canonical_name: 'Danger Mouse', credited_as: 'Jay-Z' };
+  const credited = { canonical_name: 'Main Name', credited_as: 'Stage Name' };
 
-  assert.equal(context.galleryArtistDisplayName('Jay-Z', credited), 'Danger Mouse');
-  assert.equal(context.galleryArtistDisplayName('Amarok', { canonical_name: 'Amarok' }), 'Amarok');
-  assert.equal(context.galleryArtistDisplayName('Amarok', { identities: [] }), 'Amarok');
-  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Jay-Z', albumCount: 1, artist_musicbrainz: credited }),
-    /data-gallery-context-name>Danger Mouse<\/span>.*data-artist="Jay-Z"/s, 'the info trigger still names the tag');
+  assert.equal(context.galleryArtistDisplayName('Stage Name', credited), 'Main Name');
+  assert.equal(context.galleryArtistDisplayName('Twin Name', { canonical_name: 'Twin Name' }), 'Twin Name');
+  assert.equal(context.galleryArtistDisplayName('Twin Name', { identities: [] }), 'Twin Name');
+  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Stage Name', albumCount: 1, artist_musicbrainz: credited }),
+    /data-gallery-context-name>Main Name<\/span>.*data-artist="Stage Name"/s, 'the info trigger still names the tag');
 });
 
 test('a split artist\'s panel lists each MusicBrainz artist with its albums and link', () => {
@@ -366,16 +411,16 @@ test('a split artist\'s panel lists each MusicBrainz artist with its albums and 
     context,
   );
   const html = context.buildGalleryArtistIdentitiesHtml({ identities: [
-    { artist_mbid: '75d43a2e-ba60-427c-b2c7-bb666053d2f1', musicbrainz_url: 'https://musicbrainz.org/artist/75d43a2e-ba60-427c-b2c7-bb666053d2f1', canonical_name: 'Amarok',
-      disambiguation: 'Polish progressive rock band', album_count: 4 },
-    { artist_mbid: 'b42d111d-5932-4c00-8562-8bbf7203f850', musicbrainz_url: 'https://musicbrainz.org/artist/b42d111d-5932-4c00-8562-8bbf7203f850', canonical_name: 'Amarok',
-      disambiguation: 'Spanish fusion band', album_count: 1 },
+    { artist_mbid: '00000000-0000-4000-8000-000000000a01', musicbrainz_url: 'https://musicbrainz.org/artist/00000000-0000-4000-8000-000000000a01', canonical_name: 'Twin Name',
+      disambiguation: 'northern band', album_count: 4 },
+    { artist_mbid: '00000000-0000-4000-8000-000000000a02', musicbrainz_url: 'https://musicbrainz.org/artist/00000000-0000-4000-8000-000000000a02', canonical_name: 'Twin Name',
+      disambiguation: 'southern band', album_count: 1 },
   ] });
 
   assert.match(html, /Your albums belong to 2 MusicBrainz artists:/);
-  assert.match(html, /Amarok \(Polish progressive rock band\) · 4 albums.*href="https:\/\/musicbrainz\.org\/artist\/75d43a2e-ba60-427c-b2c7-bb666053d2f1"/s);
-  assert.match(html, /Amarok \(Spanish fusion band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/b42d111d-5932-4c00-8562-8bbf7203f850"/s);
-  assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Amarok' }), '');
+  assert.match(html, /Twin Name \(northern band\) · 4 albums.*href="https:\/\/musicbrainz\.org\/artist\/00000000-0000-4000-8000-000000000a01"/s);
+  assert.match(html, /Twin Name \(southern band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/00000000-0000-4000-8000-000000000a02"/s);
+  assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Twin Name' }), '');
 
   // Owner 2026-11-14: a person and their same-named band are separate artists; nothing
   // lists a band "also on MusicBrainz" under the person any more.
@@ -408,8 +453,151 @@ test('Album Details callers use presentation-only title and year values', () => 
   );
   const mobileSource = fs.readFileSync(path.join(runtimeRoot, 'album-details-components.js'), 'utf8');
 
-  assert.match(tagEditorSource, /album:\s*album\.display_name\s*\|\|\s*album\.name/);
+  // An applied MusicBrainz data correction (display_title) comes first (S4).
+  assert.match(tagEditorSource, /album:\s*album\.display_title\s*\|\|\s*album\.display_name\s*\|\|\s*album\.name/);
   assert.match(tagEditorSource, /year:\s*album\.display_year\s*\|\|\s*album\.year/);
-  assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(mobileSource, /title:\s*album\.display_title\s*\|\|\s*album\.display_name\s*\|\|\s*album\.name/);
   assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
+});
+
+test('album details show the MusicBrainz release type, else the local tag', () => {
+  const context = loadComponents();
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'ALBUM', musicbrainz_release: { type_label: 'Live' } }), 'Live');
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'EP', musicbrainz_release: { type_label: null } }), 'EP');
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'EP' }), 'EP');
+  assert.equal(context.albumDetailsReleaseType({}), 'ALBUM');
+  const tagEditorSource = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
+  assert.match(tagEditorSource, /releaseType:\s*albumDetailsReleaseType\(album\)/);
+});
+
+test('gallery artist headers show the romanized name in parentheses beside the name, outside it (J3)', () => {
+  const context = loadComponents();
+  context.romanizedArtistLabel = (name) => (name === '天門' ? '(Tenmon)' : '');
+  const bar = context.buildGalleryBarHtml({ contextKind: 'artist', artist: '天門', albumCount: 5 });
+  assert.match(bar, /<span data-gallery-context-name>天門<\/span><span class="gallery-artist-romanized" data-gallery-context-romanized>\(Tenmon\)<\/span><button class="gallery-info-button"/);
+  assert.match(context.buildFamilyArtistHeaderHtml({ artist: '天門', albumCount: 5 }),
+    /<h2 class="artist-name">天門 <span class="gallery-artist-romanized">\(Tenmon\)<\/span><\/h2>/);
+  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Angra', albumCount: 16 }),
+    /<span class="gallery-artist-romanized" data-gallery-context-romanized hidden><\/span>/);
+  assert.doesNotMatch(context.buildFamilyArtistHeaderHtml({ artist: 'Angra', albumCount: 16 }), /romanized/);
+});
+
+test('romanized names load once per ten minutes and redraw the tree and gallery only on change (J3)', async () => {
+  const context = loadComponents();
+  const calls = [];
+  let names = { '天門': 'Tenmon' };
+  context.fetch = async (url) => { calls.push(url); return { ok: true, json: async () => ({ names }) }; };
+  context.setRomanizedArtistNames = (value) => calls.push(['set', value]);
+  context.renderSidebar = () => calls.push('sidebar');
+  context.updateGalleryMainChrome = () => calls.push('chrome');
+  assert.equal(await context.refreshRomanizedArtistNames(), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), ['/api/musicbrainz/artists/romanized-names', ['set', { '天門': 'Tenmon' }], 'sidebar', 'chrome']);
+  assert.equal(await context.refreshRomanizedArtistNames(), false, 'not asked again within ten minutes');
+  assert.equal(calls.length, 4);
+  context.Date = { now: () => Date.now() + 600001 };
+  names = { '天門': 'Tenmon' };
+  assert.equal(await context.refreshRomanizedArtistNames(), false, 'unchanged names redraw nothing');
+  assert.equal(calls.length, 5);
+});
+
+// Main's status-poll budget: an unchanged poll fetches nothing more. Only an artist status that
+// changed after the first read (a new match) asks for romanized names again.
+test('a changed artist status after the first read refreshes romanized names; the first read does not', async () => {
+  const context = loadComponents();
+  const urls = [];
+  let artists = [{ local_artist_name: 'Amarok', gallery_artist: 'Amarok', match_state: 'pending' }];
+  context.state = { status: { allowed_actions: { 'catalogue.enrichment.request': true } } };
+  context.fetch = async (url) => {
+    urls.push(url);
+    return { ok: true, headers: { get: () => '' }, json: async () => (url.includes('romanized') ? { names: {} } : { artists }) };
+  };
+  await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  assert.deepEqual(urls, ['/api/musicbrainz/artists/status']);
+  artists = [];
+  await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(urls, ['/api/musicbrainz/artists/status', '/api/musicbrainz/artists/status',
+    '/api/musicbrainz/artists/romanized-names']);
+});
+
+test('album details carry the romanized artist name as hover text on desktop and a line on phones (J3)', () => {
+  const context = loadComponents();
+  for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
+    const html = context.buildAlbumDetailsHeaderHtml({ layout, artist: '天門', album: 'Hoshi no Koe', year: '2002', artistRomanized: 'Tenmon' });
+    assert.match(html, /<span title="Tenmon">天門<\/span>/, layout);
+    assert.equal((html.match(/class="album-details-header__romanized">\(Tenmon\)</g) || []).length, 1, layout);
+  }
+  const copy = context.buildAlbumDetailsHeaderHtml({ variant: 'copy', title: 'Hoshi no Koe', eyebrow: '天門', eyebrowRomanized: 'Tenmon' });
+  assert.match(copy, /album-details-header__eyebrow">天門<\/div><div class="album-details-header__romanized">\(Tenmon\)<\/div>/);
+  const plain = context.buildAlbumDetailsHeaderHtml({ layout: 'classic_bar', artist: 'Angra', album: 'Angels Cry' });
+  assert.doesNotMatch(plain, /title=|album-details-header__romanized/);
+  context.romanizedArtistName = (name) => (name === '天門' ? 'Tenmon' : '');
+  assert.equal(context.albumDetailsRomanizedArtist({ album_artist: '天門' }), 'Tenmon');
+  assert.equal(context.albumDetailsRomanizedArtist({ album_artist: 'Кипелов' }), '');
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-details-components.css'), 'utf8');
+  assert.match(css, /\.album-details-header__romanized \{ display: none;/);
+  const phone = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'), 'utf8');
+  assert.match(phone.slice(phone.indexOf('@media (max-width: 900px)')), /\.album-details-header__romanized \{ display: block;/);
+  const callers = ['tag-editor-and-optimistic-updates.js', 'album-details-components.js'].map((file) => fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', file), 'utf8')).join('\n');
+  assert.match(callers, /artistRomanized: albumDetailsRomanizedArtist\(album\)/);
+  assert.match(callers, /eyebrowRomanized: albumDetailsRomanizedArtist\(album\)/);
+});
+
+// Acceptance 2026-11-16: the page's Gallery Bar comes from the server template, which has no
+// romanized slot, so "(Tenmon)" never showed beside 天門 at the top of the artist's gallery.
+test('the server-rendered Gallery Bar gains the romanized slot right after the name (J3)', () => {
+  const context = loadComponents();
+  const html = [];
+  const made = { hidden: true, textContent: '' };
+  const name = { insertAdjacentHTML(where, markup) { html.push([where, markup]); } };
+  const bar = { querySelector(selector) {
+    if (selector === '[data-gallery-context-name]') return name;
+    if (selector === '[data-gallery-context-romanized]') return html.length ? made : null;
+    return null;
+  } };
+  assert.equal(context.galleryContextRomanizedElement(bar), made);
+  assert.deepEqual(html, [['afterend', '<span class="gallery-artist-romanized" data-gallery-context-romanized hidden></span>']]);
+  assert.equal(context.galleryContextRomanizedElement(bar), made);
+  assert.equal(html.length, 1, 'added once');
+  assert.equal(context.galleryContextRomanizedElement({ querySelector: () => null }), null);
+  const chrome = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js'), 'utf8');
+  assert.match(chrome, /const romanized = galleryContextRomanizedElement\(bar\);/);
+});
+
+// Acceptance 2026-11-16: on a phone the Series block sat under the cover. Album details render
+// before the album page is presented (is-mobile-page), so placement decided at render time saw
+// a desktop modal. Placement now follows the mobile composition, which runs after presentation
+// and on every breakpoint change.
+test('phone album details place Series after the track table once the page is presented (4A)', () => {
+  const context = loadComponents();
+  const placed = [];
+  const element = (name) => ({
+    name, classList: { contains: (token) => token === 'is-mobile-page' && mobilePage, add() {}, remove() {} },
+    dataset: {}, closest: () => body, querySelector: () => null, appendChild() {},
+    insertAdjacentHTML: (where, html) => placed.push([name, where, html.match(/data-album-details-series="(\w+)"/)[1]]),
+  });
+  let mobilePage = false;
+  const body = { querySelector: () => null };
+  const overlay = element('overlay');
+  const cover = element('cover');
+  const list = element('list');
+  context.usesMobilePageLayout = () => true;
+  context.document = {
+    documentElement: { getAttribute: () => 'classic_bar' },
+    getElementById: (id) => ({ 'track-modal': overlay, 'track-modal-cover': cover, 'track-modal-list': list }[id] || null),
+    querySelectorAll: () => [],
+  };
+  context.mobilePageState = { pages: [] };
+  context.syncMobilePageShell = () => {};
+  const album = { name: 'Fetch The Bolt Cutters', musicbrainz_series: [{ mbid: 's', name: 'Pitchfork: 10/10', kind: 'series' }] };
+
+  context.syncMobileAlbumComposition(album);
+  assert.deepEqual(placed.at(-1), ['cover', 'beforeend', 'series'], 'a desktop modal: under the cover');
+  mobilePage = true;
+  context.syncMobileAlbumComposition(album);
+  assert.deepEqual(placed.at(-1), ['list', 'afterend', 'series'], 'the presented phone page: after the track table');
+  const tagEditor = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
+  assert.doesNotMatch(tagEditor, /syncAlbumDetailsSeries\(/, 'render time no longer decides the placement');
 });

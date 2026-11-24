@@ -9,6 +9,10 @@ from typing import Any
 
 from music_app.services.musicbrainz_evidence import (
     SPECIAL_PURPOSE_ARTISTS,
+    album_folders,
+    decide_by_folder,
+    decide_by_recordings,
+    recording_sample,
     album_level,
     album_rank,
     TITLE_RANK,
@@ -145,6 +149,12 @@ class MusicBrainzArtistEnrichmentProcessor:
         )
         if not context:
             raise RuntimeError("Claimed MusicBrainz job has no accessible artist context.")
+        # A split name's folder fallback reads where each album's files sit, relative to its root.
+        load_folders = getattr(self._repository, "load_album_folders", None)
+        if callable(load_folders) and context.get("albums"):
+            folders = load_folders(job_id=job_id, worker_id=worker_id)
+            context["albums"] = [{**album, "folders": folders.get(int(album.get("id") or 0), [])}
+                                 for album in context["albums"]]
 
         if context.get("manual_decision") and context.get("projection_is_fresh"):
             self._repository.complete_job(
@@ -294,7 +304,7 @@ class MusicBrainzArtistEnrichmentProcessor:
                 # compare and choose instead of facing an empty conflict.
                 self._repository.replace_candidates(
                     local_artist_id=local_artist_id,
-                    candidates=list(outcome.get("candidates") or []),
+                    candidates=self._with_details(list(outcome.get("candidates") or [])),
                     match_state=_CANDIDATE_MATCH_STATES.get(classification, "conflict"),
                     evidence_summary=evidence_summary,
                     observed_at=observed_at,
@@ -317,13 +327,42 @@ class MusicBrainzArtistEnrichmentProcessor:
             observed_at=observed_at,
             preserve_existing=bool(context.get("existing_artist_mbid")),
         )
-        return {"processed": True, "state": terminal_state, "job_id": job_id}
+        return {"processed": True, "state": terminal_state, "job_id": job_id, "local_artist_id": local_artist_id}
+
+    def _with_details(self, candidates: list[dict[str, object]]) -> list[dict[str, object]]:
+        """A release credit carries only an id and a name: each shown candidate known only so
+        is looked up once, until its details are stored. A provider failure ends the lookups;
+        the next normal re-check tries again."""
+        credited = [candidate for candidate in candidates[:_MAX_CANDIDATES] if candidate.get("details_missing")]
+        if not credited:
+            return candidates
+        missing = self._repository.artist_mbids_without_details(
+            [str(candidate["artist_mbid"]) for candidate in credited])
+        for candidate in credited:
+            mbid = str(candidate["artist_mbid"])
+            if mbid not in missing:
+                continue
+            found = self._client.lookup_artist(mbid)
+            if found.get("classification") == "not_found":
+                continue
+            if found.get("classification") != "matched":
+                break
+            artist = found["artist"]
+            # A merged artist answers under another MBID: not this candidate's details.
+            if str(artist.get("mbid") or "").lower() != mbid.lower():
+                continue
+            candidate.update({key: artist.get(key) for key in
+                              ("sort_name", "disambiguation", "country_code", "area_mbid", "area_name")})
+            candidate["artist_kind"] = artist.get("artist_type")
+        return candidates
 
 
 # Bounds per artist, so one artist can never stall the queue: every mirror
 # request counts, and evidence gathering stops once the budget is spent.
 _MAX_REQUESTS_PER_ARTIST = 80
 _MAX_CANDIDATES = 15
+# Hinted MBIDs: a Last.fm identifier and the MusicBrainz artists a Discogs fallback led to.
+_MAX_HINTS = 3
 # Same-named artists with no album link: at most this many are scored, with
 # fewer browse pages, and requests stay reserved for the album searches.
 _MAX_NAME_ONLY_CANDIDATES = 5
@@ -547,11 +586,12 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
                 add(candidate, "named")
         if pool:
             break
-    # The stored Last.fm artist MBID is only a hint candidate.
-    hint = next((str(mbid).strip().lower() for mbid in context.get("hinted_artist_mbids") or []
-                 if str(mbid or "").strip()), "")
-    if hint and hint not in pool:
-        add({"mbid": hint, "canonical_name": "", "score": 0}, "hinted")
+    # The stored Last.fm artist MBID and the artists Discogs led to are only hint candidates.
+    hints = list(dict.fromkeys(str(mbid).strip().lower() for mbid in context.get("hinted_artist_mbids") or []
+                               if str(mbid or "").strip()))
+    for hint in hints[:_MAX_HINTS]:
+        if hint not in pool:
+            add({"mbid": hint, "canonical_name": "", "score": 0}, "hinted")
     # A local artist already matched under another spelling of this name.
     for sibling in context.get("sibling_matches") or []:
         if isinstance(sibling, dict) and name_keys(sibling.get("name")) & local_keys:
@@ -638,7 +678,8 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         # member of are separate artists with their own MBIDs (Alice Cooper and his 1969-73
         # band), split per album like any other same-named artists.
         return {"classification": "per_album", "artists": artists, "confidence": 1,
-                "album_identities": _album_identities(decision["certain"], albums),
+                "album_identities": _album_identities(decision["certain"], albums)
+                + _undecided_album_identities(decision, albums, mirror),
                 "evidence_summary": f"Your albums belong to {len(artists)} MusicBrainz artists."}
     if classification == "not_found":
         return {"classification": "not_found",
@@ -685,6 +726,76 @@ def _album_identities(certain: dict[int, dict[str, object]], albums: list[dict[s
             "release_mbid": evidence.get("release_id"), "disc_position": evidence.get("disc"),
             "signals": sorted(evidence.get("signals") or ()), "tag_differs": not owner.get("name_agrees"),
         })
+    return identities
+
+
+# A split name's undecided albums looked up by recordings, at most this many per artist and run.
+_UNDECIDED_ALBUM_LIMIT = 20
+
+
+def _undecided_album_identities(decision: dict[str, object], albums: list[dict[str, object]],
+                                mirror: _Mirror) -> list[dict[str, object]]:
+    """Owner 2026-11-18: an album no candidate certainly holds goes to the candidate a sample
+    of its recordings leads to; only an album with no recordings evidence falls back to the
+    folder it shares with one candidate's decided albums. Recordings and folder that disagree,
+    or several candidates holding the sample, leave it undecided. An owner's choice is kept."""
+    owners = {str(owner["mbid"]): owner for owner in decision.get("candidates") or []}
+    candidates = list(owners)
+    certain = decision.get("certain") or {}
+    decided_folders: dict[str, set[str]] = {mbid: set() for mbid in candidates}
+
+    def note_decided(index: int, mbid: str) -> None:
+        folders = album_folders(albums[index].get("folders") or [])
+        if folders and mbid in decided_folders:
+            decided_folders[mbid].add(folders[1].casefold())
+
+    kept = set(certain)
+    for index, owner in certain.items():
+        note_decided(index, str(owner["mbid"]))
+    for index, album in enumerate(albums):
+        identity = album.get("identity") or {}
+        if identity.get("source") == "manual":
+            kept.add(index)
+            note_decided(index, str(identity.get("mbid") or ""))
+    undecided = [index for index in range(len(albums)) if index not in kept][:_UNDECIDED_ALBUM_LIMIT]
+    mirror.remaining = max(mirror.remaining, 3 * len(undecided))
+
+    def identity_for(index: int, mbid: str, evidence: dict[str, object]) -> dict[str, object]:
+        return {"local_album_id": albums[index].get("id"), "local_title": albums[index].get("title"),
+                "artist_mbid": mbid, "tag_differs": not owners[mbid].get("name_agrees"), **evidence}
+
+    identities, fallback = [], []
+    for index in undecided:
+        sample = recording_sample(albums[index].get("tracks") or [])
+        results: dict[str, list[dict[str, object]]] = {}
+        for title in sample:
+            try:
+                found = mirror.call("search_recordings", title, candidates,
+                                    accept=("complete", "not_found", "invalid_request"))
+            except _ProviderFailure:
+                found = None
+            if found is None:  # budget spent or the mirror failed: this album stays unchecked
+                results = {}
+                break
+            results[title] = found.get("recordings") or []
+        if sample and len(results) < len(sample):
+            continue
+        outcome = decide_by_recordings(sample, results, candidates) if sample else {"outcome": "none", "found": {}}
+        if outcome["outcome"] == "decided":
+            mbid = str(outcome["artist_mbid"])
+            identities.append(identity_for(index, mbid, {
+                "method": outcome["method"], "sampled_titles": sample, "found": outcome["found"],
+                "release_mbid": outcome.get("release_mbid")}))
+            note_decided(index, mbid)
+        elif outcome["outcome"] not in {"tie", "mixed"}:
+            fallback.append((index, {mbid for mbid, count in outcome["found"].items() if count}))
+    for index, weak_artists in fallback:
+        folders = album_folders(albums[index].get("folders") or [])
+        owner = decide_by_folder(folders[1].casefold(), decided_folders) if folders else None
+        if owner is None or (weak_artists and weak_artists != {owner}):
+            continue
+        # The artist folder relative to its library root; never an absolute path.
+        identities.append(identity_for(index, owner, {"method": "folder", "folder": folders[1].partition(":")[2]}))
     return identities
 
 
@@ -836,8 +947,8 @@ def _match_tracks_alone(candidate, albums, mirror) -> None:
         # release, not its "Mysterious Realms").
         if not _open_to_other_releases(evidence) or not count:
             continue
-        same_length = [release for release in releases if release.get("release_group_id") and sum(
-            int(disc.get("track_count") or 0) for disc in release.get("discs") or []) == count]
+        same_length = [release for release in releases if release.get("release_group_id")
+                       and _audio_track_count_may_be(release, count)]
         seen: set[str] = set()
         for release in same_length:
             if release["release_group_id"] in seen or len(seen) >= _MAX_TRACK_ONLY_PER_ALBUM:
@@ -853,6 +964,17 @@ def _match_tracks_alone(candidate, albums, mirror) -> None:
             if trial["level"] and _better_than(trial, evidence):
                 candidate["albums"][index] = trial
                 break
+
+
+# A mixed-mode or enhanced CD may list a data track that a local rip never has.
+_DATA_TRACK_FORMAT = re.compile(r"mixed mode|enhanced", re.IGNORECASE)
+
+
+def _audio_track_count_may_be(release: dict[str, object], count: int) -> bool:
+    discs = release.get("discs") or []
+    total = sum(int(disc.get("track_count") or 0) for disc in discs)
+    data_tracks = sum(bool(_DATA_TRACK_FORMAT.search(str(disc.get("format") or ""))) for disc in discs)
+    return total - data_tracks <= count <= total
 
 
 def _fetch_tracks(evidence: dict[str, object], album: dict[str, object], mirror) -> bool | None:
@@ -1027,6 +1149,11 @@ def _candidate_for_storage(candidate: dict[str, Any]) -> dict[str, object]:
         "disambiguation": candidate.get("disambiguation"),
         "artist_kind": candidate.get("artist_type"),
         "country_code": candidate.get("country_code"),
+        "sort_name": candidate.get("sort_name"),
+        "area_mbid": candidate.get("area_mbid"),
+        "area_name": candidate.get("area_name"),
+        # A search or a lookup gives a sort name; a release credit does not.
+        "details_missing": not candidate.get("sort_name"),
         "candidate_score": max(0, min(score, 1)),
         "evidence_summary": summary,
     }

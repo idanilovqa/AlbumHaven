@@ -25,10 +25,16 @@ function albumRequiresHydration(album) {
   return declaredTrackCounts.length > 0 && !declaredTrackCounts.includes(tracks.length);
 }
 
+// The details request returns what only album details carry (MusicBrainz type, Series and
+// Featured In, a.k.a. titles); gallery payloads never do, even with every track.
+function albumHasLoadedDetails(album) {
+  return album?.album_details_loaded === true;
+}
+
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
+  const headerParts = [album.display_artist || album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
   els.title.textContent = headerParts.join(' - ');
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
@@ -464,7 +470,45 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     if (Array.isArray(payload?.current_releases)) error.currentReleases = payload.current_releases;
     throw error;
   }
+  // Marked on the parsed response itself, which the details caches keep by identity.
+  payload.album.album_details_loaded = true;
   return payload.album;
+}
+
+function sameAlbumTrackPaths(first, second) {
+  const paths = (album) => (Array.isArray(album?.tracks) ? album.tracks : [])
+    .map((track) => String(track?.path || '')).sort();
+  const [left, right] = [paths(first), paths(second)];
+  return left.length === right.length && left.every((path, index) => path === right[index]);
+}
+
+// A gallery album opened with all its tracks renders at once; the details request every other
+// album makes then adds what the gallery payload lacks, if this album is still the one open.
+function completeOpenTrackModalAlbumDetails(album) {
+  const albumKey = String(getAlbumRequestKey(album) || '').trim();
+  // Only by the album's own id: a key alone can name several releases (a first-paint card
+  // carries none, and completes when opened again from the loaded gallery).
+  const albumId = Number(album?.album_id || album?.id || 0);
+  if (!albumKey || !(albumId > 0) || albumHasLoadedDetails(album) || album.inventory_status === 'missing') return;
+  const generation = trackModalCleanupGeneration;
+  loadTrackModalAlbumDetails(albumKey, { albumId }).then((details) => {
+    const els = getTrackModalElements();
+    if (generation !== trackModalCleanupGeneration || !els.overlay || els.overlay.hidden) return;
+    if (!albumHasLoadedDetails(details) || albumRequiresHydration(details)) return;
+    const shown = getCurrentTrackModalAlbum();
+    if (String(getAlbumRequestKey(shown) || '') !== albumKey) return;
+    // Details add what the gallery lacks, never membership: details cached before a move
+    // or split still list the old tracks, and the gallery album is the current one.
+    if (!sameAlbumTrackPaths(details, shown)) return;
+    // Re-render in place (it recomposes the phone page too): the modal, its page and its player
+    // are already open. An edition tab keeps its label.
+    const withContext = attachGalleryPlaybackContextToAlbum(details);
+    const completed = shown.tabLabel === undefined ? withContext : { ...withContext, tabLabel: shown.tabLabel };
+    state.modalReleases[state.modalReleaseIndex] = completed;
+    renderTrackModalRelease(completed);
+  }).catch(() => {
+    // The album stays as the gallery showed it; opening it again retries.
+  });
 }
 
 // A gallery album that is gone was split or merged meanwhile. The refreshed gallery shows every
@@ -775,6 +819,7 @@ function openTrackModal(album, options = {}) {
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
+  completeOpenTrackModalAlbumDetails(albumWithPlaybackContext);
 }
 
 function getCurrentTrackModalAlbum() {

@@ -40,6 +40,8 @@ from music_app.services.gallery_display import (
 )
 from music_app.services.gallery_scope import normalize_gallery_scope, normalize_visible_categories
 from music_app.services.library_browse_postgres import GalleryProjectionPending, PostgresLibraryBrowseRepository
+from music_app.services.gallery_projection_postgres import gallery_publication_revision
+from music_app.services.state import status_inventory_mutation_revision
 from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
     resolve_album_open_directories,
@@ -234,6 +236,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
         "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
         "utility_allowed_actions": allowed_actions_for_request(request, (
             "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
+            "library.metadata_matches.review",
         )),
     }
     context_finished_at = time.perf_counter()
@@ -742,8 +745,10 @@ def _build_bootstrap_payload(
     request_started_epoch_ms: int,
 ) -> tuple[dict[str, object], float, dict[str, object]]:
     payload_elapsed_ms = 0.0
-    # Read before the view so a mutation committed while it builds is still seen as newer.
-    inventory_mutation_revision = int(library_state.get("inventory_mutation_revision") or 0)
+    # Read before the view so a mutation committed while it builds is still seen as newer; the
+    # revision /status reports, so one whose gallery is not yet published still counts as newer.
+    gallery_revision = gallery_publication_revision()
+    inventory_mutation_revision = status_inventory_mutation_revision(library_state)
     library_browse_uses_postgres = library_browse_postgres_is_effective(config)
     requested_root_albums_surface = _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
     requested_home_root_surface = _request_targets_home_root_surface(query_args, query_raw, selected_artist)
@@ -876,6 +881,7 @@ def _build_bootstrap_payload(
             "coversInProgress": is_cover_refresh_busy(library_state),
             "coversCancelable": bool(library_state.get("covers_in_progress")),
             "inventoryMutationRevision": inventory_mutation_revision,
+            "galleryPublicationRevision": gallery_revision,
             "partialView": initial_view_partial,
             "startupPreview": {
                 "mode": preview_mode,

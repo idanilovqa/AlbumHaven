@@ -392,7 +392,7 @@ test('problematic-files cases exclusively use the dedicated fixture surface whil
   const problematicCases = matrix.filter((entry) =>
     /FTC-UTIL-PROBLEMS-(009|010)/.test(entry.case));
 
-  assert.equal(problematicCases.length, 2);
+  assert.equal(problematicCases.length, 3);
   assert.deepEqual(
     new Set(problematicCases.map((entry) => entry.case.match(/FTC-UTIL-PROBLEMS-(?:009|010)/)[0])),
     new Set(['FTC-UTIL-PROBLEMS-009', 'FTC-UTIL-PROBLEMS-010']),
@@ -432,10 +432,13 @@ test('problematic-files performance targets use only the dedicated profile and s
     assert.ok(target, name);
     assert.equal(target.fixtureProfile, 'utility-problematic-files', name);
     assert.equal(target.workers, 1, name);
-    assert.equal(target.cases.length, 1, name);
-    assert.equal(target.cases[0].config, 'playwright.utility-problematic-files.config.cjs', name);
-    assert.equal(target.cases[0].project, 'utility-problematic-files', name);
-    assert.match(target.cases[0].test, /^tests\/e2e\/utilityProblematicFiles\//, name);
+    // problematic-files-focused also measures stored MusicBrainz data corrections (S4).
+    assert.equal(target.cases.length, name === 'problematic-files-focused' ? 2 : 1, name);
+    for (const testCase of target.cases) {
+      assert.equal(testCase.config, 'playwright.utility-problematic-files.config.cjs', name);
+      assert.equal(testCase.project, 'utility-problematic-files', name);
+      assert.match(testCase.test, /^tests\/e2e\/utilityProblematicFiles\//, name);
+    }
   }
 });
 

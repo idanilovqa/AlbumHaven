@@ -245,6 +245,27 @@ function scheduleTagEditorRenderAfterPaint(tagEditor, els) {
   scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(render));
 }
 
+// Owner 2026-11-18: files that left the album since it was opened are skipped and left
+// untouched; the save says so in amber, with the files it did write.
+function buildMovedFilesAlertMessage(savedCount, movedFiles) {
+  const count = Math.max(0, Number(savedCount) || 0);
+  return `Saved ${count} ${count === 1 ? 'file' : 'files'}. These files are no longer in this album and were not changed: `
+    + `${[...movedFiles].sort().join(', ')}. Reopen the album to edit them.`;
+}
+
+function buildTagEditCompletionAlert(tagEditAlert, data) {
+  const warnings = (Array.isArray(data?.warnings) ? data.warnings : [])
+    .map((warning) => String(warning || '').trim())
+    .filter(Boolean);
+  const moved = String(tagEditAlert?.movedMessage || '').trim();
+  const hasWarning = Boolean(moved) || warnings.length > 0;
+  return {
+    message: [moved || String(tagEditAlert?.completionMessage || '').trim(), ...warnings].filter(Boolean).join(' '),
+    severity: hasWarning ? 'warning' : 'success',
+    title: hasWarning ? 'Tags saved with warning' : 'Tags updated',
+  };
+}
+
 function openTagEditor(album, options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
@@ -909,6 +930,8 @@ async function confirmManualTagEdit() {
       ) {
         failedSaveTaskError = String(data.error || '').trim();
       }
+      // Every edited file left this album since it was opened: nothing was changed; say which.
+      if (data.error_code === 'tag_edit_files_moved') failedSaveTaskError = String(data.error || '').trim();
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {
@@ -921,6 +944,8 @@ async function confirmManualTagEdit() {
         && data.edit_outcome === 'failed_rolled_back';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
+    const movedFiles = (Array.isArray(data.moved_files) ? data.moved_files : []).map(String).filter(Boolean);
+    if (movedFiles.length) tagEditAlert.movedMessage = buildMovedFilesAlertMessage(editedPaths.length - movedFiles.length, movedFiles);
     const updatedAlbums = Array.isArray(data.updated_albums)
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
@@ -999,18 +1024,8 @@ async function confirmManualTagEdit() {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
     if (responseIsTerminal && !terminalResponseNeedsCanonicalRefresh) {
-      const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-        .map((warning) => String(warning || '').trim())
-        .filter(Boolean);
-      const hasCompletionWarning = completionWarnings.length > 0;
-      showRepairAlert(
-        [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
-        hasCompletionWarning ? 'warning' : 'success',
-        8000,
-        {
-          title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-        },
-      );
+      const completion = buildTagEditCompletionAlert(tagEditAlert, data);
+      showRepairAlert(completion.message, completion.severity, 8000, { title: completion.title });
     }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
@@ -1958,10 +1973,12 @@ function renderTrackModalRelease(album) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
-      album: album.display_name || album.name || 'Album',
+      artistRomanized: albumDetailsRomanizedArtist(album),
+      album: album.display_title || album.display_name || album.name || 'Album',
+      alternativeTitles: album.musicbrainz_release?.alternative_titles,
       year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
-      tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
+      releaseType: albumDetailsReleaseType(album),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
@@ -2103,7 +2120,7 @@ function renderTrackModalRelease(album) {
   const tracks = Array.isArray(activeDuplicateSource?.tracks)
     ? activeDuplicateSource.tracks
     : (Array.isArray(album.tracks) ? album.tracks : []);
-  const grouped = groupAlbumTracks(tracks);
+  const grouped = groupAlbumTracks(tracks, album);
   const bonusGroups = grouped.groups.filter((group) => group.isBonus);
   const mainGroups = grouped.groups.filter((group) => !group.isBonus);
   const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
@@ -2209,8 +2226,11 @@ function isBonusDiscTrack(track) {
 }
 
 
-function groupAlbumTracks(tracks) {
+function groupAlbumTracks(tracks, album = null) {
   const safeTracks = orderAlbumTracks(tracks);
+  // The matched MusicBrainz release decides where the main album ends; without it the
+  // disc labels and tags are the local guess.
+  const lastMainDisc = Number(album?.musicbrainz_release?.last_main_disc_number) || 0;
 
   const explicitDiscs = Array.from(new Set(
     safeTracks
@@ -2279,7 +2299,9 @@ function groupAlbumTracks(tracks) {
       discNumber: groups.get(key).discNumber,
       discLabel: groups.get(key).discLabel,
       discSubtitle: groups.get(key).discSubtitle,
-      isBonus: Boolean(groups.get(key).isBonus),
+      isBonus: lastMainDisc
+        ? (groups.get(key).discNumber || 1) > lastMainDisc
+        : Boolean(groups.get(key).isBonus),
       tracks: groups.get(key).tracks,
     })),
   };
@@ -2287,7 +2309,7 @@ function groupAlbumTracks(tracks) {
 
 
 function buildTrackListHtml(tracks, album = null, totalLength = null) {
-  const grouped = groupAlbumTracks(tracks);
+  const grouped = groupAlbumTracks(tracks, album);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
   const trackRows = Array.isArray(album?.track_rows) ? album.track_rows : [];
@@ -2328,8 +2350,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         : duration;
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
-      const displayTitle = String(trackRow?.title || track.title || '').trim();
-      const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
+      // An applied MusicBrainz data correction (S4) shows in place of the tag; the tag stays.
+      const displayTitle = String(track.display_title || trackRow?.title || track.title || '').trim();
+      const taggedSecondary = String(trackRow?.secondary_artist || '').trim();
+      const secondaryArtist = taggedSecondary && track.display_artist ? String(track.display_artist) : taggedSecondary;
       return {
         path: trackPath,
         src,
@@ -2344,6 +2368,11 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         originalDuration: duration,
         trackNumber: trackValue,
         secondaryArtist,
+        // The tag title's Latin form (S7); none beside a corrected title it was not made for.
+        titleTransliteration: displayTitle === String(trackRow?.title || '').trim()
+          ? String(trackRow?.title_transliteration || '').trim() : '',
+        // The matched release's sub-section heading (S8); never a tag.
+        section: String(trackRow?.section || '').trim(),
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),

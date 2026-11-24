@@ -320,6 +320,58 @@ test('track modal play button exposes numeric duration seconds', () => {
   assert.match(markup, /data-track-duration-seconds="180"/);
 });
 
+test('track modal hands each track row provider sub-section to the track table, never a tag', () => {
+  let tableConfig = null;
+  const context = loadHelper([], {
+    state: { player: { current: null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml: (config) => { tableConfig = config; return ''; },
+    document: { documentElement: null },
+  });
+  const tracks = [8, 9].map((number) => ({
+    path: `C:/Music/${number}.flac`, title: `Track ${number}`, track_number: number, disc_number: 1,
+    duration_seconds: 180, section: 'From a tag',
+  }));
+  context.buildTrackListHtml(tracks, {
+    track_rows: [
+      { path: tracks[0].path, track_number: 8 },
+      { path: tracks[1].path, track_number: 9, section: 'Where Dead Angels Lie' },
+    ],
+  });
+
+  assert.deepEqual([...tableConfig.groups[0].tracks].map((track) => track.section), ['', 'Where Dead Angels Lie']);
+});
+
+test('track modal hands a track row Latin form to the track table only beside the title it was made for', () => {
+  let tableConfig = null;
+  const context = loadHelper([], {
+    state: { player: { current: null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml: (config) => { tableConfig = config; return ''; },
+    document: { documentElement: null },
+  });
+  const tracks = [['桜花抄', null], ['焦燥', 'A corrected title'], ['Kiss', null]].map(([title, display], index) => ({
+    path: `C:/Music/${index}.flac`, title, display_title: display, track_number: index + 1, disc_number: 1,
+    duration_seconds: 180,
+  }));
+  context.buildTrackListHtml(tracks, {
+    track_rows: [
+      { path: tracks[0].path, track_number: 1, title: '桜花抄', title_transliteration: 'Oukashou' },
+      { path: tracks[1].path, track_number: 2, title: '焦燥', title_transliteration: 'Shousou' },
+      { path: tracks[2].path, track_number: 3, title: 'Kiss' },
+    ],
+  });
+
+  assert.deepEqual([...tableConfig.groups[0].tracks].map((track) => [track.title, track.titleTransliteration]),
+    [['桜花抄', 'Oukashou'], ['A corrected title', ''], ['Kiss', '']]);
+});
+
 test('track modal playback refresh preserves generic Play track and Pause track accessible names', () => {
   const trackPath = 'C:\\Music\\Named Track.flac';
   const attributes = new Map([
@@ -2839,6 +2891,57 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
 });
 
+// Owner 2026-11-18: files that left the album are skipped; the rest is saved, in amber.
+test('a save that skipped files that left the album says so in amber with the saved count', () => {
+  const context = loadHelper([], {});
+  assert.equal(context.buildMovedFilesAlertMessage(3, ['02 - Moved.mp3']),
+    'Saved 3 files. These files are no longer in this album and were not changed: 02 - Moved.mp3. Reopen the album to edit them.');
+  assert.equal(context.buildMovedFilesAlertMessage(1, ['b.mp3', 'a.mp3']),
+    'Saved 1 file. These files are no longer in this album and were not changed: a.mp3, b.mp3. Reopen the album to edit them.');
+  const alert = { completionMessage: 'Saved changes to 4 tracks in “Album”.' };
+  assert.deepEqual({ ...context.buildTagEditCompletionAlert(alert, { warnings: [] }) },
+    { message: 'Saved changes to 4 tracks in “Album”.', severity: 'success', title: 'Tags updated' });
+  alert.movedMessage = context.buildMovedFilesAlertMessage(3, ['02 - Moved.mp3']);
+  const moved = context.buildTagEditCompletionAlert(alert, { warnings: [] });
+  assert.equal(moved.message, alert.movedMessage, 'the amber message replaces the plain completion');
+  assert.equal(moved.severity, 'warning');
+});
+
+test('a save whose every file left the album shows the server\'s reason', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\02 - Moved.flac';
+  const album = { key: 'artist::album', name: 'Album', album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album' }] };
+  const error = 'These files are no longer in this album, so nothing was changed: 02 - Moved.flac. Reopen the album to edit them.';
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Renamed' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [{ ...album, name: 'Renamed' }]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return []; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    claimTagEditViewMutation() { return { id: 'moved-claim' }; },
+    releaseFailedTagEditViewMutation() {},
+    restoreTagEditorDraftAfterFailedSave() {},
+    async fetch() {
+      return { ok: false, status: 409,
+        async json() { return { ok: false, error_code: 'tag_edit_files_moved', error }; } };
+    },
+  });
+  context.state.ui = { viewStateRevision: 5 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(alerts.at(-1)[0], error);
+  assert.equal(alerts.at(-1)[1], 'error');
+});
+
 test('manual tag edit preserves the editor draft for retry after an immediate failed POST', async () => {
   const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
   const album = {
@@ -4978,6 +5081,38 @@ test('Album Details matches a numbered second disc rating by its disc tag (All t
     Array.from(renderedConfig.groups, (group) => [group.discLabel, group.discRating]),
     [['CD 1', null], ['CD 2', 8]],
   );
+});
+
+// MusicBrainz Delivery 2 (owner 2026-11-08): the matched release decides where the main
+// album ends; without that decision the local guess stays.
+const MAIN_THEN_UNNAMED_BONUS = [
+  { path: 'C:\Music\A\CD1\01.mp3', disc_number: 1, disc_number_raw: '1', track_number: 1, duration_seconds: 100 },
+  { path: 'C:\Music\A\CD2\01.mp3', disc_number: 2, disc_number_raw: '2', track_number: 1, duration_seconds: 60 },
+  { path: 'C:\Music\A\CD3\01.mp3', disc_number: 3, disc_number_raw: '3', track_number: 1, duration_seconds: 30 },
+];
+
+test('Album Details ends the main album after the disc MusicBrainz names', () => {
+  const context = loadHelper([]);
+  const grouped = context.groupAlbumTracks(MAIN_THEN_UNNAMED_BONUS, {
+    musicbrainz_release: { last_main_disc_number: 2 },
+  });
+  assert.deepEqual(Array.from(grouped.groups, (group) => group.isBonus), [false, false, true]);
+});
+
+test('Album Details keeps the local guess without a MusicBrainz main-album end', () => {
+  const context = loadHelper([]);
+  for (const album of [null, {}, { musicbrainz_release: { last_main_disc_number: null } }]) {
+    const grouped = context.groupAlbumTracks(MAIN_THEN_UNNAMED_BONUS, album);
+    assert.deepEqual(Array.from(grouped.groups, (group) => group.isBonus), [false, false, false]);
+  }
+});
+
+test('A named Bonus disc MusicBrainz counts as main album stays main', () => {
+  const context = loadHelper([]);
+  const tracks = MAIN_THEN_UNNAMED_BONUS.slice(0, 2).map((track, index) => (
+    index === 1 ? { ...track, disc_subtitle: 'Bonus' } : track));
+  const grouped = context.groupAlbumTracks(tracks, { musicbrainz_release: { last_main_disc_number: 2 } });
+  assert.deepEqual(Array.from(grouped.groups, (group) => group.isBonus), [false, false]);
 });
 
 // Request-capture contract (tests/ci/bounded-interactions.json): confirming a missing album's

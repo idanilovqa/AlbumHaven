@@ -8,7 +8,9 @@ import pytest
 
 from music_app.services.musicbrainz_evidence import (
     album_level,
+    album_rank,
     album_signals,
+    assign_albums,
     candidate_name_keys,
     decide,
     group_title_keys,
@@ -447,3 +449,102 @@ def test_titles_sharing_only_generic_words_never_agree_partially():
     """Jay-Z: "The Grey Album" (a mash-up of The Black Album's songs) is not that album."""
     assert title_agreement("The Grey Album", "The Black Album (Pete Rock Remix)") is None
     assert title_agreement("Keys to the Paradise", "Keys to the Palace") == "partial"
+
+
+# J3 (owner 2026-11-15): romanized artist names shown in parentheses beside original-script names.
+def _artist(canonical, sort_name=None, aliases=()):
+    return {"canonical_name": canonical, "sort_name": sort_name or canonical, "aliases": list(aliases)}
+
+
+def test_a_primary_latin_alias_romanizes_a_japanese_name_english_first():
+    from music_app.services.musicbrainz_matching import romanized_name
+    artist = _artist("久石譲", "Hisaishi, Joe", [
+        {"name": "Hisaishi Jō", "locale": "ja-latn", "primary": True},
+        {"name": "Joe Hisaishi", "locale": "en", "primary": True},
+        {"name": "ひさいし じょう", "locale": "ja", "primary": False},
+    ])
+    assert romanized_name("久石 譲", artist) == "Joe Hisaishi"
+
+
+def test_a_latin_canonical_name_romanizes_when_no_alias_does():
+    from music_app.services.musicbrainz_matching import romanized_name
+    assert romanized_name("잠비나이", _artist("Jambinai", aliases=[{"name": "잠비나이", "locale": "ko", "primary": True}])) == "Jambinai"
+
+
+def test_a_latin_sort_name_romanizes_last_and_reads_first_name_first():
+    from music_app.services.musicbrainz_matching import romanized_name
+    assert romanized_name("天門", _artist("天門", "Tenmon")) == "Tenmon"
+    assert romanized_name("平沢進", _artist("平沢進", "Hirasawa, Susumu")) == "Susumu Hirasawa"
+
+
+def test_search_hints_never_romanize():
+    from music_app.services.musicbrainz_matching import romanized_name
+    hint = {"name": "Tenmonn", "locale": None, "primary": False, "kind": "Search hint"}
+    assert romanized_name("天門", _artist("天門", "天門", [hint])) is None
+
+
+def test_latin_and_cyrillic_names_get_no_romanized_name():
+    from music_app.services.musicbrainz_matching import romanized_name
+    assert romanized_name("Angra", _artist("Angra")) is None
+    # Cyrillic names get the hover form only (J1, redesigned), never the parentheses.
+    assert romanized_name("Кипелов", _artist("Кипелов", "Kipelov")) is None
+    # Nothing Latin to show.
+    assert romanized_name("天門", _artist("天門", "天門")) is None
+    assert romanized_name("天門", None) is None
+    # The name already carries its Latin form.
+    assert romanized_name("ナイトメア Nightmare", _artist("ナイトメア", aliases=[{"name": "Nightmare", "locale": "en", "primary": True}])) is None
+
+
+_MILLENIUM_TITLES = ("Together As One", "Believe In Love", "Marianne", "Come Back", "Almost Made It To Heaven",
+                     "Hold On", "Gabriella", "Gonna Let You Go", "Invincible")
+
+
+def _year_rule_album(year, titles, lengths=None):
+    lengths = lengths or [0] * len(titles)
+    return {"year": year, "tracks": [{"title": title, "duration_seconds": length} for title, length in zip(titles, lengths)]}
+
+
+def _year_rule_release(date, titles, lengths=None):
+    lengths = lengths or [0] * len(titles)
+    return {"first_release_date": date, "tracks": [{"title": title, "length": length * 1000} for title, length in zip(titles, lengths)]}
+
+
+def _year_rule_evidence(local, remote):
+    signals = album_signals(local, remote)
+    return {"signals": signals, "level": album_level("exact", signals)}
+
+
+def test_a_wrong_tag_year_never_vetoes_a_full_tracklist_match():
+    """Owner 2026-11-21 (Millenium: tagged 1998, MusicBrainz 1995, 9 of 9 tracks)."""
+    full = _year_rule_evidence(_year_rule_album(1998, _MILLENIUM_TITLES), _year_rule_release("1995", [title.lower() for title in _MILLENIUM_TITLES]))
+    assert "year" not in full["signals"] and {"track_list", "track_count"} <= full["signals"]
+    assert full["level"] == "strong"
+    # A release that agrees on the year, the count and the lengths but not the titles never
+    # outranks the full tracklist.
+    lengths = list(range(200, 209))
+    other = _year_rule_evidence(_year_rule_album(1998, _MILLENIUM_TITLES, lengths),
+                      _year_rule_release("1998", [f"Other {index}" for index in range(9)], lengths))
+    assert {"year", "track_count", "durations"} <= other["signals"] and "track_list" not in other["signals"]
+    assert album_rank(full) > album_rank(other)
+    assign_albums([{"albums": [other]}, {"albums": [full]}])
+    assert full["assigned"] and not other["assigned"]
+
+
+def test_a_different_year_with_a_partial_tracklist_stays_unmatched():
+    partial = _year_rule_evidence(_year_rule_album(1998, _MILLENIUM_TITLES),
+                        _year_rule_release("1995", [*_MILLENIUM_TITLES[:3], *(f"Other {index}" for index in range(9))]))
+    assert partial["signals"] == {"tracks_differ"}
+    assert partial["level"] is None
+
+
+def test_the_year_only_breaks_a_tie_between_editions_with_the_same_tracklist():
+    local = _year_rule_album(1998, _MILLENIUM_TITLES)
+    dated = _year_rule_evidence(local, _year_rule_release("1998", _MILLENIUM_TITLES))
+    other_edition = _year_rule_evidence(local, _year_rule_release("1995", _MILLENIUM_TITLES))
+    assert album_rank(dated) > album_rank(other_edition)
+    assign_albums([{"albums": [other_edition]}, {"albums": [dated]}])
+    assert dated["assigned"] and not other_edition["assigned"]
+    # Neither year agrees: the tracks decide nothing between them, as before.
+    first, second = (_year_rule_evidence(local, _year_rule_release(date, _MILLENIUM_TITLES)) for date in ("1995", "2004"))
+    assign_albums([{"albums": [first]}, {"albums": [second]}])
+    assert not first["assigned"] and not second["assigned"]

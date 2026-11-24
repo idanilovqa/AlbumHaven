@@ -305,6 +305,30 @@ def test_a_busy_queue_is_claimed_again_without_the_idle_wait():
     assert len(processor.calls) >= 4, "the worker waited between busy batches"
 
 
+def test_only_a_pass_that_processed_work_checks_the_gallery():
+    """A match can label a split name, so a busy pass republishes an out-of-date tree; an idle
+    pass, which changed nothing, never asks."""
+    api = worker_api()
+    processor = Processor([{"processed": True, "state": "succeeded"}] * 2)
+    checks = []
+
+    async def scenario():
+        worker = api.MusicBrainzEnrichmentWorker(
+            processor=processor, worker_id="worker-a", batch_size=1, poll_seconds=0.01,
+            after_busy_pass=lambda: checks.append(len(processor.calls)),
+        )
+        worker.start()
+        for _ in range(200):
+            if len(processor.calls) >= 6:
+                break
+            await asyncio.sleep(0.01)
+        await worker.stop()
+
+    asyncio.run(scenario())
+    assert len(processor.calls) >= 6
+    assert checks == [1, 2], "one check per busy pass, none for the idle passes"
+
+
 def test_concurrency_must_be_positive():
     api = worker_api()
     with pytest.raises(ValueError):

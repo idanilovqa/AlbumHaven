@@ -841,7 +841,7 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     monkeypatch.setattr(
         state,
         "schedule_gallery_projection_refresh",
-        lambda config: invalidated.append("gallery"),
+        lambda config, **_options: invalidated.append("gallery"),
         raising=False,
     )
     monkeypatch.setattr(
@@ -884,6 +884,8 @@ def test_targeted_projection_invalidation_queues_the_settings_prewarm(monkeypatc
     from music_app.services import state
 
     events: list[str] = []
+    # The real refresh would run on the cache-write thread, and fail, during a later test.
+    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", lambda config, **_options: None)
     monkeypatch.setattr(state, "invalidate_problematic_albums_payload_cache", lambda _: None)
     monkeypatch.setattr(state, "invalidate_utility_rules_payload_cache", lambda _: None)
     monkeypatch.setattr(state, "invalidate_postgres_utility_projection_cache", lambda **_: events.append("invalidate"))

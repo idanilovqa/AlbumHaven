@@ -243,6 +243,9 @@ class _EmptyMissingAlbumConnection:
             "requested_identities as materialized",
             "candidate_containers as materialized",
             "library.local_album_artist_identities",
+            "library.local_album_musicbrainz_releases",
+            "library.local_album_musicbrainz_series",
+            "library.local_album_musicbrainz_correction_rows",
         )):
             return _InventoryCursor()
         assert _is_missing_album_query(sql)
@@ -5793,6 +5796,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     )
     assert executed[search_sql_index + 1] == {
         "query_like": "%tender%",
+        "query_latin_like": "%tender%",
         "query_utf8_prefilter": "tender",
         "include_missing": True,
         "search_artist_keys": [],
@@ -8822,6 +8826,7 @@ def test_postgres_search_rows_query_authoritative_database_on_every_request():
     assert [executed[0], executed[2]] == [
         {
             "query_like": "%Ария%",
+            "query_latin_like": None,
             "query_utf8_prefilter": "Ария",
             "include_missing": True,
             "search_artist_keys": [],
@@ -8830,6 +8835,7 @@ def test_postgres_search_rows_query_authoritative_database_on_every_request():
         },
         {
             "query_like": "%Ария%",
+            "query_latin_like": None,
             "query_utf8_prefilter": "Ария",
             "include_missing": True,
             "search_artist_keys": [],
@@ -9833,7 +9839,8 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
             return False
 
         def execute(self, sql, params=None):
-            if _is_missing_album_query(sql):
+            if _is_missing_album_query(sql) or any(table in str(sql) for table in (
+                    "library.local_album_musicbrainz_series", "library.local_album_musicbrainz_correction_rows")):
                 return _InventoryCursor()
             executed.extend([sql, params])
             return FakeCursor()
@@ -10807,7 +10814,16 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
 
     sql = " ".join(_search_preview_sql().split())
 
-    assert sql.count("like lower(%(query_like)s)") == 8
+    # Eight indexed base-table scans, plus the small MusicBrainz series table (Delivery 2, S6):
+    # a series' name finds its albums through their release decisions. The same scans also
+    # match applied MusicBrainz corrections (S4): album title and album artist, and track title
+    # and track artist, four predicates more, no extra scan. One more indexed scan is of the few
+    # releases credited under another name than the artist's main one (0275), never of the albums.
+    assert sql.count("like lower(%(query_like)s)") == 14
+    assert sql.count("from library.local_albums where") == sql.count("from library.local_albums where lower(btrim(coalesce(")
+    assert sql.count("from integration.musicbrainz_releases releases") == 1
+    assert sql.count("from library.local_tracks where") == 1
+    assert "where lower(btrim(integration.musicbrainz_series.name)) like lower(%(query_like)s)" in sql
     assert "album_title_matches as materialized (" in sql
     assert "display_artist_matches as materialized (" in sql
     assert "credited_album_artist_matches as materialized (" in sql
@@ -11079,6 +11095,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
     assert "scan_cache,file_entry" in str(executed[0])
     assert payload == [
         {
+            "album_id": 501,
             "key": "split artist::split album::year::1999",
             "album_ref": "split artist::split album::year::1999",
             "_persisted_album_key": "split artist::split album",
@@ -11247,6 +11264,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
 
     assert payload == [
         {
+            "album_id": 601,
             "key": "exception-artist-exception-album",
             "album_ref": "exception-artist-exception-album",
             "_persisted_album_key": "exception-artist-exception-album",

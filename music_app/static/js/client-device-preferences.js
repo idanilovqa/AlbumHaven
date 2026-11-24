@@ -11,6 +11,7 @@
     'albumhaven.playerAppearance.v1': 'playerAppearance',
     'albumhaven.mobileGridColumns.v1': 'mobileGridColumns',
     'albumhaven.gallerySources.v1': 'gallerySources',
+    'albumhaven.seriesTreeCollapsedGroups.v1': 'seriesTreeCollapsedGroups',
   });
   const STRING_FIELDS = new Set(['albumOpenMode', 'compactPlayerMode']);
   const clone = (value) => JSON.parse(JSON.stringify(value));

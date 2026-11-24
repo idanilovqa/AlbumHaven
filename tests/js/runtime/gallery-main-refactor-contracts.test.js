@@ -531,6 +531,7 @@ test('artist info ignores queued pre-open scroll but dismisses real post-open mo
   context.observeArtistFamilyPanelBounds = () => null;
   context.updateGalleryMainChrome = () => {};
   context.focusGalleryMainSurface = () => {};
+  context.refreshRomanizedArtistNames = () => Promise.resolve(false);
   context.initGalleryMain();
   const anchor = { setAttribute() {} };
   const surface = { hidden: true, matches: () => false, setAttribute() {},
@@ -666,14 +667,20 @@ test('current GalleryBar owner puts the album count on the name line and the pil
   assert.match(galleryMainCssSource, /\.gallery-bar__summary,\s*\.gallery-bar__artist-metadata\s*\{[^}]*min-height:\s*20px/s);
 });
 
-test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {
+test('GalleryBar shows no genre pill or text for an artist with no genre and never leaks metadata into family contexts', () => {
   const context = loadRuntime();
   const buildGalleryBarHtml = requireContract(context, 'buildGalleryBarHtml');
-  const confirmedEmpty = buildGalleryBarHtml({
-    contextKind: 'single-artist', artist: 'Unknown Artist', albumCount: 1,
-    artist_musicbrainz: { country: null, genres: ['Genre unavailable'] },
-  });
-  assert.match(confirmedEmpty, /ui-metadata-pill--genre-unavailable[^>]*>Genre unavailable</);
+  // No genre, or the placeholder for none, shows no pill.
+  for (const genres of [['Genre unavailable'], [], null, ['', '  ']]) {
+    const noGenre = buildGalleryBarHtml({
+      contextKind: 'single-artist', artist: 'Unknown Artist', albumCount: 1,
+      artist_musicbrainz: { country: 'Finland', genres },
+    });
+    assert.doesNotMatch(noGenre, /ui-metadata-pill--genre|Genre unavailable|unavailable/i, JSON.stringify(genres));
+    assert.match(noGenre, /ui-metadata-pill--country">Finland</, 'the country pill still shows');
+  }
+  const withGenre = context.buildGalleryArtistMetadataHtml({ genres: ['Genre unavailable', 'power metal'] });
+  assert.equal(withGenre, '<span class="ui-metadata-pill ui-metadata-pill--genre">power metal</span>');
 
   const family = buildGalleryBarHtml({
     contextKind: 'family', primaryArtist: 'Kipelov', artistCount: 2, albumCount: 6,
@@ -2317,10 +2324,10 @@ test('the artist panel ends its text with one disabled Open full page and lists 
     'disabled for every artist, with the same title Full page had');
   assert.match(builder, /<p data-artist-info-summary\$\{isLongBiography \? ' data-artist-info-long' : ''\}>\$\{escapeHtml\(summary\)\} \$\{fullPage\}<\/p>\$\{links \? `<div class="artist-info-overlay__links">\$\{links\}<\/div>` : ''\}/,
     'the control is the last item of the text, and the service links follow below it');
-  // An artist matched under another name shows the MusicBrainz name as its title and
-  // names the tag under its links; a split artist lists its MusicBrainz artists first.
-  assert.match(builder, /<\/div>` : ''\}\$\{identities\}\$\{credit\}/);
-  assert.match(builder, /data-artist-info-credit>Tagged as \$\{escapeHtml\(artist\)\} in your files\.<\/p>/);
+  // An artist matched under another name shows the MusicBrainz name as its title, with no
+  // "Tagged as" line; a split artist lists its MusicBrainz artists.
+  assert.match(builder, /<\/div>` : ''\}\$\{identities\}/);
+  assert.doesNotMatch(galleryMainInteractionsSource, /Tagged as|data-artist-info-credit/);
   assert.match(builder, /<h2>\$\{escapeHtml\(displayName\)\}<\/h2>/);
   assert.match(builder, /scrollHeight <= summaryElement\.clientHeight \+ 1\) summaryElement\.removeAttribute\('data-artist-info-long'\)/,
     'text that fits in five lines gets no clamp or fade');

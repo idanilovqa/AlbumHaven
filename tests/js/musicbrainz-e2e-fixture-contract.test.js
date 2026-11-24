@@ -110,13 +110,13 @@ test('the links case opens the artist that owns the zero-vote Discogs fixture', 
   assert.match(step, /MBID\.zeroVote/);
 });
 
-test('the Shamaani Duo album assertion locates the canonical Korpiklaani heading', () => {
+test('the Quillmere Duo album assertion locates the canonical Brackenfold Choir heading', () => {
   const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
   const start = spec.indexOf('MBD1-40:');
   const step = spec.slice(start, spec.indexOf('FTC-MBID-002', start));
 
-  assert.match(step, /albumDetailsTags\(\{ galleryActions, trackModalActions \}, 'Korpiklaani', 'Hunka lunka'\)/);
-  assert.match(step, /toContain\('Tagged as Shamaani Duo'\)/);
+  assert.match(step, /albumDetailsTags\(\{ galleryActions, trackModalActions \}, 'Brackenfold Choir', 'First Embers'\)/);
+  assert.match(step, /tag\.startsWith\('Tagged as'\)\)\)\.toEqual\(\[\]\)/);
 });
 
 test('the held hydration case uses the scrollable compilation artist fixture', () => {
@@ -178,7 +178,7 @@ test('metadata-conflict persistence is asserted on the family member information
   assert.match(step, /page\.reload\(\)[\s\S]*openArtistInfoPanel\(CONFLICT_ASSIGN\)/);
   assert.match(step, /heading: CONFLICT_ASSIGN/);
   assert.match(step, /countries: \['Finland'\]/);
-  assert.match(step, /genres: \['Genre unavailable'\]/);
+  assert.match(step, /genres: \[\], \/\/ No genre shows no pill or text/);
   assert.match(step, /musicbrainz\.org\/artist\/\$\{MBID\.conflictAssign\}/);
   assert.doesNotMatch(step, /readArtistContextMetadata/);
 });
@@ -229,7 +229,7 @@ test('MusicBrainz owner-registry contracts are mapped to the existing three comp
     .map((row) => [row.case.slice(0, 12), row]));
 
   assert.ok(byId.get('FTC-MBID-001').expectedContracts.includes('mbd1-04-header-info-hydration-race'));
-  assert.ok(byId.get('FTC-MBID-001').expectedContracts.includes('mbd1-40-shamaani-duo-korpiklaani'));
+  assert.ok(byId.get('FTC-MBID-001').expectedContracts.includes('mbd1-40-credited-duo-renamed-main'));
   assert.ok(byId.get('FTC-MBID-003').expectedContracts.includes('mbd1-14-provider-outage-retry-timing'));
   assert.ok(byId.get('FTC-MBID-003').expectedContracts.includes('mbd1-39-resolved-row-disappears'));
   assert.ok(byId.get('FTC-MBID-003').expectedContracts.includes('mbd1-43-file-rating-mismatch-no-mutation'));

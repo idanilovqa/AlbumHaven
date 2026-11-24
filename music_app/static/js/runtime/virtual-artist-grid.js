@@ -14,7 +14,8 @@ function getAlbumCardVersionKey(album) {
 }
 
 function albumCardHtml(album, options = {}) {
-  const displayName = album?.display_name || album?.name || '';
+  // An applied MusicBrainz data correction (display_title, S4) shows in place of the tag.
+  const displayName = album?.display_title || album?.display_name || album?.name || '';
   const displayYear = album?.display_year || album?.year || '';
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
@@ -86,8 +87,11 @@ function albumCardHtml(album, options = {}) {
     albumFallback,
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
-    artist: album.album_artist,
+    titleLatin: album?.title_latin,
+    artist: album.display_artist || album.album_artist,
     year: displayYear,
+    genre: album?.musicbrainz_genre,
+    artistRomanized: galleryRomanizedArtistName(album.album_artist),
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
@@ -123,6 +127,9 @@ function getAlbumCardRenderKey(album) {
     String(album?.album_artist || ''),
     String(album?.year || ''),
     String(album?.display_year || ''),
+    String(album?.musicbrainz_genre || ''),
+    String(album?.title_latin || ''),
+    galleryRomanizedArtistName(album?.album_artist),
     getAlbumCardRating(album),
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
@@ -2814,7 +2821,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, series: group.series, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -2860,7 +2867,7 @@ function buildArtistSectionHtml(
   const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, series: safeGroup.series, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;
@@ -2970,7 +2977,10 @@ function renderArtistGroups(options = {}) {
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
   const renderOptions = {
     ...options,
-    showArtistSectionHeaders: !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
+    // A series shows its albums alone; All series heads each series like an artist.
+    showArtistSectionHeaders: String(state.view.selected_series || '').trim()
+      ? state.view.selected_series === 'all'
+      : !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
   };
   modeConfig.renderer(
     { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },

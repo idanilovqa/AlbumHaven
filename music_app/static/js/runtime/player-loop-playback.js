@@ -67,6 +67,19 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
   rows.forEach(row => globalPlayerMetadataMotion.update(row));
 }
 
+// The artist the player names, as the card does: the track's applied correction, else the album's
+// display_artist in place of its tag. Display only: the track, scrobbles and identities keep the tag.
+function playerShownArtist(track) {
+  const artist = track?.artist || '';
+  const album = typeof state === 'undefined' ? null : state.player?.playbackQueue?.albumSnapshot;
+  const albumTrack = Array.isArray(album?.tracks)
+    ? album.tracks.find((item) => item?.path === track?.path)
+    : null;
+  if (!albumTrack) return artist;
+  return albumTrack.display_artist
+    || (album.display_artist && artist === album.album_artist ? album.display_artist : artist);
+}
+
 function renderGlobalPlayerMetadata(els, track) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
   const setText = (row, text) => {
@@ -77,9 +90,9 @@ function renderGlobalPlayerMetadata(els, track) {
   };
   if (els.artist) {
     els.artist.hidden = !mobile || !track;
-    setText(els.artist, track?.artist || '');
+    setText(els.artist, playerShownArtist(track));
   }
-  const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
+  const parts = (mobile ? [track?.title] : [playerShownArtist(track), track?.title]).filter(Boolean);
   setText(els.title, parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '');
   if (els.albumLink) {
     setText(els.albumLink, track?.album || '');

@@ -513,7 +513,10 @@ body.modal-open { overflow: hidden; }
   display: none;
 }
 
+/* Block items: the menu's width ends after its longest item (inline-block items would add
+   up their widths side by side while the fixed menu sizes itself). */
 .album-card-context-menu-item {
+  display: block;
   width: 100%;
   appearance: none;
   border: 0;
@@ -661,6 +664,14 @@ body.modal-open { overflow: hidden; }
 .version-picker-option-subtitle {
   color: rgba(245, 247, 250, 0.68);
   font-size: 13px;
+}
+
+/* An entry's own actions (Edits Queue: open and remove), after its name. */
+.version-picker-option-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .version-picker-empty {

@@ -165,34 +165,61 @@ function openSettings(albums) {
   return { albums, capture, context, counts, els, settle };
 }
 
+// The rows the real virtual list mounts for this list at the top of its viewport.
+function windowRows({ context, els }, albums) {
+  const range = context.window.ProblematicFilesVirtualList.calculateRange({
+    count: albums, offset: 0, viewport: els.list.clientHeight,
+  });
+  return range.end - range.start;
+}
+
+// One open of Problematic Files (a forced load of the complete list), then renders of the committed list:
+// reopening the loaded tab, and selecting a mounted row.
+async function openAndRender(session) {
+  const { albums, capture, context, counts, els, settle } = session;
+  const before = capture.requests.length;
+  const mutationsBefore = counts.domMutations;
+  await context.loadProblematicFiles(true);
+  await settle();
+  assert.equal(context.state.utility.problematicFiles.length, albums, 'the complete list is committed');
+  assert.equal(els.count.textContent, String(albums), 'the count shows every album');
+  const mounted = els.list.querySelectorAll(`[${ROW_KEY}]`).map(row => row.getAttribute(ROW_KEY));
+  assert.equal(mounted[0], 'synthetic-album-000000', 'the list starts at its first album');
+  assert.equal(mounted.length, windowRows(session, albums), 'exactly the virtual list window is mounted');
+  const domMutations = counts.domMutations - mutationsBefore;
+
+  const visitsBefore = counts.itemsVisited;
+  await context.loadProblematicFiles();
+  context.state.utility.selectedProblematicKey = mounted[1];
+  context.renderProblematicFilesTab();
+  await settle();
+  const itemsVisited = counts.itemsVisited - visitsBefore;
+  assert.equal(context.state.utility.selectedProblematicKey, mounted[1]);
+
+  const requests = capture.urls().slice(before);
+  assert.deepEqual(requests, ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+  return { requests, metrics: { itemsVisited, domMutations } };
+}
+
 test('request capture: Problematic Files renders a committed list visiting a bounded number of albums per render', async () => {
   const id = 'js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles';
-  await measureInteractionContract(id, {
-    setup: albums => openSettings(albums),
-    async act({ albums, capture, context, counts, els, settle }) {
-      const before = capture.requests.length;
-      const mutationsBefore = counts.domMutations;
-      await context.loadProblematicFiles(true);
-      await settle();
-      assert.equal(context.state.utility.problematicFiles.length, albums, 'the complete list is committed');
-      assert.equal(els.count.textContent, String(albums), 'the count shows every album');
-      const mounted = els.list.querySelectorAll(`[${ROW_KEY}]`).map(row => row.getAttribute(ROW_KEY));
-      assert.equal(mounted[0], 'synthetic-album-000000', 'the list starts at its first album');
-      assert.ok(mounted.length > 0 && mounted.length <= 20, `a window of rows is mounted, not ${mounted.length}`);
-      const domMutations = counts.domMutations - mutationsBefore;
+  const { cardinalities, budgets } = require('../../ci/bounded-interactions.json').interactions.find(entry => entry.id === id);
+  await measureInteractionContract(id, { setup: albums => openSettings(albums), act: openAndRender });
 
-      // Renders of the committed list: reopening the loaded tab, and selecting a mounted row.
-      const visitsBefore = counts.itemsVisited;
-      await context.loadProblematicFiles();
-      context.state.utility.selectedProblematicKey = mounted[1];
-      context.renderProblematicFilesTab();
-      await settle();
-      const itemsVisited = counts.itemsVisited - visitsBefore;
-      assert.equal(context.state.utility.selectedProblematicKey, mounted[1]);
-
-      const requests = capture.urls().slice(before);
-      assert.deepEqual(requests, ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
-      return { requests, metrics: { itemsVisited, domMutations } };
-    },
-  });
+  // A third size between the registered pair, and a bound on DOM work from the real virtual list window:
+  // a longer list may replace the whole mounted window (one removal and one insertion per row) at most once
+  // more than the smallest list does.
+  const opened = {};
+  for (const albums of [cardinalities.small, 2000, cardinalities.production]) {
+    const session = openSettings(albums);
+    opened[albums] = { ...(await openAndRender(session)).metrics, window: windowRows(session, albums) };
+  }
+  const smallest = opened[cardinalities.small];
+  for (const [albums, { domMutations, itemsVisited, window }] of Object.entries(opened)) {
+    assert.equal(itemsVisited, budgets.itemsVisited, `${albums} albums: renders visit a bounded number of albums`);
+    assert.ok(domMutations <= smallest.domMutations + 2 * window,
+      `${albums} albums: ${domMutations} DOM mutations exceed ${smallest.domMutations} + 2 x ${window} window rows`);
+  }
+  assert.equal(opened[2000].domMutations, budgets.domMutations, '2,000 albums: the same DOM work as the production size');
+  assert.equal(opened[cardinalities.production].domMutations, budgets.domMutations);
 });

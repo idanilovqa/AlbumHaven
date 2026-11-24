@@ -101,6 +101,7 @@ class RuleStatePostgresAdapter:
         ignored_repair_keys: Iterable[object],
         *,
         album_keys_by_repair_key: Mapping[object, object] | None = None,
+        labels_by_repair_key: Mapping[object, object] | None = None,
         remove_repair_keys: Iterable[object] = (),
     ) -> str:
         normalized = _normalize_keys(ignored_repair_keys)
@@ -108,7 +109,8 @@ class RuleStatePostgresAdapter:
         if not normalized and not removals:
             return "applied"
         return self._write_ignored_repairs(
-            "upsert", normalized, _album_keys_for(normalized, album_keys_by_repair_key), removals)
+            "upsert", normalized, _album_keys_for(normalized, album_keys_by_repair_key), removals,
+            labels=_album_keys_for(normalized, labels_by_repair_key))
 
     def delete_ignored_repair_keys(self, ignored_repair_keys: Iterable[object]) -> str:
         normalized = _normalize_keys(ignored_repair_keys)
@@ -118,6 +120,7 @@ class RuleStatePostgresAdapter:
 
     def _write_ignored_repairs(
         self, action: str, repair_keys: set[str], album_keys: dict[str, str], remove_keys: set[str],
+        *, labels: dict[str, str] | None = None,
     ) -> str:
         """"applied", or "pending" when a publication holds the inventory lock past the bound.
 
@@ -126,8 +129,9 @@ class RuleStatePostgresAdapter:
         It never waits longer than PUBLICATION_WAIT_MS (6.5: no unbounded wait on a request): past it, the
         write keeps a durable intent that every read already shows, and the drain applies it after the
         publication, in order (ignored_repair_intents)."""
+        # labels: the name the user saw for each rule, kept with it (owner, 11-24).
         intent = {"action": action, "repair_keys": sorted(repair_keys), "album_keys": album_keys,
-                  "remove_keys": sorted(remove_keys)}
+                  "remove_keys": sorted(remove_keys), "labels": dict(labels or {})}
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_context(connection)
@@ -150,7 +154,8 @@ class RuleStatePostgresAdapter:
                         _insert_ignored_repair_intent_sql(),
                         (action, intent["repair_keys"], _jsonb(album_keys), intent["remove_keys"],
                          sorted({identity for key in [*repair_keys, *remove_keys]
-                                 for identity in (ignored_repair_identity(key), album_keys.get(key, "")) if identity})),
+                                 for identity in (ignored_repair_identity(key), album_keys.get(key, "")) if identity}),
+                         _jsonb(intent["labels"])),
                     )
                     return "pending"
 
@@ -273,7 +278,7 @@ def _connect(database_url: str) -> Any:
 # The longest an ignored-repair write waits for a held publication before it keeps an intent instead. The
 # request answers well inside a second either way (6.5, deadlock part 3).
 PUBLICATION_WAIT_MS = 500
-_INTENT_FIELDS = ("id", "action", "repair_keys", "album_keys", "remove_keys")
+_INTENT_FIELDS = ("id", "action", "repair_keys", "album_keys", "remove_keys", "labels")
 
 
 def _inventory_publication_lock_sql() -> str:
@@ -402,6 +407,7 @@ def _apply_ignored_repair_intent(connection: Any, intent: Mapping[str, object]) 
     action = intent.get("action")
     repair_keys = sorted(_normalize_keys(intent.get("repair_keys")))
     album_keys = {_text(key): _text(value) for key, value in dict(intent.get("album_keys") or {}).items()}
+    labels = {_text(key): _text(value) for key, value in dict(intent.get("labels") or {}).items()}
     if action == "delete":
         connection.execute(_delete_selected_ignored_repairs_sql(), (repair_keys,))
         return
@@ -410,9 +416,10 @@ def _apply_ignored_repair_intent(connection: Any, intent: Mapping[str, object]) 
         connection.execute(_delete_selected_ignored_repairs_sql(), (removals,))
     for repair_key in repair_keys:
         album_key = album_keys.get(repair_key) or None
+        label = labels.get(repair_key) or None
         connection.execute(
-            _upsert_ignored_repair_sql(include_album_key=album_key is not None),
-            (repair_key, album_key) if album_key is not None else (repair_key,),
+            _upsert_ignored_repair_sql(include_album_key=album_key is not None, include_label=label is not None),
+            (repair_key, *(value for value in (album_key, label) if value is not None)),
         )
     if action == "replace":
         connection.execute(_delete_ignored_repairs_except_sql(), (repair_keys,))
@@ -698,10 +705,12 @@ def _complete_legacy_album_exclusion_groups_sql() -> str:
     )
 
 
-def _upsert_ignored_repair_sql(*, include_album_key: bool) -> str:
+def _upsert_ignored_repair_sql(*, include_album_key: bool, include_label: bool = False) -> str:
     metadata_sql = f"'{{\"source\":\"{_SOURCE}\"}}'::jsonb"
     if include_album_key:
         metadata_sql += " || jsonb_build_object('album_key', %s::text)"
+    if include_label:
+        metadata_sql += " || jsonb_build_object('label', %s::text)"
     return (
         _bootstrap_context_sql()
         + f"""
@@ -723,7 +732,7 @@ def _load_ignored_repair_intents_sql(*, include_failed: bool = False) -> str:
         _bootstrap_context_sql()
         + f"""
         select intents.id, intents.action, intents.repair_keys, intents.album_keys, intents.remove_keys,
-               intents.failed_at, intents.failure, intents.failure_kind
+               intents.labels, intents.failed_at, intents.failure, intents.failure_kind
         from library.ignored_repair_intents intents
         join bootstrap_context on intents.library_id = bootstrap_context.library_id
         {"" if include_failed else "where intents.failed_at is null"}
@@ -736,7 +745,8 @@ def _load_scoped_ignored_repair_intents_sql() -> str:
     return (
         _bootstrap_context_sql()
         + """
-        select intents.id, intents.action, intents.repair_keys, intents.album_keys, intents.remove_keys
+        select intents.id, intents.action, intents.repair_keys, intents.album_keys, intents.remove_keys,
+               intents.labels
         from library.ignored_repair_intents intents
         join bootstrap_context on intents.library_id = bootstrap_context.library_id
         where intents.failed_at is null
@@ -752,11 +762,12 @@ def _load_ignored_repairs_with_intents_sql() -> str:
         _bootstrap_context_sql()
         + """
         select null::bigint as id, 'upsert' as action, array[ignored.repair_key] as repair_keys,
-               '{}'::jsonb as album_keys, '{}'::text[] as remove_keys
+               '{}'::jsonb as album_keys, '{}'::text[] as remove_keys, '{}'::jsonb as labels
         from library.ignored_repairs ignored
         join bootstrap_context on ignored.library_id = bootstrap_context.library_id
         union all
-        select intents.id, intents.action, intents.repair_keys, intents.album_keys, intents.remove_keys
+        select intents.id, intents.action, intents.repair_keys, intents.album_keys, intents.remove_keys,
+               intents.labels
         from library.ignored_repair_intents intents
         join bootstrap_context on intents.library_id = bootstrap_context.library_id
         where intents.failed_at is null
@@ -770,8 +781,8 @@ def _insert_ignored_repair_intent_sql() -> str:
         _bootstrap_context_sql()
         + """
         insert into library.ignored_repair_intents
-          (library_id, action, repair_keys, album_keys, remove_keys, scope_identities)
-        select bootstrap_context.library_id, %s, %s::text[], %s, %s::text[], %s::text[]
+          (library_id, action, repair_keys, album_keys, remove_keys, scope_identities, labels)
+        select bootstrap_context.library_id, %s, %s::text[], %s, %s::text[], %s::text[], %s
         from bootstrap_context;
     """
     )

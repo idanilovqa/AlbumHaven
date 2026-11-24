@@ -8217,7 +8217,12 @@ def _utility_problem_ignore_payload(row_payload: Mapping[str, object]) -> dict[s
         "album_group_key": album_group_key,
         # Owner (11-24): the rule's album or file is no longer in the library, told by the same read's joins.
         "target_missing": target_missing,
-        "missing_name": (Path(identity).name or identity) if target_missing else "",
+        # The name kept with the rule, else (rules from before names were kept) the file's folder and
+        # name, or the album's normalized key; never a name inferred for an old rule.
+        "missing_name": (
+            str(row_payload.get("rule_label") or "").strip()
+            or (identity if scope == "album" else "/".join(part for part in (Path(identity).parent.name, Path(identity).name) if part))
+        ) if target_missing else "",
     }
 
 
@@ -14169,6 +14174,7 @@ def _utility_rules_sql() -> str:
           select
             'version'::text as row_kind,
             null::text as source_kind,
+            null::text as rule_label,
             library.ignored_versions.version_key as ignored_version_key,
             null::text as ignored_repair_key,
             library.local_albums.id as album_id,
@@ -14199,6 +14205,7 @@ def _utility_rules_sql() -> str:
           select
             'problem_ignore'::text as row_kind,
             ignored_repairs.source_kind,
+            ignored_repairs.metadata ->> 'label' as rule_label,
             null::text as ignored_version_key,
             ignored_repairs.repair_key as ignored_repair_key,
             library.local_albums.id as album_id,

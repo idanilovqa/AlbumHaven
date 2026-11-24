@@ -14,6 +14,8 @@ create table if not exists library.ignored_repair_intents (
   -- The albums and files the intent names (rule_state_postgres.ignored_repair_identity): a read of one
   -- album's or one page's problems takes only the intents that name its rows.
   scope_identities text[] not null default '{}'::text[],
+  -- The name the user saw for each rule ("Artist – Album" or the file name), kept with the rule it adds.
+  labels jsonb not null default '{}'::jsonb,
   recorded_at timestamptz not null default now(),
   -- A drain never leaves an intent pending forever: one it cannot apply, or that its last attempt still left
   -- pending, is failed here, logged, and listed in the Rules until the same rule is written again.

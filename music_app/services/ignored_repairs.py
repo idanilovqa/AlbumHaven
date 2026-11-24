@@ -94,12 +94,14 @@ def create_ignored_repair_keys(
     row_keys: set[str],
     *,
     album_keys_by_repair_key: dict[str, str] | None = None,
+    labels_by_repair_key: dict[str, str] | None = None,
     remove_row_keys: set[str] | None = None,
 ) -> str:
     select_runtime_persistence_adapter("ignored_repairs", config)
     status = RuleStatePostgresAdapter(config).upsert_ignored_repair_keys(
         row_keys,
         album_keys_by_repair_key=album_keys_by_repair_key,
+        labels_by_repair_key=labels_by_repair_key,
         remove_repair_keys=remove_row_keys or set(),
     )
     return _after_write(config, status)

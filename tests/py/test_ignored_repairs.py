@@ -38,8 +38,10 @@ def test_create_ignored_repair_keys_uses_one_targeted_mutation_then_invalidates(
             row_keys,
             *,
             album_keys_by_repair_key=None,
+            labels_by_repair_key=None,
             remove_repair_keys=(),
         ):
+            assert labels_by_repair_key is None, "this caller keeps no names"
             calls.append(
                 (
                     set(row_keys),

@@ -141,6 +141,10 @@ def create_problem_exclusions(
         config,
         row_keys,
         album_keys_by_repair_key=album_keys_by_repair_key,
+        # Owner (11-24): the name the user saw, shown again if the album or file is later gone.
+        labels_by_repair_key={
+            _text(item.get("row_key")): label for item in ordered_resolved if (label := _rule_label(item))
+        },
         remove_row_keys=set(legacy_row_keys),
     )
     return ProblemExclusionResult(
@@ -154,6 +158,12 @@ def create_problem_exclusions(
         removed_legacy_row_keys=legacy_row_keys,
         status=status,
     )
+
+
+def _rule_label(item: Mapping[str, object]) -> str:
+    if _text(item.get("scope")) == "album":
+        return " – ".join(part for part in (_text(item.get("artist")), _text(item.get("album"))) if part)
+    return _text(item.get("filename"))
 
 
 def revert_problem_exclusion(config: dict, raw_row_key: object) -> tuple[str, str]:

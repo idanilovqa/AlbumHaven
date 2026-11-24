@@ -2179,9 +2179,11 @@ def test_asgi_selected_artist_root_sidebar_composes_only_root_sidebar_fields(
     assert payload["view_data_source"] == "postgres_library_browse"
 
 
-def test_asgi_selected_artist_root_sidebar_retries_while_projection_is_rebuilding(
+def test_asgi_selected_artist_serves_its_gallery_while_the_root_sidebar_is_rebuilding(
     monkeypatch,
 ):
+    """The selected artist's gallery never waits for the root sidebar header: while that header is being
+    rebuilt, the response carries the gallery and names the sidebar request the page makes next."""
     from starlette.datastructures import QueryParams
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -2190,13 +2192,19 @@ def test_asgi_selected_artist_root_sidebar_retries_while_projection_is_rebuildin
             pass
 
         def build_selected_artist_payload(self, **_kwargs):
-            return {"selected_artist": "Broadcast", "artist_groups": []}
+            return {
+                "selected_artist": "Broadcast",
+                "artist_groups": [{"artist": "Broadcast", "albums": [{"key": "broadcast-tender-buttons"}]}],
+            }
 
         def build_projected_root_sidebar_payload(self, **_kwargs):
             raise asgi_read_routes.GalleryProjectionPending("Gallery is being prepared.")
 
     request = SimpleNamespace(
-        query_params=QueryParams("surface=albums&artist=Broadcast&root_sidebar=1"),
+        query_params=QueryParams(
+            "surface=albums&artist=Broadcast&root_sidebar=1&payload_tier=gallery_summary"
+            "&gallery_scope=new_arrivals&gallery_display=list&category=main_library&category=hoard"
+        ),
         app=SimpleNamespace(state=SimpleNamespace(config={}, library_state={})),
     )
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", PendingRepository)
@@ -2204,16 +2212,20 @@ def test_asgi_selected_artist_root_sidebar_retries_while_projection_is_rebuildin
     monkeypatch.setattr(asgi_read_routes, "_should_use_transient_scan_browse_state", lambda *_args: False)
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_root_sidebar_request", lambda _request: False)
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_selected_artist_request", lambda _request: True)
+    monkeypatch.setattr(asgi_read_routes, "_project_missing_album_actions_for_request", lambda *_args: None)
 
     response = asgi_read_routes.view_data(request)
 
-    assert response.status_code == 503
-    assert json.loads(response.body) == {
-        "ok": False,
-        "code": "gallery_projection_pending",
-        "error": "Gallery is being prepared.",
-    }
-    assert response.headers["Retry-After"] == "1"
+    assert response.status_code == 200
+    payload = json.loads(response.body)
+    assert payload["selected_artist"] == "Broadcast"
+    assert payload["artist_groups"][0]["albums"] == [{"key": "broadcast-tender-buttons"}]
+    assert "artists_sidebar" not in payload
+    # Only the root sidebar's own parameters: the selection and payload tier stay with this response.
+    assert payload["root_sidebar_followup_endpoint"] == (
+        "/view-data?surface=albums&payload_tier=sidebar&gallery_scope=new_arrivals"
+        "&gallery_display=list&category=main_library&category=hoard"
+    )
 
 
 def test_asgi_selected_artist_query_context_uses_postgres_browse(app, asgi_app, monkeypatch):

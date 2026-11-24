@@ -637,6 +637,34 @@ def test_a_request_waiting_for_a_folder_is_woken_when_the_worker_lists_it():
     assert time.monotonic() - started < 2.0
 
 
+def test_a_wait_reports_how_it_ended_and_what_was_queued_for_the_request_diagnostics():
+    """6.5 (FTC-COVERS-019P): passive diagnostics say whether the worker woke the request or the deadline did."""
+    import threading
+    import time
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker, root_key
+
+    worker = LocalCoverInventoryWorker({}, repository=object())
+    worker._listings.add([root_key("C:/Music/Opened")], foreground=True)
+    worker._listings.add([root_key("C:/Music/Changed"), root_key("C:/Music/Other")])
+    worker._contexts.add(["context"], foreground=True)
+    assert worker.queue_depth() == {
+        "working": None, "contexts_opened": 1, "contexts_changed": 0,
+        "listings_opened": 1, "listings_changed": 2, "rechecks_opened": 0, "rechecks_changed": 0,
+    }
+
+    timed_out = worker.wait_for_listing("C:/Music/Album", 0.05)
+    assert timed_out["outcome"] == "deadline"
+    assert timed_out["waited_ms"] >= 40 and timed_out["last_finished_before_wait_ms"] is None
+
+    threading.Timer(0.05, worker._mark_finished, args=[("root", root_key("C:/Music/Album"))]).start()
+    woken = worker.wait_for_listing("C:/Music/Album", 5.0)
+    assert woken["outcome"] == "woken" and woken["waited_ms"] < 1000
+
+    time.sleep(0.02)
+    again = worker.wait_for_listing("C:/Music/Album", 0.01)
+    assert again["outcome"] == "deadline" and again["last_finished_before_wait_ms"] >= 15
+
+
 class _SessionLease:
     """A session lease: records its statements and whether it was closed."""
 

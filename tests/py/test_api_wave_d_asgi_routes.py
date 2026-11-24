@@ -7,6 +7,8 @@ import base64
 from copy import deepcopy
 import hashlib
 import io
+import json
+import logging
 import importlib
 from pathlib import Path
 from threading import Event, Thread, Timer
@@ -277,6 +279,7 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
         request=lambda selected_root: events.append("queue_root"), request_context=request_context,
         recheck_context=lambda paths: events.append("queue_recheck"),
         wait_for_context=lambda paths, timeout: events.append("wait_context"),
+        queue_depth=lambda: {},
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context", validated_context, raising=False)
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths", validate_tracks)
@@ -322,7 +325,7 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
         assert events.count("queue_context") == 1
 
 
-def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, monkeypatch):
+def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, monkeypatch, caplog):
     """Owner (2026-11-18): an album opened before its folder was listed showed "not listed yet", then asked again."""
     from music_app.routes import api_wave_d_asgi_routes as routes
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -343,6 +346,7 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
         # The worker publishes while the request waits, then wakes it.
         assert 0 < timeout <= routes._UNLISTED_INVENTORY_WAIT_SECONDS
         waits.append(folder)
+        return {"outcome": "woken", "waited_ms": 12}
 
     worker = SimpleNamespace(
         repository=SimpleNamespace(root_for_tracks=lambda paths: root, get=get),
@@ -351,6 +355,7 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
         request_context=lambda paths: pytest.fail("a known folder needs no context request"),
         recheck_context=lambda paths: None,
         wait_for_listing=wait_for_listing,
+        queue_depth=lambda: {"listings_opened": 0},
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context",
                         lambda _self, **_kwargs: {"album_id": 42, "album_key": "artist::unlisted album", "track_paths": [str(track)]},
@@ -362,12 +367,21 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.local_cover_inventory = worker
 
-    status, _, body = _run_asgi_request(
-        asgi_app, "POST", "/utilities/cover-lookup/gallery",
-        json_body={"album": {"album_id": 42, "name": "Unlisted Album", "tracks": []}},
-    )
+    with caplog.at_level(logging.INFO, logger=routes.LOGGER.name):
+        status, _, body = _run_asgi_request(
+            asgi_app, "POST", "/utilities/cover-lookup/gallery",
+            json_body={"album": {"album_id": 42, "name": "Unlisted Album", "tracks": []}},
+        )
 
     assert status == 200
+    # 6.5 (FTC-COVERS-019P): one passive INFO line per open says how each wait ended, without paths.
+    [logged] = [json.loads(record.getMessage()) for record in caplog.records
+                if '"cover_lookup_local_inventory_wait"' in record.getMessage()]
+    assert logged["folder_known"] is True
+    assert logged["queue_at_request"] == {"listings_opened": 0}
+    assert logged["context_wait"] == "not_needed"
+    assert logged["listing_wait"] == {"outcome": "woken", "waited_ms": 12}
+    assert str(root) not in json.dumps(logged) and "Unlisted" not in json.dumps(logged)
     payload = _decode_json(body)
     assert payload["local_inventory_complete"] is True
     assert [item["filename"] for item in payload["local_covers"]] == ["front.jpg"]
@@ -3623,6 +3637,7 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
         remove_path=remove_inventory_path,
         request_context=lambda paths: None,
         recheck_context=lambda paths: None,
+        queue_depth=lambda: {},
         repository=SimpleNamespace(
             get=lambda root: {"available": True, "complete": True, "candidates": candidates},
         ),

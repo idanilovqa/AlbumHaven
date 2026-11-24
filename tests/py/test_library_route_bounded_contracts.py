@@ -1003,6 +1003,7 @@ def _indexed_cover_inventory(monkeypatch, app, album_root):
         recheck_context=lambda _paths: None,
         wait_for_context=lambda _paths, _timeout: None,
         wait_for_listing=lambda _root, _timeout: None,
+        queue_depth=lambda: {},
     )
     # Starlette's State keeps its attributes in one dict. Patched as an item, the worker is restored
     # however many times a contract installs it; an attribute patch can record the attribute as absent

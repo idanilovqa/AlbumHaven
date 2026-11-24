@@ -950,6 +950,60 @@ test('initial startup readiness waits for its successful full render', async () 
   assert.equal(context.startupMetrics.completed, 1);
 });
 
+for (const revision of ['albumCoverMutationRevision', 'tagEditOptimisticMutationRevision']) {
+  test(`a startup response discarded for ${revision} is requested again and completes readiness`, async () => {
+    const { context, pendingRequests } = createContext();
+    const url = '/view-data?surface=albums&artist=Current';
+    const startup = context.fetchAndRender(url, false, { startupRefresh: true, startupHydrationTier: 'full' });
+    context.state.ui[revision] = Number(context.state.ui[revision] || 0) + 1;
+    pendingRequests[0].resolveWith({ selected_artist: 'Current', artist_groups: [], initial_view_partial: false });
+
+    assert.equal(await startup, false, 'the stale response is still not applied');
+    assert.equal(pendingRequests.length, 2, 'startup asks again for the current state');
+    assert.equal(context.startupMetrics.completed, 0);
+
+    pendingRequests[1].resolveWith({ selected_artist: 'Current', artist_groups: [], initial_view_partial: false });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(context.startupMetrics.completed, 1);
+    assert.equal(pendingRequests.length, 2);
+  });
+}
+
+test('a discarded startup response is not requested again over a pending tag edit', async () => {
+  const { context, pendingRequests } = createContext();
+  context.hasPendingTagEditViewMutations = () => true;
+  const startup = context.fetchAndRender('/view-data?surface=albums', false, { startupRefresh: true });
+  context.state.ui.tagEditOptimisticMutationRevision = 1;
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+
+  assert.equal(await startup, false);
+  assert.equal(pendingRequests.length, 1);
+});
+
+test('a discarded response outside startup is not requested again', async () => {
+  const { context, pendingRequests } = createContext();
+  const request = context.fetchAndRender('/view-data?artist=Current', false, {});
+  context.state.ui.albumCoverMutationRevision = 1;
+  pendingRequests[0].resolveWith({ selected_artist: 'Current', artist_groups: [] });
+
+  assert.equal(await request, false);
+  assert.equal(pendingRequests.length, 1);
+});
+
+test('a discarded startup response leaves an already queued navigation in charge', async () => {
+  const { context, pendingRequests } = createContext();
+  const startup = context.fetchAndRender('/view-data?surface=albums', false, { startupRefresh: true });
+  context.state.ui.albumCoverMutationRevision = 1;
+  context.state.ui.pendingViewRequest = {
+    url: '/view-data?artist=Chosen', push: true, options: {}, originatingViewStateRevision: 0,
+  };
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+
+  assert.equal(await startup, false);
+  assert.equal(pendingRequests.length, 2);
+  assert.match(pendingRequests[1].url, /artist=Chosen/);
+});
+
 test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {
   const { context, calls, pendingRequests } = createContext();
   const startup = context.fetchAndRender('/view-data?payload_tier=full', false, { startupRefresh: true });

@@ -783,9 +783,7 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
 
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
-  // The user's Artist Tree pick over an open Loose Tracks page owns the selection: a later repaint (a delayed
-  // library-wide answer, a page-shell sync) never takes it back; only opening Loose Tracks again does.
-  if (page && libraryWideOpen && !state.ui.artistTreePicked) syncCompactLibraryNavigation(true);
+  if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
 }
 
 function syncCompactLibraryNavigation(looseTracks) {
@@ -804,9 +802,7 @@ function syncCompactLibraryNavigation(looseTracks) {
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
-// `picked` marks a user's own navigation choice, as opposed to a presentation sync.
-function syncLibraryNavigationMode(mode, { picked = false } = {}) {
-  if (picked) state.ui.artistTreePicked = mode === 'artists';
+function syncLibraryNavigationMode(mode) {
   const collections = mode === 'collections';
   document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
@@ -976,7 +972,6 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   state.ui.nonAlbumLibraryWide = libraryWide;
-  if (options.syncNavigation !== false) state.ui.artistTreePicked = false;
   const partial = libraryWide && hasPartialLibraryNonAlbumTracks();
   const hydrationPending = libraryWide
     ? !hasHydratedLibraryNonAlbumTracks() && !partial
@@ -1003,7 +998,9 @@ function openNonAlbumModal(options = {}) {
     });
   }
   if (typeof presentMobilePage === 'function') {
-    presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle });
+    // A repaint (syncNavigation: false) re-presents the page without moving the navigation selection.
+    presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle },
+      { syncNavigation: options.syncNavigation !== false });
   }
   const waitExhausted = hydrationPending && libraryWide && libraryNonAlbumWaitExhausted();
   els.table.innerHTML = waitExhausted

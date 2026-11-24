@@ -79,7 +79,6 @@ const state = {
     pendingSidebarAllArtistsActive: false,
     artistsDrawerOpen: false,
     artistTreeFolded: null,
-    artistTreePicked: false,
     pendingAppRefocusSuppression: false,
     suppressNextViewportClick: false,
     suppressClickSequenceUntil: 0,

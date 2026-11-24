@@ -6364,7 +6364,6 @@ const state = {
     pendingSidebarAllArtistsActive: false,
     artistsDrawerOpen: false,
     artistTreeFolded: null,
-    artistTreePicked: false,
     pendingAppRefocusSuppression: false,
     suppressNextViewportClick: false,
     suppressClickSequenceUntil: 0,
@@ -13187,7 +13186,7 @@ function handleArtistsDrawerClick(event) {
   if (foldButton) {
     event.preventDefault();
     if (foldButton === document.getElementById('artist-tree-navigation-button')
-      && typeof syncLibraryNavigationMode === 'function') syncLibraryNavigationMode('artists', { picked: true });
+      && typeof syncLibraryNavigationMode === 'function') syncLibraryNavigationMode('artists');
     toggleArtistTreeFold();
     return true;
   }
@@ -16630,9 +16629,7 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
 
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
-  // The user's Artist Tree pick over an open Loose Tracks page owns the selection: a later repaint (a delayed
-  // library-wide answer, a page-shell sync) never takes it back; only opening Loose Tracks again does.
-  if (page && libraryWideOpen && !state.ui.artistTreePicked) syncCompactLibraryNavigation(true);
+  if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
 }
 
 function syncCompactLibraryNavigation(looseTracks) {
@@ -16651,9 +16648,7 @@ function syncCompactLibraryNavigation(looseTracks) {
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
-// `picked` marks a user's own navigation choice, as opposed to a presentation sync.
-function syncLibraryNavigationMode(mode, { picked = false } = {}) {
-  if (picked) state.ui.artistTreePicked = mode === 'artists';
+function syncLibraryNavigationMode(mode) {
   const collections = mode === 'collections';
   document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
@@ -16823,7 +16818,6 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   state.ui.nonAlbumLibraryWide = libraryWide;
-  if (options.syncNavigation !== false) state.ui.artistTreePicked = false;
   const partial = libraryWide && hasPartialLibraryNonAlbumTracks();
   const hydrationPending = libraryWide
     ? !hasHydratedLibraryNonAlbumTracks() && !partial
@@ -16850,7 +16844,9 @@ function openNonAlbumModal(options = {}) {
     });
   }
   if (typeof presentMobilePage === 'function') {
-    presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle });
+    // A repaint (syncNavigation: false) re-presents the page without moving the navigation selection.
+    presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle },
+      { syncNavigation: options.syncNavigation !== false });
   }
   const waitExhausted = hydrationPending && libraryWide && libraryNonAlbumWaitExhausted();
   els.table.innerHTML = waitExhausted
@@ -57964,7 +57960,7 @@ function mobilePageDescriptor(kind, album = null, options = {}) {
     libraryWide: kind === 'non-album' && options.libraryWide === true,
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
-function syncMobilePageShell() {
+function syncMobilePageShell({ syncNavigation = true } = {}) {
   const mobile = usesMobilePageLayout();
   const active = mobile ? mobilePageState.pages.at(-1) : null;
   const main = document.getElementById('shell-main-surface');
@@ -57991,6 +57987,7 @@ function syncMobilePageShell() {
       nonAlbumSurface,
       Boolean(retainedNonAlbumPage),
       retainedPage?.kind === 'non-album',
+      syncNavigation,
     );
   }
   if (active) {
@@ -58236,7 +58233,7 @@ function restoreMobileGalleryParent(descriptor) {
   }
   handleGalleryBootstrapPopState(options);
 }
-function presentMobilePage(descriptor) {
+function presentMobilePage(descriptor, { syncNavigation = true } = {}) {
   const historyOnly = descriptor.kind === 'non-album' && !usesMobilePageLayout();
   if (!usesMobilePageLayout() && !mobilePageState.pages.length && !historyOnly) return false;
   const outlet = document.getElementById('mobile-page-outlet');
@@ -58280,7 +58277,7 @@ function presentMobilePage(descriptor) {
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey
     && !needsNonAlbumMobilePromotion) {
     Object.assign(active, descriptor);
-    syncMobilePageShell();
+    syncMobilePageShell({ syncNavigation });
     return true;
   }
   if (!historyOnly) delete outlet.dataset.pageInteracted;
@@ -58293,7 +58290,7 @@ function presentMobilePage(descriptor) {
   }
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
-    syncMobilePageShell();
+    syncMobilePageShell({ syncNavigation });
     return true;
   }
   // A changed album reuses one component; older history entries retain its key for Back/Forward.
@@ -58308,7 +58305,7 @@ function presentMobilePage(descriptor) {
   mobilePageState.pages.push(descriptor);
   closeArtistsDrawer({ restoreFocus: false });
   closeGalleryMainSurface?.(false);
-  syncMobilePageShell();
+  syncMobilePageShell({ syncNavigation });
   if (!mobilePageState.restoring) writeMobilePageHistory();
   if (!historyOnly) requestAnimationFrame(() => {
     const inBody = document.getElementById('mobile-page-header')?.dataset.albumIdentityInBody === 'true';

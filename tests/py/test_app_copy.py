@@ -195,3 +195,100 @@ def test_index_template_loads_the_app_copy_client_before_the_app(asgi_app):
     client = text.index(f'<script src="/static/js/app-copy.js?v={version}" defer></script>')
     assert client < text.index("/static/app.js?v=")
     assert 'id="app-copy-offline-notice"' in text
+
+
+def test_every_stylesheet_and_script_of_the_app_page_can_be_kept_by_the_copy(asgi_app):
+    """Offline, Settings and Account were unstyled. The copy keeps only what
+    the server marks immutable, which takes the current version; an unversioned asset is no-store."""
+    import re
+
+    version = asgi_app.state.runtime_asset_version
+    _status, _headers, body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+    text = body.decode("utf-8")
+    assets = set(re.findall(r'<link rel="stylesheet" href="(/static/[^"]+)"', text))
+    assets |= set(re.findall(r'<script src="(/static/[^"]+)"', text))
+    assert {"/static/css/account.css", "/static/css/admin-members.css", "/static/css/settings-navigation.css",
+            "/static/js/selection-accent.js"} <= {asset.split("?")[0] for asset in assets}
+
+    for asset in sorted(assets):
+        path, _, query = asset.partition("?")
+        assert query == f"v={version}", asset
+        status, headers, _body = run_asgi_request(asgi_app, "GET", path, query={"v": version})
+        assert status == 200, asset
+        assert headers["cache-control"] == "public, max-age=31536000, immutable", asset
+
+
+def _signed_in_since(asgi_app, authenticated_at):
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
+
+    class Resolver:
+        def resolve(self, _raw_token):
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=1,
+                session_id=1,
+                username_display="Test Listener",
+                authenticated_at=authenticated_at,
+                is_bootstrap_owner=True,
+                current_library_id=1,
+                library_relationships=(LibraryRelationship(1, "owner", True),),
+            )
+
+    asgi_app.state.current_actor_resolver = Resolver()
+
+
+def _expires(headers):
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(int(headers["x-album-haven-app-copy-expires"]) / 1000, timezone.utc)
+
+
+def test_copy_expires_after_seven_days_while_the_session_lasts_longer(asgi_app):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    _signed_in_since(asgi_app, now - timedelta(days=1))
+
+    _status, headers, _body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+
+    assert abs(_expires(headers) - (now + timedelta(days=7))) < timedelta(minutes=1)
+
+
+def test_copy_never_outlives_the_session(asgi_app):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    # The default session ends 90 days after signing in, two days from now.
+    _signed_in_since(asgi_app, now - timedelta(days=88))
+
+    _status, headers, _body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+
+    assert abs(_expires(headers) - (now + timedelta(days=2))) < timedelta(minutes=1)
+
+
+def test_copy_never_outlives_a_short_idle_window(asgi_app):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    _signed_in_since(asgi_app, now)
+    asgi_app.state.auth_policy_config = {
+        **asgi_app.state.auth_policy_config,
+        "session": {"idle_seconds": 3 * 3600, "absolute_seconds": 30 * 86400},
+    }
+
+    _status, headers, _body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+
+    assert abs(_expires(headers) - (now + timedelta(hours=3))) < timedelta(minutes=1)
+
+
+def test_app_copy_switched_off_retires_the_worker_and_leaves_the_page_without_it(asgi_app, monkeypatch):
+    monkeypatch.setenv("ALBUM_HAVEN_APP_COPY", "off")
+
+    status, headers, body = run_asgi_request(asgi_app, "GET", "/app-copy-worker.js")
+    _page_status, _page_headers, page = run_asgi_request(asgi_app, "GET", "/")
+
+    assert status == 200
+    assert headers["cache-control"] == "no-cache"
+    assert b"unregister()" in body and b"album-haven-app-copy-" in body
+    assert b"addEventListener('fetch'" not in body
+    assert b"/static/js/app-copy.js" not in page

@@ -306,6 +306,17 @@ def test_get_login_mints_hidden_one_time_token_and_hardened_cookie(auth_asgi):
     assert "Domain=" not in cookie
 
 
+def test_get_login_names_the_copy_worker_only_while_the_copy_is_on(auth_asgi, monkeypatch):
+    """IAR-W12: the sign-in page installs the copy's worker, so the library page after it is kept."""
+    worker_meta = '<meta name="album-haven-app-copy-worker" content="/app-copy-worker.js?mode=web">'
+    app, _, _ = _app(auth_asgi)
+    monkeypatch.delenv("ALBUM_HAVEN_APP_COPY", raising=False)
+    assert worker_meta in _request(app, "GET")[2].decode()
+
+    monkeypatch.setenv("ALBUM_HAVEN_APP_COPY", "off")
+    assert worker_meta not in _request(app, "GET")[2].decode()
+
+
 def test_get_login_renders_approved_v007_semantic_controls_and_assets(auth_asgi):
     app, _, _ = _app(auth_asgi)
 

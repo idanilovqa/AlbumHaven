@@ -29,6 +29,7 @@ module.exports = defineConfig({
   use: {
     baseURL: PRODUCTION_SEARCH_BENCHMARK_URL,
     headless: true,
+    serviceWorkers: 'block',
     viewport: { width: 1440, height: 960 },
     trace: 'off',
     screenshot: 'off',

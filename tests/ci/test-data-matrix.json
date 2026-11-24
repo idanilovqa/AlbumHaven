@@ -10220,5 +10220,255 @@
       "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
     },
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W01 a browser loads the library from the server and keeps a copy without file paths",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-server-first",
+      "copy-stores-no-file-paths"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W05 offline, the saved library appears at once, read-only, and recovers without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-offline-read-only",
+      "offline-recovery-without-reload"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W09 after the first visit, a new tab opened offline shows the saved library, never a connection error",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-first-visit-offline-new-tab"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-offline-reload-names-unreachable-view"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W11 a slow connection that is still online never shows the Offline notice while the library loads",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-slow-online-no-offline-notice"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
+    "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "auth:instant-return-sign-out-w02"
+    ],
+    "executionWave": 2,
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sign-out-deletes-browser-copy"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:instant-return-sign-out-w02",
+      "filesystemCopy": "media/cases/instant-return-sign-out-w02"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unreachable-album-details-stop-loading",
+      "unreachable-artist-named-without-other-view"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnSignIn.spec.js",
+    "case": "FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library, and more albums show 'Offline. Can't load more albums, check your network or try again later'",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "sign-in-keeps-library-before-offline",
+      "unreachable-more-albums-message"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W14 a navigation with no answer shows the saved library with the Offline line after 10 s, never sooner, and goes live in place when the answer comes",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "no-answer-shows-copy-after-wait",
+      "held-answer-goes-live-in-place"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+    "case": "FTC-IAR-W15 offline, album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the network returning, without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "offline-surfaces-recover-without-reload"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+    "case": "FTC-IAR-W16 with the server down behind its tunnel (502), album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the server answering, without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "server-down-surfaces-recover-without-reload"
+    ],
+    "ownerApproval": "approved"
   }
 ]

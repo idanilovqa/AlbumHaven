@@ -6,7 +6,10 @@ const test = require('node:test');
 
 const { createAppCopyClient } = require(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy.js'));
 
-function setup({ marker = null, account = 'acct-a', answer = async () => ({ ok: true, status: 200, type: 'basic', json: async () => ({ account }) }) } = {}) {
+function setup({
+  marker = null, account = 'acct-a', answer = async () => ({ ok: true, status: 200, type: 'basic', json: async () => ({ account }) }),
+  androidShell = true, secure = true, workers = true, controlled = false, onLine = true, viewMissing = false, unanswered = false,
+} = {}) {
   const listeners = new Map();
   const notice = { hidden: true };
   const timers = [];
@@ -29,33 +32,41 @@ function setup({ marker = null, account = 'acct-a', answer = async () => ({ ok: 
     registered: [],
     reloads: 0,
     probes: 0,
+    clock: 5_000_000,
   };
+  const location = { href: 'https://sandbox9.albumhaven.org/?artist=Broadcast', reload: () => { env.reloads += 1; } };
   const document = {
     visibilityState: 'visible',
     querySelector: selector => (selector === 'meta[name="album-haven-app-copy"]' && marker
-      ? { getAttribute: name => ({ content: marker, 'data-account': 'acct-a' })[name] } : null),
+      ? { getAttribute: name => ({ content: marker, 'data-account': 'acct-a', ...(viewMissing ? { 'data-view-missing': '1' } : {}), ...(unanswered ? { 'data-unanswered': '1' } : {}) })[name] } : null),
     getElementById: id => (id === 'app-copy-offline-notice' ? notice : null),
     addEventListener: (name, listener) => listeners.set(`document:${name}`, listener),
   };
   const client = createAppCopyClient({
     document,
-    window: { addEventListener: (name, listener) => listeners.set(`window:${name}`, listener) },
-    navigator: {
+    window: { isSecureContext: secure, addEventListener: (name, listener) => listeners.set(`window:${name}`, listener) },
+    navigator: workers ? {
+      onLine,
       serviceWorker: {
+        controller: controlled ? {} : null,
         async register(url, options) { env.registered.push({ url, options }); return registration; },
         async getRegistration() { return env.registered.length || env.hadRegistration ? registration : undefined; },
+        // Settles once a worker runs, which in these tests is as soon as one is registered.
+        get ready() { return env.registered.length ? Promise.resolve(registration) : new Promise(() => {}); },
       },
-    },
-    location: { href: 'https://sandbox9.albumhaven.org/?artist=Broadcast', reload: () => { env.reloads += 1; } },
+    } : {},
+    location,
     fetch: async (url, options) => { env.probes += 1; env.lastProbe = { url, options }; return answer(url); },
     setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
     clearTimeout() {},
-    capabilities: () => ({ setReadOnly: on => env.readOnlyCalls.push(on) }),
+    capabilities: () => ({ setReadOnly: on => env.readOnlyCalls.push(on), isAndroidShell: () => androidShell }),
     MessageChannel,
+    now: () => env.clock,
   });
   const shell = { report: async stored => { reported.push(stored); } };
   const settle = () => new Promise(resolve => setTimeout(resolve, 5));
-  return { client, env, listeners, notice, timers, posted, reported, registration, shell, document, settle };
+  const hide = () => { document.visibilityState = 'hidden'; listeners.get('document:visibilitychange')(); };
+  return { client, env, listeners, notice, timers, posted, reported, registration, shell, document, location, settle, hide };
 }
 
 test('a page loaded from the network is not a copy and asks nothing of the server', async () => {
@@ -128,10 +139,12 @@ test('IAR-005: unreachable, the copy is read-only with its notice until the serv
   assert.equal(reconciled, 0);
   assert.ok(timers.length >= 1);
 
-  // A retry that still fails waits longer; the next one succeeds without a reload.
+  // The server is asked again every 2.5 s, not after a growing wait; each check is
+  // given up after 4 s. The next one that succeeds needs no reload.
   await timers.at(-1).callback();
-  const delays = timers.map(timer => timer.delay);
-  assert.ok(delays[1] > delays[0]);
+  const retries = timers.filter(timer => timer.delay !== 4000).map(timer => timer.delay);
+  assert.deepEqual(retries, [2500, 2500]);
+  assert.ok(timers.some(timer => timer.delay === 4000), 'each check has a 4 s limit');
   online = true;
   listeners.get('window:online')();
   await settle();
@@ -191,6 +204,122 @@ test('nothing is saved while the copy is read-only', async () => {
   assert.ok(!posted.some(message => message.type === 'save'));
 });
 
+// ---- Ordinary browsers (IAR-W01, IAR-W07) ----
+
+// A busy device can fire `load` late, and the network can go before anything is kept.
+test('IAR-W12: in a browser over HTTPS the server-first worker is registered as the page runs, without waiting for load', async () => {
+  const { env, listeners, settle } = setup({ androidShell: false, marker: 'network' });
+  await settle();
+
+  assert.equal(listeners.get('window:load'), undefined);
+  assert.deepEqual(env.registered, [{ url: '/app-copy-worker.js?mode=web', options: { scope: '/', updateViaCache: 'none' } }]);
+});
+
+test('IAR-W07: without a secure context or service workers, a browser behaves as today', async () => {
+  for (const options of [{ secure: false }, { workers: false }]) {
+    const { env, settle } = setup({ androidShell: false, ...options });
+    await settle();
+    assert.deepEqual(env.registered, [], JSON.stringify(options));
+  }
+});
+
+test('the Android app never registers the browser worker; its shell decides', async () => {
+  const { env, settle } = setup({ androidShell: true });
+  await settle();
+  assert.deepEqual(env.registered, []);
+});
+
+test('in a browser, switching tabs saves the view only when it changed or ten minutes passed', async () => {
+  const { env, listeners, posted, location, document, settle, hide } = setup({ androidShell: false, marker: 'network', controlled: true });
+  await settle();
+  const saves = () => posted.filter(message => message.type === 'save').length;
+
+  // The worker already kept this page when it loaded.
+  hide();
+  await settle();
+  assert.equal(saves(), 0);
+
+  location.href = 'https://sandbox9.albumhaven.org/?artist=Mono';
+  document.visibilityState = 'visible';
+  hide();
+  await settle();
+  assert.equal(saves(), 1);
+
+  hide();
+  await settle();
+  assert.equal(saves(), 1);
+
+  env.clock += 10 * 60 * 1000;
+  listeners.get('window:pagehide')();
+  await settle();
+  assert.equal(saves(), 2);
+});
+
+test('in a browser, a page the worker did not load is saved the first time it is hidden', async () => {
+  const { posted, settle, hide } = setup({ androidShell: false, marker: null });
+  await settle();
+
+  hide();
+  await settle();
+
+  assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
+});
+
+// The Offline notice must not flash during an ordinary load. A connected device shows it only
+// once the server has failed to answer the account check.
+test('IAR-W11: in a browser a page from the copy is read-only from its first paint, without the notice while connected', async () => {
+  let answer;
+  const { client, notice, env, settle } = setup({
+    androidShell: false, marker: 'cache', answer: () => new Promise((resolve) => { answer = resolve; }),
+  });
+  assert.equal(client.isReadOnly(), true);
+  assert.equal(notice.hidden, true);
+
+  answer({ ok: true, status: 200, type: 'basic', json: async () => ({ account: 'acct-a' }) });
+  await settle();
+
+  assert.equal(client.isReadOnly(), false);
+  assert.equal(notice.hidden, true);
+  assert.deepEqual(env.readOnlyCalls, [true, false]);
+});
+
+test('IAR-W11: in a browser a copy shows the notice at once when the device is offline', () => {
+  const { client, notice } = setup({ androidShell: false, marker: 'cache', onLine: false, answer: () => new Promise(() => {}) });
+
+  assert.equal(client.isReadOnly(), true);
+  assert.equal(notice.hidden, false);
+});
+
+test('IAR-W11: in a browser a connected device shows the notice once the server cannot answer', async () => {
+  const { notice, settle } = setup({
+    androidShell: false, marker: 'cache', answer: async () => { throw new TypeError('Failed to fetch'); },
+  });
+  await settle();
+
+  assert.equal(notice.hidden, false);
+});
+
+test('the Android app shows its copy without the notice while the server answers', async () => {
+  const { client, notice } = setup({ androidShell: true, marker: 'cache', answer: () => new Promise(() => {}) });
+
+  assert.equal(client.isReadOnly(), false);
+  assert.equal(notice.hidden, true);
+});
+
+test('IAR-W09: in a browser, a page the worker did not load is saved as soon as the worker runs, without being hidden', async () => {
+  const { posted, settle } = setup({ androidShell: false, marker: 'network' });
+  await settle();
+
+  assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
+});
+
+test('IAR-W09: a page the worker already kept is not saved again when the worker runs', async () => {
+  const { posted, settle } = setup({ androidShell: false, marker: 'network', controlled: true });
+  await settle();
+
+  assert.deepEqual(posted.filter(message => message.type === 'save'), []);
+});
+
 test('bounded interaction: an unreachable copy retries one account check per tick after 1,000 failed retries', async () => {
   const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
   const { measureInteractionContract } = require('../helpers/request-capture');
@@ -217,9 +346,54 @@ test('bounded interaction: an unreachable copy retries one account check per tic
       });
       assert.equal(client.isReadOnly(), true);
       assert.deepEqual(env.readOnlyCalls, [true], 'the read-only state is set once, not per retry');
-      assert.equal(timers.at(-1).delay, 30000, 'retries back off to the longest delay');
+      assert.equal(timers.filter(timer => timer.delay !== 4000).at(-1).delay, 2500, 'retries stay at 2.5 s, never a growing wait');
+      assert.equal(env.lastProbe.url, '/app-copy/account');
       assert.equal(session.reconciled, 0);
       return { requests: probes.slice(before), metrics };
     },
   });
+});
+
+// An address never kept, opened while the server is unreachable, showed another view.
+test('IAR-W10: a copy standing in for an address never kept says so, so the page shows that address as unreachable', async () => {
+  const offline = async () => { throw new TypeError('Failed to fetch'); };
+  const standIn = setup({ androidShell: false, marker: 'cache', viewMissing: true, answer: offline });
+  const ownCopy = setup({ androidShell: false, marker: 'cache', answer: offline });
+  const network = setup({ androidShell: false, marker: 'network', viewMissing: true });
+  await Promise.all([standIn.settle(), ownCopy.settle(), network.settle()]);
+
+  assert.equal(standIn.client.viewMissing, true);
+  assert.equal(ownCopy.client.viewMissing, false);
+  assert.equal(network.client.viewMissing, false, 'only a page from the copy can stand in');
+  assert.equal(standIn.client.isReadOnly(), true);
+});
+
+// No answer for 10 s: the copy the worker shows after no answer at all says Offline
+// at once, and switches to live in place when the held account check is finally answered.
+test('IAR-W14: a copy shown after no answer shows the notice at once and goes live in place once the server answers', async () => {
+  let answerAccount;
+  const { client, notice, env, settle } = setup({
+    androidShell: false, marker: 'cache', unanswered: true,
+    answer: () => new Promise((resolve) => { answerAccount = resolve; }),
+  });
+  let reconciled = 0;
+  client.onServerAnswer(() => { reconciled += 1; });
+  await settle();
+
+  assert.equal(notice.hidden, false, 'Offline at once, without waiting for the account check');
+  assert.equal(client.isReadOnly(), true);
+
+  answerAccount({ ok: true, status: 200, type: 'basic', json: async () => ({ account: 'acct-a' }) });
+  await settle();
+
+  assert.equal(notice.hidden, true);
+  assert.equal(client.isReadOnly(), false);
+  assert.equal(reconciled, 1, 'the view is brought up to date in place');
+  assert.equal(env.reloads, 0);
+});
+
+test('IAR-W14: an ordinary copy on a connected device still waits for the account check before the notice', async () => {
+  const { notice, settle } = setup({ androidShell: false, marker: 'cache', answer: () => new Promise(() => {}) });
+  await settle();
+  assert.equal(notice.hidden, true);
 });

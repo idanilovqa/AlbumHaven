@@ -51,7 +51,8 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.problematicFilesComplete = false;
   state.utility.problematicArtistItems = [];
   // The complete list carries every Artist problem, so the paint before it must not page Artists.
-  state.utility.problematicArtistHasMore = options.completeOnly !== true;
+  // A refresh keeps the complete list on screen until its bounded page commits: no Artist page before then.
+  state.utility.problematicArtistHasMore = options.completeOnly !== true && !refreshesCompleteList;
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
@@ -188,6 +189,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           data,
           options.preserveSelectedDetail === true || data.complete === false,
         );
+        if (refreshesCompleteList) state.utility.problematicArtistHasMore = true;
         boundedPayloadCommitted = data.complete === false;
         state.utility.problematicHasMore = data.has_more === true
           || (data.has_more === undefined && data.complete === false);

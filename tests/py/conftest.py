@@ -16,6 +16,15 @@ from urllib.parse import urlparse
 
 import pytest
 
+from tests.e2e.support import localPostgresGuard
+
+# Before any test or app module can connect: a local run reaches only a throwaway cluster it names.
+if not localPostgresGuard.is_github_actions():
+    if os.environ.get("PGPORT", "").strip() in {"", localPostgresGuard.INSTALLED_SERVER_PORT}:
+        os.environ["PGPORT"] = localPostgresGuard.UNSERVED_PORT
+    os.environ.pop("PGSERVICE", None)
+    localPostgresGuard.install()
+
 
 _SAFE_PYTEST_ENV = {
     "LASTFM_API_ENABLED": "false",

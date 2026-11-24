@@ -3582,8 +3582,9 @@ class PostgresLibraryBrowseRepository:
             str(identity_payload.get("relation_alias_fingerprint") or ""),
         )
         cacheable = bool(fingerprint[0] and fingerprint[1])
+        # Every caller reads these library-sized maps and none changes them, so a hit shares them.
         cached = (
-            self._get_cached_utility_projection("relation-alias-maps")
+            self._get_cached_utility_projection("relation-alias-maps", copy_payload=False)
             if cacheable
             else None
         )

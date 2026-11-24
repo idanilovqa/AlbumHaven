@@ -2485,8 +2485,8 @@ function parseUrlState(url) {
 
 // BEGIN js/runtime/browser-navigation-helpers.js
 
-// What the readers of history state use. The browser writes the state to its session files, where
-// signing out does not reach it, so nothing of the library is kept there.
+// What the readers of history state use. A view is named by its address, so the state is only where
+// the entry is in the app's navigation.
 const HISTORY_NAVIGATION_KEYS = ['albumHavenNavigationPosition', 'albumHavenDiscoveryPosition', 'mobilePages', 'imageLightbox'];
 
 function getBrowserLocationOrigin() {
@@ -2524,7 +2524,7 @@ function replaceBrowserViewState(view) {
   window.history.replaceState(historyNavigationState(), '', buildUrl(view));
 }
 
-// Entries written by earlier builds held their whole view.
+// An entry loaded again keeps only the keys above.
 function dropViewFromHistoryState() {
   if (!window.history?.state) return;
   const kept = historyNavigationState();
@@ -22755,12 +22755,28 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
       return false;
     }
-    // A response dispatched before a tag edit must not replace its optimistic view.
-    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
-      return false;
-    }
-    // Artwork published after this request started owns the album cover state.
-    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
+    if (
+      // A response dispatched before a tag edit must not replace its optimistic view.
+      requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      // Artwork published after this request started owns the album cover state.
+      || requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)
+    ) {
+      // Startup has no other request to finish it. A pending cover draws from its own overlay;
+      // a pending tag edit has none, so that one is not asked again.
+      if (
+        requestOptions.startupRefresh
+        && !state.ui.pendingViewRequest
+        && !(typeof hasPendingTagEditViewMutations === 'function' && hasPendingTagEditViewMutations())
+      ) {
+        state.ui.pendingViewRequest = {
+          url: apiUrl,
+          push: state.ui.activeViewRequestPush,
+          options: retainsMountedSelectedViewState
+            ? { ...requestOptions, retainMountedSelectedViewState: { ...state.view } }
+            : requestOptions,
+          originatingViewStateRevision: requestViewStateRevision,
+        };
+      }
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {

@@ -1,5 +1,5 @@
-// What the readers of history state use. The browser writes the state to its session files, where
-// signing out does not reach it, so nothing of the library is kept there.
+// What the readers of history state use. A view is named by its address, so the state is only where
+// the entry is in the app's navigation.
 const HISTORY_NAVIGATION_KEYS = ['albumHavenNavigationPosition', 'albumHavenDiscoveryPosition', 'mobilePages', 'imageLightbox'];
 
 function getBrowserLocationOrigin() {
@@ -37,7 +37,7 @@ function replaceBrowserViewState(view) {
   window.history.replaceState(historyNavigationState(), '', buildUrl(view));
 }
 
-// Entries written by earlier builds held their whole view.
+// An entry loaded again keeps only the keys above.
 function dropViewFromHistoryState() {
   if (!window.history?.state) return;
   const kept = historyNavigationState();

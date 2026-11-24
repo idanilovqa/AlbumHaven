@@ -1,5 +1,5 @@
-// A history entry's state is written by the browser to its session files, where signing out does not
-// reach it: it holds only where the entry is in the app's navigation, never the library.
+// A view is named by its address: a history entry's state holds only where the entry is in the app's
+// navigation.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14,8 +14,8 @@ const NAVIGATION = {
 };
 const madeUpView = () => ({
   selected_artist: 'Made up',
-  music_dir: 'Q:\\ZZMADEUP',
-  artist_groups: [{ artist: 'Made up', albums: [{ tracks: [{ path: 'Q:\\ZZMADEUP\\Album\\01.flac' }] }] }],
+  artist_count: 1,
+  artist_groups: [{ artist: 'Made up', albums: [{ name: 'Made up album' }] }],
 });
 
 function browser({ state = null, settings = false } = {}) {
@@ -60,7 +60,7 @@ test('a view correcting its address keeps only where the entry is in the navigat
   assert.deepEqual(writes, [{ how: 'replace', next: NAVIGATION, url: '/?artist=Made%20up' }]);
 });
 
-test('an entry an earlier build wrote loses the library when it is loaded again', () => {
+test('an entry loaded again keeps only its navigation', () => {
   const { context, writes } = browser({ state: { albumHavenNavigationPosition: 2, ...madeUpView() } });
 
   context.dropViewFromHistoryState();

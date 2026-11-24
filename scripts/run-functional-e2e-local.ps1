@@ -17,6 +17,15 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding
 
 $expectedRelease = 'fixtures-v1.0.30'
+# GitHub's runner owns port 5432; on any other machine that is the installed server, possibly
+# production's, so a local run names a throwaway cluster's port.
+$postgresPort = if ($env:ALBUM_HAVEN_TEST_POSTGRES_PORT) { [int]$env:ALBUM_HAVEN_TEST_POSTGRES_PORT } elseif ($env:GITHUB_ACTIONS -ceq 'true') { 5432 } else { 0 }
+
+function Assert-ThrowawayPostgresPort {
+    if ($postgresPort -lt 1 -or ($postgresPort -eq 5432 -and $env:GITHUB_ACTIONS -cne 'true')) {
+        throw 'Set ALBUM_HAVEN_TEST_POSTGRES_PORT to a throwaway cluster''s port (not 5432), or run the hosted gates.'
+    }
+}
 $fixtureProfile = 'functional-core'
 $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $contractPath = Join-Path $repositoryRoot 'tests\ci\functional-shards.json'
@@ -159,12 +168,13 @@ function Import-EnvironmentFile([string]$Path) {
 }
 
 function Get-PostgresAdminPassword([string]$PgpassPath) {
+    Assert-ThrowawayPostgresPort
     foreach ($line in (Get-Content -LiteralPath $PgpassPath)) {
-        if ($line -match '^localhost:5432:(?:\*|postgres):postgres:(.+)$') {
+        if ($line -match "^localhost:${postgresPort}:(?:\*|postgres):postgres:(.+)`$") {
             return $Matches[1].Replace('\:', ':').Replace('\\', '\')
         }
     }
-    throw "PGPASSFILE has no localhost:5432 entry for the postgres role: $PgpassPath"
+    throw "PGPASSFILE has no localhost:${postgresPort} entry for the postgres role: $PgpassPath"
 }
 
 function Assert-OwnedTempRoot([string]$Candidate) {
@@ -259,7 +269,7 @@ function Invoke-PostgresBootstrap(
         '-GithubEnv', $GithubEnv,
         '-StatePath', $StatePath,
         '-PythonPath', $python,
-        '-Port', '5432',
+        '-Port', "$postgresPort",
         '-SkipFixtureLoad'
     )
     $previousErrorActionPreference = $ErrorActionPreference

@@ -17,6 +17,9 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from scripts.migration_compat import source_indicator_ledger
+from tests.e2e.support import localPostgresGuard
+
+localPostgresGuard.install()
 
 if os.name == "nt":
     import msvcrt

@@ -6,7 +6,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 const helperPath = path.resolve(__dirname, '../e2e/helpers/appearanceFixture.js');
 const load = () => import(pathToFileURL(helperPath).href);
-const env = { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator_fixture@127.0.0.1/album_haven_ci_fixture' };
+const env = { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator_fixture@127.0.0.1:54329/album_haven_ci_fixture' };
 
 for (const row of [null, {
   account_id: 42, client_profile: 'desktop', revision: 17,
@@ -39,7 +39,7 @@ for (const row of [null, {
 test('appearance fixture rejects an unrelated database before invoking a client', async () => {
   const { captureAppearanceFixtureSnapshot } = await load();
   await assert.rejects(captureAppearanceFixtureSnapshot('fixture-owner', {
-    env: { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator@127.0.0.1/production' },
+    env: { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator@127.0.0.1:54329/production' },
     async execFileAsync() { assert.fail('must not access an unowned database'); },
   }), /isolated Postgres setup identity/);
 });

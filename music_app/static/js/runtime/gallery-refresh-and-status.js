@@ -1438,12 +1438,28 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
       return false;
     }
-    // A response dispatched before a tag edit must not replace its optimistic view.
-    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
-      return false;
-    }
-    // Artwork published after this request started owns the album cover state.
-    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
+    if (
+      // A response dispatched before a tag edit must not replace its optimistic view.
+      requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      // Artwork published after this request started owns the album cover state.
+      || requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)
+    ) {
+      // Startup has no other request to finish it. A pending cover draws from its own overlay;
+      // a pending tag edit has none, so that one is not asked again.
+      if (
+        requestOptions.startupRefresh
+        && !state.ui.pendingViewRequest
+        && !(typeof hasPendingTagEditViewMutations === 'function' && hasPendingTagEditViewMutations())
+      ) {
+        state.ui.pendingViewRequest = {
+          url: apiUrl,
+          push: state.ui.activeViewRequestPush,
+          options: retainsMountedSelectedViewState
+            ? { ...requestOptions, retainMountedSelectedViewState: { ...state.view } }
+            : requestOptions,
+          originatingViewStateRevision: requestViewStateRevision,
+        };
+      }
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {

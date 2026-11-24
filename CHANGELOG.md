@@ -15,6 +15,15 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.51 - 2026-11-24
+
+- Signing in no longer gets stuck on the login page when the page was left open too long or another tab opened the login page. The app quietly gets a fresh sign-in token and signs you in with what you typed; if it still can't, it asks you to sign in again.
+- When a track moved back into its album while another album split from it still shared the folder, the album's cover could vanish for a few seconds. Every album in a split folder now keeps the folder's cover through the next library pass. Covers you chose yourself are never touched.
+- A startup response set aside because a cover or tag save happened meanwhile is now asked for again, so the page finishes its first refresh instead of keeping a partial view.
+- Search, browsing and Problematic Files details share the cached artist alias maps instead of copying them on every request.
+- Browser history entries hold only their place in the app's navigation, not a copy of the view: a view is named by its address. Entries saved earlier keep only that place when the page loads again, and a tag save that moves the current view replaces the address the same way.
+- Test and CI only: local tests and test runners refuse the installed Postgres server's port outside GitHub Actions, and the Android in-app update test rides out dropped device connections.
+
 ## 0.11.50 - 2026-11-23
 
 - One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.

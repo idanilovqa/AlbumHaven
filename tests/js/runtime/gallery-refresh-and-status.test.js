@@ -3955,6 +3955,25 @@ test('a failed health refresh remains pending even when the utility loader clear
   assert.equal(attempts, 2);
 });
 
+test('the first watcher health observation is a baseline, not a change that reloads Problematic Files', async () => {
+  // FTC-UTIL-PROBLEMS-009: Settings opened right after page load; the first status poll landed during
+  // the utility's own load and forced a second complete summary 140 ms after it.
+  const fixture = watcherRefreshFixture();
+  fixture.context.state.status = {};
+  const utility = fixture.context.state.utility;
+  utility.loaded = false;
+  utility.loading = true;
+  utility.loadPromise = Promise.resolve(['summary from the page load']);
+  await fixture.observe({ state: 'healthy', problems: [] });
+  utility.loading = false;
+  utility.loaded = true;
+  utility.loadPromise = null;
+  await fixture.observe({ state: 'healthy', problems: [] });
+  assert.deepEqual(fixture.refreshes, [], 'the page load already reflects the first observed health');
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [true], 'a later real health change still refreshes the loaded list');
+});
+
 test('pollStatus treats the first inventory revision observation as a baseline', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

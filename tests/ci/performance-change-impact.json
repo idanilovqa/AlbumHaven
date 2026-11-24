@@ -207,6 +207,15 @@
     },
     {
       "paths": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "targets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
+    },
+    {
+      "paths": [
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
       ],
       "targets": [

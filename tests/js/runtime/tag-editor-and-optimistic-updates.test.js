@@ -3343,6 +3343,7 @@ function createTrackModalCoverContext(options = {}) {
     HTMLImageElement: TrackModalTestImage,
     document: {
       body: documentBody,
+      images: [],
       createElement(tagName) {
         return String(tagName).toLowerCase() === 'img'
           ? new TrackModalTestImage()
@@ -4083,6 +4084,23 @@ test('a changed cover keeps the decoded one shown until its replacement has deco
   assert.equal(replacement.isConnected, true);
   assert.equal(replacement.getAttribute('src'), 'blob:replacement-cover');
   assert.equal(replacement.closest('.track-modal-cover-visual').classList.contains('is-loading'), false);
+});
+
+test('a changed cover already decoded on the page replaces the shown one at once', async () => {
+  const { context, cover, image, loaderCalls, showCover } = await openDecodedTrackModalCover();
+  const picked = new URL('/cover/picked-cover?size=480&v=fixture', 'http://127.0.0.1:4173/').href;
+  context.document.images.push(Object.assign(context.document.createElement('img'), {
+    currentSrc: picked, complete: true, naturalWidth: 480,
+  }));
+
+  showCover('picked-cover');
+
+  const shown = cover.querySelector('img');
+  assert.notEqual(shown, image, 'the picked cover must not wait behind an off-page load');
+  assert.equal(shown.isConnected, true);
+  assert.equal(shown.getAttribute('data-production-cover-src'), '/cover/picked-cover?size=480&v=fixture');
+  assert.equal(shown.getAttribute('src'), '/cover/picked-cover?size=480&v=fixture');
+  assert.equal(loaderCalls.length, 1, 'an already decoded cover needs no second load');
 });
 
 test('only the last of several cover changes replaces the decoded cover', async () => {

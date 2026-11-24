@@ -1512,8 +1512,10 @@ def _cover_response(
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
                 source_path = resolved
                 generation_options = {}
-                # An unrevisioned preview stays in app data, outside the relocation inventory.
-                if inventory_recorder is not None and normalized_revision:
+                # Previews follow the storage setting (owner, 2026-11-22): under a storage policy every
+                # preview is written to its root and joins the relocation inventory. Without one, an
+                # unrevisioned preview stays in app data, outside it (0845e566c).
+                if inventory_recorder is not None and (normalized_revision or storage_policy is not None):
                     generation_options["on_published"] = inventory_recorder
                 resolved = resolve_cover_display_variant(
                     resolved,

@@ -72,8 +72,11 @@ def library_app(tmp_path, monkeypatch):
     def refuse_connection(*_args, **_kwargs):
         raise psycopg.OperationalError("bounded-interaction contracts never connect to Postgres")
 
-    monkeypatch.setattr(psycopg, "connect", refuse_connection)
-    monkeypatch.setattr(psycopg.Connection, "connect", classmethod(lambda cls, *args, **kwargs: refuse_connection()))
+    # The refusal has an undo stack of its own: a failed undo of the test's other patches can never leave
+    # psycopg refusing connections for the rest of the session.
+    refusal = pytest.MonkeyPatch()
+    refusal.setattr(psycopg, "connect", refuse_connection)
+    refusal.setattr(psycopg.Connection, "connect", classmethod(lambda cls, *args, **kwargs: refuse_connection()))
     monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", _RootSettingsStore)
     # The in-memory inventory below is the published library: no hydration runs.
     monkeypatch.setattr(api_read_asgi_routes, "request_library_hydration_for_state", lambda *_args, **_kwargs: True)
@@ -90,7 +93,10 @@ def library_app(tmp_path, monkeypatch):
     monkeypatch.setattr(album_details, "build_track_preference_overlay_lookup", lambda *_args, **_kwargs: {})
     # The Postgres rule-state store holds no rules for this library.
     monkeypatch.setattr(rule_state_postgres.RuleStatePostgresAdapter, "_load_rows", lambda _self, _sql: [])
-    return app
+    try:
+        yield app
+    finally:
+        refusal.undo()
 
 
 def _use_roots(app, settings: dict[str, object]) -> None:
@@ -998,7 +1004,10 @@ def _indexed_cover_inventory(monkeypatch, app, album_root):
         wait_for_context=lambda _paths, _timeout: None,
         wait_for_listing=lambda _root, _timeout: None,
     )
-    monkeypatch.setattr(app.state, "local_cover_inventory", worker, raising=False)
+    # Starlette's State keeps its attributes in one dict. Patched as an item, the worker is restored
+    # however many times a contract installs it; an attribute patch can record the attribute as absent
+    # and fail its own undo with a KeyError, aborting every undo queued behind it.
+    monkeypatch.setitem(app.state._state, "local_cover_inventory", worker)
 
 
 def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size(

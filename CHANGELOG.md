@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.51 - 2026-11-23
+
+- Browser history entries hold only their place in the app's navigation, not a copy of the view: a view is named by its address. Entries saved earlier keep only that place when the page loads again, and a tag save that moves the current view replaces the address the same way.
+
 ## 0.11.50 - 2026-11-23
 
 - One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.

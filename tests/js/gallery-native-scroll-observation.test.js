@@ -510,3 +510,29 @@ test('CDP response timestamps normalize both seconds and milliseconds to epoch m
   assert.equal(normalizeCdpResponseEpoch(0), null);
   assert.equal(normalizeCdpResponseEpoch(Number.NaN), null);
 });
+
+test('deferred-update boundary keeps the event it saw after the bounded diagnostic log drops it', async () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js',
+  ), 'utf8');
+  const boundarySource = source.slice(
+    source.indexOf('function deferredUpdateBoundary'),
+    source.indexOf('async function waitForDeferredGroupUpdate'),
+  );
+  const observed = { type: 'group-update-deferred', sequence: 8, epoch: 1200 };
+  let reads = 0;
+  // The grid keeps 24 events, so busy rendering drops the update right after it is first seen.
+  const readDeferredGroupUpdate = async () => (++reads === 1 ? observed : null);
+  const deferredUpdateBoundary = new Function(
+    'readDeferredGroupUpdate', 'RESPONSE_BOUNDARY_TIMEOUT_MS',
+    `${boundarySource}; return deferredUpdateBoundary;`,
+  )(readDeferredGroupUpdate, 1000);
+
+  assert.deepEqual(
+    await deferredUpdateBoundary({}, 7, Promise.resolve(1100)),
+    { responseAt: 1100, deferredEvent: observed },
+  );
+  const desktopScenarios = source.slice(source.indexOf("test.describe('desktop Cards'"));
+  assert.doesNotMatch(desktopScenarios, /waitForDeferredGroupUpdate\(/);
+});

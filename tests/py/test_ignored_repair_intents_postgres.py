@@ -215,10 +215,10 @@ def _first_album_problem(library, repository):
     item = next(item for item in page["items"] if item["name"] == "Album A")
     detail = repository.build_problematic_file_detail_payload(item["key"])
     row = detail["album_problem_rows"][0]
-    return item["key"], row["row_key"], row["album_key"], row["problem_reason"]
+    return item["key"], row["row_key"], row["album_key"], row.get("problem_reason") or row["reason"]
 
 
-def _shown(repository, item_key):
+def _reloaded(repository, item_key):
     """What a reload shows: the Rules' ignored problems, the album's detail rows, and its page item."""
     rules = repository.build_utility_rules_payload()
     rule = next(rule for rule in rules["rules"] if rule.get("key") == "problem-ignores")
@@ -236,7 +236,7 @@ def test_a_pending_ignore_shows_after_a_reload_in_the_rules_the_details_and_the_
     save = library.save()
     try:
         assert _answered(lambda: _ignore(library, {row_key: album_key})) == "pending"
-        ignored, detail_rows, reasons = _shown(repository, item_key)
+        ignored, detail_rows, reasons = _reloaded(repository, item_key)
         assert row_key in ignored
         assert row_key not in detail_rows
         assert reasons is None or reason not in reasons
@@ -245,7 +245,7 @@ def test_a_pending_ignore_shows_after_a_reload_in_the_rules_the_details_and_the_
         save.close()
     _drained(library)
     assert _pending(library) == 0
-    assert _shown(repository, item_key) == (ignored, detail_rows, reasons)
+    assert _reloaded(repository, item_key) == (ignored, detail_rows, reasons)
 
 
 def test_a_pending_unignore_shows_after_a_reload_in_the_rules_and_the_details(library):
@@ -255,7 +255,7 @@ def test_a_pending_unignore_shows_after_a_reload_in_the_rules_and_the_details(li
     save = library.save()
     try:
         assert _answered(lambda: _unignore(library, {row_key: album_key})) == "pending"
-        ignored, detail_rows, _reasons = _shown(repository, item_key)
+        ignored, detail_rows, _reasons = _reloaded(repository, item_key)
         assert row_key not in ignored
         assert row_key in detail_rows
     finally:
@@ -263,6 +263,6 @@ def test_a_pending_unignore_shows_after_a_reload_in_the_rules_and_the_details(li
         save.close()
     _drained(library)
     assert _pending(library) == 0
-    ignored, detail_rows, _reasons = _shown(repository, item_key)
+    ignored, detail_rows, _reasons = _reloaded(repository, item_key)
     assert row_key not in ignored
     assert row_key in detail_rows

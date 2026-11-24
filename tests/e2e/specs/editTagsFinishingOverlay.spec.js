@@ -25,6 +25,7 @@ const FINISHING_ANSWER_TIMEOUT_MS = 90000;
 const albumDetailsTitle = (albumName, year = FINISHING_YEAR) => `${FIXTURE_ARTIST} • ${albumName} • ${year}`;
 
 async function pendingTagEditIds(page) {
+  // parity-check: allow-read-only-measurement-evaluate -- read the kept pending edits' ids from storage
   return page.evaluate((key) => {
     try { return (JSON.parse(window.localStorage.getItem(key) || '[]') || []).map((entry) => entry.id); } catch { return []; }
   }, PENDING_TAG_EDITS_KEY);
@@ -52,8 +53,13 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
       // Owner (2026-11-23): the new name shows at the Save, on the saving page, before the server answers.
       const accepted = await tagEditorActions.applyAndReturnFinishingEdit({
         timeout: FINISHING_ANSWER_TIMEOUT_MS,
+        // While the save is held no server response names the album yet, so this proves what is on screen:
+        // Album Details' title, then (Album Details closed, as it covers the gallery) the exact card,
+        // unobscured under its heading.
         onBeforeResponse: async () => {
-          await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
+          await trackModalActions.waitForTitle(albumDetailsTitle(FINISHING_RENAMED_ALBUM));
+          await trackModalActions.close();
+          await galleryActions.waitForAlbumCardShownUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM, { year: FINISHING_YEAR });
           await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
         },
       });
@@ -61,8 +67,9 @@ test('FTC-TAGS-043 a save that finishes while a scan holds the library shows its
       const physicalTags = await readGeneratedMp3AlbumTags({ artist: FIXTURE_ARTIST, album: FINISHING_ALBUM });
       expect(physicalTags).toHaveLength(FINISHING_TRACK_COUNT);
       for (const track of physicalTags) expect(track.albumValues).toEqual([FINISHING_RENAMED_ALBUM]);
-      await trackModalActions.waitForTitle(albumDetailsTitle(FINISHING_RENAMED_ALBUM));
-      await trackModalActions.close();
+      // The save has answered: the gallery's result names the new album.
+      await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FINISHING_RENAMED_ALBUM);
+      await galleryActions.waitForAlbumHidden(FINISHING_ALBUM);
     });
 
     await stepLogger.step('A reload shows the new album name on the card and in Album Details', async () => {

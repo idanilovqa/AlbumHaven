@@ -26,12 +26,21 @@ def _counted_maintenance(fixture, monkeypatch):
     monkeypatch.setenv("ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED", "1")
     monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: None)
     monkeypatch.setattr(problematic_index, "BACKFILL_BATCH", BATCH)
-    counted = SimpleNamespace(counts=OperationCounts(), own=[], batches=[], fresh=browse._connect)
+    counted = SimpleNamespace(counts=OperationCounts(), own=[], batches=[], fresh=browse._connect, statements=[], details=[])
     open_worker, pooled = problematic_index._worker_connection, browse._pooled_connection
 
     def worker_connection(repository):
         counted.own.append(repository)
-        return CountingConnection(open_worker(repository), counted.counts)
+        connection = CountingConnection(open_worker(repository), counted.counts)
+        execute = connection.execute
+
+        def recording(query, params=None, *args, **kwargs):
+            # Diagnosis (6.5, 11-24): what each batch ran, printed when the contract fails.
+            counted.statements.append(" ".join(str(query).split())[:160])
+            return execute(query, params, *args, **kwargs)
+
+        connection.execute = recording
+        return connection
 
     @contextmanager
     def counted_pool(*args, **kwargs):
@@ -46,11 +55,15 @@ def _counted_maintenance(fixture, monkeypatch):
     index_rows = problematic_index._index_rows
 
     def counted_batch(*args, **kwargs):
-        before = counted.counts.sql_statements
+        before, first = counted.counts.sql_statements, len(counted.statements)
         try:
             return index_rows(*args, **kwargs)
         finally:
             counted.batches.append(counted.counts.sql_statements - before)
+            counted.details.append({"album_ids": list(args[3]) if len(args) > 3 else None,
+                                    "include_loose": args[4] if len(args) > 4 else None,
+                                    "loose_folders": kwargs.get("loose_folders"),
+                                    "statements": counted.statements[first:]})
 
     monkeypatch.setattr(problematic_index, "_worker_connection", worker_connection)
     monkeypatch.setattr(browse, "_pooled_connection", counted_pool)
@@ -62,6 +75,7 @@ def _counted_maintenance(fixture, monkeypatch):
 def _start_pass(counted):
     counted.own.clear()
     counted.batches.clear()
+    counted.details.clear()
     counted.counts.sql_statements = counted.counts.pool_leases = 0
 
 
@@ -95,6 +109,9 @@ def test_maintenance_holds_one_connection_of_its_own_and_its_batches_stay_flat(w
             measured.pool_leases += counted.counts.pool_leases
             # Per batch, not per pass: the most statements any one batch ran.
             measured.sql_statements = max(measured.sql_statements, *counted.batches)
+            for detail in counted.details:
+                if len(detail["statements"]) != 9:
+                    print(f"{albums} albums, {'drain' if setup else 'backfill'} pass, batch of {len(detail['statements'])}: {detail}")
         print(f"{albums} albums: largest batch {measured.sql_statements} statements, {measured.pool_leases} pool leases")
         return measured
 

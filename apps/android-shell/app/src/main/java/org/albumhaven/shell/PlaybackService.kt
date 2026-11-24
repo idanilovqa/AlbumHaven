@@ -251,6 +251,13 @@ class PlaybackService : MediaLibraryService() {
          */
         override fun selectOrigin(origin: String) {
             if (origin == this@PlaybackService.origin) return
+            startOver(origin)
+        }
+
+        /** Nothing of the account's playback outlives signing out: the player starts over empty. */
+        override fun signedOut() = startOver(this@PlaybackService.origin)
+
+        private fun startOver(origin: String) {
             retireController()
             newExecutors()
             restoreStore.clear()

@@ -128,6 +128,20 @@ class PlaybackNotificationTest {
         waitUntil("the ended service out of the foreground") { playbackService()?.foreground != true }
     }
 
+    // Signing out leaves nothing of the account's playback: no sound, no queue, no card, no saved copy.
+    @Test
+    fun signingOutStopsPlaybackAndForgetsItsQueueCardAndSavedCopy() {
+        play()
+        onMain { handle.signedOut() }
+
+        waitUntil("an empty, silent player") {
+            handle.port.snapshot.items.isEmpty() && handle.port.snapshot.state != NativePlaybackState.PLAYING
+        }
+        waitUntil("the media card gone") { mediaNotification() == null || playbackService()?.foreground != true }
+        val saved = context.getSharedPreferences("playback_restore", Context.MODE_PRIVATE).all
+        assertTrue("the saved queue outlived signing out: $saved", saved.values.none { "Signal 5" in it.toString() })
+    }
+
     private fun play(queued: QueueItem = item) {
         val bound = CountDownLatch(1)
         val serviceConnection = object : ServiceConnection {

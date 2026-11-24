@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import threading
 from types import SimpleNamespace
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from music_app.services import startup_bootstrap
@@ -1616,10 +1616,10 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
 
     assert track_status == 200
     assert track_body == b"track-bytes"
-    assert track_headers.get("cache-control") == "no-cache"
+    assert track_headers.get("cache-control") == "private, no-store"
     assert track_headers.get("content-disposition") == 'inline; filename="song.mp3"'
     assert revalidated_track_status == 304
-    assert revalidated_track_headers.get("cache-control") == "no-cache"
+    assert revalidated_track_headers.get("cache-control") == "private, no-store"
     assert revalidated_track_body == b""
     assert rejected_track_status == 404
     _assert_flask_like_private_media_not_found(_rejected_track_headers, _rejected_track_body)
@@ -1637,20 +1637,20 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
     assert revalidated_cover_mtime_body == b""
     assert loop_status == 200
     assert loop_body == b"loop-bytes"
-    assert loop_headers.get("cache-control") == "no-cache"
+    assert loop_headers.get("cache-control") == "private, no-store"
     assert loop_headers.get("content-disposition") == 'inline; filename="loop-1.mp3"'
     assert revalidated_loop_status == 304
-    assert revalidated_loop_headers.get("cache-control") == "no-cache"
+    assert revalidated_loop_headers.get("cache-control") == "private, no-store"
     assert revalidated_loop_headers.get("content-disposition") == 'inline; filename="loop-1.mp3"'
     assert revalidated_loop_body == b""
     assert rejected_loop_status == 404
     _assert_flask_like_private_media_not_found(rejected_loop_headers, rejected_loop_body)
     assert preview_status == 200
     assert preview_body == b"preview-bytes"
-    assert preview_headers.get("cache-control") == "no-cache"
+    assert preview_headers.get("cache-control") == "private, no-store"
     assert preview_headers.get("content-disposition") == 'inline; filename="loop-1_pplus1.mp3"'
     assert revalidated_preview_status == 304
-    assert revalidated_preview_headers.get("cache-control") == "no-cache"
+    assert revalidated_preview_headers.get("cache-control") == "private, no-store"
     assert revalidated_preview_headers.get("content-disposition") == 'inline; filename="loop-1_pplus1.mp3"'
     assert revalidated_preview_body == b""
     assert missing_preview_status == 404
@@ -1712,7 +1712,7 @@ def test_asgi_saved_loop_media_uses_owned_stored_legacy_artifact(
 
     assert status == 200
     assert body == b"canonical-loop-bytes"
-    assert headers.get("cache-control") == "no-cache"
+    assert headers.get("cache-control") == "private, no-store"
 
 
 def test_asgi_cover_uses_dedicated_capacity_instead_of_the_shared_request_worker(
@@ -1758,7 +1758,7 @@ def test_asgi_cover_uses_dedicated_capacity_instead_of_the_shared_request_worker
         "Нил Морс - Джозеф, часть первая.png",
     ],
 )
-def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_unicode(
+def test_asgi_cover_names_no_library_file_in_content_disposition(
     app,
     filename,
     monkeypatch,
@@ -1775,7 +1775,8 @@ def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_u
         cover_reference_url(asgi_app, cover_path),
         query={},
     )
-    expected_disposition = f"inline; filename*=utf-8''{quote(filename)}"
+    # A cover may be stored, and a cache keeps the headers with the image.
+    expected_disposition = 'inline; filename="cover.png"'
 
     assert status == 200
     assert body == b"cover-bytes"

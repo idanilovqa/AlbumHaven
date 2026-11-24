@@ -242,6 +242,22 @@ jobs:
               --markdown=$env:GITHUB_STEP_SUMMARY
           }
 
+      # The functional runner keeps a failed shard under the system temp folder, outside the upload.
+      # Only Playwright's output and blob are copied; database state and fixture media stay behind.
+      - name: Collect failed functional shard evidence
+        if: ${{ failure() }}
+        run: |
+          foreach ($shard in @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter "album-haven-functional-local-*")) {
+            $destination = Join-Path "test-results/regression-gates/functional-shards" $shard.Name
+            foreach ($part in @("output", "blob")) {
+              $source = Join-Path $shard.FullName $part
+              if (Test-Path -LiteralPath $source -PathType Container) {
+                New-Item -ItemType Directory -Force -Path $destination | Out-Null
+                Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+              }
+            }
+          }
+
       # No teardown: the runner VM and its PostgreSQL service are discarded after the job.
       - name: Upload gate results
         if: ${{ always() }}

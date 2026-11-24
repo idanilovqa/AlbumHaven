@@ -42,7 +42,7 @@ function startServer() {
       response.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
         ...(copy
-          ? { 'Cache-Control': 'private, no-cache', 'X-Album-Haven-App-Copy': server.account, 'X-Album-Haven-Asset-Version': 't1' }
+          ? { 'Cache-Control': 'private, no-store', 'X-Album-Haven-App-Copy': server.account, 'X-Album-Haven-Asset-Version': 't1' }
           : { 'Cache-Control': 'no-store, max-age=0' }),
       });
       const shell = server.androidShell
@@ -100,7 +100,7 @@ async function adoptShell(page) {
 }
 
 async function copyCount(page) {
-  return page.evaluate(async () => (await caches.keys()).filter(name => name.startsWith('album-haven-app-copy-v2:')).length);
+  return page.evaluate(async () => (await caches.keys()).filter(name => name.startsWith('album-haven-app-copy-v2.1:')).length);
 }
 
 test.describe('app copy service worker', () => {
@@ -170,7 +170,7 @@ test.describe('app copy service worker', () => {
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 3');
     await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('data-account', 'acct-b');
-    await expect.poll(() => page.evaluate(async () => caches.keys())).toEqual(['album-haven-app-copy-v2:acct-b']);
+    await expect.poll(() => page.evaluate(async () => caches.keys())).toEqual(['album-haven-app-copy-v2.1:acct-b']);
   });
 
   test('IAR-007: a copy older than seven days is not shown', async ({ page }) => {
@@ -180,7 +180,7 @@ test.describe('app copy service worker', () => {
     await expect.poll(() => copyCount(page)).toBe(1);
     // allow-read-only-measurement-evaluate: ages the kept copy's record by eight days.
     await page.evaluate(async () => {
-      const cache = await caches.open('album-haven-app-copy-v2:acct-a');
+      const cache = await caches.open('album-haven-app-copy-v2.1:acct-a');
       const metaUrl = new URL('/__app-copy__/meta', location.origin).href;
       const meta = await (await cache.match(metaUrl)).json();
       for (const kept of Object.values(meta.pages)) kept.savedAt -= 8 * 24 * 60 * 60 * 1000;

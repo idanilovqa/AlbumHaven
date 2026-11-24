@@ -2258,7 +2258,9 @@ async function pollStatus() {
     && !startedDuringPendingStart;
   let nextPollDelay = null;
   const knownStatus = state.status || {};
-  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
+  // Like the inventory revision, the first observed watcher health is a baseline: the loaded lists already reflect it.
+  const knownWatcherHealth = Object.prototype.hasOwnProperty.call(knownStatus, 'watcher_health')
+    ? watcherHealthRefreshSignature(knownStatus) : null;
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -2328,7 +2330,8 @@ async function pollStatus() {
       }
     }
     const utility = state.utility;
-    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    const healthChanged = knownWatcherHealth !== null
+      && knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
     if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
       utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
     }

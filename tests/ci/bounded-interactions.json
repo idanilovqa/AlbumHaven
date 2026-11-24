@@ -13730,6 +13730,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/private_route_boundary.py#_PrivateCachePolicy.__call__",
+      "action": "Set the cache policy on each private answer's headers from its own Cache-Control and its address, reading no body",
+      "entrypoints": [
+        "py:music_app/services/private_route_boundary.py#_PrivateCachePolicy.__call__:middleware:MIDDLEWARE asgi"
+      ],
+      "owners": [
+        "music_app/services/private_route_boundary.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:services/private_route_boundary.py#_refresh_session_csrf_cookie",
       "action": "Run refresh _refresh_session_csrf_cookie",
       "entrypoints": [

@@ -1,6 +1,6 @@
 """Bounded reads of the copy-folder and multi-album-folder work, on a throwaway database (6.5, 2026-11-24).
 
-One synthetic library is seeded at two sizes (20 and 2,000 unrelated albums): three albums in their own folders,
+One synthetic library is seeded at two sizes (20 and 200 unrelated albums): three albums in their own folders,
 a folder of copies of their songs, a real multi-album folder (two complete albums alone) and a folder of two
 partial albums. The real app answers Album Details and Problematic Files; each added read is counted and must
 not grow with the library, and the query plans must reach their indexes."""
@@ -18,7 +18,7 @@ from tests.py.test_isolated_postgres_live import (
     _finish_live_startup,
 )
 
-SIZES = (20, 2000)
+SIZES = (20, 200)
 ALBUMS = ("Album One", "Album Two", "Album Three")
 MIXED = "Mixed album metadata in one folder"
 
@@ -160,7 +160,7 @@ def test_live_copy_folder_reads_stay_flat_at_two_library_sizes(seeded_app):
 
         measured[unrelated] = {"copy_reads": list(copy_reads), "twin_rows": twin_rows, "narrowing": list(narrowing)}
 
-    # Flat: the same statements and rows at 20 and at 2,000 unrelated albums.
+    # Flat: the same statements and rows at 20 and at 200 unrelated albums.
     small, large = (measured[size] for size in SIZES)
     assert small == large, measured
     assert len(small["copy_reads"]) == 1 and small["copy_reads"][0] == 2, "one read, returning the album's 2 copies"

@@ -1,4 +1,48 @@
+import { readFileSync } from 'node:fs';
+
 import { CDPDocumentEvents } from './cdpDocumentEvents.js';
+
+// The gallery's bounded source-totals wait (gallery-main-interactions.js): one /home-data?source_totals=1
+// read, then one retry per delay while a source scope is pending, at one inventory revision. Each read
+// only updates the source totals; it never answers for the gallery.
+const SOURCE_TOTALS_RESPONSE_KEYS = new Set([
+  'source_totals_by_scope', 'pending_source_scopes', 'inventory_mutation_revision',
+]);
+export const SOURCE_TOTALS_READ_LIMIT = (() => {
+  const runtime = readFileSync(new URL(
+    '../../../music_app/static/js/runtime/gallery-main-interactions.js', import.meta.url,
+  ), 'utf8');
+  const delays = runtime.match(/const PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS = \[([^\]]*)\]/u);
+  if (!delays) throw new Error('gallery-main-interactions.js no longer declares its source-totals retry delays');
+  return 1 + delays[1].split(',').filter(value => value.trim()).length;
+})();
+
+export function isSourceTotalsUrl(value) {
+  const requestUrl = value instanceof URL ? value : new URL(String(value));
+  return requestUrl.pathname === '/home-data'
+    && ['1', 'true', 'yes', 'on'].includes(
+      String(requestUrl.searchParams.get('source_totals') || '').trim().toLowerCase(),
+    );
+}
+
+// Totals and nothing else: no album rows, gallery page, sidebar or surface.
+function sourceTotalsShapeError(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'is not an object';
+  const extra = Object.keys(payload).filter(key => !SOURCE_TOTALS_RESPONSE_KEYS.has(key));
+  if (extra.length) return `carries more than totals: ${extra.sort().join(', ')}`;
+  const totals = payload.source_totals_by_scope;
+  if (!totals || typeof totals !== 'object' || Array.isArray(totals)) return 'has no source_totals_by_scope';
+  for (const [scope, total] of Object.entries(totals)) {
+    const keys = Object.keys(total || {}).sort();
+    if (keys.join(',') !== 'album_count,artist_count'
+      || !keys.every(key => Number.isFinite(Number(total[key])))) {
+      return `carries more than totals for scope "${scope}": ${keys.join(', ')}`;
+    }
+  }
+  if (!Array.isArray(payload.pending_source_scopes)) return 'has no pending_source_scopes list';
+  if (!Number.isSafeInteger(payload.inventory_mutation_revision)) return 'has no inventory revision';
+  return null;
+}
 
 // The search's Loose Tracks prefetch shares /view-data and the query but carries no gallery
 // (server: _is_postgres_search_loose_tracks_prefetch_request), so it never answers for the view.
@@ -294,6 +338,8 @@ export class ProductionViewObserver {
     this.mutationGeneration = 0;
     this.galleryPayloadObserved = false;
     this.bootstrapPresenceEligible = false;
+    this.sourceTotalsReadsByRevision = new Map();
+    this.sourceTotalsViolation = null;
 
     this.documentGeneration = 0;
     const resetDocumentObservation = () => {
@@ -320,6 +366,7 @@ export class ProductionViewObserver {
       this.latestCompletedSaveTaskPayload = null;
       this.completedCanonicalMutationPayloads = [];
       this.pendingPayloadReads.clear();
+      this.sourceTotalsReadsByRevision.clear();
       this.stateRevision += 1;
     };
     events.on('documentcommitted', resetDocumentObservation);
@@ -340,6 +387,12 @@ export class ProductionViewObserver {
         this.requestDetails.set(request, saveTaskDetail);
         this.activeRequests.set(request, saveTaskDetail);
         this.stateRevision += 1;
+        return;
+      }
+      if (isSourceTotalsUrl(request.url())) {
+        this.requestDetails.set(request, {
+          documentGeneration: this.documentGeneration, full: false, kind: 'source-totals', url: request.url(),
+        });
         return;
       }
       const detail = readViewDataRequest(request, this.nextRequestSequence + 1);
@@ -458,6 +511,30 @@ export class ProductionViewObserver {
             this.pendingPayloadReads.delete(pendingRead);
             this.stateRevision += 1;
           });
+        return;
+      }
+      if (detail?.kind === 'source-totals') {
+        if (!response.ok()) return;
+        Promise.resolve(response.json())
+          .then((payload) => {
+            if (detail.documentGeneration !== this.documentGeneration) return;
+            const shapeError = sourceTotalsShapeError(payload);
+            if (shapeError) {
+              this.sourceTotalsViolation ||= `A source-totals response ${shapeError} (${detail.url}).`;
+              return;
+            }
+            const revision = payload.inventory_mutation_revision;
+            const reads = (this.sourceTotalsReadsByRevision.get(revision) || 0) + 1;
+            this.sourceTotalsReadsByRevision.set(revision, reads);
+            if (reads > SOURCE_TOTALS_READ_LIMIT) {
+              this.sourceTotalsViolation ||= `${reads} source-totals reads at inventory revision ${revision} `
+                + `exceed the retry limit of ${SOURCE_TOTALS_READ_LIMIT}.`;
+            }
+          })
+          .catch((error) => {
+            this.sourceTotalsViolation ||= `A source-totals response could not be read: ${error?.message || error}`;
+          })
+          .finally(() => { this.stateRevision += 1; });
         return;
       }
       if (!detail || (!detail.full && !detail.gallery)) return;
@@ -643,6 +720,7 @@ export class ProductionViewObserver {
 
   read() {
     if (this.events.observationError) throw this.events.observationError;
+    if (this.sourceTotalsViolation) throw new Error(this.sourceTotalsViolation);
     const activeRequest = [...this.activeRequests.values()]
       .sort((left, right) => right.sequence - left.sequence)[0];
     return {
@@ -671,6 +749,7 @@ export class ProductionViewObserver {
       topologyRevision: this.topologyRevision,
       galleryArtistTopologies: Object.fromEntries(this.galleryArtistTopologies),
       bootstrapPresenceEligible: this.bootstrapPresenceEligible,
+      sourceTotalsReadsByRevision: Object.fromEntries(this.sourceTotalsReadsByRevision),
     };
   }
 

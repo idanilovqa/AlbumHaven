@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.support import isolatedPostgres
+from tests.py.postgres_column_dependents import triggers_depending_on_columns_set_aside
 from music_app.services import library_browse_postgres as browse
 from music_app.services.utils import MOJIBAKE_CANDIDATE_PATTERN, MOJIBAKE_ENCODING_CANDIDATE_CHARS
 
@@ -40,14 +41,18 @@ def physical_catalog(request):
                     where a.attrelid = 'library.local_track_files'::regclass and a.attgenerated = 's'
                     order by a.attnum
                 """).fetchall()
-                for column in projections:
-                    connection.execute(f'ALTER TABLE library.local_track_files DROP COLUMN "{column["name"]}"')
-                connection.execute('ALTER TABLE library.local_track_files ALTER COLUMN private_path TYPE text COLLATE "C"')
-                for column in projections:
-                    connection.execute(
-                        f'ALTER TABLE library.local_track_files ADD COLUMN "{column["name"]}" {column["type"]} '
-                        f'GENERATED ALWAYS AS ({column["expression"]}) STORED'
-                    )
+                # Triggers that read private_path or a projection (0294's loose-group capture) step aside and return unchanged.
+                with triggers_depending_on_columns_set_aside(
+                    connection, "library.local_track_files", ["private_path", *(column["name"] for column in projections)],
+                ):
+                    for column in projections:
+                        connection.execute(f'ALTER TABLE library.local_track_files DROP COLUMN "{column["name"]}"')
+                    connection.execute('ALTER TABLE library.local_track_files ALTER COLUMN private_path TYPE text COLLATE "C"')
+                    for column in projections:
+                        connection.execute(
+                            f'ALTER TABLE library.local_track_files ADD COLUMN "{column["name"]}" {column["type"]} '
+                            f'GENERATED ALWAYS AS ({column["expression"]}) STORED'
+                        )
             owner = connection.execute("""
                 select l.id, l.owner_account_id from library.libraries l
                 join app.bootstrap_owners b on b.account_id = l.owner_account_id

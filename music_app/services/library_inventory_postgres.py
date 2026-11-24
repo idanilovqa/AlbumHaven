@@ -152,6 +152,9 @@ class PostgresLibraryInventoryRepository:
             all_roots=all_roots,
             unlimited=unlimited,
             membership_folders=bool(folders),
+            # Membership-problem and group loads keep their own scoped branches.
+            keyed_tracks=bool(normalized_track_ids) and not (
+                membership_problems_only or normalized_membership_group_ids or folders),
         )
         if connection is None:
             with self._connect_to_database() as owned_connection:
@@ -395,6 +398,7 @@ def _non_album_candidates_sql(
     all_roots: bool = False,
     unlimited: bool = False,
     membership_folders: bool = False,
+    keyed_tracks: bool = False,
 ) -> str:
     stored_file_album = "coalesce(library.local_track_files.scan_file_album, '')"
     stored_non_album_predicate = _non_album_value_predicate_sql(stored_file_album)
@@ -518,7 +522,10 @@ def _non_album_candidates_sql(
     )
     # A batch's override ranking runs once, over the batch's own files only (materialized, each file's overrides
     # looked up by its key); otherwise it was re-run per outer row of the main join.
-    batch_materialized = "materialized " if membership_folders else ""
+    # A keyed load (case 64: the Loose Tracks drain; a search's cached ids) is a batch like a folder batch:
+    # each of its files reaches its rows by primary key, so its reads follow the batch, never the library.
+    batch = membership_folders or keyed_tracks
+    batch_materialized = "materialized " if batch else ""
     active_track_files = """
           select
             batch_file.id,
@@ -539,7 +546,7 @@ def _non_album_candidates_sql(
               %(private_path_count)s = 0
               or batch_file.private_path = any(%(private_paths)s::text[])
             )
-        """ if membership_folders else """
+        """ if batch else """
           select
             library.local_track_files.id,
             library.local_track_files.track_id,
@@ -588,7 +595,7 @@ def _non_album_candidates_sql(
             -- override of the library. Do not simplify it away.
             and overrides.library_id + 0 = (select bootstrap_context.library_id from bootstrap_context)
         ),
-        """ if membership_folders else ""
+        """ if batch else ""
     exception_candidates = """
           -- The batch's override hits (materialized above, once per statement) joined to its files: both sides
           -- are stored, so this join can be hashed and nothing here reads exception_overrides again.
@@ -617,7 +624,7 @@ def _non_album_candidates_sql(
           join active_track_files
             on active_track_files.track_id = override_hits.key_track_id
           where override_hits.match_priority = 1
-        """ if membership_folders else """
+        """ if batch else """
           select
             active_track_files.id as track_file_id,
             library.exception_overrides.id,
@@ -701,12 +708,19 @@ def _non_album_candidates_sql(
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
     """
-    sql = f"""
-        with bootstrap_context as (
-          {_bootstrap_context_sql()}
-        ),{membership_folder_list}
-        eligible_track_file_ids as (
-          -- Scan-published membership problems, scoped like the branches below:
+    eligible_track_file_ids = """
+          -- The keyed tracks' own files, one probe of local_track_files_track_id_idx per track. The unkeyed
+          -- branches reach their files through the library's indexes, so a keyed drain read every track,
+          -- artist and file of the library; the main select's candidate predicate decides which are loose.
+          select keyed_files.id as track_file_id
+          from unnest(%(track_ids)s::bigint[]) as keyed(track_id)
+          cross join lateral (
+            select files.id
+            from library.local_track_files files
+            where files.track_id = keyed.track_id and files.scan_cache_stale is false
+            -- Fence, not redundant: offset 0 keeps each track one index probe whatever the statistics.
+            offset 0
+          ) keyed_files""" if keyed_tracks else f"""          -- Scan-published membership problems, scoped like the branches below:
           -- a materialized whole-library CTE read every file's metadata (1.05 s
           -- at 162k files) even when a search passed the cached track ids.
           select files.id as track_file_id
@@ -719,7 +733,13 @@ def _non_album_candidates_sql(
             {membership_unassigned_scope}
             {membership_group_scope}
             {""}
-          {other_eligibility_branches}
+          {other_eligibility_branches}"""
+    sql = f"""
+        with bootstrap_context as (
+          {_bootstrap_context_sql()}
+        ),{membership_folder_list}
+        eligible_track_file_ids as (
+{eligible_track_file_ids}
         ),
         active_track_files as {batch_materialized}({active_track_files}),
         {batch_override_ctes}exception_candidates as {batch_materialized}({exception_candidates}),
@@ -844,7 +864,7 @@ def _non_album_candidates_sql(
           active_track_files.id
         {limit_clause};
     """
-    return _keyed_folder_batch_sql(sql, all_roots=all_roots) if membership_folders else sql
+    return _keyed_folder_batch_sql(sql, all_roots=all_roots) if batch else sql
 
 
 # A drain batch's main select (case 55): every row is the batch's own file, and each relation it shows is

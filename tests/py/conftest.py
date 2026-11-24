@@ -57,6 +57,35 @@ for key, value in _SAFE_PYTEST_ENV.items():
     os.environ[key] = value
 
 
+def _refuse_postgres_connections_without_an_explicit_target() -> None:
+    """An empty conninfo or a URL without host and port falls back to libpq's localhost:5432,
+    which can be a real server on a developer machine; isolated test databases name both."""
+    try:
+        import psycopg
+        from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    except ImportError:
+        return
+    driver_connect = psycopg.Connection.connect.__func__
+    if getattr(driver_connect, "_album_haven_target_guard", False):
+        return
+
+    def connect(cls, conninfo: str = "", **kwargs):
+        target_options = {key: kwargs[key] for key in ("host", "hostaddr", "port") if kwargs.get(key) is not None}
+        params = conninfo_to_dict(make_conninfo(conninfo, **target_options))
+        if not str(params.get("host") or params.get("hostaddr") or "").strip() or not str(params.get("port") or "").strip():
+            raise psycopg.OperationalError(
+                "pytest refused a Postgres connection without an explicit host and port"
+            )
+        return driver_connect(cls, conninfo, **kwargs)
+
+    connect._album_haven_target_guard = True
+    psycopg.Connection.connect = classmethod(connect)
+    psycopg.connect = psycopg.Connection.connect
+
+
+_refuse_postgres_connections_without_an_explicit_target()
+
+
 def _workspace_pytest_temp_root() -> Path:
     configured_root = os.environ.get(_PYTEST_ROOT_ENV, "").strip()
     if configured_root:

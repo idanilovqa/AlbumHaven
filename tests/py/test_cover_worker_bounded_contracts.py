@@ -12,6 +12,7 @@ from dataclasses import asdict
 import hashlib
 import os
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,28 @@ from tests.py.bounded_interactions import OperationCounts, assert_plateau, measu
 from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
 _DATABASE_URL = "postgresql://album_haven_app@localhost/app"
+
+
+@pytest.fixture(autouse=True)
+def _postgres_connections_refused(monkeypatch):
+    """No contract here connects to Postgres, on its own thread or a queued one: every attempt fails the test."""
+    import psycopg
+
+    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
+
+    attempts: list[str] = []
+
+    def refuse(*_args, **_kwargs):
+        attempts.append(threading.current_thread().name)
+        raise psycopg.OperationalError("bounded worker contracts never connect to Postgres")
+
+    monkeypatch.setattr(psycopg, "connect", refuse)
+    monkeypatch.setattr(psycopg.Connection, "connect", classmethod(lambda _cls, *args, **kwargs: refuse()))
+    yield
+    # Work the contract queued runs on the single cache-writer thread; settle it while the refusal holds.
+    for _ in range(2):
+        _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=30)
+    assert not attempts, f"Postgres connection attempted from threads {attempts}"
 
 
 class _RootSettingsStore:
@@ -319,9 +342,18 @@ def test_cover_job_contract_reads_only_the_job_album_folder_at_production_librar
 
 
 def test_missing_album_removal_contract_probes_only_the_album_files_at_production_library_size(music_dir, monkeypatch):
+    from music_app.services import scoped_relation_projection
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
     stale_tracks = 12
+    # The relation journal's publication is Postgres work on the removal's own connection. The doubled
+    # connection cannot run it, and a failed publication would be deferred with a logged traceback whose
+    # formatting stats source files: work the contract would wrongly charge to the removal.
+    published: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        scoped_relation_projection, "publish_affected_relation_projection",
+        lambda _connection, *, album_keys, **_options: published.append(tuple(album_keys)) or {},
+    )
 
     def run(album_count: int) -> OperationCounts:
         library = music_dir / f"library-{album_count}"
@@ -354,6 +386,7 @@ def test_missing_album_removal_contract_probes_only_the_album_files_at_productio
         )
         counts, result = _counted(monkeypatch, lambda: service.confirm_removal("removed-album"))
         assert result == {"removed_album_key": "removed-album", "library_revision": 7}
+        assert published.pop() == ("removed-album",)
         return counts
 
     measure_scale_pair(
@@ -393,6 +426,7 @@ def test_background_hydration_contract_publishes_the_inventory_without_probing_f
         lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="postgres"),
     )
     monkeypatch.setattr(state_module, "load_exception_overrides", lambda _config: {})
+    monkeypatch.setattr(state_module, "resolve_media_host_history_scope", lambda _config: None)
     monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", InlineExecutor())
     monkeypatch.setattr(state_module, "_prewarm_root_browse_payload_for_state", lambda *_args: None)
     config = {

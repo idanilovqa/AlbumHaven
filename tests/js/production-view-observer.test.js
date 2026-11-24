@@ -2231,3 +2231,92 @@ test('the search Loose Tracks prefetch never stands in for the gallery view-data
   assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&payload_tier=sidebar&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1`), false);
   assert.equal(isSearchLooseTracksPrefetchUrl('http://127.0.0.1/view-data?surface=albums&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1'), false);
 });
+
+// gallery-main-interactions.js: the first /home-data?source_totals=1 read plus at most one retry per delay.
+function sourceTotalsRetryLimit() {
+  const runtime = require('node:fs').readFileSync(path.join(
+    __dirname, '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js',
+  ), 'utf8');
+  const delays = runtime.match(/const PENDING_SOURCE_TOTALS_RETRY_DELAYS_MS = \[([^\]]*)\]/u);
+  assert.ok(delays, 'the runtime declares its source-totals retry delays');
+  return 1 + delays[1].split(',').filter(value => value.trim()).length;
+}
+
+function sourceTotalsPayload(revision, pending = ['hoard']) {
+  return {
+    source_totals_by_scope: { '': { artist_count: 0, album_count: 0 }, main_library: { artist_count: 2, album_count: 3 } },
+    pending_source_scopes: pending,
+    inventory_mutation_revision: revision,
+  };
+}
+
+test('a source-totals retry keeps the gallery payload and its request as the view authority', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const gallery = request('http://127.0.0.1/view-data?surface=albums&category=main_library');
+  page.emit('request', gallery);
+  page.emit('response', response(gallery, {
+    payload_tier: 'full', query: '',
+    artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }],
+  }));
+  page.emit('requestfinished', gallery);
+  await flushPromises();
+  for (let attempt = 0; attempt < sourceTotalsRetryLimit(); attempt += 1) {
+    const totals = request('http://127.0.0.1/home-data?source_totals=1');
+    page.emit('request', totals);
+    page.emit('response', response(totals, sourceTotalsPayload(7)));
+    page.emit('requestfinished', totals);
+    await flushPromises();
+  }
+  const result = observer.read();
+  assert.equal(result.latestFullRequestUrl, gallery.url());
+  assert.equal(result.latestFullPayload.artist_groups[0].albums[0].name, 'Album');
+  assert.equal(result.latestFullPayloadError, null);
+  assert.deepEqual(result.sourceTotalsReadsByRevision, { 7: sourceTotalsRetryLimit() });
+});
+
+test('a source-totals read beyond the runtime retry limit at one revision fails the observation', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  for (let attempt = 0; attempt <= sourceTotalsRetryLimit(); attempt += 1) {
+    const totals = request('http://127.0.0.1/home-data?source_totals=1');
+    page.emit('request', totals);
+    page.emit('response', response(totals, sourceTotalsPayload(7)));
+    await flushPromises();
+  }
+  assert.throws(() => observer.read(), /source-totals reads at inventory revision 7 exceed the retry limit/u);
+});
+
+test('a new inventory revision starts the bounded source-totals wait again', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  for (const revision of [7, 8]) {
+    for (let attempt = 0; attempt < sourceTotalsRetryLimit(); attempt += 1) {
+      const totals = request('http://127.0.0.1/home-data?source_totals=1');
+      page.emit('request', totals);
+      page.emit('response', response(totals, sourceTotalsPayload(revision)));
+      await flushPromises();
+    }
+  }
+  assert.deepEqual(observer.read().sourceTotalsReadsByRevision, { 7: sourceTotalsRetryLimit(), 8: sourceTotalsRetryLimit() });
+});
+
+for (const [label, extra] of [
+  ['album rows', { artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }] }],
+  ['a gallery page', { gallery_page: { offset: 0, next_offset: 6 } }],
+  ['an unknown field', { surface: { kind: 'home' } }],
+]) {
+  test(`a source-totals response carrying ${label} fails the observation`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const totals = request('http://127.0.0.1/home-data?source_totals=1');
+    page.emit('request', totals);
+    page.emit('response', response(totals, { ...sourceTotalsPayload(7), ...extra }));
+    await flushPromises();
+    assert.throws(() => observer.read(), /source-totals response carries more than totals/u);
+  });
+}

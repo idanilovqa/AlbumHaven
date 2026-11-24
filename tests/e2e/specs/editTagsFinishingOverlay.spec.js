@@ -124,7 +124,7 @@ test('FTC-TAGS-044 a save whose file write fails shows the old values again, kee
       artist: FIXTURE_ARTIST, album: FAILED_ALBUM, filename: FAILED_TRACK_FILENAME,
     });
     try {
-      const failure = await tagEditorActions.applyAndWaitForFailure({ expectedErrorPattern: /^Failed to edit tags\.$/u });
+      const failure = await tagEditorActions.applyAndWaitForFailure({ expectedErrorPattern: /^Save failed: Read-only files$/u });
       expect(failure.status).toBe(500);
     } finally {
       unavailableTrack.restore();

@@ -5153,7 +5153,7 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
+      "workClass": "affected-set",
       "proof": "static",
       "requestOwnership": {
         "allowed": [

@@ -75,22 +75,18 @@ def save_ignored_repair_keys(
     ignored_row_keys: set[str],
     *,
     album_keys_by_repair_key: dict[str, str] | None = None,
-) -> None:
+) -> str:
+    """"applied", or "pending" while a publication holds the library (applied after it ends)."""
     select_runtime_persistence_adapter("ignored_repairs", config)
     adapter = RuleStatePostgresAdapter(config)
     if album_keys_by_repair_key:
-        adapter.save_ignored_repair_keys(
+        status = adapter.save_ignored_repair_keys(
             ignored_row_keys,
             album_keys_by_repair_key=album_keys_by_repair_key,
         )
     else:
-        adapter.save_ignored_repair_keys(ignored_row_keys)
-    from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
-
-    invalidate_postgres_utility_projection_cache(
-        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("rules",),
-    )
+        status = adapter.save_ignored_repair_keys(ignored_row_keys)
+    return _after_write(config, status)
 
 
 def create_ignored_repair_keys(
@@ -98,30 +94,36 @@ def create_ignored_repair_keys(
     row_keys: set[str],
     *,
     album_keys_by_repair_key: dict[str, str] | None = None,
+    labels_by_repair_key: dict[str, str] | None = None,
     remove_row_keys: set[str] | None = None,
-) -> None:
+) -> str:
     select_runtime_persistence_adapter("ignored_repairs", config)
-    RuleStatePostgresAdapter(config).upsert_ignored_repair_keys(
+    status = RuleStatePostgresAdapter(config).upsert_ignored_repair_keys(
         row_keys,
         album_keys_by_repair_key=album_keys_by_repair_key,
+        labels_by_repair_key=labels_by_repair_key,
         remove_repair_keys=remove_row_keys or set(),
     )
-    _invalidate_ignored_repair_projections(config)
+    return _after_write(config, status)
 
 
-def delete_ignored_repair_keys(config: dict, row_keys: set[str]) -> None:
+def delete_ignored_repair_keys(config: dict, row_keys: set[str]) -> str:
     select_runtime_persistence_adapter("ignored_repairs", config)
-    RuleStatePostgresAdapter(config).delete_ignored_repair_keys(row_keys)
-    _invalidate_ignored_repair_projections(config)
+    return _after_write(config, RuleStatePostgresAdapter(config).delete_ignored_repair_keys(row_keys))
 
 
-def _invalidate_ignored_repair_projections(config: dict) -> None:
+def _after_write(config: dict, status: str) -> str:
+    from music_app.services import ignored_repair_intents
     from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
 
+    # A kept intent already shows in every read of the ignored repairs.
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
         kinds=("rules",),
     )
+    if status == "pending":
+        ignored_repair_intents.queue_drain(config)
+    return status
 
 
 def update_ignored_repair_key(config: dict, row_key: str, ignored: bool) -> set[str]:

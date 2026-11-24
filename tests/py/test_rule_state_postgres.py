@@ -206,7 +206,13 @@ def test_rule_state_services_have_no_file_fallback_after_selection(
         (
             "load_ignored_repair_keys",
             "ignored_repairs",
-            [{"repair_key": " repair-b "}, {"repair_key": None}, ("repair-a",)],
+            # Stored rows read as upserts of themselves, then the pending intents in order.
+            [
+                {"id": None, "action": "upsert", "repair_keys": [" repair-b "]},
+                {"id": None, "action": "upsert", "repair_keys": [None]},
+                (None, "upsert", ["repair-a", "repair-c"], {}, []),
+                (7, "delete", ["repair-c"], {}, []),
+            ],
             {"repair-a", "repair-b"},
         ),
         (
@@ -384,8 +390,10 @@ def test_postgres_rule_key_saves_replace_library_rows_in_transaction(
     assert f"delete from library.{table_name}" in sql_text
     assert f"insert into library.{table_name}" in sql_text
     assert insert_column in sql_text
-    assert connection.transaction_entries == 1
-    assert connection.transaction_exits == 1
+    # An ignored-repair write takes the inventory lock in a savepoint inside its transaction (deadlock part 3).
+    transactions = 2 if table_name == "ignored_repairs" else 1
+    assert connection.transaction_entries == transactions
+    assert connection.transaction_exits == transactions
     insert_params = [
         params
         for sql, params in connection.operations
@@ -422,8 +430,8 @@ def test_postgres_ignored_repair_upsert_only_mutates_submitted_keys():
         "not ( library.ignored_repairs.repair_key = any" not in sql
         for sql, _params in relevant_operations
     )
-    assert connection.transaction_entries == 1
-    assert connection.transaction_exits == 1
+    assert connection.transaction_entries == 2
+    assert connection.transaction_exits == 2
 
 
 def test_postgres_ignored_repair_delete_only_deletes_submitted_keys():
@@ -441,8 +449,8 @@ def test_postgres_ignored_repair_delete_only_deletes_submitted_keys():
     assert "delete from library.ignored_repairs" in relevant_operations[0][0]
     assert "repair_key = any(%s::text[])" in relevant_operations[0][0]
     assert "and not" not in relevant_operations[0][0]
-    assert connection.transaction_entries == 1
-    assert connection.transaction_exits == 1
+    assert connection.transaction_entries == 2
+    assert connection.transaction_exits == 2
 
 
 def test_postgres_ignored_repair_targeted_mutations_skip_empty_inputs():

@@ -50,6 +50,12 @@ class OperationCounts:
     provider_calls: int = 0
     transactions: int = 0
     worker_wakes: int = 0
+    # Time a request spent waiting for a lock another transaction holds (a held inventory publication):
+    # 6.5's ruling allows no unbounded wait on a request (deadlock part 3).
+    lock_wait_ms: float = 0.0
+    # Rows a read of the pending ignored-repair intents returned: only the intents its own rows name
+    # (plus any pending replacement of every rule), never the whole table (6.5, deadlock part 3).
+    pending_intent_rows: int = 0
 
     def count(self, field_name: str, amount: int | float = 1) -> None:
         if field_name not in _FIELD_NAMES:

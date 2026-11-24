@@ -1099,10 +1099,55 @@ def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str,
             {"after": list(after) if after is not None else None, "needle": needle,
              "limit": None if limit is None else limit + 1},
         ).fetchall()
+        items = [
+            json.loads(item) if isinstance(item, str) else dict(item)
+            for row in rows
+            if (item := _value(row, "item")) is not None
+        ]
+        return _with_pending_ignores(repository, connection, items)
+
+
+def _with_pending_ignores(repository: Any, connection: Any, items: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The page with the pending ignored-repair intents laid over it (6.5: overlay at read time, scoped to the
+    page): each album item an intent names is built again from its own rows, which carry the intents
+    (library_browse_postgres._lay_pending_ignored_repairs), and leaves the page once nothing in it is left
+    to show. An Unignore can bring back only an item still on the page; the rest returns with the drain."""
+    from music_app.services.rule_state_postgres import ignored_repair_identity, pending_ignored_repairs
+
+    # Only the intents that name the page's albums or files (and any pending replacement of every rule).
+    identities = {str(value) for item in items for value in [item.get("key"), *(item.get("track_paths") or [])] if value}
+    pending = pending_ignored_repairs(connection, identities) if identities else None
+    if not pending:
+        return items
+    named = {album for album in pending.added.values() if album} | {
+        ignored_repair_identity(key) for key in [*pending.added, *pending.removed]}
+    affected = [
+        str(item.get("key") or "") for item in items
+        if not pending.keeps_stored
+        or str(item.get("key") or "") in named
+        or named.intersection(map(str, item.get("track_paths") or []))
+    ]
+    album_ids = {
+        str(_value(row, "item_key")): int(_value(row, "album_id"))
+        for row in connection.execute(
+            f"""select item_key, album_id from library.problematic_index_items
+                where library_id = ({_LIBRARY_SQL}) and item_key = any(%s::text[]) and album_id is not null""",
+            (affected,),
+        ).fetchall()
+    } if affected else {}
+    if not album_ids:
+        return items
+    rebuilt = repository._build_problematic_files_payload_from_rows(
+        connection=connection,
+        rows=repository._load_problematic_file_rows(connection=connection, album_ids=sorted(set(album_ids.values()))),
+        missing_rows=[],
+        include_initial_detail=False,
+    )
+    rebuilt_by_key = {str(item.get("key") or ""): item for item in rebuilt.get("items") or []}
     return [
-        json.loads(item) if isinstance(item, str) else dict(item)
-        for row in rows
-        if (item := _value(row, "item")) is not None
+        rebuilt_by_key[key] if key in album_ids and key in rebuilt_by_key else item
+        for item in items
+        if (key := str(item.get("key") or "")) not in album_ids or key in rebuilt_by_key
     ]
 
 

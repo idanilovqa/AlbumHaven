@@ -9676,10 +9676,11 @@
         "py:music_app/routes/api_read_asgi_routes.py#utilities_problematic_file_detail:route:GET /utilities/problematic-files/{album_key:path}"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py",
         "music_app/routes/api_problematic_albums.py",
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/library_album_index.py",
         "music_app/services/library_browse_postgres.py",
-        "music_app/services/library_album_index.py"
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
@@ -9694,9 +9695,10 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 2,
+        "sql_statements": 3,
         "filesystem_enumerations": 0,
-        "returned_rows": 12
+        "returned_rows": 12,
+        "pending_intent_rows": 2
       },
       "growth": {
         "metric": "candidate_rows",
@@ -9704,7 +9706,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 2 is not a flat allowance: the contract asserts exactly 1 statement with no candidate folder and exactly 2 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 3 is not a flat allowance: the contract asserts exactly 2 statements with no candidate folder and exactly 3 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes. Deadlock part 3 (6.5, 11-24): one more statement is the pending-intents read scoped to the album's own key and files (pending_intent_rows 2 in this contract; the 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait)."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query",
@@ -9713,10 +9715,11 @@
         "py:music_app/routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query:route:GET /utilities/problematic-files/detail"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py",
         "music_app/routes/api_problematic_albums.py",
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/library_album_index.py",
         "music_app/services/library_browse_postgres.py",
-        "music_app/services/library_album_index.py"
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
@@ -9731,9 +9734,10 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 2,
+        "sql_statements": 3,
         "filesystem_enumerations": 0,
-        "returned_rows": 12
+        "returned_rows": 12,
+        "pending_intent_rows": 2
       },
       "growth": {
         "metric": "candidate_rows",
@@ -9741,7 +9745,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 2 is not a flat allowance: the contract asserts exactly 1 statement with no candidate folder and exactly 2 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 3 is not a flat allowance: the contract asserts exactly 2 statements with no candidate folder and exactly 3 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes. Deadlock part 3 (6.5, 11-24): one more statement is the pending-intents read scoped to the album's own key and files (pending_intent_rows 2 in this contract; the 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait)."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_files",
@@ -9750,9 +9754,12 @@
         "py:music_app/routes/api_read_asgi_routes.py#utilities_problematic_files:route:GET /utilities/problematic-files"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py",
         "music_app/routes/api_problematic_albums.py",
-        "music_app/services/problematic_albums.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/problematic_albums.py",
+        "music_app/services/problematic_index.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
@@ -9762,20 +9769,19 @@
       "proof": "contract",
       "cardinalities": {
         "small": 20,
-        "production": 1000
+        "production": 200
       },
       "budgets": {
-        "builder_calls": 1,
-        "membership_rows": 0,
-        "candidate_rows": 28
+        "sql_statements": 19,
+        "pending_intent_rows": 5
       },
       "growth": {
-        "metric": "builder_calls",
+        "metric": "sql_statements",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
-      "testIdentity": "test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_problematic_files_page_lays_pending_intents_over_its_page_without_growing",
+      "testIdentity": "test_live_problematic_files_page_lays_pending_intents_over_its_page_without_growing",
+      "rollback": "Live Postgres page via problematic_index.read_page (index on), limit 50, with a stored Ignore, a pending Unignore of it and a pending Ignore (6.5, 11-24). The 19 statements: the first page's artist problem rows (1); refresh: library id, index state, dirty marks, marked loose groups (2-5); the indexed page read (6); the page-scoped intents read (7); the 2 rebuilt items' album ids, SET, rows and their scoped intents (8-11); the first item's detail: listed-as-missing, SET, duplicate helper check, duplicate candidates, rows and scoped intents (12-17); relation-alias fingerprint and bootstrap library for watch health (18-19). pending_intent_rows 5 = page 2 + rebuilt rows 2 + first detail 1. pending_intent_rows counts only the page-scoped intents read; a read of every intent or a rebuild per item makes it grow."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#view_data",
@@ -9897,14 +9903,31 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#create_problem_ignores:route:POST /utilities/rules/problem-ignores"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/ignored_repairs.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 11,
+        "lock_wait_ms": 1000
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "testIdentity": "test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "rollback": "Deadlock part 3: the write waits at most 500 ms for a held publication, then keeps an intent and answers pending. Restoring an unbounded lock wait makes lock_wait_ms exceed 1000."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#ignore_album_version",
@@ -10176,14 +10199,31 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#revert_problem_ignore:route:POST /utilities/rules/problem-ignores/revert"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/ignored_repairs.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 9,
+        "lock_wait_ms": 1000
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "testIdentity": "test_live_ignore_routes_answer_pending_within_a_second_during_a_held_publication",
+      "rollback": "Deadlock part 3: the write waits at most 500 ms for a held publication, then keeps an intent and answers pending. Restoring an unbounded lock wait makes lock_wait_ms exceed 1000."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#revert_version_exception",
@@ -10443,14 +10483,31 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#utility_rules:route:GET /utilities/rules"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 2,
+        "pending_intent_rows": 2
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_rules_route_lays_pending_intents_over_its_page_without_growing",
+      "testIdentity": "test_live_rules_route_lays_pending_intents_over_its_page_without_growing",
+      "rollback": "Deadlock part 3's read overlay: the Rules projection lays the pending ignored-repair intents over its rows in its one statement; reading them per rule or per album makes sql_statements grow."
     },
     {
       "id": "py:routes/api_wave_b_asgi_routes.py#create_loop_pitch_preview",
@@ -16339,6 +16396,40 @@
       ],
       "workClass": "affected-set",
       "proof": "static"
+    },
+    {
+      "id": "py:services/ignored_repair_intents.py#_drain_queued",
+      "action": "Apply the ignored-repair intents a held publication kept back, in order, under the inventory publication lock, on a connection no request reuses; a failed pass is retried once after 60 s",
+      "entrypoints": [
+        "py:music_app/services/ignored_repair_intents.py#_drain_queued:background:executor",
+        "py:music_app/services/ignored_repair_intents.py#_schedule_retry:scheduler:name",
+        "py:music_app/services/ignored_repair_intents.py#queue_drain:background:thread"
+      ],
+      "owners": [
+        "music_app/services/ignored_repair_intents.py",
+        "music_app/services/rule_state_postgres.py"
+      ],
+      "rules": [
+        "BI-05",
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 200
+      },
+      "budgets": {
+        "sql_statements": 6
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_drain_applies_only_the_kept_intents",
+      "testIdentity": "test_live_drain_applies_only_the_kept_intents",
+      "rollback": "The drain reads and writes only the kept intents, plus one stuck check (6.5, 11-24: due since the lock was free, a partial index on due_since); reading or rewriting every ignored repair makes sql_statements grow."
     }
   ]
 }

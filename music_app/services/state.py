@@ -34,7 +34,7 @@ from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_hydration import hydrate_library_state_from_disk
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-from music_app.services import problematic_index
+from music_app.services import ignored_repair_intents, problematic_index
 from music_app.services.gallery_projection_postgres import (
     schedule_gallery_projection_refresh,
 )
@@ -1355,6 +1355,8 @@ def _queue_problematic_albums_prewarm_for_state(library_state, config, logger) -
     if library_browse_postgres_is_effective(config):
         repository = PostgresLibraryBrowseRepository(config)
         problematic_index.queue_maintenance(repository)
+        # Ignores a stopped server kept behind a publication apply now, before anyone reads them stale.
+        ignored_repair_intents.queue_drain(config)
         repository.queue_utility_projection_prewarm("duplicate-identities")
         return
     __import__(

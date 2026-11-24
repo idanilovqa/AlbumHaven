@@ -4440,6 +4440,10 @@ class PostgresLibraryBrowseRepository:
             def execute(build_sql: Callable[[bool], str], params: Mapping[str, object]) -> Any:
                 return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
 
+            def album_rows(cursor: Any) -> list[object]:
+                return _lay_pending_ignored_repairs(
+                    _narrow_mixed_album_folders(active_connection, list(cursor.fetchall())), active_connection)
+
             def standalone_rows() -> list[object]:
                 return self._load_problematic_loose_file_rows(
                     connection=active_connection,
@@ -4460,13 +4464,13 @@ class PostgresLibraryBrowseRepository:
                     ),
                     {"album_ids": selected_album_ids},
                 )
-                return _narrow_mixed_album_folders(active_connection, list(cursor.fetchall()))
+                return album_rows(cursor)
             if use_candidate_summary:
                 cursor = execute(
                     lambda path_columns: _problematic_files_sql(candidate_summary=True, path_columns=path_columns),
                     candidate_params,
                 )
-                return [*_narrow_mixed_album_folders(active_connection, list(cursor.fetchall())), *standalone_rows()]
+                return [*album_rows(cursor), *standalone_rows()]
             if normalized_album_key is not None:
                 candidate_keys = [normalized_album_key]
                 if normalized_album_key != str(album_key or "").strip():
@@ -4506,12 +4510,12 @@ class PostgresLibraryBrowseRepository:
                     lambda path_columns: _problematic_files_sql(duplicate_candidates=True, path_columns=path_columns),
                     {"album_ids": duplicate_album_ids},
                 )
-                return _narrow_mixed_album_folders(active_connection, list(cursor.fetchall()))
+                return album_rows(cursor)
             cursor = execute(
                 lambda path_columns: _problematic_files_sql(path_columns=path_columns),
                 {"album_key": normalized_album_key},
             )
-            return [*_narrow_mixed_album_folders(active_connection, list(cursor.fetchall())), *standalone_rows()]
+            return [*album_rows(cursor), *standalone_rows()]
 
         if connection is not None:
             return load_rows(connection)
@@ -4640,12 +4644,21 @@ class PostgresLibraryBrowseRepository:
             )
             rows.append(row)
         _attach_loose_ignored_repair_keys(connection, rows)
-        return rows
+        return _lay_pending_ignored_repairs(rows, connection)
 
     def _load_utility_rules_rows(self) -> list[object]:
         with self._browse_connection_context() as connection:
-            cursor = connection.execute(_utility_rules_sql(), {})
-            return list(cursor.fetchall())
+            from music_app.services.rule_state_postgres import ignored_repair_intents_with_failures
+
+            pending, failed = ignored_repair_intents_with_failures(connection)
+            cursor = connection.execute(_utility_rules_sql(), _utility_rules_params(pending, failed))
+            # A failed intent's rules come back named, as source_kind "failed"; the Rules tab reports them apart.
+            failures = {str(item["row_key"]): item for item in failed}
+            return [
+                {**row, **{key: failures[row["ignored_repair_key"]].get(key) for key in ("failure", "failure_kind", "failed_at")}}
+                if isinstance(row, Mapping) and row.get("source_kind") == "failed" else row
+                for row in cursor.fetchall()
+            ]
 
     def wait_for_inventory_publication(self, *, timeout_seconds: float) -> bool:
         """Wait, at most ``timeout_seconds``, for a publication holding the inventory lock to commit.
@@ -7023,6 +7036,36 @@ def _attach_loose_ignored_repair_keys(connection: Any, rows: list[dict[str, obje
         })
 
 
+def _lay_pending_ignored_repairs(rows: list[object], connection: Any) -> list[object]:
+    """Each problem row's ignored repairs with the pending intents laid over them (6.5: overlay at read
+    time). An added album rule counts for the rows of the album it names, an added file rule for that file's
+    rows, as the stored rules reach rows in SQL. One indexed read of only the intents these rows' albums and
+    files name, from a table that is empty unless a publication held an Ignore back."""
+    from music_app.services.rule_state_postgres import ignored_repair_identity, pending_ignored_repairs
+
+    identities = {
+        str(value) for row in rows if isinstance(row, Mapping)
+        for value in (row.get("album_key"), row.get("album_ref"), row.get("file_private_path")) if value
+    }
+    pending = pending_ignored_repairs(connection, identities) if identities else None
+    if not pending:
+        return rows
+    laid: list[object] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            laid.append(row)
+            continue
+        album_key = str(row.get("album_key") or "")
+        path = str(row.get("file_private_path") or "")
+        stored = set(_row_string_list(row.get("ignored_repair_keys"))) if pending.keeps_stored else set()
+        added = {
+            key for key, named_album in pending.added.items()
+            if (named_album == album_key if named_album else ignored_repair_identity(key) == path)
+        }
+        laid.append({**row, "ignored_repair_keys": sorted(stored.difference(pending.removed) | added)})
+    return laid
+
+
 def _problem_identity_row_key(
     path: object,
     reason: object,
@@ -8091,8 +8134,15 @@ def _utility_rules_projection_payload(rows: list[object]) -> dict[str, object]:
     ignored_version_keys: set[str] = set()
     version_albums_by_key: dict[str, dict[str, object]] = {}
     problem_items_by_key: dict[str, dict[str, object]] = {}
+    failed_ignores: list[dict[str, object]] = []
     for row in rows:
         row_payload = _row_mapping(row)
+        if row_payload.get("source_kind") == "failed":
+            failed_ignores.append({
+                **_utility_problem_ignore_payload(row_payload),
+                **{key: row_payload.get(key) for key in ("failure", "failure_kind", "failed_at")},
+            })
+            continue
         ignored_version_key = str(row_payload.get("ignored_version_key") or "").strip()
         if ignored_version_key:
             ignored_version_keys.add(ignored_version_key)
@@ -8119,6 +8169,7 @@ def _utility_rules_projection_payload(rows: list[object]) -> dict[str, object]:
     ]
     return {
         "ok": True,
+        "failed_ignored_repairs": failed_ignores,
         "rules": [
             {
                 "key": "version-exceptions",
@@ -8221,6 +8272,9 @@ def _utility_problem_ignore_payload(row_payload: Mapping[str, object]) -> dict[s
         part for part in [artist_name.strip(), album_name.strip()] if part
     ) or (identity if scope == "album" else str(Path(identity).parent))
     path = "" if scope == "album" else identity
+    target_missing = (
+        row_payload.get("album_id") is None if scope == "album" else not str(row_payload.get("file_private_path") or "")
+    )
     return {
         "row_key": row_key,
         "scope": scope,
@@ -8232,6 +8286,14 @@ def _utility_problem_ignore_payload(row_payload: Mapping[str, object]) -> dict[s
         "year": str(entry.get("year") or ""),
         "problem_reason": reason,
         "album_group_key": album_group_key,
+        # Owner (11-24): the rule's album or file is no longer in the library, told by the same read's joins.
+        "target_missing": target_missing,
+        # The name kept with the rule, else (rules from before names were kept) the file's folder and
+        # name, or the album's normalized key; never a name inferred for an old rule.
+        "missing_name": (
+            str(row_payload.get("rule_label") or "").strip()
+            or (identity if scope == "album" else "/".join(part for part in (Path(identity).parent.name, Path(identity).name) if part))
+        ) if target_missing else "",
     }
 
 
@@ -14120,6 +14182,24 @@ def _load_cover_change_albums(connection: Any, track_paths: set[str]) -> list[Ma
     return [_row_mapping(row) for row in rows]
 
 
+def _utility_rules_params(pending: Any = None, failed: Iterable[Mapping[str, object]] = ()) -> dict[str, object]:
+    """_utility_rules_sql's parameters: the pending ignored-repair intents, folded, and the failed ones' rules
+    (none by default)."""
+    from music_app.services.rule_state_postgres import PendingIgnoredRepairs
+
+    pending = pending if pending is not None else PendingIgnoredRepairs()
+    added = sorted(pending.added.items())
+    failed = list(failed)
+    return {
+        "keeps_stored": pending.keeps_stored,
+        "removed_keys": sorted(pending.removed),
+        "added_keys": [key for key, _album_key in added],
+        "added_album_keys": [album_key for _key, album_key in added],
+        "failed_keys": [str(item["row_key"]) for item in failed],
+        "failed_album_keys": [str(item.get("album_key") or "") for item in failed],
+    }
+
+
 def _utility_rules_sql() -> str:
     return """
         with bootstrap_context as (
@@ -14132,6 +14212,33 @@ def _utility_rules_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
+        -- The stored ignored repairs with the pending intents laid over them (_utility_rules_params).
+        ignored_source as (
+          select ignored.library_id, ignored.repair_key, ignored.metadata, 'rule'::text as source_kind
+          from library.ignored_repairs ignored
+          where %(keeps_stored)s
+            and ignored.repair_key <> all(%(removed_keys)s::text[])
+            and ignored.repair_key <> all(%(added_keys)s::text[])
+          union all
+          select
+            bootstrap_context.library_id,
+            added.repair_key,
+            case when added.album_key = '' then '{}'::jsonb
+                 else jsonb_build_object('album_key', added.album_key) end,
+            'rule'::text
+          from bootstrap_context
+          cross join unnest(%(added_keys)s::text[], %(added_album_keys)s::text[]) as added(repair_key, album_key)
+          union all
+          -- Changes the library could not apply: named through the same joins as the rules, never listed as rules.
+          select
+            bootstrap_context.library_id,
+            failed.repair_key,
+            case when failed.album_key = '' then '{}'::jsonb
+                 else jsonb_build_object('album_key', failed.album_key) end,
+            'failed'::text
+          from bootstrap_context
+          cross join unnest(%(failed_keys)s::text[], %(failed_album_keys)s::text[]) as failed(repair_key, album_key)
+        ),
         relation_context as (
           -- The whole-library alias map only explains ignored album-artist
           -- problems; skip building it when no such rule exists.
@@ -14140,9 +14247,9 @@ def _utility_rules_sql() -> str:
             case
               when exists (
                 select 1
-                from library.ignored_repairs
-                where library.ignored_repairs.library_id = library.libraries.id
-                  and right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+                from ignored_source
+                where ignored_source.library_id = library.libraries.id
+                  and right(ignored_source.repair_key, 14) = '::album_artist'
               )
                 then coalesce(
                   library.local_relation_views(library.libraries.id) -> 'alias_to_canonical',
@@ -14157,6 +14264,8 @@ def _utility_rules_sql() -> str:
         version_rows as (
           select
             'version'::text as row_kind,
+            null::text as source_kind,
+            null::text as rule_label,
             library.ignored_versions.version_key as ignored_version_key,
             null::text as ignored_repair_key,
             library.local_albums.id as album_id,
@@ -14186,8 +14295,10 @@ def _utility_rules_sql() -> str:
         repair_rows as (
           select
             'problem_ignore'::text as row_kind,
+            ignored_repairs.source_kind,
+            ignored_repairs.metadata ->> 'label' as rule_label,
             null::text as ignored_version_key,
-            library.ignored_repairs.repair_key as ignored_repair_key,
+            ignored_repairs.repair_key as ignored_repair_key,
             library.local_albums.id as album_id,
             library.local_albums.album_key,
             library.local_albums.title as album_title,
@@ -14201,25 +14312,25 @@ def _utility_rules_sql() -> str:
             library.local_track_files.private_path as file_private_path,
             library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
             case
-              when right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+              when right(ignored_repairs.repair_key, 14) = '::album_artist'
                 then relation_context.alias_to_canonical
             end as alias_to_canonical
-          from library.ignored_repairs
+          from ignored_source ignored_repairs
           join bootstrap_context
-            on bootstrap_context.library_id = library.ignored_repairs.library_id
+            on bootstrap_context.library_id = ignored_repairs.library_id
           join relation_context
-            on relation_context.library_id = library.ignored_repairs.library_id
+            on relation_context.library_id = ignored_repairs.library_id
           left join library.local_track_files
-            on library.ignored_repairs.repair_key !~ '::problem-album::[^:]+$'
+            on ignored_repairs.repair_key !~ '::problem-album::[^:]+$'
            and library.local_track_files.private_path = case
-                 when library.ignored_repairs.repair_key ~ '::problem-file::[^:]+$'
+                 when ignored_repairs.repair_key ~ '::problem-file::[^:]+$'
                    then regexp_replace(
-                     library.ignored_repairs.repair_key,
+                     ignored_repairs.repair_key,
                      '::problem-file::[^:]+$',
                      ''
                    )
                  else regexp_replace(
-                   library.ignored_repairs.repair_key,
+                   ignored_repairs.repair_key,
                    '::[^:]+$',
                    ''
                  )
@@ -14227,19 +14338,19 @@ def _utility_rules_sql() -> str:
            and coalesce((library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean, false) is false
           left join library.local_tracks
             on library.local_tracks.id = library.local_track_files.track_id
-           and library.local_tracks.library_id = library.ignored_repairs.library_id
+           and library.local_tracks.library_id = ignored_repairs.library_id
           left join library.local_albums
-            on library.local_albums.library_id = library.ignored_repairs.library_id
+            on library.local_albums.library_id = ignored_repairs.library_id
            and (
                 (
-                  library.ignored_repairs.repair_key ~ '::problem-album::[^:]+$'
+                  ignored_repairs.repair_key ~ '::problem-album::[^:]+$'
                   and library.local_albums.album_key = nullif(
-                    library.ignored_repairs.metadata ->> 'album_key',
+                    ignored_repairs.metadata ->> 'album_key',
                     ''
                   )
                 )
                 or (
-                  library.ignored_repairs.repair_key !~ '::problem-album::[^:]+$'
+                  ignored_repairs.repair_key !~ '::problem-album::[^:]+$'
                   and library.local_albums.id = library.local_tracks.album_id
                 )
            )

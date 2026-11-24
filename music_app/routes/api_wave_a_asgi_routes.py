@@ -1524,7 +1524,7 @@ async def revert_problem_ignore(request: Request) -> JSONResponse:
 def _revert_problem_ignore_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     try:
-        row_key = revert_problem_exclusion(config, payload.get("row_key"))
+        row_key, write_status = revert_problem_exclusion(config, payload.get("row_key"))
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     log_app_event(
@@ -1535,7 +1535,7 @@ def _revert_problem_ignore_response(request: Request, payload: JsonDict, history
         history=True,
         row_key=row_key,
      history_scope=history_scope)
-    return JSONResponse({"ok": True, "reverted_row_key": row_key})
+    return JSONResponse({"ok": True, "reverted_row_key": row_key, "status": write_status})
 
 
 @router.post("/utilities/rules/problem-ignores")
@@ -1571,6 +1571,7 @@ def _create_problem_ignores_response(request: Request, payload: JsonDict, histor
         "ok": True,
         "applied_items": result.applied_items,
         "removed_legacy_row_keys": result.removed_legacy_row_keys,
+        "status": result.status,
     })
 
 

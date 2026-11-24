@@ -268,6 +268,42 @@ function buildUtilityCompactTable(config) {
   return buildCompactDataTable(config);
 }
 
+// The Ignore and Unignore changes the library could not apply after a publication held them back: never
+// left showing as pending, they are reported here until the same rule is changed again (6.5, 11-24).
+// Owner-approved wording (11-24): one alert per way it failed.
+const FAILED_PROBLEM_IGNORE_EXPLANATIONS = {
+  error: 'The library could not save it.',
+  stuck: 'It was still waiting after the library finished updating.',
+};
+
+function problemIgnoreTargetName(item) {
+  if (item?.scope === 'album') return String(item.album || item.missing_name || item.row_key || '').trim();
+  return String(item?.filename || item?.missing_name || item?.row_key || '').trim();
+}
+
+function buildFailedProblemIgnoresAlert() {
+  const failed = Array.isArray(state.utility.failedIgnoredRepairs) ? state.utility.failedIgnoredRepairs : [];
+  return Object.entries(FAILED_PROBLEM_IGNORE_EXPLANATIONS).map(([kind, explanation]) => {
+    const items = failed.filter((item) => (item?.failure_kind === 'stuck' ? 'stuck' : 'error') === kind);
+    if (!items.length) return '';
+    const named = items.map((item) => `${problemIgnoreTargetName(item)}: ${String(item.problem_reason || '').trim()}.`);
+    return buildOnPageAlertHtml({
+      severity: 'error',
+      title: items.length === 1 ? 'This change wasn\'t applied' : `${items.length} changes weren't applied`,
+      message: `${named.join(' ')} ${explanation} Change it again to try once more.`,
+    });
+  }).join('');
+}
+
+// Owner (11-24): a rule whose album or file is no longer in the library, in the Revert rule button's own words.
+function buildProblemIgnoreTargetGoneAlert(item) {
+  if (item?.target_missing !== true) return '';
+  return buildSmallAlertHtml({
+    severity: 'warning',
+    message: `${problemIgnoreTargetName(item)} is no longer in your library. This rule applies to nothing. Revert rule?`,
+  });
+}
+
 function buildProblemIgnoresRuleDetail(rule) {
   const albumItems = (Array.isArray(rule?.album_items) ? rule.album_items : []).filter(matchesUtilityRuleSearch);
   const fileItems = (Array.isArray(rule?.file_items) ? rule.file_items : []).filter(matchesUtilityRuleSearch);
@@ -300,7 +336,7 @@ function buildProblemIgnoresRuleDetail(rule) {
           cells: {
             target: `<div class="utility-rule-album-title">${escapeHtml(
               scope === 'album' ? (albumDisplay || 'Unknown album') : (item.filename || 'Unknown file'),
-            )}</div>${scope === 'file' && item.album ? `<div class="utility-rule-album-meta">${escapeHtml(item.album)}</div>` : ''}`,
+            )}</div>${scope === 'file' && item.album ? `<div class="utility-rule-album-meta">${escapeHtml(item.album)}</div>` : ''}${buildProblemIgnoreTargetGoneAlert(item)}`,
             reason: `<span class="utility-track-problem-chip utility-rule-problem-chip">${escapeHtml(item.problem_reason || item.reason || '')}</span>`,
             action: `<button class="button utility-rule-revert" type="button" data-revert-problem-ignore="${escapeHtml(item.row_key || '')}" ${item.pending ? 'aria-busy="true" disabled' : ''}>Revert rule</button>`,
           },
@@ -311,6 +347,7 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
+        ${buildFailedProblemIgnoresAlert()}
         ${!albumItems.length && !fileItems.length ? `<p class="utility-detail-meta">${rule.album_items?.length || rule.file_items?.length ? 'No problem exclusions match your search.' : 'No problem exclusions yet.'}</p>` : ''}
         ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
@@ -355,6 +392,7 @@ function buildProblemIgnoresRuleDetail(rule) {
     <div class="utility-rule-detail">
       <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
       <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
+      ${buildFailedProblemIgnoresAlert()}
       <div class="utility-rule-album-list">${rows}</div>
     </div>
   `;

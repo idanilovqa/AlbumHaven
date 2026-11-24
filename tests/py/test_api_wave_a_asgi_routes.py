@@ -1990,6 +1990,7 @@ def test_asgi_create_problem_ignores_returns_full_compact_ack_without_broad_proj
         return SimpleNamespace(
             applied_items=[canonical_item],
             removed_legacy_row_keys=[],
+            status="applied",
         )
 
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FakeRepository)
@@ -2021,6 +2022,7 @@ def test_asgi_create_problem_ignores_returns_full_compact_ack_without_broad_proj
         "ok": True,
         "applied_items": [canonical_item],
         "removed_legacy_row_keys": [],
+        "status": "applied",
     }
     assert "rules" not in payload
     assert "updated_albums" not in payload
@@ -2054,7 +2056,7 @@ def test_asgi_create_problem_ignores_passes_mixed_album_and_file_batch_to_one_mu
     def fake_create(_config, payload, *, resolve_items):
         del resolve_items
         calls.append(list(payload["items"]))
-        return SimpleNamespace(applied_items=[], removed_legacy_row_keys=[])
+        return SimpleNamespace(applied_items=[], removed_legacy_row_keys=[], status="pending")
 
     monkeypatch.setattr(asgi_routes, "create_problem_exclusions", fake_create, raising=False)
 
@@ -2070,6 +2072,7 @@ def test_asgi_create_problem_ignores_passes_mixed_album_and_file_batch_to_one_mu
         "ok": True,
         "applied_items": [],
         "removed_legacy_row_keys": [],
+        "status": "pending",
     }
     assert calls == [items]
 
@@ -2164,7 +2167,7 @@ def test_asgi_revert_problem_ignore_uses_targeted_delete_and_compact_ack(
 
     def fake_revert(config, raw_row_key):
         calls.append((config, raw_row_key))
-        return row_key
+        return row_key, "applied"
 
     monkeypatch.setattr(asgi_routes, "revert_problem_exclusion", fake_revert, raising=False)
     monkeypatch.setattr(
@@ -2191,7 +2194,7 @@ def test_asgi_revert_problem_ignore_uses_targeted_delete_and_compact_ack(
 
     payload = _decode_json(body)
     assert status == 200
-    assert payload == {"ok": True, "reverted_row_key": row_key}
+    assert payload == {"ok": True, "reverted_row_key": row_key, "status": "applied"}
     assert "rules" not in payload
     assert "updated_albums" not in payload
     assert "updated_problematic_album" not in payload
@@ -2386,6 +2389,7 @@ def test_asgi_revert_problem_ignore_uses_selected_postgres_targeted_delete(
 
         def delete_ignored_repair_keys(self, values):
             saved_ignored_repairs.append(set(values))
+            return "applied"
 
     class FakePostgresBrowseRepository:
         def __init__(self, config):
@@ -2416,6 +2420,7 @@ def test_asgi_revert_problem_ignore_uses_selected_postgres_targeted_delete(
     assert payload == {
         "ok": True,
         "reverted_row_key": "postgres-remove::year",
+        "status": "applied",
     }
     assert saved_ignored_repairs == [{"postgres-remove::year"}]
     assert json.loads(ignored_json_path.read_text(encoding="utf-8")) == {
@@ -2453,6 +2458,7 @@ def test_asgi_revert_problem_ignore_uses_targeted_postgres_when_mutation_seam_de
 
         def delete_ignored_repair_keys(self, values):
             deleted_ignored_repairs.append(set(values))
+            return "applied"
 
     class FakePostgresBrowseRepository:
         def __init__(self, _config):
@@ -2483,6 +2489,7 @@ def test_asgi_revert_problem_ignore_uses_targeted_postgres_when_mutation_seam_de
     assert payload == {
         "ok": True,
         "reverted_row_key": "postgres-remove::year",
+        "status": "applied",
     }
     assert deleted_ignored_repairs == [{"postgres-remove::year"}]
     assert json.loads(ignored_json_path.read_text(encoding="utf-8")) == {

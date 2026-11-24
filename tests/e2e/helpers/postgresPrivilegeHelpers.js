@@ -240,3 +240,42 @@ export async function withScanPublicationPrivilegeFailure(run, options = {}) {
   if (failures.length) throw failures[0];
   return result;
 }
+
+// 6.5 (11-24), deadlock part 3: the database refuses to save one Problem Exclusion rule. A trigger with a name
+// unique to this run raises for rules whose key contains `keyFragment`, only on the isolated E2E database
+// (resolveIsolatedE2ESetupConnection refuses any other). It is dropped when `run` ends, failed or not, and
+// the drop is checked.
+export async function withRefusedIgnoredRepairWrite(keyFragment, run, {
+  env = process.env,
+  execFileAsync = execFileAsyncDefault,
+  platform = process.platform,
+} = {}) {
+  const fragment = String(keyFragment || '').trim();
+  if (!fragment) throw new Error('A rule key fragment is required to refuse its write.');
+  const databaseUrl = String(env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL || '').trim();
+  if (!databaseUrl) {
+    throw new Error('ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL is required to refuse a rule write.');
+  }
+  const { databaseTarget, password } = resolveIsolatedE2ESetupConnection(databaseUrl);
+  const childEnv = psqlEnvironment(env, password, platform);
+  const baseArgs = ['--no-psqlrc', '--quiet', '--tuples-only', '--no-align', `--dbname=${databaseTarget}`, '--set=ON_ERROR_STOP=1'];
+  const psql = (command) => executePsql({ args: [...baseArgs, `--command=${command}`], env: childEnv, execFileAsync, platform });
+  const name = `e2e_refuse_ignore_${process.pid}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const literal = `'${fragment.replaceAll("'", "''")}'`;
+  await psql([
+    `create function library.${name}() returns trigger language plpgsql as $refuse$`,
+    `begin if position(lower(${literal}) in lower(new.repair_key)) > 0 then`,
+    "raise exception 'E2E: the database refuses this rule'; end if; return new; end $refuse$;",
+    `create trigger ${name} before insert or update on library.ignored_repairs`,
+    `for each row execute function library.${name}();`,
+  ].join(' '));
+  try {
+    return await run();
+  } finally {
+    await psql(`drop trigger if exists ${name} on library.ignored_repairs; drop function if exists library.${name}();`);
+    const { stdout } = await psql(`select count(*) from pg_catalog.pg_trigger where tgname = '${name}'`);
+    if (String(stdout || '').trim() !== '0') {
+      throw new Error(`The E2E rule-refusing trigger ${name} is still on library.ignored_repairs.`);
+    }
+  }
+}

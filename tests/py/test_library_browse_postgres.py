@@ -12215,10 +12215,11 @@ def test_problematic_loose_public_key_preserves_projected_identity_bytes():
 
 
 class _NoLooseRulesConnection:
-    """The loose loader reads its groups' exclusion rules over the connection; these cases have none."""
+    """The loose loader reads its groups' exclusion rules, then the pending ones, over the connection; these
+    cases have none."""
 
     def execute(self, sql, params=None):
-        assert "library.ignored_repairs" in sql, "The loose loader reads only its rules over the connection."
+        assert "library.ignored_repair" in sql, "The loose loader reads only its rules over the connection."
         return self
 
     def fetchall(self):
@@ -16858,6 +16859,10 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
     assert detail_payload is not None
     assert detail_payload["key"] == "product-album"
     assert detail_payload["detail_loaded"] is True
+    # Each album read also reads the pending ignored-repair intents laid over its rows (deadlock part 3).
+    pending_reads = [sql for sql, _params in executed if "library.ignored_repair_intents" in sql]
+    assert len(pending_reads) == 2
+    executed[:] = [entry for entry in executed if "library.ignored_repair_intents" not in entry[0]]
     assert len(executed) == 7
     assert all(
         "library.local_track_files" in sql
@@ -16882,6 +16887,11 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
         and params == {"album_ids": [101]}
         for sql, params in executed
     )
+
+
+class _NoPendingIntentsCursor:
+    def fetchall(self):
+        return []
 
 
 def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
@@ -16988,6 +16998,9 @@ def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
             return False
 
         def execute(self, sql, params=None):
+            if "library.ignored_repair_intents" in sql:
+                # No Ignore is pending (deadlock part 3's intents, read first).
+                return _NoPendingIntentsCursor()
             executed.append(sql)
             executed.append(dict(params or {}))
             return FakeCursor()
@@ -17228,6 +17241,8 @@ def test_targeted_problem_ignore_projection_returns_full_canonical_item_with_dur
         "year": "1988",
         "problem_reason": "Undecoded characters",
         "album_group_key": "Product Artist :: ?",
+        "target_missing": False,
+        "missing_name": "",
         "album_key": durable_album_key,
         "legacy_row_keys": [f"{track_path}::album"],
     }]
@@ -17583,7 +17598,10 @@ def test_postgres_library_browse_caches_utility_rules_payload_per_database_url()
         def __exit__(self, exc_type, exc, traceback):
             return False
 
-        def execute(self, _sql, _params=None):
+        def execute(self, sql, _params=None):
+            if "library.ignored_repair_intents" in sql:
+                # No Ignore is pending (deadlock part 3's intents, read first).
+                return _NoPendingIntentsCursor()
             executed["count"] += 1
             return FakeCursor()
 
@@ -20620,3 +20638,45 @@ def test_visible_album_clause_and_membership_sql_keep_their_exact_default_text()
     assert digest(browse._visible_album_clause("library.local_albums")) == "1bbd452d9d7a4220"
     assert digest(browse._root_gallery_membership_sql())[:12] == "321e8df262c3"
     assert digest(browse._root_gallery_membership_sql(candidate_albums_only=True))[:12] == "514c549b948a"
+
+
+def test_rules_projection_marks_rules_whose_target_is_gone_and_names_failed_changes():
+    """Owner (11-24): a rule whose album or file is no longer in the library is marked, with the name it can
+    show; a change the library could not apply is listed with its name and reason, not among the rules."""
+    from music_app.services.library_browse_postgres import _utility_rules_projection_payload
+
+    gone_path = r"C:\Music\Gone\03 Song.flac"
+    here_path = r"C:\Music\Here\01 Here.flac"
+    base = {"row_kind": "problem_ignore", "ignored_version_key": None, "album_metadata": {}, "alias_to_canonical": {}}
+    rows = [
+        {**base, "ignored_repair_key": f"{gone_path}::problem-file::missing-year", "source_kind": "rule",
+         "album_id": None, "file_private_path": None, "file_entry": None},
+        {**base, "ignored_repair_key": "gone artist::gone album::problem-album::missing-cover-art", "source_kind": "rule",
+         "album_id": None, "album_key": None, "file_private_path": None, "file_entry": None},
+        {**base, "ignored_repair_key": f"{here_path}::problem-file::missing-year", "source_kind": "rule",
+         "album_id": 7, "album_key": "here::album", "album_title": "Here Album", "file_private_path": here_path,
+         "file_entry": {"path": here_path, "album": "Here Album", "album_artist": "Here", "title": "Here"}},
+        {**base, "ignored_repair_key": f"{here_path}::problem-file::missing-cover-art", "source_kind": "failed",
+         "album_id": 7, "album_key": "here::album", "album_title": "Here Album", "file_private_path": here_path,
+         "file_entry": {"path": here_path, "album": "Here Album", "album_artist": "Here", "title": "Here"},
+         "failure": "the database refused it", "failure_kind": "error", "failed_at": "2026-11-24T18:00:00Z"},
+    ]
+
+    payload = _utility_rules_projection_payload(rows)
+
+    rule = next(rule for rule in payload["rules"] if rule["key"] == "problem-ignores")
+    items = {item["row_key"]: item for item in rule["items"]}
+    assert set(items) == {rows[0]["ignored_repair_key"], rows[1]["ignored_repair_key"], rows[2]["ignored_repair_key"]}
+    assert items[rows[0]["ignored_repair_key"]]["target_missing"] is True
+    # Rules from before names were kept: the file's folder and name, or the album's normalized key.
+    assert items[rows[0]["ignored_repair_key"]]["missing_name"] == "Gone/03 Song.flac"
+    assert items[rows[1]["ignored_repair_key"]]["target_missing"] is True
+    assert items[rows[1]["ignored_repair_key"]]["missing_name"] == "gone artist::gone album"
+    assert items[rows[2]["ignored_repair_key"]].get("target_missing") is False
+    # A rule that kept the name the user saw shows that name once its target is gone.
+    named = _utility_rules_projection_payload([{**rows[1], "rule_label": "Gone Artist – Gone Album"}])
+    [named_item] = next(rule for rule in named["rules"] if rule["key"] == "problem-ignores")["items"]
+    assert named_item["missing_name"] == "Gone Artist – Gone Album"
+    [failed] = payload["failed_ignored_repairs"]
+    assert failed["row_key"] == rows[3]["ignored_repair_key"]
+    assert (failed["filename"], failed["problem_reason"], failed["failure_kind"]) == ("01 Here.flac", "Missing cover art", "error")

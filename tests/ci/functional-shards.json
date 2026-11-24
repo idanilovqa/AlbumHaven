@@ -1378,6 +1378,13 @@
               "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
               "case": "FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/problemExclusionHeldPublication.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-015 an exclusion the library cannot save after a held scan comes back and is reported in Rules, while the other applies",
+              "area": "problematic-files"
             }
           ]
         },

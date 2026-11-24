@@ -8950,3 +8950,46 @@ test('watchSaveTask keeps watching a finishing save past the usual polls until i
   assert.equal(notices.length, 1, 'the "Tags still updating" notice shows once');
   assert.ok(Math.max(...waits) <= 5000 && Math.max(...waits) > 500, `polling slowed to at most 5 s: ${Math.max(...waits)}`);
 });
+
+// 6.5 (11-24), owner-approved wording: an Ignore or Unignore the library could not apply after a held
+// publication is reported in the problem exclusions rule through the shared alert, never left showing as pending.
+test('the problem exclusions rule reports rule changes that were not applied, in the approved words', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const rule = { key: 'problem-ignores', title: 'Problem exclusions', album_items: [], file_items: [] };
+  context.state.utility.failedIgnoredRepairs = [];
+  assert.doesNotMatch(context.buildUtilityRuleDetail(rule), /on-page-alert/);
+  const failed = (name, reason, kind) => ({
+    row_key: `${name}::problem-file::x`, scope: 'file', filename: name, problem_reason: reason, failure_kind: kind,
+  });
+  context.state.utility.failedIgnoredRepairs = [failed('03 Song.flac', 'Missing year', 'error')];
+  let html = context.buildUtilityRuleDetail(rule);
+  assert.match(html, /data-on-page-alert="error"/);
+  assert.match(html, />This change wasn(?:'|&#0?39;)t applied</);
+  assert.match(html, />03 Song\.flac: Missing year\. The library could not save it\. Change it again to try once more\.</);
+  context.state.utility.failedIgnoredRepairs = [
+    failed('03 Song.flac', 'Missing year', 'stuck'), failed('04 Song.flac', 'Missing cover art', 'stuck'),
+  ];
+  html = context.buildUtilityRuleDetail(rule);
+  assert.match(html, />2 changes weren(?:'|&#0?39;)t applied</);
+  assert.match(html, />03 Song\.flac: Missing year\. 04 Song\.flac: Missing cover art\. It was still waiting after the library finished updating\. Change it again to try once more\.</);
+});
+
+// Owner (11-24): a rule whose album or file is no longer in the library says so, beside its own Revert rule button.
+test('a rule whose album or file is gone says it applies to nothing, beside its Revert rule button', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.failedIgnoredRepairs = [];
+  const html = context.buildUtilityRuleDetail({
+    key: 'problem-ignores', title: 'Problem exclusions', album_items: [],
+    file_items: [{
+      row_key: 'C:\Music\Gone\03 Song.flac::problem-file::missing-year', scope: 'file', filename: '03 Song.flac',
+      problem_reason: 'Missing year', target_missing: true, missing_name: '03 Song.flac',
+    }, {
+      row_key: 'C:\Music\Here\01 Here.flac::problem-file::missing-year', scope: 'file', filename: '01 Here.flac',
+      problem_reason: 'Missing year',
+    }],
+  });
+  assert.match(html, /data-small-alert="warning"/);
+  assert.match(html, /03 Song\.flac is no longer in your library\. This rule applies to nothing\. Revert rule\?/);
+  assert.equal((html.match(/data-small-alert=/g) || []).length, 1, 'only the gone rule says so');
+  assert.equal((html.match(/data-revert-problem-ignore=/g) || []).length, 2, 'each rule keeps its Revert rule button');
+});

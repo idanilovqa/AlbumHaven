@@ -5742,6 +5742,7 @@ def test_live_utility_rules_sql_joins_the_separately_stored_durable_album_key(
         }
 
         from music_app.services.library_browse_postgres import (
+            _utility_rules_params,
             _utility_rules_projection_payload,
             _utility_rules_sql,
         )
@@ -5751,7 +5752,7 @@ def test_live_utility_rules_sql_joins_the_separately_stored_durable_album_key(
                 connection,
                 isolatedPostgres.RUNTIME_ROLE,
             )
-            rows = list(connection.execute(_utility_rules_sql()).fetchall())
+            rows = list(connection.execute(_utility_rules_sql(), _utility_rules_params()).fetchall())
 
         repair_rows = [
             row for row in rows if str(row["row_kind"]) == "problem_ignore"
@@ -6213,6 +6214,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                 _root_sidebar_sql,
                 _search_preview_sql,
                 _selected_artist_sql,
+                _utility_rules_params,
                 _utility_rules_sql,
             )
             from music_app.services.library_inventory_postgres import (
@@ -6305,7 +6307,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                     2,
                     1500.0,
                 ),
-                "utility_rules": (_utility_rules_sql(), {}, 2, 250.0),
+                "utility_rules": (_utility_rules_sql(), _utility_rules_params(), 2, 250.0),
                 "non_album_reads": (
                     _non_album_candidates_sql(),
                     {

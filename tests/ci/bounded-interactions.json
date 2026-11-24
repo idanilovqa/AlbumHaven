@@ -7433,26 +7433,53 @@
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles",
-      "action": "fetchSummary requests installed by loadProblematicFiles",
+      "action": "Open Problematic Files: one bounded page, one complete list committed once; each render of the committed list visits a bounded number of albums and mounts one window of rows",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:request:fetchSummary",
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:timer:scheduleBrowserTimeout"
       ],
       "owners": [
-        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/utility-renderers-and-actions.js",
+        "music_app/static/js/runtime/problematic-files-virtual-list.js"
       ],
       "rules": [
         "BI-03",
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/utilities/problematic-files"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/utilities/problematic-files/detail"
+        ]
+      },
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 2,
+        "itemsVisited": 100,
+        "domMutations": 74
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-problematic-render-contract.test.js",
+      "testIdentity": "request capture: Problematic Files renders a committed list visiting a bounded number of albums per render",
+      "performanceTargets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Reverting the per-commit Problematic Files list cache makes every render merge, sort and walk the whole committed list again (three passes per render), and this contract fails on itemsVisited growth."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadTagEditorFolderFiles",

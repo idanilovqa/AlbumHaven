@@ -88,6 +88,7 @@ class RuleStatePostgresAdapter:
         }
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                _hold_inventory_publication(connection)
                 _ensure_bootstrap_context(connection)
                 for repair_key in sorted(normalized):
                     album_key = normalized_album_keys.get(repair_key)
@@ -121,6 +122,7 @@ class RuleStatePostgresAdapter:
         }
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                _hold_inventory_publication(connection)
                 _ensure_bootstrap_context(connection)
                 if removals:
                     connection.execute(
@@ -142,6 +144,7 @@ class RuleStatePostgresAdapter:
             return
         with self._connect_to_database() as connection:
             with _transaction(connection):
+                _hold_inventory_publication(connection)
                 _ensure_bootstrap_context(connection)
                 connection.execute(
                     _delete_selected_ignored_repairs_sql(),
@@ -262,6 +265,15 @@ class _NoopTransaction:
 
 def _connect(database_url: str) -> Any:
     return _leased_connection(database_url)
+
+
+def _hold_inventory_publication(connection: Any) -> None:
+    """An ignored repair marks every album it names (0266's trigger). A save or scan marks its albums under
+    the inventory publication lock, so taking that lock first, before any row write, keeps the two from
+    taking the same albums' marks in opposite orders (deadlock part 3). It waits; it never refuses."""
+    from music_app.services.relation_projection_postgres import inventory_publication_advisory_lock_sql
+
+    connection.execute(inventory_publication_advisory_lock_sql())
 
 
 def _transaction(connection: Any) -> Any:

@@ -3,6 +3,8 @@
 A folder holding several albums never turns a proven copy into a mixed-folder problem: the scan's stored
 membership problem and Album Details' own classification (the SQL twin) both keep the duplicate type.
 Synthetic layout on a throwaway database only."""
+from pathlib import Path
+
 import pytest
 
 from tests.e2e.support import isolatedPostgres
@@ -69,21 +71,21 @@ def test_live_a_copy_folder_keeps_every_copy_as_a_duplicate_track(watcher_repair
                    from library.local_track_files where scan_cache_stale is false"""
             ).fetchall()
         }
-        album_keys = [row["album_key"] for row in connection.execute(
-            "select album_key from library.local_albums where title = any(%s)", (list(ALBUMS),),
-        ).fetchall()]
+        album_keys = {row["title"]: row["album_key"] for row in connection.execute(
+            "select title, album_key from library.local_albums where title = any(%s)", (list(ALBUMS),),
+        ).fetchall()}
+        # Album Details classifies the opened album's files (and their folder neighbours, for context):
+        # each album's own copies are judged in that album's run.
         twin = {}
-        for album_key in album_keys:
-            for row in connection.execute(_membership_sql(), {"album_key": album_key}).fetchall():
-                twin[row["private_path"]] = row["problem"]
+        for index, album in enumerate(ALBUMS, start=1):
+            own = {path for path in copies if Path(path).name.startswith(f"{index}-")}
+            rows = connection.execute(_membership_sql(), {"album_key": album_keys[album]}).fetchall()
+            twin.update({row["private_path"]: row["problem"] for row in rows if row["private_path"] in own})
 
     assert {path: stored[path] for path in copies} == {path: DUPLICATE for path in copies}
     assert not any(stored[path] for path in real), "a real multi-album folder's songs exist nowhere else"
     assert len(album_keys) == len(ALBUMS)
-    # Album Details scopes its classification to the album's files and their folders; every copy it sees
-    # must keep the duplicate type.
-    assert copies & set(twin), "Album Details never classified a copy"
-    assert {path: twin[path] for path in copies & set(twin)} == {path: DUPLICATE for path in copies & set(twin)}, (
+    assert twin == {path: DUPLICATE for path in copies}, (
         "Album Details classifies a proven copy as a duplicate, not as a mixed-folder file"
     )
 

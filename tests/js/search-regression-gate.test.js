@@ -91,3 +91,32 @@ test('calibrated search gate keeps functional release selection independent', ()
   assert.match(runner, /\$env:ALBUM_HAVEN_FIXTURE_ROOT = \$FixtureRoot/u);
   assert.match(runner, /\$env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET = \$SyntheticScalePreset/u);
 });
+
+// A failing stage must not hide the stages after it: CI needs the whole failure inventory in one run.
+test('search gate runs every stage after a failure and fails at the end with every failed stage', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const script = path.join(repositoryRoot, 'scripts/run-search-regressions.ps1');
+  const scenario = [
+    "$ErrorActionPreference = 'Stop'",
+    '$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:SEARCH_GATE_SCRIPT, [ref]$null, [ref]$null)',
+    // The script's stage bookkeeping: its failure list and the stage functions, without running any stage.
+    '$ast.EndBlock.Statements | Where-Object {',
+    '  $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -or',
+    "  ($_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$script:failedStages')",
+    '} | ForEach-Object { Invoke-Expression $_.Extent.Text }',
+    "Invoke-Checked { cmd /c exit 3 } 'First functional shard'",
+    "Invoke-Checked { cmd /c echo second-stage-ran } 'Second functional shard'",
+    "Invoke-Checked { throw 'runner crashed' } 'Performance targets'",
+    'Assert-SearchGatePassed',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', scenario], {
+    encoding: 'utf8', windowsHide: true, env: { ...process.env, SEARCH_GATE_SCRIPT: script },
+  });
+  assert.notEqual(result.status, 0, 'the gate fails when any stage failed');
+  assert.match(result.stdout, /second-stage-ran/u, 'a later stage still runs after a failed one');
+  const output = `${result.stdout}${result.stderr}`;
+  assert.match(output, /First functional shard failed with exit code 3/u);
+  assert.match(output, /Performance targets failed: runner crashed/u);
+  assert.doesNotMatch(output, /Second functional shard failed/u);
+});

@@ -1494,3 +1494,37 @@ test('Loose Tracks reapplies surface and navigation ownership across the mobile 
   assert.equal(surface.parentElement, nodes['shell-main-surface']);
   assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
 });
+
+// FTC-ARTIST-TREE-005: a Loose Tracks repaint (syncNavigation: false) reaches the page presentation without a
+// navigation sync, so it never moves the user's navigation selection; a real open still syncs it.
+test('a desktop Loose Tracks repaint carries its navigation opt-out to the page presentation', () => {
+  const element = () => ({ hidden: false, dataset: {}, classList: { toggle() {}, remove() {}, add() {} } });
+  const elements = {};
+  const presentations = [];
+  const context = load('mobile-navigation.js', {
+    window: { innerWidth: 1280, history: { state: {} } },
+    state: { view: { surface: 'albums' }, ui: {}, status: {}, coverLookup: {}, utility: {} },
+    document: {
+      getElementById: (id) => (elements[id] ||= element()),
+      querySelectorAll: () => [],
+      body: element(),
+    },
+    buildUrl: () => '/?surface=albums',
+    setNonAlbumPagePresentation: (_surface, open, navigationActive, syncNavigation) => {
+      presentations.push({ open, navigationActive, syncNavigation });
+    },
+  });
+  context.syncMobileAlbumHeader = () => {};
+  context.syncMobileLoopHeader = () => {};
+  context.writeMobilePageHistory = () => {};
+  context.closeArtistsDrawer = () => {};
+  vm.runInContext("mobilePageState.pages.push({ kind: 'non-album', albumKey: '' });", context);
+
+  assert.equal(context.presentMobilePage({ kind: 'non-album', albumKey: '' }, { syncNavigation: false }), true);
+  assert.equal(context.presentMobilePage({ kind: 'non-album', albumKey: '' }), true);
+
+  assert.deepEqual(presentations, [
+    { open: true, navigationActive: true, syncNavigation: false },
+    { open: true, navigationActive: true, syncNavigation: true },
+  ]);
+});

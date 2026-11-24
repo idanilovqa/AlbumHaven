@@ -186,7 +186,8 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   await shell.close.click();
   await expect(shell.dialog).toBeHidden();
   // Owner (11-08 evening, UI-MOBILE-SETTINGS): opening Settings on a phone made the "Settings" page header flash.
-  const phone = (await freshBrowserSession.create({ phone: true })).page;
+  const phoneSession = await freshBrowserSession.create({ phone: true });
+  const phone = phoneSession.page;
   await phone.goto('/');
   await expect(phone.locator('#mobile-library-button')).toBeVisible();
   // Owner (11-09): the phone Gallery header keeps its count right under the title, as on web, and every Settings
@@ -197,11 +198,18 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
     const box = (selector) => { const node = document.querySelector(selector); if (!node || !node.getClientRects().length) return null;
       const bounds = node.getBoundingClientRect(); return { x: Math.round(bounds.x), y: Math.round(bounds.y), height: Math.round(bounds.height), bottom: Math.round(bounds.bottom), fontSize: getComputedStyle(node).fontSize }; };
     return { hamburger: box('#mobile-library-button'), title: box('[data-gallery-bar-instance="gallery"] .gallery-bar__title'),
-      summary: box('[data-gallery-bar-instance="gallery"] .gallery-bar__summary'), back: box('#mobile-back-button'),
+      summary: box('[data-gallery-bar-instance="gallery"] .gallery-bar__artist-mobile-summary .gallery-bar__summary-count'),
+      back: box('#mobile-back-button'),
       pageHamburger: box('#mobile-settings-button'), pageTitle: box('#mobile-page-title'), picker: box('#mobile-settings-section-button') };
   });
   await phone.goto('/?surface=albums&artist=Mastodon');
+  // Measure the settled gallery, never the start-up loader in front of it.
+  await phoneSession.galleryActions.waitForGalleryReady();
   await expect(phone.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]')).toHaveText('Mastodon');
+  // Owner (11-24): the album count sits under the band name. On a phone artist bar it is the count in the
+  // artist summary line (the plain summary line is hidden there).
+  await expect(phone.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__artist-mobile-summary .gallery-bar__summary-count'))
+    .toHaveText(/^\d+ albums?$/);
   const gallery = await readHeader(phone);
   expect(gallery.summary.y - gallery.title.bottom).toBeLessThanOrEqual(3);
   await phone.goto('/');
@@ -325,7 +333,9 @@ test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard
   await shell.filters.press('ArrowDown');
   await shell.filter('Missing cover art').click();
   await expect(shell.filter('Missing cover art')).toHaveAttribute('aria-selected', 'false');
-  await expect(shell.filterMenu).toBeHidden();
+  // A deselect is a pick too: the menu stays open, and the option no longer shows checked.
+  await expect(shell.filterMenu).toBeVisible();
+  await expect(shell.filter('Missing cover art').locator('.utility-problem-filter-check svg')).toBeHidden();
   await shell.filters.press('ArrowDown');
   await expect(shell.filterMenu).toBeVisible();
   await expect(shell.filterOptions.first()).toBeFocused();

@@ -532,6 +532,8 @@ export class ProductionViewObserver {
             }
           })
           .catch((error) => {
+            // A reload drops the replaced page's bodies; only the current page's reads count.
+            if (detail.documentGeneration !== this.documentGeneration) return;
             this.sourceTotalsViolation ||= `A source-totals response could not be read: ${error?.message || error}`;
           })
           .finally(() => { this.stateRevision += 1; });

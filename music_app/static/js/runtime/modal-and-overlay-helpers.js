@@ -998,7 +998,9 @@ function openNonAlbumModal(options = {}) {
     });
   }
   if (typeof presentMobilePage === 'function') {
-    presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle });
+    // A repaint (syncNavigation: false) re-presents the page without moving the navigation selection.
+    presentMobilePage({ ...mobilePageDescriptor('non-album', null, { libraryWide }), subtitle },
+      { syncNavigation: options.syncNavigation !== false });
   }
   const waitExhausted = hydrationPending && libraryWide && libraryNonAlbumWaitExhausted();
   els.table.innerHTML = waitExhausted

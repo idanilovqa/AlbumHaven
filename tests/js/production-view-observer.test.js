@@ -2320,3 +2320,35 @@ for (const [label, extra] of [
     assert.throws(() => observer.read(), /source-totals response carries more than totals/u);
   });
 }
+
+// FTC-ALBUM-DETAILS-021 / FTC-ARTIST-FAMILY-019 / FTC-NON-ALBUM-015: Chrome drops the bodies of the replaced
+// document on reload, so a read of an earlier page's source-totals answer fails after the new page commits.
+const EVICTED_BODY = 'Protocol error (Network.getResponseBody): No resource with given identifier found';
+
+test('a source-totals body that a reload dropped from the replaced page is not a violation', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const totals = request('http://127.0.0.1/home-data?source_totals=1');
+  page.emit('request', totals);
+  let rejectRead;
+  page.emit('response', response(totals, null, {
+    json: () => new Promise((_resolve, reject) => { rejectRead = reject; }),
+  }));
+  page.emit('documentcommitted');
+  rejectRead(new Error(EVICTED_BODY));
+  await flushPromises();
+  assert.doesNotThrow(() => observer.read());
+});
+
+test('a source-totals body read failure on the current page still fails the observation', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  page.emit('documentcommitted');
+  const totals = request('http://127.0.0.1/home-data?source_totals=1');
+  page.emit('request', totals);
+  page.emit('response', response(totals, null, { json: () => Promise.reject(new Error(EVICTED_BODY)) }));
+  await flushPromises();
+  assert.throws(() => observer.read(), /A source-totals response could not be read: .*No resource with given identifier/u);
+});

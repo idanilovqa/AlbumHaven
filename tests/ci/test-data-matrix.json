@@ -105,7 +105,7 @@
       "databaseIdentity": "case:play-after-pause-timing",
       "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

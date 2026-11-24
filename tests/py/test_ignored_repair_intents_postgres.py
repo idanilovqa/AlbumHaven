@@ -12,6 +12,7 @@ from time import monotonic
 import psycopg
 import pytest
 
+from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (live fixture)
 from tests.py.test_problematic_index_two_writers_postgres import _Writer, library  # noqa: F401 (live fixture)
 
 ANSWER_SECONDS = 1.0
@@ -186,3 +187,72 @@ def test_a_drain_started_during_a_held_publication_waits_for_it_and_never_applie
     _drained(library)
     assert _stored(library) == set(keys)
     assert _pending(library) == 0
+
+
+# 6.5's ruling on the reload: the server lays the pending intents over every read, scoped to what it reads, so
+# a reload, a second tab or another device shows the Ignore while the publication still holds it back.
+def _repository(library):
+    from music_app.services import library_browse_postgres as browse, problematic_index
+
+    repository = browse.PostgresLibraryBrowseRepository({**library.fixture.config, problematic_index.ENABLED_KEY: "1"})
+    problematic_index.prepare_for_serving(repository)
+    return repository
+
+
+def _first_album_problem(library, repository):
+    """Album A's first album-scope problem, as its detail offers it to Ignore."""
+    page = repository.build_problematic_files_page(limit=50, cursor="")
+    item = next(item for item in page["items"] if item["name"] == "Album A")
+    detail = repository.build_problematic_file_detail_payload(item["key"])
+    row = detail["album_problem_rows"][0]
+    return item["key"], row["row_key"], row["album_key"], row["problem_reason"]
+
+
+def _shown(repository, item_key):
+    """What a reload shows: the Rules' ignored problems, the album's detail rows, and its page item."""
+    rules = repository.build_utility_rules_payload()
+    rule = next(rule for rule in rules["rules"] if rule.get("key") == "problem-ignores")
+    ignored = {item["row_key"] for item in rule.get("items") or []}
+    detail = repository.build_problematic_file_detail_payload(item_key)
+    detail_rows = {row["row_key"] for row in (detail or {}).get("album_problem_rows") or []}
+    page = repository.build_problematic_files_page(limit=50, cursor="")
+    reasons = next((item["problem_reasons"] for item in page["items"] if item["key"] == item_key), None)
+    return ignored, detail_rows, reasons
+
+
+def test_a_pending_ignore_shows_after_a_reload_in_the_rules_the_details_and_the_page(library):
+    repository = _repository(library)
+    item_key, row_key, album_key, reason = _first_album_problem(library, repository)
+    save = library.save()
+    try:
+        assert _ignore(library, {row_key: album_key}) == "pending"
+        ignored, detail_rows, reasons = _shown(repository, item_key)
+        assert row_key in ignored
+        assert row_key not in detail_rows
+        assert reasons is None or reason not in reasons
+    finally:
+        save.rollback()
+        save.close()
+    _drained(library)
+    assert _pending(library) == 0
+    assert _shown(repository, item_key) == (ignored, detail_rows, reasons)
+
+
+def test_a_pending_unignore_shows_after_a_reload_in_the_rules_and_the_details(library):
+    repository = _repository(library)
+    item_key, row_key, album_key, _reason = _first_album_problem(library, repository)
+    assert _ignore(library, {row_key: album_key}) == "applied"
+    save = library.save()
+    try:
+        assert _unignore(library, {row_key: album_key}) == "pending"
+        ignored, detail_rows, _reasons = _shown(repository, item_key)
+        assert row_key not in ignored
+        assert row_key in detail_rows
+    finally:
+        save.rollback()
+        save.close()
+    _drained(library)
+    assert _pending(library) == 0
+    ignored, detail_rows, _reasons = _shown(repository, item_key)
+    assert row_key not in ignored
+    assert row_key in detail_rows

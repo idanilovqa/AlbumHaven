@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from music_app.services.library_watch_suppression import LibraryWatchSuppression
 
 
@@ -15,6 +17,37 @@ def test_suppression_covers_active_write_and_bounded_delivery_grace(tmp_path: Pa
 
     now[0] = 5.01
     assert suppression.contains(cover) is False
+
+
+def test_a_write_that_fails_keeps_no_grace(tmp_path: Path):
+    """FTC-TAGS-008: a failed write changed nothing of the app's, so the next change to that file (the user
+    putting it back) reaches the watcher at once instead of being dropped for the grace period."""
+    now = [0.0]
+    suppression = LibraryWatchSuppression(grace_seconds=5.0, clock=lambda: now[0])
+    track = tmp_path / "track.mp3"
+
+    with pytest.raises(PermissionError):
+        with suppression.suppress((track,)):
+            assert suppression.contains(track) is True
+            raise PermissionError("the file cannot be written")
+    assert suppression.contains(track) is False
+
+
+def test_a_failed_write_keeps_an_earlier_writes_grace_without_extending_it(tmp_path: Path):
+    now = [0.0]
+    suppression = LibraryWatchSuppression(grace_seconds=5.0, clock=lambda: now[0])
+    track = tmp_path / "track.mp3"
+
+    with suppression.suppress((track,)):
+        pass
+    now[0] = 3.0
+    with pytest.raises(PermissionError):
+        with suppression.suppress((track,)):
+            raise PermissionError("the file cannot be written")
+    assert suppression.contains(track) is True, "the earlier write's own events are still hidden"
+
+    now[0] = 5.01
+    assert suppression.contains(track) is False, "the failed write did not extend the grace"
 
 
 def test_nested_suppression_remains_active_until_outer_write_finishes(tmp_path: Path):

@@ -1212,6 +1212,30 @@ for (const speculative of [false, true]) {
   });
 }
 
+// FTC-TAGS-009/020: a save's own view arrives before the status poll reports that save's revision. Details
+// fetched after that view already hold the save; the poll must not drop them, or the next merge into that
+// album shows only the moved tracks until the server answers.
+test('details fetched after the applied view of a revision survive the status poll that reports it', async () => {
+  const preview = { key: 'merge-target', request_key: 'merge-target', name: 'Merge Target', preview_only: true, tracks: [] };
+  const hydrated = { ...preview, preview_only: false, tracks: [{ path: 'one', title: 'One' }, { path: 'two', title: 'Two' }] };
+  const older = { key: 'older-album', request_key: 'older-album', name: 'Older Album', preview_only: false, tracks: [{ path: 'three', title: 'Three' }] };
+  const { context } = loadHelper({
+    initialAlbums: [preview, { ...older, preview_only: true, tracks: [] }], inventoryMutationRevision: 1,
+    onFetchAlbumDetails: ({ url }) => ({
+      ok: true, status: 200, json: async () => ({ ok: true, album: String(url).includes(older.key) ? older : hydrated }),
+    }),
+  });
+  await context.loadTrackModalAlbumDetails(older.key);
+  context.state.ui.appliedViewInventoryMutationRevision = 2;
+  assert.equal(await context.loadTrackModalAlbumDetails(preview.key), hydrated);
+
+  context.state.status.inventory_mutation_revision = 2;
+  context.invalidateAllHydratedTrackModalAlbumDetails(2);
+
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), hydrated);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(older.key), null, 'details from before revision 2 are dropped');
+});
+
 test('inventory mutation refresh rehydrates the album that is still open', async () => {
   const stale = {
     key: 'watcher-album',

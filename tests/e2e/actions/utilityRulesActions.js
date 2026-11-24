@@ -86,6 +86,24 @@ export class UtilityRulesActions {
     };
   }
 
+  // Each not-applied alert as the user reads it: its title and its message.
+  async readNotAppliedAlerts() {
+    const read = [];
+    for (let index = 0; index < await this.utilityRulesTab.notAppliedAlerts.count(); index += 1) {
+      read.push({
+        title: String(await this.utilityRulesTab.notAppliedAlertTitle(index).textContent() || '').trim(),
+        message: String(await this.utilityRulesTab.notAppliedAlertMessage(index).textContent() || '').trim(),
+      });
+    }
+    return read;
+  }
+
+  async readTargetGoneLines() {
+    return (await this.utilityRulesTab.targetGoneAlerts.allTextContents())
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+  }
+
   async readProblemExclusionRows() {
     const readRows = async (table) => (
       (await this.utilityRulesTab.keyedRows(table).allTextContents())

@@ -24,9 +24,20 @@ export class UtilityRulesTab extends BasePage {
     this.fileExclusionsTable = this.ruleDetail.getByRole('table', { name: 'File exclusions', exact: true });
     this.exclusionRows = this.ruleDetail.locator(this.keyedTableRowSelector);
     this.revertButtons = page.getByRole('button', { name: 'Revert rule', exact: true });
+    // Deadlock part 3 (owner, 11-24): changes the library could not apply, and rules whose target is gone.
+    this.notAppliedAlerts = this.ruleDetail.locator('[data-on-page-alert="error"]');
+    this.targetGoneAlerts = this.ruleDetail.locator('[data-small-alert="warning"]');
     this.revertConfirmation = page.getByRole('dialog', { name: 'Revert rule?', exact: true });
     this.revertYes = this.revertConfirmation.getByRole('button', { name: 'Yes', exact: true });
     this.revertNo = this.revertConfirmation.getByRole('button', { name: 'No', exact: true });
+  }
+
+  notAppliedAlertTitle(index) {
+    return this.notAppliedAlerts.nth(index).locator('.on-page-alert__title');
+  }
+
+  notAppliedAlertMessage(index) {
+    return this.notAppliedAlerts.nth(index).locator('.on-page-alert__message');
   }
 
   get listItemSelector() {

@@ -12,6 +12,7 @@ from dataclasses import asdict
 import hashlib
 import os
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,28 @@ from tests.py.bounded_interactions import OperationCounts, assert_plateau, measu
 from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
 _DATABASE_URL = "postgresql://album_haven_app@localhost/app"
+
+
+@pytest.fixture(autouse=True)
+def _postgres_connections_refused(monkeypatch):
+    """No contract here connects to Postgres, on its own thread or a queued one: every attempt fails the test."""
+    import psycopg
+
+    from music_app.services.cache import _CACHE_WRITE_EXECUTOR
+
+    attempts: list[str] = []
+
+    def refuse(*_args, **_kwargs):
+        attempts.append(threading.current_thread().name)
+        raise psycopg.OperationalError("bounded worker contracts never connect to Postgres")
+
+    monkeypatch.setattr(psycopg, "connect", refuse)
+    monkeypatch.setattr(psycopg.Connection, "connect", classmethod(lambda _cls, *args, **kwargs: refuse()))
+    yield
+    # Work the contract queued runs on the single cache-writer thread; settle it while the refusal holds.
+    for _ in range(2):
+        _CACHE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=30)
+    assert not attempts, f"Postgres connection attempted from threads {attempts}"
 
 
 class _RootSettingsStore:

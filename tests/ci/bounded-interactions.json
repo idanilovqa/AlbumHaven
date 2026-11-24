@@ -10321,22 +10321,6 @@
       "proof": "static"
     },
     {
-      "id": "py:routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_status",
-      "action": "Serve GET /utilities/edit-tags/requests/{client_request_id}",
-      "entrypoints": [
-        "py:music_app/routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_status:route:GET /utilities/edit-tags/requests/{client_request_id}"
-      ],
-      "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
-      ],
-      "rules": [
-        "BI-04",
-        "BI-13"
-      ],
-      "workClass": "page",
-      "proof": "static"
-    },
-    {
       "id": "py:routes/api_wave_a_asgi_routes.py#utilities_move_album",
       "action": "Serve POST /utilities/move-album",
       "entrypoints": [

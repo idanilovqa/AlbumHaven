@@ -5908,20 +5908,6 @@ def test_a_resent_save_the_server_already_received_is_refused_before_any_work(mo
                                   "error": "This save was already received."}
 
 
-def test_save_status_reports_received_unknown_and_invalid_ids(monkeypatch):
-    from music_app.routes import api_wave_a_asgi_routes as routes
-
-    asgi_app = _make_asgi_app()
-    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
-    status, _, body = _run_asgi_request(asgi_app, "GET", f"/utilities/edit-tags/requests/{_RESENT_SAVE_ID}")
-    assert (status, _decode_json(body)) == (200, {"ok": True, "found": True, "status": "completed"})
-    status, _, body = _run_asgi_request(
-        asgi_app, "GET", "/utilities/edit-tags/requests/0b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b")
-    assert (status, _decode_json(body)) == (200, {"ok": True, "found": False, "status": None})
-    status, _, _body = _run_asgi_request(asgi_app, "GET", "/utilities/edit-tags/requests/not-a-save-id")
-    assert status == 400
-
-
 def test_one_status_request_answers_every_waiting_save(monkeypatch):
     """6.5 (11-22): a retry pass asks about all its waiting saves in one request, read in one call."""
     from music_app.routes import api_wave_a_asgi_routes as routes

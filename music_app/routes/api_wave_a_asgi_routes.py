@@ -1901,18 +1901,6 @@ async def utilities_edit_tags_request_statuses(request: Request) -> JSONResponse
     })
 
 
-@router.get("/utilities/edit-tags/requests/{client_request_id}")
-async def utilities_edit_tags_request_status(request: Request, client_request_id: str) -> JSONResponse:
-    """What happened to a save the page sent but got no answer for (owner, 2026-11-17)."""
-    normalized = normalize_client_request_id(client_request_id)
-    if not normalized:
-        return JSONResponse({"ok": False, "error": "Invalid save id."}, status_code=400)
-    status = await run_in_threadpool(
-        PostgresTagEditIntentRepository(_app_config(request)).request_status, normalized,
-    )
-    return JSONResponse({"ok": True, "found": status is not None, "status": status})
-
-
 @router.post("/utilities/edit-tags")
 async def utilities_edit_tags(request: Request) -> JSONResponse:
     # The whole save request leases from the save workload (row B3), its History scope read included.

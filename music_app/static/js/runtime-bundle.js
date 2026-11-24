@@ -42085,7 +42085,7 @@ const PENDING_TAG_EDIT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // Owner (2026-11-23): a "finishing" save (files written and verified, the library still catching up) stays
 // here so a reload or another tab still shows its values; it is never resent, only checked.
 const PENDING_TAG_EDIT_SHOWN_STATES = new Set(['finishing', 'waiting', 'resending']);
-// 6.5 (11-22): one status request per retry pass, carrying at most this many waiting saves (the server's limit).
+// 6.5 (11-22): a retry pass asks about its waiting saves in requests of at most this many ids (the route's cap).
 const PENDING_TAG_EDIT_STATUS_BATCH = 500;
 
 // T3: the account and library this page belongs to (an opaque key the page carries); entries of another
@@ -42161,16 +42161,20 @@ const pendingTagEdits = (() => {
     return response.json().catch(() => ({}));
   }
 
-  // The server's answer for each waiting save, by id, from one request; throws when it cannot be reached.
+  // The server's answer for each waiting save, by id, one request per chunk; throws when it cannot be reached.
   async function readStatuses(waiting) {
-    const status = await fetch('/utilities/edit-tags/requests/status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ ids: waiting.map((entry) => entry.id) }),
-    });
-    const answer = await readJson(status);
-    if (!status.ok || answer.ok !== true) throw new Error(answer.error || `Save status answered ${status.status}`);
-    return answer.requests || {};
+    const statuses = {};
+    for (let start = 0; start < waiting.length; start += PENDING_TAG_EDIT_STATUS_BATCH) {
+      const status = await fetch('/utilities/edit-tags/requests/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ ids: waiting.slice(start, start + PENDING_TAG_EDIT_STATUS_BATCH).map((entry) => entry.id) }),
+      });
+      const answer = await readJson(status);
+      if (!status.ok || answer.ok !== true) throw new Error(answer.error || `Save status answered ${status.status}`);
+      Object.assign(statuses, answer.requests);
+    }
+    return statuses;
   }
 
   // 'saved', 'failed' or 'waiting' from the server's answer for this save; throws when a resend cannot reach it.
@@ -42212,7 +42216,7 @@ const pendingTagEdits = (() => {
     let reachedServer = false;
     let settledAny = false;
     try {
-      const waiting = entries.filter((item) => item.state !== 'failed').slice(0, PENDING_TAG_EDIT_STATUS_BATCH);
+      const waiting = entries.filter((item) => item.state !== 'failed');
       let statuses;
       try {
         statuses = await readStatuses(waiting);

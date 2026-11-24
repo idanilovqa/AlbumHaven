@@ -111,9 +111,13 @@ def _candidate_sql(browse):
     ).replace("__FILE_PARENT__", browse._physical_parent_sql("files.private_path"))
 
 
-def _plan(setup_url, sql, params):
+def _plan(setup_url, sql, params, *, seqscan=True):
+    """The query plan, with the default planner unless seqscan=False (a structural proof only)."""
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute("set enable_seqscan = off")
+        connection.execute("analyze library.local_track_files")
+        connection.execute("analyze library.local_tracks")
+        if not seqscan:
+            connection.execute("set enable_seqscan = off")
         row = connection.execute("explain (format json) " + sql, params).fetchone()
     return json.dumps(row[0] if not hasattr(row, "keys") else list(row.values())[0])
 
@@ -168,22 +172,32 @@ def test_live_copy_folder_reads_stay_flat_at_two_library_sizes(seeded_app):
     assert len(small["narrowing"]) <= 1, small
 
 
-def test_live_added_reads_reach_their_indexes(seeded_app):
+_INDEXES = {
+    # B: the copy lookup goes through the duplicate identity index (0093).
+    "copies": ("local_track_files_active_duplicate_identity_idx",),
+    # D3: candidate folders by private path and physical parent (0088), other albums' files by album id.
+    "candidate folders": ("local_track_files_private_path_idx", "local_track_files_active_physical_parent_idx",
+                          "local_tracks_album_id_idx"),
+}
+
+
+def _plans(seed, setup_url, *, seqscan):
     from music_app.services import library_browse_postgres as browse
 
-    seed, setup_url = seeded_app
     _app, music_dir = seed(SIZES[-1])
     album_paths = [str(Path(music_dir) / f"Owner/Album One/{number:02d}.flac") for number in (1, 2, 3)]
     shared_paths = [str(Path(music_dir) / f"Owner/Shared/{album[:5]}-{number:02d}.flac")
                     for album in ("Fourth Album", "Fifth Album") for number in (1, 2)]
+    return {
+        "copies": _plan(setup_url, browse._OUTSIDE_COPIES_SQL,
+                        {"paths": album_paths, "reason": "Duplicate track outside album folder"}, seqscan=seqscan),
+        "candidate folders": _plan(setup_url, _candidate_sql(browse), {"paths": shared_paths}, seqscan=seqscan),
+    }
 
-    # B: the copy lookup goes through the duplicate identity index (0093).
-    plan = _plan(setup_url, browse._OUTSIDE_COPIES_SQL,
-                 {"paths": album_paths, "reason": "Duplicate track outside album folder"})
-    assert "local_track_files_active_duplicate_identity_idx" in plan, plan
 
-    # D3: candidate folders by private path and physical parent (0088), other albums' files by album id.
-    plan = _plan(setup_url, _candidate_sql(browse), {"paths": shared_paths})
-    for index in ("local_track_files_private_path_idx", "local_track_files_active_physical_parent_idx",
-                  "local_tracks_album_id_idx"):
-        assert index in plan, (index, plan)
+def test_live_added_reads_reach_their_indexes_with_the_default_planner(seeded_app):
+    """6.5 (2026-11-24): at 200 unrelated albums the default planner (sequential scans allowed) already picks
+    every index the added reads rely on."""
+    plans = _plans(*seeded_app, seqscan=True)
+    missing = [(read, index) for read, indexes in _INDEXES.items() for index in indexes if index not in plans[read]]
+    assert not missing, (missing, plans)

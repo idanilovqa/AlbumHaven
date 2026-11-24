@@ -9704,7 +9704,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 2 is not a flat allowance: the contract asserts exactly 1 statement with no candidate folder and exactly 2 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query",
@@ -9741,7 +9741,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. sql_statements 2 is not a flat allowance: the contract asserts exactly 1 statement with no candidate folder and exactly 2 with 1 or 5 candidate folders (the mixed-folder narrowing, one statement however many folders), at both sizes."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_files",

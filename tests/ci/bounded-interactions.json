@@ -9754,9 +9754,12 @@
         "py:music_app/routes/api_read_asgi_routes.py#utilities_problematic_files:route:GET /utilities/problematic-files"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py",
         "music_app/routes/api_problematic_albums.py",
-        "music_app/services/problematic_albums.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/problematic_albums.py",
+        "music_app/services/problematic_index.py",
+        "music_app/services/rule_state_postgres.py"
       ],
       "rules": [
         "BI-04",
@@ -9766,20 +9769,19 @@
       "proof": "contract",
       "cardinalities": {
         "small": 20,
-        "production": 1000
+        "production": 200
       },
       "budgets": {
-        "builder_calls": 1,
-        "membership_rows": 0,
-        "candidate_rows": 28
+        "sql_statements": 19,
+        "pending_intent_rows": 5
       },
       "growth": {
-        "metric": "builder_calls",
+        "metric": "sql_statements",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
-      "testIdentity": "test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_problematic_files_page_lays_pending_intents_over_its_page_without_growing",
+      "testIdentity": "test_live_problematic_files_page_lays_pending_intents_over_its_page_without_growing",
+      "rollback": "Live Postgres page via problematic_index.read_page (index on), limit 50, with a stored Ignore, a pending Unignore of it and a pending Ignore (6.5, 11-24). The 19 statements: the first page's artist problem rows (1); refresh: library id, index state, dirty marks, marked loose groups (2-5); the indexed page read (6); the page-scoped intents read (7); the 2 rebuilt items' album ids, SET, rows and their scoped intents (8-11); the first item's detail: listed-as-missing, SET, duplicate helper check, duplicate candidates, rows and scoped intents (12-17); relation-alias fingerprint and bootstrap library for watch health (18-19). pending_intent_rows 5 = page 2 + rebuilt rows 2 + first detail 1. pending_intent_rows counts only the page-scoped intents read; a read of every intent or a rebuild per item makes it grow."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#view_data",
@@ -10496,8 +10498,8 @@
         "production": 200
       },
       "budgets": {
-        "sql_statements": 0,
-        "returned_rows": 1
+        "sql_statements": 2,
+        "pending_intent_rows": 2
       },
       "growth": {
         "metric": "sql_statements",

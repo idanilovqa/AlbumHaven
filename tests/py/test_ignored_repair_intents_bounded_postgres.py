@@ -250,16 +250,19 @@ def test_live_rules_route_lays_pending_intents_over_its_page_without_growing(see
     measure_scale_pair(
         interaction_id="py:routes/api_wave_a_asgi_routes.py#utility_rules",
         small=SIZES[0], large=SIZES[1], run=run,
-        budgets={"sql_statements": 0, "returned_rows": 1}, growth=("sql_statements", 0),
+        budgets={"sql_statements": 2, "pending_intent_rows": 2}, growth=("sql_statements", 0),
     )
 
 
-def _page(app, limit="50"):
+def _page(app, limit="50", *, indexed=False):
     from tests.py.asgi_testing import decode_json, run_asgi_request
 
     status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files", query={"limit": limit})
     assert status == 200, body
-    return {item["name"]: item for item in decode_json(body)["items"]}
+    payload = decode_json(body)
+    if indexed:
+        assert payload.get("projection_cache_status") == "indexed", payload.get("projection_cache_status")
+    return {item["name"]: item for item in payload["items"]}
 
 
 def _album_rows(app, item_key):
@@ -284,9 +287,11 @@ def test_live_problematic_files_page_lays_pending_intents_over_its_page_without_
 
     def run(unrelated):
         app, config = seed(unrelated)
+        # The server's path: the persisted index (tests/py/conftest.py switches it off for every other test).
+        config[problematic_index.ENABLED_KEY] = "1"
         repository = PostgresLibraryBrowseRepository(config)
         problematic_index.prepare_for_serving(repository)
-        page = _page(app)
+        page = _page(app, indexed=True)
         kept = _album_rows(app, page["A Kept Album"]["key"])
         pending = _album_rows(app, page["A Pending Album"]["key"])
         assert "Missing cover art" in kept and len(kept) >= 2 and list(pending) == ["Missing cover art"]
@@ -298,7 +303,7 @@ def test_live_problematic_files_page_lays_pending_intents_over_its_page_without_
             assert _ignore(app, pending["Missing cover art"]) == "pending"
         counts = OperationCounts()
         with _counted(counts):
-            shown = _page(app)
+            shown = _page(app, indexed=True)
         assert "Missing cover art" in shown["A Kept Album"]["problem_reasons"]
         assert "A Pending Album" not in shown
         counts.count("returned_rows", len(shown))
@@ -307,13 +312,7 @@ def test_live_problematic_files_page_lays_pending_intents_over_its_page_without_
     measure_scale_pair(
         interaction_id="py:routes/api_read_asgi_routes.py#utilities_problematic_files",
         small=SIZES[0], large=SIZES[1], run=run,
-        budgets={"sql_statements": 0}, growth=("sql_statements", 0),
-        # Calibration only: the registration of this proof waits for 6.5 (one entrypoint, one testIdentity).
-        registry={"interactions": [{
-            "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_files",
-            "cardinalities": {"small": SIZES[0], "production": SIZES[1]},
-            "budgets": {"sql_statements": 0}, "growth": {"metric": "sql_statements", "largeMinusSmallMax": 0},
-        }]},
+        budgets={"sql_statements": 19, "pending_intent_rows": 5}, growth=("sql_statements", 0),
     )
 
 

@@ -39,6 +39,9 @@ DUPLICATE_RESULTS_VERSION = "1"
 # startup refusal.
 PREPARE_COMMAND = "python scripts/prepare_duplicate_results.py"
 DUPLICATE_RESULTS_MIGRATION = "0268_create_album_duplicate_results.sql"
+DUPLICATE_IDENTITY_MIGRATIONS = (
+    "0093_add_duplicate_identity_lookup_index.sql and 0118_fold_accents_in_duplicate_identity.sql"
+)
 # A refused start's exit code; uvicorn's own 3 covers every other failed start.
 REFUSED_TO_START_EXIT_CODE = 78
 # How long a starting app waits for its database, so a reboot in the wrong order recovers.
@@ -843,8 +846,16 @@ def _serving_state(database_url: str, connect_timeout: int) -> tuple[bool, bool,
         connection.execute("set lock_timeout = '5s'")
         tables = connection.execute(
             """select to_regclass('library.album_duplicate_results') is not null
-                  and to_regclass('library.album_duplicate_results_state') is not null as present""",
+                  and to_regclass('library.album_duplicate_results_state') is not null as present,
+                  to_regprocedure('library.duplicate_identity_text(text)') is not null
+                  and to_regprocedure('library.duplicate_identity_year(text)') is not null as identity_helpers""",
         ).fetchone()
+        if not _value(tables, "identity_helpers"):
+            # Duplicate candidates come only from the keyed identity read (no whole-library fallback).
+            raise NotReadyToServeError(
+                "Album Haven will not start: this database lacks the duplicate identity helpers of migrations "
+                f"{DUPLICATE_IDENTITY_MIGRATIONS}. Apply them, then start Album Haven."
+            )
         if not _value(tables, "present"):
             return False, False, False, False
         library_id = _library_id(connection)

@@ -37,6 +37,13 @@ class _FakeLibrary:
 
     def rows(self, sql: str, params) -> list[dict[str, object]]:
         params = params or {}
+        if "to_regprocedure" in sql:
+            return [{"available": True}]
+        if "album_key = any(%(album_keys)s" in sql:  # The keyed candidate read: requested albums and their twins.
+            requested = {album_id for album_id in self.tags if self.key(album_id) in params["album_keys"]}
+            identities = {tuple(self.tags[album_id].values()) for album_id in requested}
+            twins = {album_id for album_id, tags in self.tags.items() if tuple(tags.values()) in identities}
+            return [{"album_id": album_id, "pg17_superset": False} for album_id in sorted(requested | twins)]
         if "inventory_mutation_revision" in sql:
             return [{"library_id": 1, "inventory_revision": str(self.revision), "root_versions": [],
                      "root_count": 1, "override_versions": None, "override_count": 0,
@@ -113,7 +120,7 @@ def test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_prod
             repository._attach_duplicate_sources(albums)
             return [album["key"] for album in albums if album.get("has_duplicate_files")]
 
-        assert view() == ["album-1", "album-2"]  # Warm: the cold load reads the whole index once.
+        assert view() == ["album-1", "album-2"]  # Warm: the cold keyed read caches the page's absent albums.
         measuring["on"] = True
         previous = {**library.tags[1], "path": library.path(1)}
         library.tags[1] = {**library.tags[1], "album": "Renamed"}

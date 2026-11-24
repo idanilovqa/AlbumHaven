@@ -199,6 +199,21 @@ def test_live_startup_refuses_a_database_without_the_migration(library, populate
     assert refusal and MIGRATION in refusal, refusal
 
 
+def test_live_startup_refuses_a_database_without_the_duplicate_identity_helpers(library):
+    """Duplicate candidates come only from the keyed identity read: without its helpers Album Haven refuses
+    to start by migration name, never degrading to another candidate source."""
+    import psycopg
+
+    _seed_album(library)
+    with psycopg.connect(library.setup_url) as connection:
+        connection.execute("drop function library.duplicate_identity_year(text) cascade")
+
+    refusal = _startup()
+
+    assert refusal and "0093_add_duplicate_identity_lookup_index.sql" in refusal, refusal
+    assert "0118_fold_accents_in_duplicate_identity.sql" in refusal, refusal
+
+
 def test_live_startup_refuses_results_of_another_version(library, monkeypatch):
     from music_app.services import problematic_index
 

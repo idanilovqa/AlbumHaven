@@ -5974,16 +5974,11 @@ def _load_duplicate_candidate_album_ids(
     *,
     repository: PostgresLibraryBrowseRepository,
 ) -> list[int]:
-    # Compare only compact tag identities before loading full file metadata. SQL
-    # collation is not Python's NFC/casefold rule; broad Unicode SQL candidates
-    # otherwise pull thousands of unrelated albums into every artist request.
-    if (
-        album_keys
-        and _coerce_int(
-            getattr(getattr(connection, "info", None), "server_version", 0)
-        ) >= 180000
-        and _duplicate_identity_helpers_available(connection)
-    ):
+    # Compare only compact tag identities before loading full file metadata. The
+    # keyed read returns a superset of Python's NFC/casefold rule on every server
+    # (see its PostgreSQL 17 arm); callers verify each candidate exactly.
+    if album_keys:
+        _require_duplicate_identity_helpers(connection, repository._database_url)
         return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
     kind = "duplicate-identities"
     fingerprint = _duplicate_inventory_fingerprint(connection)
@@ -6052,6 +6047,22 @@ def _duplicate_identity_helpers_available(connection: Any) -> bool:
     return bool(row and row.get("available") is True)
 
 
+# Databases whose duplicate identity helpers this process has seen: checked once per database, not per read.
+_DUPLICATE_IDENTITY_HELPERS_READY: set[str] = set()
+
+
+def _require_duplicate_identity_helpers(connection: Any, database_url: str) -> None:
+    """Fails loudly, once per process and database, when the keyed duplicate read cannot run."""
+    if database_url in _DUPLICATE_IDENTITY_HELPERS_READY:
+        return
+    if not _duplicate_identity_helpers_available(connection):
+        raise RuntimeError(
+            "Album Haven cannot read duplicate albums: library.duplicate_identity_text and "
+            f"library.duplicate_identity_year are missing. Apply migrations {problematic_index.DUPLICATE_IDENTITY_MIGRATIONS}."
+        )
+    _DUPLICATE_IDENTITY_HELPERS_READY.add(database_url)
+
+
 def _load_duplicate_candidate_album_ids_for_keys(
     connection: Any,
     album_keys: list[str],
@@ -6106,14 +6117,16 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             and library.duplicate_identity_text(files.scan_file_album) <> ''
             and library.duplicate_identity_year(files.scan_file_year)
               between 1000 and 9999
-        ), candidate_containers as materialized (
-          select distinct
+        ), identity_files as (
+          select
+            requested_identities.library_id,
             requested_identities.album_artist_identity,
             requested_identities.album_identity,
             requested_identities.album_year,
-            tracks.album_id,
+            files.track_id,
             files.library_root_id,
-            {physical_container} as folder
+            {physical_container} as folder,
+            false as pg17_superset
           from requested_identities
           join library.local_track_files files
             on library.duplicate_identity_text(files.scan_file_album_artist)
@@ -6124,12 +6137,57 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
                  = requested_identities.album_year
            and files.scan_cache_stale is false
            and files.scan_file_entry_is_object is true
+          union all
+          -- CI-only path for PostgreSQL 17; delete this arm when CI runs
+          -- PostgreSQL 18 (P9-CI-024). Below 18 duplicate_identity_text folds
+          -- with lower(), not casefold(), so non-ASCII identities (ß/ss, ς/σ,
+          -- ligatures) can differ from Python's rule. Within the requested
+          -- year, every file is a candidate when the requested identity is
+          -- non-ASCII, else every file with non-ASCII album or album-artist
+          -- text. A superset: callers accept no candidate without Python's
+          -- exact identity check. pg17_superset counts these rows apart.
+          select
+            requested_identities.library_id,
+            requested_identities.album_artist_identity,
+            requested_identities.album_identity,
+            requested_identities.album_year,
+            files.track_id,
+            files.library_root_id,
+            {physical_container} as folder,
+            true as pg17_superset
+          from requested_identities
+          join library.local_track_files files
+            on library.duplicate_identity_year(files.scan_file_year)
+                 = requested_identities.album_year
+           and files.scan_cache_stale is false
+           and files.scan_file_entry_is_object is true
+          where current_setting('server_version_num')::integer < 180000
+            and (
+              octet_length(requested_identities.album_artist_identity)
+                <> length(requested_identities.album_artist_identity)
+              or octet_length(requested_identities.album_identity)
+                <> length(requested_identities.album_identity)
+              or octet_length(files.scan_file_album_artist)
+                <> length(files.scan_file_album_artist)
+              or octet_length(files.scan_file_album)
+                <> length(files.scan_file_album)
+            )
+        ), candidate_containers as materialized (
+          select distinct
+            identity_files.album_artist_identity,
+            identity_files.album_identity,
+            identity_files.album_year,
+            tracks.album_id,
+            identity_files.library_root_id,
+            identity_files.folder,
+            identity_files.pg17_superset
+          from identity_files
           join library.local_tracks tracks
-            on tracks.id = files.track_id
-           and tracks.library_id = requested_identities.library_id
+            on tracks.id = identity_files.track_id
+           and tracks.library_id = identity_files.library_id
           join library.library_roots roots
-            on roots.id = files.library_root_id
-           and roots.library_id = requested_identities.library_id
+            on roots.id = identity_files.library_root_id
+           and roots.library_id = identity_files.library_id
            and roots.is_active is true
         ), duplicate_identities as (
           select album_artist_identity, album_identity, album_year
@@ -6137,31 +6195,32 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
           group by album_artist_identity, album_identity, album_year
           having count(distinct (library_root_id, folder)) > 1
         ), candidate_album_ids as (
-          select requested_albums.album_id
+          select requested_albums.album_id, false as pg17_superset
           from requested_albums
           union
-          select distinct candidate_containers.album_id
+          select distinct candidate_containers.album_id, candidate_containers.pg17_superset
           from candidate_containers
           join duplicate_identities using (
             album_artist_identity, album_identity, album_year
           )
           union
-          select linked.id
+          select linked.id, false
           from requested_albums
           join library.local_albums linked
             on linked.library_id=requested_albums.library_id
            and linked.id::text=requested_albums.metadata
                 #>> '{{stray_duplicate_of,album_id}}'
           union
-          select stray.id
+          select stray.id, false
           from requested_albums
           join library.local_albums stray
             on stray.library_id=requested_albums.library_id
            and stray.metadata #>> '{{stray_duplicate_of,album_id}}'
                 = requested_albums.album_id::text
         )
-        select candidate_album_ids.album_id
+        select album_id, bool_and(pg17_superset) as pg17_superset
         from candidate_album_ids
+        group by album_id
         order by album_id;
     """
 

@@ -3,6 +3,7 @@
 import pytest
 
 from music_app.services import library_browse_postgres as browse
+from music_app.services.library import _duplicate_album_identity_values
 
 
 @pytest.mark.parametrize(("requested_year", "requested_base"), [
@@ -13,6 +14,8 @@ from music_app.services import library_browse_postgres as browse
     ("1988", "foreign artist::foreign title"),
 ])
 def test_separate_release_summary_key_resolves_composite_persisted_credit(monkeypatch, requested_year, requested_base):
+    monkeypatch.setattr("music_app.services.library_browse_postgres._require_duplicate_identity_helpers",
+                        lambda _connection, _database_url: None)  # The fake has the identity helpers.
     base = "ддт::студийные записи"
     rows = []
     for identifier, artist, title, year in [
@@ -62,6 +65,21 @@ def test_separate_release_summary_key_resolves_composite_persisted_credit(monkey
             if sql == "SET LOCAL enable_seqscan = off" or "library.ignored_repair_intents" in sql:
                 # No Ignore is pending (deadlock part 3's intents).
                 self.result = []
+                return self
+            if "album_keys" in (params or {}):
+                # The keyed candidate read stays scoped to the local library: another library with an
+                # identical identity is excluded.
+                assert "libraries.owner_account_id = owners.account_id" in sql
+                assert "owners.owner_key = 'local-bootstrap-owner'" in sql
+                own = [row for row in rows if row["library_id"] == 1]
+
+                def identity(row):
+                    return _duplicate_album_identity_values(
+                        row["artist_name"], row["album_title"], row["file_entry"]["year"])
+
+                wanted = {identity(row) for row in own if row["album_key"] in params["album_keys"]}
+                self.result = [{"album_id": album_id, "pg17_superset": False}
+                               for album_id in sorted({row["album_id"] for row in own if identity(row) in wanted})]
                 return self
             if "album_ids" in (params or {}):
                 selected.extend(params["album_ids"])

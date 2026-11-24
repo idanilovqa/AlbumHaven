@@ -15246,7 +15246,7 @@
     },
     {
       "id": "py:services/problematic_index.py#_maintain",
-      "action": "Background Problematic Files maintenance: each pass (backfill batches, then marked-album batches) runs on one connection of its own, with no pool lease and no other connection, and each batch's statements stay flat in library size",
+      "action": "Background Problematic Files maintenance: each pass (backfill batches, then marked-album batches) runs on one connection of its own, with no pool lease and no other connection, and each batch's statements stay flat in library size. The test also keeps the keyed duplicate-candidate read's rows (membership_rows) flat, and apart from them the rows of its PostgreSQL 17-only arm (candidate_rows; CI-only, deleted with the arm under P9-CI-024), each with growth 0",
       "entrypoints": [
         "py:music_app/services/problematic_index.py#_maintain:background:executor"
       ],

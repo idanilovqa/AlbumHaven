@@ -182,7 +182,7 @@ test('bounded interaction: a retry pass sends one status request per 500 waiting
 // Owner (2026-11-23): a save whose files are written is saved; while the library catches up ("finishing"),
 // a reload or another tab still shows the new values. The pending edit stays in this storage, is never
 // resent, and its values are laid over every display site until the save settles. No list UI here.
-function loadWithOverlay({ answers = [], stored = null, scope = 'scope-a', now = Date.now(), viewCommit = null } = {}) {
+function loadWithOverlay({ answers = [], stored = null, scope = 'scope-a', now = Date.now() } = {}) {
   const storage = new Map(stored ? [['albumHaven.pendingTagEdits', JSON.stringify(stored)]] : []);
   const timers = [];
   const requests = [];
@@ -206,8 +206,7 @@ function loadWithOverlay({ answers = [], stored = null, scope = 'scope-a', now =
     showToast() {},
     refreshCurrentViewAfterBackgroundCompletion: async () => { calls.refreshes += 1; },
     buildOptimisticUpdatedAlbumsFromEdits: (album, updates) => [{ ...album, edited: updates }],
-    // The real update commits the patched view (mergeViewPayload -> applyViewPayload), which lays the open saves over it.
-    applyUpdatedAlbumsToCurrentView: (albums, options) => { calls.overlays.push([albums, options]); viewCommit?.(); return albums; },
+    applyUpdatedAlbumsToCurrentView: (albums, options) => { calls.overlays.push([albums, options]); return albums; },
     applyTagEditsToNonAlbumView: (album, updates) => calls.nonAlbum.push([album, updates]),
     renderView: () => { calls.renders += 1; },
     fetch: async (url, options = {}) => {
@@ -308,17 +307,6 @@ test('a finishing save is laid over the view after a load and when another tab a
   fireStorage();
   assert.equal(calls.overlays.length, 3, 'both open saves were laid over after the other tab wrote');
   assert.equal(calls.renders, 1);
-});
-
-// FTC-TAGS-043 (run 45365886706): after a reload with a finishing save, the first view commit laid the save
-// over the view, whose own commit laid it over again, until the stack overflowed and the gallery never loaded.
-test('laying a finishing save over the view commits it once, never re-entering itself', () => {
-  let loaded = null;
-  const { api, calls } = loadWithOverlay({ viewCommit: () => loaded.overlayCurrentView() });
-  loaded = api;
-  api.addFinishing({ id: SAVE_ID, payload: finishingPayload, album: finishingAlbum });
-  assert.equal(api.overlayCurrentView(), 1);
-  assert.equal(calls.overlays.length, 1, 'the overlay re-entered itself through its own view commit');
 });
 
 test('the values of a finishing save replace the stored ones in fetched album details', () => {

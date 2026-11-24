@@ -1680,6 +1680,10 @@ function synchronizeCurrentViewAlbumIndex() {
   });
 }
 
+// The patched view is the current view, finishing saves already laid over it, plus these albums: its commit
+// never lays them again (the overlay itself commits through here; FTC-TAGS-043's reload recursion).
+const UPDATED_ALBUMS_COMMIT_OPTIONS = Object.freeze({ trackSidebarReveal: false, overlayPendingTagEdits: false });
+
 function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
   const incomingCandidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
   const originalAlbum = options.originalAlbum || null;
@@ -1819,13 +1823,13 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
       album_count: (nextPrimaryGroups.reduce((sum, group) => sum + (group.albums || []).length, 0)
         + visibleFamilyGroups.reduce((sum, group) => sum + (group.albums || []).length, 0)),
       artist_count: (nextPrimaryGroups.length + visibleFamilyGroups.length),
-    }, { trackSidebarReveal: false });
+    }, UPDATED_ALBUMS_COMMIT_OPTIONS);
   } else {
     mergeViewPayload({
       artist_groups: grouped,
       album_count: grouped.reduce((sum, group) => sum + (group.albums || []).length, 0),
       artist_count: grouped.length,
-    }, { trackSidebarReveal: false });
+    }, UPDATED_ALBUMS_COMMIT_OPTIONS);
   }
   if (options.skipRender) synchronizeCurrentViewAlbumIndex();
   if (!options.skipRender) {

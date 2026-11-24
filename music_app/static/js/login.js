@@ -1,6 +1,19 @@
 (() => {
   "use strict";
 
+  // Signing in or out ends what the browser kept for the previous account: the same keys as
+  // runtime/browser-storage-helpers.js.
+  for (const [storage, keys] of [
+    ["localStorage", ["albumhaven.playerState.v1", "albumhaven.androidNativeQueue.v1"]],
+    ["sessionStorage", ["albumhaven.recentSearches.v1", "albumhaven.playbackHandoff.v1"]],
+  ]) {
+    try {
+      keys.forEach((key) => window[storage].removeItem(key));
+    } catch (_error) {
+      // Storage is switched off: nothing was kept.
+    }
+  }
+
   const form = document.querySelector(".login-form");
   const password = document.querySelector("#login-password");
   const toggle = document.querySelector(".login-password-toggle");

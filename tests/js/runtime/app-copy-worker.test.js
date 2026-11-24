@@ -111,6 +111,21 @@ test('a fresh copy answers the navigation without waiting for the network', asyn
   assert.match(await response.text(), /content="cache" data-account="acct-a"/);
 });
 
+// What the browser keeps for an account (browser-storage-helpers.js) is read back by the account the
+// page names, so a page from the copy must still name it.
+test('a page from the copy still names its signed-in account', async () => {
+  const bootstrap = '<script id="client-layout-preferences-bootstrap" type="application/json">{"account_id": 7, "profiles": {}}</script>';
+  let online = true;
+  const { handle } = setup({ respond: () => (online ? page('acct-a', { body: bootstrap }) : new TypeError('Failed to fetch')) });
+  await handle(navigation('/'));
+  online = false;
+
+  const kept = await (await handle(navigation('/'))).text();
+
+  assert.match(kept, /content="cache"/);
+  assert.ok(kept.includes(bootstrap), kept);
+});
+
 test('a copy of another page is not shown for this one', async () => {
   const { calls, handle } = setup();
   await handle(navigation('/?artist=Broadcast'));

@@ -60,6 +60,7 @@ document.getElementById('search-form')?.addEventListener('submit', (event) => {
 });
 
 document.addEventListener('submit', (event) => {
+  closeAccountBrowserStorageOnSignOut(event);
   handleUtilityBootstrapSubmit(event);
 });
 

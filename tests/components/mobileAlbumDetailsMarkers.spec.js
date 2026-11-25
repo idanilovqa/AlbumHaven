@@ -41,6 +41,22 @@ for (const width of [320, 390]) for (const layout of ['classic_bar', 'stacked_ba
       await expect(badge).toHaveCSS('color', color);
       expect(await badge.evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(color);
     }
+    // Owner (sandbox2, 11-25): the glyph sits centered in its badge and is drawn like the Gallery's source glyph.
+    for (const badge of [hoard, arrivals]) {
+      const geometry = await badge.evaluate((node) => {
+        const outer = node.getBoundingClientRect();
+        const glyph = node.querySelector('svg').getBoundingClientRect();
+        const style = getComputedStyle(node.querySelector('svg'));
+        return {
+          dx: (glyph.left + glyph.width / 2) - (outer.left + outer.width / 2),
+          dy: (glyph.top + glyph.height / 2) - (outer.top + outer.height / 2),
+          fill: style.fill, cap: style.strokeLinecap, join: style.strokeLinejoin,
+        };
+      });
+      expect(Math.abs(geometry.dx)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(geometry.dy)).toBeLessThanOrEqual(0.5);
+      expect([geometry.fill, geometry.cap, geometry.join]).toEqual(['none', 'round', 'round']);
+    }
     const artBox = await art.boundingBox();
     const [hoardBox, arrivalsBox] = await Promise.all([hoard.boundingBox(), arrivals.boundingBox()]);
     if (layout === 'editorial_canvas') {

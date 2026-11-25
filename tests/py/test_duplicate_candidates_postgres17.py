@@ -100,17 +100,37 @@ def test_postgres17_arm_is_gated_by_version_and_bounded_by_the_requested_year():
     import music_app.services.library_browse_postgres as browse
 
     sql = " ".join(browse._duplicate_candidate_album_ids_for_keys_sql().split())
-    arm = sql[sql.index("true as pg17_superset"):sql.index("), candidate_containers as")]
     assert "CI-only path for PostgreSQL 17; delete this arm when CI runs PostgreSQL 18 (P9-CI-024)" in " ".join(
         line.strip(" -") for line in browse._duplicate_candidate_album_ids_for_keys_sql().splitlines()
     )
-    assert f"where {ARM_GATE}" in arm
-    assert ("on library.duplicate_identity_year(files.scan_file_year) = requested_identities.album_year"
-            in arm), "the arm reads only the requested year's files"
-    for text in ("requested_identities.album_artist_identity", "requested_identities.album_identity",
-                 "files.scan_file_album_artist", "files.scan_file_album"):
-        assert f"octet_length({text}) <> length({text})" in arm, text
-    assert sql.count(ARM_GATE) == 1
+    arms = sql[sql.index("true as pg17_superset"):sql.index("), candidate_containers as")]
+    files = sql[sql.index("pg17_casefold_files as materialized"):sql.index("), identity_files as")]
+    sensitive = browse._CASEFOLD_SENSITIVE_CLASS
+    # A casefold-sensitive requested identity reads its year's files; nothing is scanned otherwise.
+    assert ("where requested_identities.pg17_casefold_sensitive and "
+            "library.duplicate_identity_year(files.scan_file_year) = requested_identities.album_year") in arms
+    # Otherwise only the casefold-sensitive files of the requested year: one regex read per statement, gated
+    # by the server version.
+    assert "join pg17_casefold_files files on files.album_year = requested_identities.album_year" in arms
+    assert f"where {ARM_GATE}" in files
+    for text in ("files.scan_file_album", "files.scan_file_album_artist"):
+        assert f"{text} ~ '{sensitive}'" in files, text
+        assert f"{text} ~ '{sensitive}'" in sql[:sql.index("as pg17_casefold_sensitive")], text
+    assert sql.count(ARM_GATE) == 2  # the casefold-sensitive files, and the requested identities' flag
+
+
+def test_casefold_sensitive_class_is_every_character_casefold_and_lower_treat_differently():
+    """The class matches exactly the characters whose casefold() differs from lower(), plus capital sigma
+    (lower() turns it into final sigma at a word's end): text without one folds alike under both."""
+    import re
+    import sys
+
+    import music_app.services.library_browse_postgres as browse
+
+    pattern = re.compile(browse._CASEFOLD_SENSITIVE_CLASS)
+    characters = [chr(code) for code in range(sys.maxunicode + 1) if not 0xD800 <= code <= 0xDFFF]
+    expected = {character for character in characters if character.casefold() != character.lower()} | {"Σ"}
+    assert {character for character in characters if pattern.fullmatch(character)} == expected
 
 
 def _server_version(fixture) -> int:
@@ -236,6 +256,20 @@ def test_ascii_only_identities_add_no_superset_candidates(library):
     results = _duplicate_results(library, [keys["One"], keys["Other"], keys["Elsewhere"]])
     assert results[keys["One"]]["has_duplicate_files"] is True
     assert keys["Other"] not in results and keys["Elsewhere"] not in results
+
+
+def test_casefold_insensitive_non_ascii_identities_add_no_superset_candidates(library):
+    """Cyrillic (or accented) text folds alike under lower() and casefold(): it never widens the PostgreSQL 17
+    arm to the whole requested year (the hosted fixture's backfill read every same-year album otherwise)."""
+    keys = _seed(
+        library,
+        ("One", "Ария", YEAR), ("Two", "АРИЯ", YEAR),
+        ("Other", "Другой", YEAR),
+    )
+    ids = _album_ids(library, keys.values())
+
+    candidates = _candidate_rows(library, keys["One"])
+    assert candidates == {ids[keys["One"]]: False, ids[keys["Two"]]: False}
 
 
 def test_no_keys_read_no_duplicate_candidates_and_run_no_statement():

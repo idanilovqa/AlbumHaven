@@ -6021,7 +6021,20 @@ def _load_duplicate_candidate_album_ids_for_keys(
     })
 
 
+# The characters Python's casefold() and lower() fold differently, plus capital sigma (lower() makes it
+# final ς at a word's end, casefold() always σ), as a regex class. Text without them folds alike; the
+# PostgreSQL 17 duplicate arm reads only text holding one. A test keeps it equal to Python's own tables.
+_CASEFOLD_SENSITIVE_CLASS = "[" + (
+    "\u00b5\u00df\u0149\u017f\u01f0\u0345\u0390\u03a3\u03b0\u03c2\u03d0-\u03d1\u03d5-\u03d6"
+    "\u03f0-\u03f1\u03f5\u0587\u13a0-\u13f5\u13f8-\u13fd\u1c80-\u1c88\u1e96-\u1e9b\u1e9e\u1f50\u1f52"
+    "\u1f54\u1f56\u1f80-\u1faf\u1fb2-\u1fb4\u1fb6-\u1fb7\u1fbc\u1fbe\u1fc2-\u1fc4\u1fc6-\u1fc7\u1fcc"
+    "\u1fd2-\u1fd3\u1fd6-\u1fd7\u1fe2-\u1fe4\u1fe6-\u1fe7\u1ff2-\u1ff4\u1ff6-\u1ff7\u1ffc"
+    "\uab70-\uabbf\ufb00-\ufb06\ufb13-\ufb17"
+) + "]"
+
+
 def _duplicate_candidate_album_ids_for_keys_sql() -> str:
+    casefold_sensitive = _CASEFOLD_SENSITIVE_CLASS
     physical_container = _physical_album_container_sql("files.private_path")
     return f"""
         with target_library as materialized (
@@ -6040,14 +6053,21 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             on albums.library_id = target_library.library_id
           where albums.album_key = any(%(album_keys)s::text[])
         ), requested_identities as materialized (
-          select distinct
+          select
             requested_albums.library_id,
             library.duplicate_identity_text(files.scan_file_album_artist)
               as album_artist_identity,
             library.duplicate_identity_text(files.scan_file_album)
               as album_identity,
             library.duplicate_identity_year(files.scan_file_year)
-              as album_year
+              as album_year,
+            -- PostgreSQL 17 arm only: whether this identity's text holds a
+            -- character casefold() and lower() treat differently.
+            bool_or(
+              current_setting('server_version_num')::integer < 180000
+              and (files.scan_file_album_artist ~ '{casefold_sensitive}'
+                   or files.scan_file_album ~ '{casefold_sensitive}')
+            ) as pg17_casefold_sensitive
           from requested_albums
           join library.local_tracks tracks
             on tracks.library_id = requested_albums.library_id
@@ -6060,6 +6080,22 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             and library.duplicate_identity_text(files.scan_file_album) <> ''
             and library.duplicate_identity_year(files.scan_file_year)
               between 1000 and 9999
+          group by 1, 2, 3, 4
+        ), pg17_casefold_files as materialized (
+          -- PostgreSQL 17 only (one-time filter on 18): the casefold-sensitive
+          -- files, found by a regex over their text before any per-row year
+          -- function runs, read once per statement.
+          select
+            files.track_id,
+            files.library_root_id,
+            {physical_container} as folder,
+            library.duplicate_identity_year(files.scan_file_year) as album_year
+          from library.local_track_files files
+          where current_setting('server_version_num')::integer < 180000
+            and files.scan_cache_stale is false
+            and files.scan_file_entry_is_object is true
+            and (files.scan_file_album ~ '{casefold_sensitive}'
+                 or files.scan_file_album_artist ~ '{casefold_sensitive}')
         ), identity_files as (
           select
             requested_identities.library_id,
@@ -6082,13 +6118,16 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
            and files.scan_file_entry_is_object is true
           union all
           -- CI-only path for PostgreSQL 17; delete this arm when CI runs
-          -- PostgreSQL 18 (P9-CI-024). Below 18 duplicate_identity_text folds
-          -- with lower(), not casefold(), so non-ASCII identities (ß/ss, ς/σ,
-          -- ligatures) can differ from Python's rule. Within the requested
-          -- year, every file is a candidate when the requested identity is
-          -- non-ASCII, else every file with non-ASCII album or album-artist
-          -- text. A superset: callers accept no candidate without Python's
-          -- exact identity check. pg17_superset counts these rows apart.
+          -- PostgreSQL 18 (P9-CI-024), with the next one, pg17_casefold_files
+          -- and pg17_casefold_sensitive. Below 18
+          -- duplicate_identity_text folds with lower(), not casefold(), so
+          -- identities holding a character the two treat differently (ß/ss,
+          -- final ς/σ, ligatures: the class below) can differ from Python's
+          -- rule; any other text folds alike. Within the requested year, every
+          -- file is a candidate when the requested identity holds such a
+          -- character, else every file whose album or album-artist text does.
+          -- A superset: callers accept no candidate without Python's exact
+          -- identity check. pg17_superset counts these rows apart.
           select
             requested_identities.library_id,
             requested_identities.album_artist_identity,
@@ -6099,22 +6138,31 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             {physical_container} as folder,
             true as pg17_superset
           from requested_identities
-          join library.local_track_files files
-            on library.duplicate_identity_year(files.scan_file_year)
-                 = requested_identities.album_year
-           and files.scan_cache_stale is false
-           and files.scan_file_entry_is_object is true
-          where current_setting('server_version_num')::integer < 180000
-            and (
-              octet_length(requested_identities.album_artist_identity)
-                <> length(requested_identities.album_artist_identity)
-              or octet_length(requested_identities.album_identity)
-                <> length(requested_identities.album_identity)
-              or octet_length(files.scan_file_album_artist)
-                <> length(files.scan_file_album_artist)
-              or octet_length(files.scan_file_album)
-                <> length(files.scan_file_album)
-            )
+          cross join lateral (
+            -- Only for a casefold-sensitive requested identity (a one-time
+            -- filter: no scan otherwise).
+            select files.track_id, files.library_root_id, files.private_path
+            from library.local_track_files files
+            where requested_identities.pg17_casefold_sensitive
+              and library.duplicate_identity_year(files.scan_file_year)
+                    = requested_identities.album_year
+              and files.scan_cache_stale is false
+              and files.scan_file_entry_is_object is true
+            offset 0
+          ) files
+          union all
+          select
+            requested_identities.library_id,
+            requested_identities.album_artist_identity,
+            requested_identities.album_identity,
+            requested_identities.album_year,
+            files.track_id,
+            files.library_root_id,
+            files.folder,
+            true as pg17_superset
+          from requested_identities
+          join pg17_casefold_files files
+            on files.album_year = requested_identities.album_year
         ), candidate_containers as materialized (
           select distinct
             identity_files.album_artist_identity,

@@ -10323,6 +10323,156 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › version exception: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › version exception: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › album exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › album exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › file exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › file exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › version exception: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › version exception: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › album exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › album exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › file exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › file exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/triggerAnchorSurface.spec.js",
     "case": "nested calendar dates remain clickable beyond the parent panel clipping boundary",
     "profile": null,

@@ -26606,6 +26606,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (problematicAlbum && !listed.placed && !searched.placed) listed.items.push(problematicAlbum);
     state.utility.problematicFiles = listed.items;
     state.utility.problematicServerSearchItems = searched.items;
+    rememberProblematicServerSearchAnswer();
   }
   if (reconcileSelection && mutationOwnsView) {
     const items = getFilteredProblematicAlbums();
@@ -27978,6 +27979,18 @@ function problematicServerQuery() {
   return { q, reasons, key };
 }
 
+// Reopening a search reuses its answer as the list now shows it, not as the server first sent it.
+function rememberProblematicServerSearchAnswer() {
+  const key = state.utility.problematicServerSearchSettledQuery;
+  state.utility.problematicServerSearchCache = key ? {
+    [key]: {
+      items: state.utility.problematicServerSearchItems,
+      hasMore: state.utility.problematicServerSearchHasMore,
+      nextCursor: state.utility.problematicServerSearchNextCursor,
+    },
+  } : {};
+}
+
 function getFilteredProblematicAlbums() {
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
   // A search or filter shows the server's matches with the loaded rows that match; while its request is
@@ -29178,18 +29191,7 @@ function restoreProblematicAlbumSnapshot(operation) {
   const album = operation?.snapshot?.album;
   if (!album) return;
   const albumKey = String(album.key || '');
-  const items = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles.slice()
-    : [];
-  const currentIndex = items.findIndex((item) => String(item?.key || '') === albumKey);
-  if (currentIndex >= 0) items.splice(currentIndex, 1);
-  const insertionIndex = Math.min(
-    Math.max(Number(operation.snapshot.albumIndex || 0), 0),
-    items.length,
-  );
-  items.splice(insertionIndex, 0, cloneProblemExclusionValue(album));
-
-  let projectedAlbum = items[insertionIndex];
+  let projectedAlbum = cloneProblemExclusionValue(album);
   const journal = getProblemExclusionMutationJournal();
   const acknowledgedSuccessors = (journal.acknowledgedCreates || [])
     .filter((candidate) => (
@@ -29211,9 +29213,20 @@ function restoreProblematicAlbumSnapshot(operation) {
         candidate.items,
       ).updatedAlbum;
     });
-  if (projectedAlbum) items[insertionIndex] = projectedAlbum;
-  else items.splice(insertionIndex, 1);
-  state.utility.problematicFiles = items;
+  // Back everywhere it was listed: the loaded pages, the search or filter results, or both.
+  const { albumIndex = -1, searchIndex = -1 } = operation.snapshot;
+  const placements = [
+    ['problematicFiles', searchIndex < 0 ? Math.max(albumIndex, 0) : albumIndex],
+    ['problematicServerSearchItems', searchIndex],
+  ];
+  for (const [owner, index] of placements) {
+    if (index < 0) continue;
+    const items = (Array.isArray(state.utility[owner]) ? state.utility[owner] : [])
+      .filter((item) => String(item?.key || '') !== albumKey);
+    if (projectedAlbum) items.splice(Math.min(index, items.length), 0, projectedAlbum);
+    state.utility[owner] = items;
+  }
+  rememberProblematicServerSearchAnswer();
   state.utility.selectedProblematicKey = projectedAlbum
     ? String(operation.snapshot.selectedProblematicKey || '')
     : '';
@@ -29298,6 +29311,7 @@ function applyOptimisticProblemExclusionCard(album, updatedAlbum) {
       : current.filter((item) => String(item?.key || '') !== albumKey);
   }
   if (!listed) return;
+  rememberProblematicServerSearchAnswer();
   if (!updatedAlbum && String(state.utility.selectedProblematicKey || '') === albumKey) {
     state.utility.selectedProblematicKey = '';
   }
@@ -29362,6 +29376,9 @@ async function queueProblemExclusionCreate({ album, items }) {
   const albumIndex = (state.utility.problematicFiles || []).findIndex((item) => (
     String(item?.key || '') === String(album?.key || '')
   ));
+  const searchIndex = (state.utility.problematicServerSearchItems || []).findIndex((item) => (
+    String(item?.key || '') === String(album?.key || '')
+  ));
   const projection = projectProblemExclusionFromAlbum(album, selectedItems);
   const operation = beginProblemExclusionMutation({
     kind: 'create',
@@ -29369,6 +29386,7 @@ async function queueProblemExclusionCreate({ album, items }) {
     snapshot: {
       album,
       albumIndex,
+      searchIndex,
       selectedProblematicKey: state.utility.selectedProblematicKey,
       ruleItems: collectProblemIgnoreItems(currentRule)
         .filter((item) => selectedKeys.has(String(item?.row_key || ''))),
@@ -33748,13 +33766,7 @@ async function searchProblematicFilesOnServer(query) {
   state.utility.problematicServerSearchItems = Array.isArray(data?.items) ? data.items : [];
   state.utility.problematicServerSearchHasMore = data?.has_more === true;
   state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
-  state.utility.problematicServerSearchCache = {
-    [query.key]: {
-      items: state.utility.problematicServerSearchItems,
-      hasMore: state.utility.problematicServerSearchHasMore,
-      nextCursor: state.utility.problematicServerSearchNextCursor,
-    },
-  };
+  rememberProblematicServerSearchAnswer();
   if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
 }
 
@@ -33784,6 +33796,7 @@ async function loadNextProblematicServerSearchPage() {
         : [...state.utility.problematicServerSearchItems, ...additions];
       state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
       state.utility.problematicServerSearchHasMore = data?.has_more === true;
+      rememberProblematicServerSearchAnswer();
       if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
       return additions;
     } finally {

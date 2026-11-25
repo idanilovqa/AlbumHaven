@@ -1978,6 +1978,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (problematicAlbum && !listed.placed && !searched.placed) listed.items.push(problematicAlbum);
     state.utility.problematicFiles = listed.items;
     state.utility.problematicServerSearchItems = searched.items;
+    rememberProblematicServerSearchAnswer();
   }
   if (reconcileSelection && mutationOwnsView) {
     const items = getFilteredProblematicAlbums();
@@ -3348,6 +3349,18 @@ function problematicServerQuery() {
   const reasons = Array.from(new Set(state.utility.selectedProblemFilters || [])).sort();
   const key = q || reasons.length ? JSON.stringify([q.toLocaleLowerCase(), reasons]) : '';
   return { q, reasons, key };
+}
+
+// Reopening a search reuses its answer as the list now shows it, not as the server first sent it.
+function rememberProblematicServerSearchAnswer() {
+  const key = state.utility.problematicServerSearchSettledQuery;
+  state.utility.problematicServerSearchCache = key ? {
+    [key]: {
+      items: state.utility.problematicServerSearchItems,
+      hasMore: state.utility.problematicServerSearchHasMore,
+      nextCursor: state.utility.problematicServerSearchNextCursor,
+    },
+  } : {};
 }
 
 function getFilteredProblematicAlbums() {

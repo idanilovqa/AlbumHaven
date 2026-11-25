@@ -445,13 +445,7 @@ async function searchProblematicFilesOnServer(query) {
   state.utility.problematicServerSearchItems = Array.isArray(data?.items) ? data.items : [];
   state.utility.problematicServerSearchHasMore = data?.has_more === true;
   state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
-  state.utility.problematicServerSearchCache = {
-    [query.key]: {
-      items: state.utility.problematicServerSearchItems,
-      hasMore: state.utility.problematicServerSearchHasMore,
-      nextCursor: state.utility.problematicServerSearchNextCursor,
-    },
-  };
+  rememberProblematicServerSearchAnswer();
   if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
 }
 
@@ -481,6 +475,7 @@ async function loadNextProblematicServerSearchPage() {
         : [...state.utility.problematicServerSearchItems, ...additions];
       state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
       state.utility.problematicServerSearchHasMore = data?.has_more === true;
+      rememberProblematicServerSearchAnswer();
       if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
       return additions;
     } finally {

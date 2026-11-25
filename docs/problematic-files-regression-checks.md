@@ -61,6 +61,10 @@ scrolling. Retain the approved readiness
 budget of 1000 ms plus 200 ms grace and all other existing benchmark budgets.
 A shell appearing without usable content is not readiness.
 
+Known limit: a refresh of an open list rereads at most its first 200 rows in one
+request. Rows the user had scrolled in beyond that are dropped and load again
+by scrolling.
+
 The CI change-impact contract selects both targets for PF dependencies. Update
 that mapping and its tests whenever ownership moves. No setup error, skipped
 suite, narrower test selection, or repeated run replaces a failed measurement.

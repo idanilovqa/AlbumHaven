@@ -16655,6 +16655,7 @@ function buildNonAlbumTrackLoadingMarkup() {
     collapsibleGroups: true,
     ariaLabel: 'Loading loose tracks',
     idPrefix: 'loose-track-loading',
+    density: 'default',
   });
 }
 
@@ -16785,6 +16786,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
+    density: 'default',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
@@ -24482,6 +24484,8 @@ function buildAlbumTrackTableHtml(config = {}) {
   const collapsibleGroups = Boolean(config.collapsibleGroups);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
+  // Album Details keeps the approved compact rows; a page of loose tracks asks for the roomier default density.
+  const density = config.density === 'default' ? 'default' : 'compact';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const totalLength = String(config.totalLength || '').trim();
@@ -24555,7 +24559,7 @@ function buildAlbumTrackTableHtml(config = {}) {
           fullSpanContent: `<span class="album-track-table__section-title">${escapeHtml(sectionTitle)}</span>`,
         }, row] : [row];
       }),
-      density: 'compact',
+      density,
       frame: 'outline',
       overflow: 'none',
       mobile: 'preserve',
@@ -24582,7 +24586,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
-  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}" data-density="${density}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
 }
 
 function triggerAlbumTrackPlayActivation(button) {

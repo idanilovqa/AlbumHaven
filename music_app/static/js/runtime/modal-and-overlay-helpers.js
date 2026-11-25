@@ -771,6 +771,7 @@ function buildNonAlbumTrackLoadingMarkup() {
     collapsibleGroups: true,
     ariaLabel: 'Loading loose tracks',
     idPrefix: 'loose-track-loading',
+    density: 'default',
   });
 }
 
@@ -901,6 +902,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
+    density: 'default',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });

@@ -4616,6 +4616,46 @@ async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileShee
   return true;
 }
 
+// As for the navigation drawer: a keyboard open moves focus to the panel's first enabled
+// control, and closing it while focus is inside (or on its trigger) returns it to the trigger.
+function toggleCoverLookupDrawer({ fromKeyboard = false } = {}) {
+  if (state.coverLookup.drawerOpen) {
+    closeCoverLookupDrawer();
+    return;
+  }
+  state.coverLookup.drawerOpen = true;
+  ensureCoverLookupPolling();
+  loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+  renderCoverLookupDrawer();
+  if (!fromKeyboard) return;
+  Array.from(document.querySelectorAll('#cover-lookup-drawer :is(button, [href], input, select, textarea, [tabindex])'))
+    .find(control => !control.disabled && control.tabIndex >= 0 && !control.closest('[hidden], [inert]'))
+    ?.focus({ preventScroll: true });
+}
+
+function closeCoverLookupDrawer() {
+  if (!state.coverLookup.drawerOpen) return false;
+  const drawer = document.getElementById('cover-lookup-drawer');
+  const trigger = document.getElementById('cover-lookup-drawer-button');
+  const active = document.activeElement;
+  const restoreFocus = Boolean(active && (drawer?.contains(active) || active === trigger));
+  state.coverLookup.drawerOpen = false;
+  renderCoverLookupDrawer();
+  stopCoverLookupPollingIfIdle();
+  if (restoreFocus) trigger?.focus({ preventScroll: true });
+  return true;
+}
+
+function handleCoverLookupDrawerKeyDown(event) {
+  if (event.key !== 'Escape' || !state.coverLookup.drawerOpen) return false;
+  const drawer = document.getElementById('cover-lookup-drawer');
+  const trigger = document.getElementById('cover-lookup-drawer-button');
+  if (!drawer?.contains(event.target) && event.target !== trigger) return false;
+  event.preventDefault();
+  closeCoverLookupDrawer();
+  return true;
+}
+
 function restoreCoverLookupDrawerScroll() {
   if (!state.coverLookup.drawerOpen) return;
   const restore = () => {

@@ -5615,7 +5615,7 @@ function buildGalleryCardInfoHtml(config = {}) {
   const metadata = `${artist ? `<span class="gallery-card__artist"><span data-gallery-metadata-text>${escapeHtml(artist)}</span></span>` : ''}${year ? `<span class="gallery-card__year">${artist ? '· ' : ''}${escapeHtml(year)}</span>` : ''}`;
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
-    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
+    ? `<button class="album-open-trigger album-title-button" type="button" tabindex="-1" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
   return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle gallery-card__metadata">${metadata}</div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
@@ -5911,7 +5911,8 @@ function buildGalleryCardHtml(config = {}) {
   const sourceGradient = sourceCategories.length
     ? `conic-gradient(${sourceCategories.map((category, index) => `${sourceColors[category]} ${index * 100 / sourceCategories.length}% ${(index + 1) * 100 / sourceCategories.length}%`).join(', ')})`
     : 'none';
-  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
+  // The artbox trigger is the card's only Tab stop; these hover controls repeat its open action.
+  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" tabindex="-1" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
   const sourceActions = [
     sourceCategories.includes('hoard') ? sourceAction('hoard', 'Hoard', buildLibrarySourceGlyphHtml('hoard')) : '',
     sourceCategories.includes('new_arrivals') ? sourceAction('new_arrivals', 'New Arrivals', buildLibrarySourceGlyphHtml('new_arrivals')) : '',
@@ -41252,6 +41253,46 @@ async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileShee
   return true;
 }
 
+// As for the navigation drawer: a keyboard open moves focus to the panel's first enabled
+// control, and closing it while focus is inside (or on its trigger) returns it to the trigger.
+function toggleCoverLookupDrawer({ fromKeyboard = false } = {}) {
+  if (state.coverLookup.drawerOpen) {
+    closeCoverLookupDrawer();
+    return;
+  }
+  state.coverLookup.drawerOpen = true;
+  ensureCoverLookupPolling();
+  loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+  renderCoverLookupDrawer();
+  if (!fromKeyboard) return;
+  Array.from(document.querySelectorAll('#cover-lookup-drawer :is(button, [href], input, select, textarea, [tabindex])'))
+    .find(control => !control.disabled && control.tabIndex >= 0 && !control.closest('[hidden], [inert]'))
+    ?.focus({ preventScroll: true });
+}
+
+function closeCoverLookupDrawer() {
+  if (!state.coverLookup.drawerOpen) return false;
+  const drawer = document.getElementById('cover-lookup-drawer');
+  const trigger = document.getElementById('cover-lookup-drawer-button');
+  const active = document.activeElement;
+  const restoreFocus = Boolean(active && (drawer?.contains(active) || active === trigger));
+  state.coverLookup.drawerOpen = false;
+  renderCoverLookupDrawer();
+  stopCoverLookupPollingIfIdle();
+  if (restoreFocus) trigger?.focus({ preventScroll: true });
+  return true;
+}
+
+function handleCoverLookupDrawerKeyDown(event) {
+  if (event.key !== 'Escape' || !state.coverLookup.drawerOpen) return false;
+  const drawer = document.getElementById('cover-lookup-drawer');
+  const trigger = document.getElementById('cover-lookup-drawer-button');
+  if (!drawer?.contains(event.target) && event.target !== trigger) return false;
+  event.preventDefault();
+  closeCoverLookupDrawer();
+  return true;
+}
+
 function restoreCoverLookupDrawerScroll() {
   if (!state.coverLookup.drawerOpen) return;
   const restore = () => {
@@ -54403,17 +54444,13 @@ async function handleUtilityBootstrapClick(event) {
   const toggleCoverLookupDrawerButton = event.target.closest('[data-toggle-cover-lookup-drawer="1"]');
   if (toggleCoverLookupDrawerButton) {
     event.preventDefault();
-    state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
-    ensureCoverLookupPolling();
-    loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
-    renderCoverLookupDrawer();
+    toggleCoverLookupDrawer({ fromKeyboard: event.detail === 0 });
     return;
   }
 
   if (event.target.closest('[data-close-cover-lookup-drawer="1"]')) {
     event.preventDefault();
-    state.coverLookup.drawerOpen = false;
-    renderCoverLookupDrawer();
+    closeCoverLookupDrawer();
     return;
   }
 
@@ -54975,6 +55012,7 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  if (typeof handleCoverLookupDrawerKeyDown === 'function' && handleCoverLookupDrawerKeyDown(event)) return true;
   const exceptionInput = event.target?.closest?.('#tag-editor-form [data-tag-field="exception_type"]');
   const exceptionOption = event.target?.closest?.('[data-tag-editor-exception-option]');
   if (exceptionInput || exceptionOption) {

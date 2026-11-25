@@ -13358,5 +13358,263 @@
       "settings-header-gallery-structure"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "opening the notifications drawer with the keyboard moves focus into it and Escape returns it to the trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "keyboard-open-focuses-drawer",
+      "tab-within-open-drawer",
+      "escape-closes-drawer-to-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "closing the notifications drawer from its Close button by keyboard returns focus to the trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "close-button-returns-focus-to-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Escape closes a pointer-opened notifications drawer and keeps focus on its trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "escape-closes-drawer-to-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "Tab moves card to card in cards view without stopping on hover controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "one-tab-stop-per-card",
+      "no-hover-control-tab-stops"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "Tab moves card to card in covers view without stopping on hover controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "one-tab-stop-per-card",
+      "no-hover-control-tab-stops"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "a keyboard-focused card still reveals its markers, opens with Enter and offers actions with Shift+F10",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "focused-card-reveals-markers",
+      "enter-opens-focused-card",
+      "keyboard-context-menu-on-card",
+      "pointer-hover-controls-retained"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab walks each notification card, then its Retry when present, then its delete button, and Shift+Tab walks back",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-retry-delete-tab-order",
+      "no-extra-card-tab-stops",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each completed notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each completed with no covers notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each art chosen notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each failed notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each interrupted notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each canceled notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each queued notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each searching notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each downloading the chosen art notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
   }
 ]

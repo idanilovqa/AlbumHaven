@@ -5014,7 +5014,7 @@
     "expectedContracts": [
       "busy-button-spins-on-every-host"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

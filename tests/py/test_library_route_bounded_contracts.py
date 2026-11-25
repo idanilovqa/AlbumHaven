@@ -263,7 +263,7 @@ def test_relation_snapshot_contract_republishes_repaired_covers_without_probing_
         repaired_path = str(album_root / "CD1" / "1.mp3")
         committed: list[int] = []
 
-        def save_snapshot(_config, _cache_path, cache, *_args, **_kwargs):
+        def save_snapshot(_config, cache, *_args, **_kwargs):
             # The Postgres cache commit reports the album whose stray cover it repaired.
             committed.append(len(cache))
             return {"repaired_cover_entries": {repaired_path: {"cover_path": str(good), "cover_selection_origin": "automatic"}},

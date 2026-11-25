@@ -276,7 +276,7 @@ def recovery_runtime(tmp_path, monkeypatch):
             state.failed.append((intent_id, str(error)))
 
     class SnapshotAdapter:
-        def load_snapshot(self, _cache_path, _root_identity):
+        def load_snapshot(self, _root_identity):
             return state.file_cache, None, {}, None, None
 
     monkeypatch.setattr(tag_edit_intents_postgres, "PostgresTagEditIntentRepository", IntentRepository)
@@ -297,7 +297,6 @@ def recovery_runtime(tmp_path, monkeypatch):
     runtime = SimpleNamespace(
         config={
             "MUSIC_DIR": music_dir,
-            "CACHE_PATH": tmp_path / "inert-cache.json",
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
             "PERSISTENCE_BACKENDS": {"library_roots": "postgres"},
         },

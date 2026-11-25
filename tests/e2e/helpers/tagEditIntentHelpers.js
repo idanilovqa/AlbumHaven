@@ -29,8 +29,6 @@ media_root = Path(media_root_text)
 setup_config = {
     "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
     "MUSIC_DIR": media_root,
-    "CACHE_PATH": media_root.parent / "app-data" / "inert-library-cache.json",
-    "LIBRARY_ROOTS_PATH": media_root.parent / "app-data" / "inert-library-roots.json",
     "PERSISTENCE_BACKENDS": {"library_roots": PERSISTENCE_BACKEND_POSTGRES},
 }
 root_identity = library_root_cache_identity(setup_config)

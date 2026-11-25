@@ -1218,7 +1218,7 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         backend = "postgres"
 
         @staticmethod
-        def load_snapshot_strict(_cache_path, _root_identity):
+        def load_snapshot_strict(_root_identity):
             return {}, 0.0, {}, 0.0, None
 
     class FakePsycopg:

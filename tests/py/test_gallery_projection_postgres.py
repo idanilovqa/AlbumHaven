@@ -619,7 +619,6 @@ def test_gallery_preparation_cancellation_contract(monkeypatch, cancel_at):
 
 @pytest.mark.parametrize("fails", [False, True])
 def test_full_scan_refresh_scheduled_only_after_successful_commit(monkeypatch, fails):
-    from pathlib import Path
     from music_app.services import cache, gallery_projection_postgres as projection
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     order = []
@@ -635,10 +634,10 @@ def test_full_scan_refresh_scheduled_only_after_successful_commit(monkeypatch, f
     monkeypatch.setattr(projection, "schedule_gallery_projection_refresh", lambda *args, **kwargs: order.append("refresh"))
     if fails:
         with pytest.raises(RuntimeError):
-            cache.save_cache_to_disk_for_config({}, Path("unused"), {}, "root", 1)
+            cache.save_cache_to_disk_for_config({}, {}, "root", 1)
         assert order == ["commit"]
     else:
-        assert cache.save_cache_to_disk_for_config({}, Path("unused"), {}, "root", 1) == {"ready": True}
+        assert cache.save_cache_to_disk_for_config({}, {}, "root", 1) == {"ready": True}
         assert order == ["commit", "refresh"]
 
 

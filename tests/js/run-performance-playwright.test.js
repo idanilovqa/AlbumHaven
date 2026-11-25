@@ -1357,18 +1357,14 @@ test('synthetic targets keep inherited owner runtime selectors explicitly blank 
   const env = _private.applyTargetEnvOverrides({
     MUSIC_DIR: 'C:\\Users\\owner\\Music',
     MUSIC_APP_DATA_DIR: 'C:\\Users\\owner\\AppData',
-    MUSIC_CACHE_PATH: 'C:\\Users\\owner\\library-cache.json',
     MUSIC_COVER_CACHE_PATH: 'C:\\Users\\owner\\cover-cache.json',
-    MUSIC_LIBRARY_ROOTS_PATH: 'C:\\Users\\owner\\library-roots.json',
     PLAYWRIGHT_REAL_APP_URL: 'https://owner-library.example.test',
   }, overrides);
 
   for (const name of [
     'MUSIC_DIR',
     'MUSIC_APP_DATA_DIR',
-    'MUSIC_CACHE_PATH',
     'MUSIC_COVER_CACHE_PATH',
-    'MUSIC_LIBRARY_ROOTS_PATH',
     'PLAYWRIGHT_REAL_APP_URL',
   ]) {
     assert.equal(env[name], '', name);
@@ -1382,9 +1378,7 @@ test('one-off synthetic performance launch strips owner paths before spawning th
   const inheritedNames = [
     'MUSIC_DIR',
     'MUSIC_APP_DATA_DIR',
-    'MUSIC_CACHE_PATH',
     'MUSIC_COVER_CACHE_PATH',
-    'MUSIC_LIBRARY_ROOTS_PATH',
     'PLAYWRIGHT_REAL_APP_URL',
   ];
   const previousEnvironment = new Map(

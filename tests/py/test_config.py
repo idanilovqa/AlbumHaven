@@ -12,7 +12,6 @@ from config import (
     PERSISTENCE_SEAM_IDS,
     _parse_env_value,
     _resolve_data_dir,
-    _resolve_data_file_path,
     build_persistence_backend_config,
     persistence_backend_for,
 )
@@ -120,24 +119,6 @@ def test_resolve_data_dir_falls_back_when_preferred_directory_is_blocked(tmp_pat
 
     assert resolved == fallback_dir
     assert fallback_dir.is_dir()
-
-
-def test_resolve_data_file_path_falls_back_when_preferred_file_is_inaccessible(tmp_path, monkeypatch):
-    preferred_file = (tmp_path / "blocked" / "library_cache.json").resolve()
-    fallback_file = (tmp_path / "fallback" / "library_cache.json").resolve()
-    original_exists = Path.exists
-
-    def raise_permission_error(self: Path) -> bool:
-        if self == preferred_file:
-            raise PermissionError("blocked")
-        return original_exists(self)
-
-    monkeypatch.setattr(Path, "exists", raise_permission_error)
-
-    resolved = _resolve_data_file_path(preferred_file, fallback_file, kind="library cache")
-
-    assert resolved == fallback_file
-    assert fallback_file.parent.is_dir()
 
 
 def test_runtime_persistence_backend_config_defaults_all_seams_to_postgres():

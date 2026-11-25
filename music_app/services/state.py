@@ -757,7 +757,6 @@ def cover_file_cache_snapshot_for_state(
 
     persisted, _last_scan, _relations, _relations_built, error = (
         select_scan_cache_adapter(config).load_snapshot(
-            Path(config["CACHE_PATH"]),
             library_root_cache_identity(config),
         )
     )
@@ -898,7 +897,6 @@ def refresh_relation_views_for_state(
         nonlocal repaired_cover_published
         committed_relation_state = save_cache_to_disk_for_config(
             config,
-            config["CACHE_PATH"],
             dict(target_state.get("file_cache") or {}),
             library_root_cache_identity(config),
             float(target_state.get("last_scan") or 0.0),

@@ -48,17 +48,13 @@ def test_root_linkage_requirement_fails_closed_with_check_violation_sqlstate():
     assert "library_id=%s candidate_count=%s method=%s" in sql
 
 
-def test_production_scan_and_import_upserts_require_and_store_root_foreign_key():
-    scan_sql = _normalized_sql(scan_cache_persistence._upsert_local_track_file_sql())
+def test_production_scan_upsert_requires_and_stores_root_foreign_key():
+    sql = _normalized_sql(scan_cache_persistence._upsert_local_track_file_sql())
 
-    from scripts import migrate_app_data_to_postgres
-
-    import_sql = _normalized_sql(migrate_app_data_to_postgres._upsert_local_track_file_sql())
-    for sql in (scan_sql, import_sql):
-        assert "insert into library.local_track_files" in sql
-        assert "track_id, library_root_id," in sql
-        assert "library.require_local_track_file_root_id(" in sql
-        assert "library_root_id = excluded.library_root_id" in sql
+    assert "insert into library.local_track_files" in sql
+    assert "track_id, library_root_id," in sql
+    assert "library.require_local_track_file_root_id(" in sql
+    assert "library_root_id = excluded.library_root_id" in sql
 
 
 def test_scan_reload_uses_same_library_active_root_authority():

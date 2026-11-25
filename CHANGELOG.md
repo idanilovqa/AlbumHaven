@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.54 - 2026-11-25
+
+- The unused library cache and library roots file settings (`MUSIC_CACHE_PATH`, `MUSIC_LIBRARY_ROOTS_PATH`) are removed; the app has kept that data in the database for several releases. `MUSIC_COVER_CACHE_PATH` stays for the one-time cover cache import.
+- The legacy JSON-to-Postgres import script (`scripts/migrate_app_data_to_postgres.py`) is retired. Upgrade through an earlier release first if you still have pre-Postgres JSON data.
+
 ## 0.11.53 - 2026-11-25
 
 - Android key attestation reads revoked certificate serials from indexed database rows instead of reading the configured status list file on every attestation. A server with a configured status list imports that file once at start-up, with logged progress, and never reads it again; until the import finishes, attestation answers "attestation unavailable" without spending the challenge. `scripts/android_attestation_revocations.py` refreshes the list (`import`) and adds or removes the operator's own revocations (`add`, `remove`).

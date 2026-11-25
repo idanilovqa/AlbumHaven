@@ -230,7 +230,7 @@ def test_in_memory_relation_build_contract_runs_once_across_production_hydration
     for index in range(20):
         path = str(tmp_path / f"Artist {index:02d}" / "Album" / "01.mp3")
         file_cache[path] = {"path": path, "title": "One", "album": "Album", "album_artist": f"Artist {index:02d}"}
-    config = {"MUSIC_DIR": tmp_path, "CACHE_PATH": tmp_path / "cache.json", "IMAGE_EXTENSIONS": {".jpg"}}
+    config = {"MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}}
 
     def run(trigger_count: int) -> OperationCounts:
         builds[0] = 0

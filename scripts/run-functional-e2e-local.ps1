@@ -307,9 +307,7 @@ $environmentKeys = @(
     'PLAYWRIGHT_PYTHON',
     'MUSIC_DIR',
     'MUSIC_APP_DATA_DIR',
-    'MUSIC_CACHE_PATH',
     'MUSIC_COVER_CACHE_PATH',
-    'MUSIC_LIBRARY_ROOTS_PATH',
     'PLAYWRIGHT_REAL_APP_URL'
 )
 
@@ -370,9 +368,7 @@ foreach ($selectedShard in $selectedShards) {
         $env:PLAYWRIGHT_PYTHON = $python
         Remove-Item Env:MUSIC_DIR -ErrorAction SilentlyContinue
         Remove-Item Env:MUSIC_APP_DATA_DIR -ErrorAction SilentlyContinue
-        Remove-Item Env:MUSIC_CACHE_PATH -ErrorAction SilentlyContinue
         Remove-Item Env:MUSIC_COVER_CACHE_PATH -ErrorAction SilentlyContinue
-        Remove-Item Env:MUSIC_LIBRARY_ROOTS_PATH -ErrorAction SilentlyContinue
         Remove-Item Env:PLAYWRIGHT_REAL_APP_URL -ErrorAction SilentlyContinue
 
         Write-Host 'Loading the isolated PostgreSQL fixture projection...'

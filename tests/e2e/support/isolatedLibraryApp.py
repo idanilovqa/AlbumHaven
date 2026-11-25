@@ -2644,13 +2644,11 @@ def configure_isolated_environment(
     environment = {
         "MUSIC_DIR": str(library_root),
         "MUSIC_APP_DATA_DIR": str(app_data_dir),
-        "MUSIC_CACHE_PATH": str(app_data_dir / "inert-library-cache.json"),
         "MUSIC_COVER_CACHE_PATH": str(app_data_dir / "inert-cover-cache.json"),
         "MUSIC_BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS": (
             "43200" if use_seeded_cover_misses else "0"
         ),
         "MUSIC_BULK_COVER_JOB_WORKERS": "4",
-        "MUSIC_LIBRARY_ROOTS_PATH": str(app_data_dir / "inert-library-roots.json"),
         "ALBUM_HAVEN_APP_DATABASE_URL": runtime_database_url,
         "ALBUM_HAVEN_LIBRARY_BROWSE_BASES": json.dumps([str(settings_browse_base)]),
         "ALBUM_HAVEN_PERSISTENCE_DEFAULT": "postgres",
@@ -3082,8 +3080,6 @@ def persist_fixture_inventory(
     setup_config: dict[str, object] = {
         "ALBUM_HAVEN_APP_DATABASE_URL": setup_database_url,
         "MUSIC_DIR": library_root.resolve(strict=False),
-        "CACHE_PATH": library_root.parent / "app-data" / "inert-library-cache.json",
-        "LIBRARY_ROOTS_PATH": library_root.parent / "app-data" / "inert-library-roots.json",
         "PERSISTENCE_BACKENDS": {
             "library_roots": PERSISTENCE_BACKEND_POSTGRES,
             "scan_cache": PERSISTENCE_BACKEND_POSTGRES,
@@ -3103,7 +3099,6 @@ def persist_fixture_inventory(
     )
     root_identity = library_root_cache_identity(setup_config)
     PostgresScanCacheAdapter(setup_config).save_snapshot(
-        Path(str(setup_config["CACHE_PATH"])),
         file_cache,
         root_identity,
         time.time(),
@@ -5656,7 +5651,7 @@ def assert_production_runtime_configuration(
             raise RuntimeError(
                 f"Isolated E2E requires Postgres {seam_id} persistence; got {selection!r}."
             )
-    for key in ("MUSIC_DIR", "DATA_DIR", "CACHE_PATH", "COVER_CACHE_PATH", "LIBRARY_ROOTS_PATH"):
+    for key in ("MUSIC_DIR", "DATA_DIR", "COVER_CACHE_PATH"):
         resolved = Path(str(config.get(key) or "")).expanduser().resolve(strict=False)
         if key == "MUSIC_DIR" and fixture_media_root is not None:
             if resolved != fixture_media_root.resolve(strict=True):

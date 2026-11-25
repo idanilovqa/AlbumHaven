@@ -16,9 +16,7 @@ def _apply_isolated_environment() -> str:
     temp_root = tempfile.mkdtemp(prefix="album-haven-cover-lookup-diagnostic-")
     temp_root_path = Path(temp_root)
     os.environ["MUSIC_APP_DATA_DIR"] = str(temp_root_path / "data")
-    os.environ["MUSIC_CACHE_PATH"] = str(temp_root_path / "data" / "library_cache.json")
     os.environ["MUSIC_COVER_CACHE_PATH"] = str(temp_root_path / "data" / "cover_search_cache.json")
-    os.environ["MUSIC_LIBRARY_ROOTS_PATH"] = str(temp_root_path / "data" / "library_roots.json")
     return temp_root
 
 
@@ -107,8 +105,6 @@ def main() -> int:
         "temp_root": isolated_root,
         "data_dir": str(Config.DATA_DIR),
         "cover_cache_path": str(Config.COVER_CACHE_PATH),
-        "library_cache_path": str(Config.CACHE_PATH),
-        "library_roots_path": str(Config.LIBRARY_ROOTS_PATH),
     }
 
     rendered_json = json.dumps(report, indent=2, ensure_ascii=False)

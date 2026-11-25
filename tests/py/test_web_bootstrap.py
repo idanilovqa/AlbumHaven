@@ -603,9 +603,7 @@ def test_index_fails_loudly_when_postgres_browse_is_unavailable_without_file_fal
     monkeypatch.setattr(web_asgi, "load_json_file", fail_json_load, raising=False)
     monkeypatch.setattr(web_asgi.state_service, "hydrate_library_state_for_config", fail_hydrate)
 
-    cache_path = tmp_path / "library_cache.json"
-    asgi_app.state.config["CACHE_PATH"] = cache_path
-    bootstrap_path = cache_path.with_name("library_cache.bootstrap.json")
+    bootstrap_path = tmp_path / "library_cache.bootstrap.json"
     bootstrap_path.write_text(
         json.dumps(
             {
@@ -927,9 +925,7 @@ def test_index_surface_albums_ignores_cached_root_startup_preview_when_postgres_
         ),
     )
 
-    cache_path = tmp_path / "library_cache.json"
-    asgi_app.state.config["CACHE_PATH"] = cache_path
-    bootstrap_path = cache_path.with_name("library_cache.bootstrap.json")
+    bootstrap_path = tmp_path / "library_cache.bootstrap.json"
     bootstrap_path.write_text(
         json.dumps(
             {

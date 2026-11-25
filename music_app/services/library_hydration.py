@@ -304,10 +304,7 @@ def hydrate_library_state_from_disk(
         if adapter_was_selected or strict_scan_cache_load
         else scan_cache_adapter.load_snapshot
     )
-    file_cache, disk_last_scan, relation_views, relations_last_built, disk_error = load_snapshot(
-        config["CACHE_PATH"],
-        root_identity,
-    )
+    file_cache, disk_last_scan, relation_views, relations_last_built, disk_error = load_snapshot(root_identity)
     if shared_browse and (
         disk_error or not file_cache
         or not relation_projection_structure_complete(relation_views)
@@ -321,7 +318,7 @@ def hydrate_library_state_from_disk(
         _record_hydration_file_error(
             record_file_error,
             "Library scan cache load failed",
-            path=config["CACHE_PATH"],
+            path="postgres scan cache",
             error=RuntimeError(disk_error),
         )
     library_state["last_scan"] = disk_last_scan
@@ -373,7 +370,6 @@ def hydrate_library_state_from_disk(
         if ensure_relations and relations_changed:
             snapshot_options["rebuild_relation_projection"] = True
         committed_relations = scan_cache_adapter.save_snapshot(
-            config["CACHE_PATH"],
             sanitized_file_cache,
             root_identity,
             disk_last_scan,
@@ -392,7 +388,6 @@ def hydrate_library_state_from_disk(
     elif validate_cache and len(sanitized_file_cache) != len(file_cache):
         save_cache_to_disk_for_config(
             config,
-            config["CACHE_PATH"],
             sanitized_file_cache,
             root_identity,
             disk_last_scan,

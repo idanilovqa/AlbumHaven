@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 import threading
 
-from music_app.services.json_files import load_json_file
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
 
@@ -41,16 +40,6 @@ def _cache_rebase_comparison_value(key: str, value: object) -> object:
     if key in {"year", "track_number", "disc_number", "total_discs"} and value is not _MISSING_CACHE_FIELD:
         return str(value or "").strip()
     return value
-
-
-def _cache_updates_path(cache_path: Path) -> Path:
-    return cache_path.with_name(f"{cache_path.stem}.updates{cache_path.suffix}")
-
-
-def _payload_matches_identity(payload: dict[str, object], root_identity: object) -> bool:
-    if isinstance(root_identity, Path):
-        return payload.get("music_root") == str(root_identity)
-    return payload.get("library_root_identity") == str(root_identity)
 
 
 def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
@@ -253,44 +242,8 @@ def _select_runtime_scan_cache_adapter(config: dict[str, object]):
     return select_scan_cache_adapter(config)
 
 
-def _load_cache_snapshot_from_file(
-    cache_path: Path,
-    root_identity: object,
-) -> tuple[dict[str, dict[str, object]], float, dict[str, object], float, str | None]:
-    if not cache_path.exists():
-        return {}, 0.0, {}, 0.0, None
-    try:
-        payload = load_json_file(cache_path, default={}, malformed="raise")
-        if not _payload_matches_identity(payload, root_identity):
-            return {}, 0.0, {}, 0.0, None
-        raw_files = payload.get("files", {})
-        file_cache = {path_str: deserialize_file_entry(entry) for path_str, entry in raw_files.items()}
-        relation_views = deserialize_relation_views(payload.get("relation_views"))
-        relations_last_built = float(payload.get("relations_last_built", 0.0) or 0.0)
-        updates_path = _cache_updates_path(cache_path)
-        if updates_path.exists():
-            try:
-                updates_payload = load_json_file(updates_path, default={}, malformed="raise")
-                raw_updates = updates_payload.get("files", {})
-                for path_str, entry in raw_updates.items():
-                    file_cache[path_str] = deserialize_file_entry(entry)
-            except Exception:
-                pass
-        return file_cache, float(payload.get("last_scan", 0.0)), relation_views, relations_last_built, None
-    except Exception as exc:
-        return {}, 0.0, {}, 0.0, f"Could not read cache file: {exc}"
-
-
-def load_cache_snapshot_from_disk(
-    cache_path: Path,
-    root_identity: object,
-) -> tuple[dict[str, dict[str, object]], float, dict[str, object], float, str | None]:
-    return _load_cache_snapshot_from_file(cache_path, root_identity)
-
-
 def save_cache_to_disk_for_config(
     config: dict[str, object],
-    cache_path: Path,
     file_cache: dict[str, dict[str, object]],
     root_identity: object,
     last_scan: float,
@@ -335,7 +288,6 @@ def save_cache_to_disk_for_config(
         }
     adapter = _select_runtime_scan_cache_adapter(config)
     result = adapter.save_snapshot(
-        cache_path,
         file_cache,
         root_identity,
         last_scan,

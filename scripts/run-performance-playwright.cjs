@@ -55,9 +55,7 @@ const GENERATED_ISOLATED_FIXTURE_MODE = 'generated-isolated';
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
   'MUSIC_DIR',
   'MUSIC_APP_DATA_DIR',
-  'MUSIC_CACHE_PATH',
   'MUSIC_COVER_CACHE_PATH',
-  'MUSIC_LIBRARY_ROOTS_PATH',
   'PLAYWRIGHT_REAL_APP_URL',
 ]);
 const LIVE_COVER_PROVIDER_DOMAIN_SUFFIXES = Object.freeze([
@@ -2314,9 +2312,7 @@ function buildSyntheticFixtureIsolationEnv(target) {
   return {
     MUSIC_DIR: '',
     MUSIC_APP_DATA_DIR: '',
-    MUSIC_CACHE_PATH: '',
     MUSIC_COVER_CACHE_PATH: '',
-    MUSIC_LIBRARY_ROOTS_PATH: '',
     PLAYWRIGHT_REAL_APP_URL: '',
   };
 }

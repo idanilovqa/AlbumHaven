@@ -179,19 +179,6 @@ def _resolve_data_dir(preferred_path: Path) -> Path:
         return _ensure_usable_directory(fallback_path)
 
 
-def _resolve_data_file_path(preferred_path: Path, fallback_path: Path, *, kind: str) -> Path:
-    resolved_preferred = _resolved_path(preferred_path)
-    try:
-        _ensure_usable_directory(resolved_preferred.parent)
-        if resolved_preferred.exists() and not resolved_preferred.is_file():
-            raise IsADirectoryError(resolved_preferred)
-        return resolved_preferred
-    except (FileExistsError, PermissionError, OSError) as exc:
-        resolved_fallback = _resolved_path(fallback_path)
-        _warn_path_fallback(kind, resolved_preferred, resolved_fallback, exc)
-        _ensure_usable_directory(resolved_fallback.parent)
-        return resolved_fallback
-
 def get_default_data_dir() -> Path:
     if sys.platform.startswith("win"):
         local_appdata = os.environ.get("LOCALAPPDATA")
@@ -221,15 +208,8 @@ class Config:
     _configured_music_dir = str(os.environ.get("MUSIC_DIR") or "").strip()
     MUSIC_DIR = _resolved_path(Path(_configured_music_dir)) if _configured_music_dir else None
     DATA_DIR = _resolve_data_dir(Path(os.environ.get("MUSIC_APP_DATA_DIR", str(get_default_data_dir()))))
-    CACHE_PATH = _resolve_data_file_path(
-        Path(os.environ.get("MUSIC_CACHE_PATH", str(DATA_DIR / "library_cache.json"))),
-        DATA_DIR / "library_cache.json",
-        kind="library cache",
-    )
-    COVER_CACHE_PATH = _resolve_data_file_path(
-        Path(os.environ.get("MUSIC_COVER_CACHE_PATH", str(DATA_DIR / "cover_search_cache.json"))),
-        DATA_DIR / "cover_search_cache.json",
-        kind="cover cache",
+    COVER_CACHE_PATH = _resolved_path(
+        Path(os.environ.get("MUSIC_COVER_CACHE_PATH", str(DATA_DIR / "cover_search_cache.json")))
     )
     BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS = max(
         0.0,
@@ -238,11 +218,6 @@ class Config:
     BULK_COVER_JOB_WORKERS = max(
         1,
         int(os.environ.get("MUSIC_BULK_COVER_JOB_WORKERS", "1")),
-    )
-    LIBRARY_ROOTS_PATH = _resolve_data_file_path(
-        Path(os.environ.get("MUSIC_LIBRARY_ROOTS_PATH", str(DATA_DIR / "library_roots.json"))),
-        DATA_DIR / "library_roots.json",
-        kind="library roots",
     )
     CACHE_MAX_AGE_SECONDS = int(os.environ.get("MUSIC_CACHE_MAX_AGE_SECONDS", "0"))
     SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav"}

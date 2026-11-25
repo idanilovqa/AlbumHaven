@@ -8225,7 +8225,6 @@ def test_postgres_search_payload_does_not_fall_back_to_runtime_cache_relation_vi
     repository = PostgresLibraryBrowseRepository(
         {
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
-            "CACHE_PATH": r"C:\cache\library_cache.json",
         },
         connect=lambda _database_url: FakeConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),

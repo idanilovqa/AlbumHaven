@@ -120,12 +120,11 @@ class StructuralTagEditDestinationConflict(RuntimeError):
 class ScanCacheAdapter(Protocol):
     backend: str
 
-    def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
+    def load_snapshot(self, root_identity: object) -> ScanCacheSnapshot:
         ...
 
     def save_snapshot(
         self,
-        cache_path: Path,
         file_cache: dict[str, dict[str, object]],
         root_identity: object,
         last_scan: float,
@@ -254,9 +253,9 @@ class PostgresScanCacheAdapter:
             return 0.0
         return _float_or_zero(payload.get("last_scan"))
 
-    def load_snapshot(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
+    def load_snapshot(self, root_identity: object) -> ScanCacheSnapshot:
         try:
-            return self.load_snapshot_strict(cache_path, root_identity)
+            return self.load_snapshot_strict(root_identity)
         except Exception as exc:
             return {}, 0.0, {}, 0.0, f"Could not read Postgres scan cache: {exc}"
 
@@ -738,8 +737,7 @@ class PostgresScanCacheAdapter:
                 "new_track_paths": new_track_paths,
             }
 
-    def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
-        del cache_path
+    def load_snapshot_strict(self, root_identity: object) -> ScanCacheSnapshot:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             snapshot_row = _first_row(connection.execute(_load_scan_snapshot_sql()))
@@ -1832,7 +1830,6 @@ class PostgresScanCacheAdapter:
 
     def save_snapshot(
         self,
-        cache_path: Path,
         file_cache: dict[str, dict[str, object]],
         root_identity: object,
         last_scan: float,
@@ -1848,7 +1845,6 @@ class PostgresScanCacheAdapter:
         observed_library_root_ids: set[str] | None = None,
     ) -> dict[str, object] | None:
         publication_started_at = perf_counter()
-        del cache_path
         committed_relation_state: dict[str, object] | None = None
         repaired_cover_entries: dict[str, dict[str, object]] = {}
         with self._connect_to_database() as connection:

@@ -827,7 +827,7 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
             revision_loads.append(0)
             return 0
 
-        def load_snapshot(self, _cache_path, _root_identity):
+        def load_snapshot(self, _root_identity):
             return (
                 {
                     path: dict(entry)
@@ -841,7 +841,6 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
 
         def save_snapshot(
             self,
-            _cache_path,
             _file_cache,
             _root_identity,
             _last_scan,

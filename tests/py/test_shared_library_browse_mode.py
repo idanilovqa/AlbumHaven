@@ -53,7 +53,7 @@ def test_shared_browse_rejects_loaded_incomplete_projection_before_publication(m
     state = {}
     with pytest.raises(RuntimeError, match="Shared browsing requires"):
         hydration.hydrate_library_state_from_disk(
-            state, {"SHARED_LIBRARY_BROWSE_ONLY": True, "CACHE_PATH": "unused"},
+            state, {"SHARED_LIBRARY_BROWSE_ONLY": True},
             scan_cache_adapter=adapter,
         )
     assert state == {}, "invalid projection must not publish a partial library state"

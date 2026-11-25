@@ -221,7 +221,6 @@ def refresh_library_state(
         library_state["last_error"] = None
         library_state["scan_outcome"] = "running"
         library_state["_file_error_history_counts"] = {}
-        cache_path = cfg["CACHE_PATH"]
         cache_max_age = cfg["CACHE_MAX_AGE_SECONDS"]
         scan_cache_adapter = _scan_cache_adapter(cfg)
         existing_cache = dict(library_state.get("file_cache") or {})
@@ -289,7 +288,6 @@ def refresh_library_state(
     )
     relations_refreshed_from_disk = False
     file_cache, disk_last_scan, disk_relation_views, disk_relations_last_built, disk_error = scan_cache_adapter.load_snapshot(
-        cache_path,
         library_root_cache_identity(cfg),
     )
     if disk_error:

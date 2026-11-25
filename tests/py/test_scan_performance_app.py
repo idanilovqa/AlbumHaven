@@ -394,9 +394,7 @@ def test_runtime_path_guard_rejects_paths_outside_temp_root(tmp_path):
             {
                 "MUSIC_DIR": music_dir,
                 "DATA_DIR": tmp_path.parent / "outside",
-                "CACHE_PATH": data_dir / "cache.json",
                 "COVER_CACHE_PATH": data_dir / "covers.json",
-                "LIBRARY_ROOTS_PATH": data_dir / "roots.json",
             },
             music_dir,
         )
@@ -433,9 +431,7 @@ def test_configure_environment_uses_explicit_runner_owned_temp_root(tmp_path, mo
     environment_keys = (
         'MUSIC_DIR',
         'MUSIC_APP_DATA_DIR',
-        'MUSIC_CACHE_PATH',
         'MUSIC_COVER_CACHE_PATH',
-        'MUSIC_LIBRARY_ROOTS_PATH',
         'MUSIC_CACHE_MAX_AGE_SECONDS',
         'MUSICBRAINZ_ENABLED',
         'SPOTIFY_CLIENT_ID',
@@ -519,7 +515,7 @@ def _scenario_inputs(tmp_path: Path):
 
 
 def _patch_scenario_guards(module, monkeypatch, events):
-    monkeypatch.setattr(module, "_runtime_config", lambda: {"CACHE_PATH": "unused"})
+    monkeypatch.setattr(module, "_runtime_config", lambda: {"TESTING": True})
     monkeypatch.setattr(module, "assert_scan_performance_runtime_paths", lambda *_args: events.append("paths"))
     monkeypatch.setattr(module, "assert_postgres_scan_cache_selected", lambda *_args: events.append("postgres"))
     monkeypatch.setattr(
@@ -714,7 +710,6 @@ def test_baseline_snapshot_persists_the_supplied_scan_marker(tmp_path, monkeypat
     monkeypatch.setattr("music_app.services.library_roots.library_root_cache_identity", lambda _config: "roots")
     monkeypatch.setattr("music_app.services.scan_cache_persistence.PostgresScanCacheAdapter", Adapter)
     runtime_config = {
-        "CACHE_PATH": tmp_path / "unused.json",
         "SUPPORTED_EXTENSIONS": {".mp3"},
         "IMAGE_EXTENSIONS": {".jpg"},
     }
@@ -725,7 +720,7 @@ def test_baseline_snapshot_persists_the_supplied_scan_marker(tmp_path, monkeypat
         last_scan_marker=module._CACHED_LAST_SCAN_MARKER,
     )
 
-    assert captured["args"][3] == module._CACHED_LAST_SCAN_MARKER
+    assert captured["args"][2] == module._CACHED_LAST_SCAN_MARKER
     assert captured["kwargs"] == {"rebuild_relation_projection": True}
     assert 0 < module._CACHED_LAST_SCAN_MARKER < 9_999_999_999.0
 
@@ -747,7 +742,7 @@ def test_incremental_scenarios_seed_a_fresh_snapshot_before_mutation(
     module = _load_module()
     inputs = _scenario_inputs(tmp_path)
     markers: list[float] = []
-    monkeypatch.setattr(module, "_runtime_config", lambda: {"CACHE_PATH": "unused"})
+    monkeypatch.setattr(module, "_runtime_config", lambda: {"TESTING": True})
     monkeypatch.setattr(module, "assert_scan_performance_runtime_paths", lambda *_args: None)
     monkeypatch.setattr(module, "assert_postgres_scan_cache_selected", lambda *_args: None)
     monkeypatch.setattr(

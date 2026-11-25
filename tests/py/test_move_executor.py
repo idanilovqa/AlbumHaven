@@ -20,9 +20,7 @@ def config(tmp_path, monkeypatch):
     return {
         "DATA_DIR": paths["data_dir"],
         "MUSIC_DIR": paths["music_dir"],
-        "CACHE_PATH": paths["cache_path"],
         "COVER_CACHE_PATH": paths["cover_cache_path"],
-        "LIBRARY_ROOTS_PATH": paths["library_roots_path"],
         "IMAGE_EXTENSIONS": {".jpg", ".jpeg", ".png"},
         "TESTING": True,
     }
@@ -198,7 +196,6 @@ def test_execute_album_move_runs_without_flask_app_context_using_explicit_depend
     track_path.write_bytes(b"track")
 
     explicit_config = {
-        "CACHE_PATH": tmp_path / "library_cache.json",
         "IMAGE_EXTENSIONS": {".jpg", ".jpeg"},
     }
     explicit_logger = SimpleNamespace(name="move-test-logger")

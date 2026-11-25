@@ -100,9 +100,7 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   for (const key of [
     'MUSIC_DIR',
     'MUSIC_APP_DATA_DIR',
-    'MUSIC_CACHE_PATH',
     'MUSIC_COVER_CACHE_PATH',
-    'MUSIC_LIBRARY_ROOTS_PATH',
     'PLAYWRIGHT_REAL_APP_URL',
   ]) {
     assert.match(source, new RegExp(`Remove-Item Env:${key}`));

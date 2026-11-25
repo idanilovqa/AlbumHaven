@@ -868,6 +868,7 @@ def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_se
     def workflow(config, settings, **kwargs):
         return save_library_settings_and_start_refresh(
             config, settings, save_root_settings=save_roots,
+            load_root_settings=lambda _config, **_scope: {},
             load_root_identity=lambda _config: ",".join(saved), **kwargs,
         )
 
@@ -949,6 +950,13 @@ def test_asgi_library_settings_post_rejects_overlapping_roots(app, asgi_app, mon
 
     monkeypatch.setattr("music_app.services.library_roots_postgres.psycopg", FakeLibraryRootsPsycopg())
     monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", FakeLibraryRootSettingsStore)
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.library_settings import save_library_settings_and_start_refresh
+
+    # Nothing is stored yet; the real save validates the roots.
+    monkeypatch.setattr(routes, "save_library_settings_and_start_refresh", lambda config, settings, **kwargs: (
+        save_library_settings_and_start_refresh(config, settings, load_root_settings=lambda _config, **_scope: {}, **kwargs)
+    ))
 
     status, _headers, body = _run_asgi_request(
         asgi_app,
@@ -988,13 +996,14 @@ def test_asgi_library_settings_write_during_a_scan_saves_and_queues_without_brid
 
     saved = []
     queued = []
-    identities = iter(["roots-before", "roots-after" if roots_changed else "roots-before"])
 
     def workflow(config, settings, **kwargs):
         return save_library_settings_and_start_refresh(
             config, settings, **kwargs,
             save_root_settings=lambda _config, payload, **_scope: saved.append(payload) or payload,
-            load_root_identity=lambda _config: next(identities),
+            # The stored roots: the ones being saved, unless this save changes them.
+            load_root_settings=lambda _config, **_scope: {} if roots_changed else dict(settings),
+            load_root_identity=lambda _config: "roots-after",
         )
 
     monkeypatch.setattr(asgi_routes, "save_library_settings_and_start_refresh", workflow)

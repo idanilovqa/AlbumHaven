@@ -88,8 +88,10 @@ export class MobileSettingsFeedbackPage extends MobileLoopsPage {
           const startY = viewport.height / 2 + distance / 2;
           const point = y => [{ x, y, id: 1 }];
           await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(startY) });
+          // Paced like a finger (one move a frame): unpaced moves are not taken as a drag.
           for (let step = 1; step <= 20; step += 1) {
             await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(startY - (distance * step) / 20) });
+            await this.page.waitForTimeout(16);
           }
           await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         } else {

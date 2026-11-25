@@ -14543,6 +14543,126 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Gallery card hoard marker widens and narrows smoothly with its own width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-expands-smoothly"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Gallery card hoard marker keeps its background and border while hovered",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-hover-keeps-colors"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Gallery card new_arrivals marker widens and narrows smoothly with its own width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-expands-smoothly"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Gallery card new_arrivals marker keeps its background and border while hovered",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-hover-keeps-colors"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Album Details art hoard marker widens and narrows smoothly with its own width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-expands-smoothly"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Album Details art hoard marker keeps its background and border while hovered",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-hover-keeps-colors"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Album Details art new_arrivals marker widens and narrows smoothly with its own width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-expands-smoothly"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sourceMarkerHover.spec.js",
+    "case": "Album Details art new_arrivals marker keeps its background and border while hovered",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-marker-hover-keeps-colors"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
     "case": "a card pressed while a candidate update re-renders the gallery shows its blue frame in the next frame",
     "profile": null,

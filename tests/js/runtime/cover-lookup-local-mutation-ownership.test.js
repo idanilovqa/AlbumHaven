@@ -123,6 +123,45 @@ function harness() {
   return { context, markSeen, loadTasks, open, settle, draft, selection, save, remove, overlay, confirm, requests, galleries, notifications, painted, shown, server };
 }
 
+// BUGFIX-22: an interrupted save leaves the lookup's recorded choice on its task while the album keeps its old
+// cover. Save compares a pick with the album's own cover, so that recorded candidate can still be saved.
+test('a lookup recorded choice that never reached the album can be saved as its cover', async () => {
+  const h = harness();
+  const a = album('A');
+  const drones = { id: 'muse-drones', url: 'https://i.ytimg.com/vi/drones/maxresdefault.jpg', source: 'youtube',
+    art_kind: 'cover' };
+  await h.open(a);
+  h.context.state.coverLookup.tasks = [{ id: 'task-A', status: 'canceled', selected_candidate_id: drones.id,
+    album_payload: a, possible_matches: [drones] }];
+  Object.assign(h.context.state.coverLookup.modal, { taskId: 'task-A', possibleMatches: [drones] });
+  assert.equal(h.context.state.coverLookup.modal.remoteCover, null, 'the album still shows its local cover');
+
+  h.context.selectRemoteCoverFromLookup(drones.id);
+  assert.equal(h.save.disabled, false, 'the recorded choice is not the album cover, so Save is available');
+
+  h.context.markCoverLookupTaskActionTaken = () => {};
+  const saving = h.context.saveRemoteCoverFromLookup();
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].url, '/utilities/cover-lookup/save-remote');
+  assert.equal(h.requests[0].body.candidate_id, drones.id);
+  assert.equal(h.shown.get('A'), drones.url, 'Album Details and the gallery show the saved choice at once');
+  // The server now links the album to that remote cover.
+  h.server.set('A', { ok: true, remote_cover: { id: 'saved-remote:drones', url: drones.url },
+    local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: false }] });
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true,
+    task: { id: 'task-A', status: 'completed', selected_candidate_id: drones.id } }) });
+  await saving;
+  assert.deepEqual(h.notifications, []);
+  assert.equal(h.shown.get('A'), drones.url);
+
+  // Once that remote cover is the album's own cover, choosing it again has nothing to save.
+  await h.open(a);
+  assert.equal(h.context.state.coverLookup.modal.remoteCover.url, drones.url);
+  Object.assign(h.context.state.coverLookup.modal, { taskId: 'task-A', possibleMatches: [drones] });
+  h.context.selectRemoteCoverFromLookup(drones.id);
+  assert.equal(h.save.disabled, true);
+});
+
 test('lookup identity previews leave the caller hydrated album and its virtual release reference untouched', async () => {
   const h = harness();
   const original = { ...album('A'), id: 7, album_id: 7, key: 'album-a', album_ref: 'edition:album-a',

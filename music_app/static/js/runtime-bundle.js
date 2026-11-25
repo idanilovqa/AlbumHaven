@@ -37607,6 +37607,18 @@ function syncCoverLookupManualControlsUi() {
   }
 }
 
+// BUGFIX-22: a remote pick needs no Save only when it already is the art being edited. A lookup's recorded
+// choice is not that: an interrupted save records it without the album ever showing it.
+function isCoverLookupSavedRemoteCover(candidate) {
+  if (!candidate) return false;
+  if (state.coverLookup.modal.artboxSlot) {
+    return typeof isSecondArtboxSavedRemote === 'function' && isSecondArtboxSavedRemote(candidate);
+  }
+  const savedUrl = normalizeCoverLookupCandidateUrl(state.coverLookup.modal.remoteCover?.url).toLowerCase();
+  return Boolean(savedUrl) && [candidate.url, candidate.thumbnail_url]
+    .some((url) => normalizeCoverLookupCandidateUrl(url).toLowerCase() === savedUrl);
+}
+
 function syncCoverLookupSaveButton() {
   const saveButton = document.getElementById('cover-lookup-save-remote-button');
   if (!saveButton) return;
@@ -37616,9 +37628,10 @@ function syncCoverLookupSaveButton() {
   });
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const pendingPastedImageId = String(state.coverLookup.modal.pendingPastedImageId || '');
-  const currentTask = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(state.coverLookup.modal.taskId || '')) || null;
-  const savedRemoteCandidateId = String(currentTask?.selected_candidate_id || '');
-  const hasRemoteSelection = Boolean(selectedRemoteId) && selectedRemoteId !== savedRemoteCandidateId;
+  const selectedRemote = selectedRemoteId
+    ? (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === selectedRemoteId)
+    : null;
+  const hasRemoteSelection = Boolean(selectedRemoteId) && !isCoverLookupSavedRemoteCover(selectedRemote);
   const hasLocalSelection = hasPendingLocalCoverSelection();
   // The second artbox takes a local or remote image; staged pasted images save to the album cover only.
   const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;

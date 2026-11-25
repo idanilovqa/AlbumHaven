@@ -1355,6 +1355,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-LIBROOTS-021 Re-scan answers in the Album Details alert for each outcome",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-UTIL-PROBLEMS-014 a watcher-found problem album appears in the open Problematic Files list without a reload",
               "area": "problematic-files"
             },

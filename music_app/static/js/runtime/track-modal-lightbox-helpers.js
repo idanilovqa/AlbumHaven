@@ -1157,8 +1157,9 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
-  // An empty second artbox never outlives Album Details.
+  // An empty second artbox, or a Re-scan's message, never outlives Album Details.
   if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
+  if (typeof clearMissingAlbumRescanResult === 'function') clearMissingAlbumRescanResult();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);

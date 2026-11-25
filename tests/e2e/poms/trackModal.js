@@ -60,6 +60,10 @@ export class TrackModal extends BasePage {
     this.headerActions = this.dialog.locator('.album-details-header__actions .action-button');
     this.missingAlert = this.dialog.locator('[data-on-page-alert="error"]');
     this.removeMissingAlbumButton = this.dialog.locator('[data-remove-missing-album="1"]');
+    this.rescanMissingAlbumButton = this.dialog.getByRole('button', { name: 'Re-scan', exact: true });
+    this.missingAlertMessage = this.missingAlert.locator('.on-page-alert__message');
+    this.rescanFoundAlert = this.dialog.locator('#track-modal-missing-warning [data-on-page-alert="success"]');
+    this.rescanFoundMessage = this.rescanFoundAlert.locator('.on-page-alert__message');
     this.artbox = this.dialog.locator('#track-modal-cover .album-artbox');
     this.artboxOverlay = this.artbox.locator('.album-artbox__overlay');
     this.artboxCoverTools = this.artbox.locator('.track-modal-cover-tool');
@@ -482,6 +486,10 @@ export class TrackModal extends BasePage {
         playerCenterCoveredByLightbox: Boolean(topmost?.closest('#image-lightbox')),
       };
     }, this.globalPlayerSelector);
+  }
+
+  toastWithText(text) {
+    return this.page.locator('#toast-layer .toast', { hasText: text });
   }
 
   async readDetailedCoverImageCheckpoint() {

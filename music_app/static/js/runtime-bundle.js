@@ -6184,15 +6184,23 @@ function buildMissingAlbumDetailsHtml(config = {}) {
       : { 'data-close-track-modal': '1' },
   });
   const reason = MISSING_ALBUM_REASON_TEXT[config.reason] || 'This album cannot be found under the current libraries.';
-  const message = config.canRemove
+  // A Re-scan's answer replaces the stored reason until the alert is closed.
+  const rescanMessage = String(config.rescanMessage || '').trim();
+  const message = rescanMessage || (config.canRemove
     ? `${reason} Its library entry is still saved.`
-    : `${reason} Ask an owner or administrator to remove it.`;
+    : `${reason} Ask an owner or administrator to remove it.`);
   return buildOnPageAlertHtml({
     severity: 'error',
     title: 'Album details unavailable',
     message,
+    className: rescanMessage ? 'missing-album-rescan-result' : '',
     actionsHtml: `${rescanButton}${removeButton}${keepButton}`,
   });
+}
+
+// A Re-scan that found the album says so where the missing alert stood.
+function buildMissingAlbumRescanFoundHtml(message) {
+  return buildOnPageAlertHtml({ severity: 'success', message, role: 'status', className: 'missing-album-rescan-result' });
 }
 
 /* Inline album metadata and the pinned Gallery Bar never own visible identity
@@ -19143,8 +19151,9 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
-  // An empty second artbox never outlives Album Details.
+  // An empty second artbox, or a Re-scan's message, never outlives Album Details.
   if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
+  if (typeof clearMissingAlbumRescanResult === 'function') clearMissingAlbumRescanResult();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
@@ -25076,7 +25085,12 @@ function buildDetectedProblemsHtml(album) {
           ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
-      ${buildMissingAlbumDetailsHtml({ canRemove, albumKey: album.key, reason: album.missing_reason })}
+      ${buildMissingAlbumDetailsHtml({
+        canRemove,
+        albumKey: album.key,
+        reason: album.missing_reason,
+        rescanMessage: typeof getMissingAlbumRescanResult === 'function' ? getMissingAlbumRescanResult(album.key)?.message : '',
+      })}
     `;
   }
   const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));
@@ -44974,6 +44988,16 @@ const MISSING_ALBUM_RESCAN_MESSAGES = {
 // The background search's result is asked for about every 1.5 s, for at most 30 s.
 const MISSING_ALBUM_SEARCH_POLL_MS = 1500;
 const MISSING_ALBUM_SEARCH_POLLS = 20;
+// The last Re-scan's message, shown in that album's missing alert (or its found alert) until Album Details closes.
+let missingAlbumRescanResult = null;
+
+function getMissingAlbumRescanResult(albumKey) {
+  return missingAlbumRescanResult && missingAlbumRescanResult.albumKey === albumKey ? missingAlbumRescanResult : null;
+}
+
+function clearMissingAlbumRescanResult() {
+  missingAlbumRescanResult = null;
+}
 
 async function keepMissingAlbum(album) {
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -45011,11 +45035,26 @@ async function rescanMissingAlbum(album, button) {
     if (!response.ok) throw new Error((method === 'POST' && payload.error) || 'Unable to re-scan this album.');
     return payload;
   };
-  const toast = ([message, tone]) => { if (typeof showToast === 'function') showToast(message, tone, 3600); };
+  // Each message stays in the album's alert (renders keep it); a toast carries it only when no alert shows it.
+  const toastUnlessShown = ([message, tone], shown) => {
+    if (!shown && typeof showToast === 'function') showToast(message, tone, 3600);
+  };
+  const report = ([message, tone]) => {
+    missingAlbumRescanResult = { albumKey, message, tone };
+    const alertMessage = button?.closest?.('.on-page-alert')?.querySelector('.on-page-alert__message');
+    if (alertMessage) alertMessage.textContent = message;
+    toastUnlessShown([message, tone], Boolean(alertMessage));
+  };
+  const reportAfterRefresh = async ([message, tone]) => {
+    missingAlbumRescanResult = { albumKey, message, tone };
+    await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
+    toastUnlessShown([message, tone], typeof document !== 'undefined'
+      && [...document.querySelectorAll('.missing-album-rescan-result')].some(node => node.checkVisibility?.() ?? true));
+  };
   try {
     let payload = await request('POST');
     if (payload.status === 'searching') {
-      toast(MISSING_ALBUM_RESCAN_MESSAGES.searching);
+      report(MISSING_ALBUM_RESCAN_MESSAGES.searching);
       for (let poll = 0; payload.status === 'searching'; poll += 1) {
         // Still searching after 30 s: the button is freed with no further message.
         if (poll >= MISSING_ALBUM_SEARCH_POLLS) return false;
@@ -45023,12 +45062,11 @@ async function rescanMissingAlbum(album, button) {
         payload = await request('GET');
       }
     }
-    await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
-    toast(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+    await reportAfterRefresh(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
       || MISSING_ALBUM_RESCAN_MESSAGES.deleted);
     return payload.status !== 'missing';
   } catch (error) {
-    if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);
+    report([error?.message || 'Unable to re-scan this album.', 'error']);
     return false;
   } finally {
     if (button?.isConnected) {
@@ -45192,14 +45230,20 @@ function renderTrackModalRelease(album) {
     els.editTags.dataset.albumKey = resolvedAlbumKey;
   }
   if (els.missingWarning) {
-    els.missingWarning.hidden = !albumMissing;
-    els.missingWarning.innerHTML = albumMissing
-      ? buildMissingAlbumDetailsHtml({
+    const rescanResult = getMissingAlbumRescanResult(resolvedAlbumKey);
+    let missingWarningHtml = '';
+    if (albumMissing) {
+      missingWarningHtml = buildMissingAlbumDetailsHtml({
         canRemove: canConfirmMissingAlbumRemoval(album),
         albumKey,
         reason: album.missing_reason,
-      })
-      : '';
+        rescanMessage: rescanResult?.message,
+      });
+    } else if (rescanResult?.tone === 'success') {
+      missingWarningHtml = buildMissingAlbumRescanFoundHtml(rescanResult.message);
+    }
+    els.missingWarning.hidden = !missingWarningHtml;
+    els.missingWarning.innerHTML = missingWarningHtml;
   }
   if (albumMissing) {
     els.cover.innerHTML = `

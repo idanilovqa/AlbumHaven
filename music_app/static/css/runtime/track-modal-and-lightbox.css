@@ -638,7 +638,7 @@
 .track-modal-missing-warning[hidden] { display: none; }
 .track-modal-missing-warning-copy { display: grid; gap: 4px; }
 .track-modal-missing-warning-copy span,
-.track-modal-missing-warning p { margin: 0; color: #fecaca; font-size: .84rem; }
+.track-modal-missing-warning .on-page-alert--error p { margin: 0; color: #fecaca; font-size: .84rem; }
 
 /* Album identity stays visible; only the track pane owns vertical scrolling. */
 .track-modal-dialog {

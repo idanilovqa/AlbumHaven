@@ -13,6 +13,7 @@ export class MobileSettingsFeedbackPage extends MobileLoopsPage {
     this.problemTitle = this.detail.locator('.utility-detail-summary .utility-detail-title');
     this.problemCover = this.detail.locator('.utility-detail-cover');
     this.problemCards = this.list.locator('[data-problematic-album-key]');
+    this.problemCount = page.locator('#utility-problematic-count');
     this.recentActivity = this.list.locator('[data-utility-log-history-id="recent"]');
     this.filter = this.root.locator('#utility-problem-filter-button');
     this.form = page.locator('#app-form-modal');
@@ -60,5 +61,40 @@ export class MobileSettingsFeedbackPage extends MobileLoopsPage {
     expect(Math.abs(gap)).toBeLessThan(2);
     expect(popup.y).toBeGreaterThanOrEqual(0);
     expect(popup.y + popup.height).toBeLessThanOrEqual((await this.player.boundingBox()).y);
+  }
+
+  problemCardTitle(card) {
+    return card.locator('.utility-list-item-title');
+  }
+
+  // Scrolls the Problematic Files list with real input (a touch swipe or the mouse wheel) until no new
+  // card appears, and returns every card key seen on the way and the last card.
+  async scrollProblemCards(direction, input) {
+    const viewport = this.page.viewportSize();
+    const session = input === 'touch' ? await this.page.context().newCDPSession(this.page) : null;
+    const seen = new Set();
+    let unchanged = 0;
+    try {
+      while (unchanged < 3) {
+        // parity-check: allow-read-only-measurement-evaluate -- read the mounted card keys after each real scroll input
+        const keys = await this.problemCards.evaluateAll(cards => cards.map(card => card.getAttribute('data-problematic-album-key')));
+        const before = seen.size;
+        keys.forEach(key => seen.add(key));
+        unchanged = seen.size === before ? unchanged + 1 : 0;
+        const distance = direction === 'down' ? viewport.height * 0.6 : -viewport.height * 0.6;
+        if (session) {
+          await session.send('Input.synthesizeScrollGesture', {
+            x: viewport.width / 2, y: viewport.height / 2, yDistance: -distance, gestureSourceType: 'touch', speed: 3000,
+          });
+        } else {
+          await this.page.mouse.move(viewport.width / 2, viewport.height / 2);
+          await this.page.mouse.wheel(0, distance);
+        }
+        await this.page.waitForFunction(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      }
+    } finally {
+      await session?.detach();
+    }
+    return { seen, edgeCard: direction === 'down' ? this.problemCards.last() : this.problemCards.first() };
   }
 }

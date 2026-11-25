@@ -1,7 +1,6 @@
 (function registerProblematicFilesVirtualList(global) {
   const DEFAULT_ROW_STRIDE = 68;
   const DEFAULT_OVERSCAN = 6;
-  const MOBILE_BREAKPOINT = '(max-width: 720px)';
   const savedOffsets = new WeakMap();
 
   function clamp(value, minimum, maximum) {
@@ -46,19 +45,52 @@
     list.scrollLeft = savedOffset.horizontal;
     list.scrollTop = savedOffset.vertical;
 
-    const isHorizontal = () => Boolean(global.matchMedia?.(MOBILE_BREAKPOINT)?.matches);
-    const getStride = (horizontal) => (
+    // The list's own layout names its axis and what scrolls it: a row strip scrolls itself sideways; a
+    // column scrolls itself, or with the page around it when it does not clip (the phone Settings page).
+    const style = (element) => global.getComputedStyle?.(element) || null;
+    const listStyle = style(list);
+    const horizontal = Boolean(listStyle && /flex/.test(listStyle.display) && listStyle.flexDirection.startsWith('row'));
+    const scrollsItself = (element, elementStyle = style(element)) => !elementStyle
+      || /auto|scroll/.test(horizontal ? elementStyle.overflowX : elementStyle.overflowY);
+    let scroller = list;
+    if (!scrollsItself(list, listStyle)) {
+      scroller = null;
+      for (let element = list.parentElement; element; element = element.parentElement) {
+        if (/auto|scroll/.test(style(element)?.overflowY || '')) { scroller = element; break; }
+      }
+    }
+    const scrollTarget = scroller || global;
+    const getStride = () => (
       horizontal ? Math.min(240, Math.max(1, Number(list.clientWidth) * 0.78)) + 8 : rowStride
     );
+    // The list's own scroll offset and visible extent along its axis, whichever element scrolls it.
+    const readViewport = () => {
+      if (scroller === list) {
+        return horizontal
+          ? { offset: Number(list.scrollLeft), viewport: Number(list.clientWidth) }
+          : { offset: Number(list.scrollTop), viewport: Number(list.clientHeight) };
+      }
+      const listTop = list.getBoundingClientRect().top;
+      const viewTop = scroller ? scroller.getBoundingClientRect().top : 0;
+      return {
+        offset: Math.max(0, viewTop - listTop),
+        viewport: scroller ? Number(scroller.clientHeight) : Number(global.innerHeight),
+      };
+    };
+    const scrollBy = (delta) => {
+      if (scroller === list) {
+        if (horizontal) list.scrollLeft = Number(list.scrollLeft) + delta;
+        else list.scrollTop = Number(list.scrollTop) + delta;
+      } else if (scroller) scroller.scrollTop = Number(scroller.scrollTop) + delta;
+      else global.scrollBy?.(0, delta);
+    };
 
     const renderNow = () => {
       if (frame) global.cancelAnimationFrame(frame);
       frame = 0;
       if (disposed) return;
-      const horizontal = isHorizontal();
-      const stride = getStride(horizontal);
-      const offset = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
-      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const stride = getStride();
+      const { offset, viewport } = readViewport();
       const visibleStart = Math.floor(Math.max(0, offset) / stride);
       const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
       const range = calculateRange({
@@ -99,8 +131,10 @@
         if (previous.nextElementSibling !== row) list.insertBefore(row, previous.nextElementSibling);
         previous = row;
       }
-      if (horizontal) list.scrollLeft = offset;
-      else list.scrollTop = offset;
+      if (scroller === list) {
+        if (horizontal) list.scrollLeft = offset;
+        else list.scrollTop = offset;
+      }
       if (focused && list.contains(focused) && list.ownerDocument.activeElement !== focused) {
         focused.focus({ preventScroll: true });
       }
@@ -131,18 +165,15 @@
     const reveal = (key) => {
       const index = items.findIndex((item) => String(item?.key || '') === String(key || ''));
       if (index < 0) return;
-      const horizontal = isHorizontal();
-      const stride = getStride(horizontal);
-      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
-      const current = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
+      const stride = getStride();
+      const { offset: current, viewport } = readViewport();
       const start = index * stride;
       const end = start + stride;
       let next = current;
       if (start < current) next = start;
       else if (end > current + viewport) next = Math.max(0, end - viewport);
       if (next === current) return;
-      if (horizontal) list.scrollLeft = next;
-      else list.scrollTop = next;
+      scrollBy(next - current);
       schedule();
     };
 
@@ -179,7 +210,7 @@
         horizontal: Number(list.scrollLeft) || 0,
         vertical: Number(list.scrollTop) || 0,
       });
-      list.removeEventListener('scroll', schedule);
+      scrollTarget.removeEventListener('scroll', schedule);
       list.removeEventListener('keydown', handleKeydown);
       global.removeEventListener?.('resize', schedule);
       resizeObserver?.disconnect();
@@ -190,7 +221,7 @@
       delete list.dataset.problematicVirtualAxis;
     };
 
-    list.addEventListener('scroll', schedule, { passive: true });
+    scrollTarget.addEventListener('scroll', schedule, { passive: true });
     list.addEventListener('keydown', handleKeydown);
     global.addEventListener?.('resize', schedule, { passive: true });
     return { render, reveal, dispose };

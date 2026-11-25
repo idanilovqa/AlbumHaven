@@ -16,14 +16,13 @@ const sourcePath = path.join(
   'problematic-files-virtual-list.js',
 );
 
-function loadVirtualList({ horizontal = false, ResizeObserver } = {}) {
+function loadVirtualList({ ResizeObserver, getComputedStyle, innerHeight = 800 } = {}) {
   const frames = [];
   const context = {
     window: {
       ResizeObserver,
-      matchMedia() {
-        return { matches: horizontal };
-      },
+      getComputedStyle,
+      innerHeight,
       requestAnimationFrame(callback) {
         frames.push(callback);
         return frames.length;
@@ -239,8 +238,10 @@ test('initial render reveals an offscreen selected row', () => {
   assert.ok(mountedKeys(list.innerHTML).includes('album-700'));
 });
 
-test('mobile mode windows the existing horizontal strip', () => {
-  const { api } = loadVirtualList({ horizontal: true });
+test('a row strip that scrolls sideways is windowed horizontally', () => {
+  const { api } = loadVirtualList({
+    getComputedStyle: () => ({ display: 'flex', flexDirection: 'row', overflowX: 'auto', overflowY: 'hidden' }),
+  });
   const list = createList();
   const virtualList = api.create({
     list,
@@ -252,6 +253,45 @@ test('mobile mode windows the existing horizontal strip', () => {
   assert.equal(list.dataset.problematicVirtualAxis, 'horizontal');
   assert.ok(mountedKeys(list.innerHTML).length < 20);
   assert.match(list.innerHTML, /style="width:/);
+});
+
+test('a column the page scrolls (the phone Settings page) is windowed vertically by that page scroller', () => {
+  const pageListeners = new Map();
+  const page = {
+    clientHeight: 700,
+    scrollTop: 0,
+    parentElement: null,
+    getBoundingClientRect: () => ({ top: 0 }),
+    addEventListener(type, callback) { pageListeners.set(type, callback); },
+    removeEventListener(type) { pageListeners.delete(type); },
+  };
+  const { api, frames } = loadVirtualList({
+    getComputedStyle: (element) => (element === page
+      ? { display: 'block', flexDirection: 'row', overflowX: 'hidden', overflowY: 'auto' }
+      : { display: 'flex', flexDirection: 'column', overflowX: 'visible', overflowY: 'visible' }),
+  });
+  const list = createList({ parentElement: page, getBoundingClientRect: () => ({ top: 120 - page.scrollTop }) });
+  const items = makeItems(706);
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render(items, 'album-0');
+  assert.equal(list.dataset.problematicVirtualAxis, 'vertical');
+  assert.match(list.innerHTML, /style="height:0px"/);
+  assert.match(list.innerHTML, new RegExp(`style="height:${(706 - 17) * 68}px"`), 'the column keeps the full height');
+  assert.equal(list.listenerCount(), 1, 'the list itself listens only for keys');
+
+  // Scrolling the page to the end mounts the last rows.
+  page.scrollTop = 120 + 706 * 68 - 700;
+  pageListeners.get('scroll')();
+  frames.shift()();
+  const keys = mountedKeys(list.innerHTML);
+  assert.equal(keys.at(-1), 'album-705');
+  assert.ok(keys.length < 30);
+  virtualList.dispose();
+  assert.equal(pageListeners.size, 0);
 });
 
 test('dispose removes listeners and cancels later rendering', () => {

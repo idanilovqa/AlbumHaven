@@ -128,6 +128,28 @@ test('mobile Problematic Files search, filters and exact exceptions survive relo
   await expect(rules.exclusionReason(rules.exclusionRowContaining('Collected Skies 02'))).toHaveText(reason);
 });
 
+test('mobile Problematic Files list scrolls by touch and wheel to its last entry, which opens', async ({ page, app }) => {
+  const ui = new MobileSettingsFeedbackPage(page);
+  await ui.openSettings();
+  await ui.selectUtility('problematic-files');
+  await expect(ui.problemCards.first()).toBeVisible();
+  const total = Number(await ui.problemCount.textContent());
+  expect(total, 'the list must be taller than the phone screen').toBeGreaterThan(12);
+  for (const input of ['touch', 'wheel']) {
+    const down = await ui.scrollProblemCards('down', input);
+    expect(down.seen.size, `${input}: every card is reached`).toBe(total);
+    await expect(down.edgeCard).toBeInViewport();
+    const up = await ui.scrollProblemCards('up', input);
+    expect(up.seen.size, `${input}: every card is reached back to the top`).toBe(total);
+    await expect(up.edgeCard).toBeInViewport();
+  }
+  const { edgeCard: last } = await ui.scrollProblemCards('down', 'touch');
+  const title = (await ui.problemCardTitle(last).textContent()).trim();
+  await last.click();
+  await expect(ui.detail).toBeVisible();
+  await expect(ui.problemTitle).toHaveText(title);
+});
+
 test('mobile Library Refresh reloads saved settings and remains read-only after resizing', async ({ page, app }) => {
   const ui = new MobileSettingsFeedbackPage(page);
   await ui.openSettings();

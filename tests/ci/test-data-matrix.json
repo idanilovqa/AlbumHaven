@@ -9889,6 +9889,26 @@
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
     "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
+    "case": "mobile Problematic Files list scrolls by touch and wheel to its last entry, which opens",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:extended-mobile-media"
+    ],
+    "expectedContracts": [
+      "mobile Problematic Files list scrolls by touch and wheel to its last entry, which opens"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
     "case": "mobile Library Refresh reloads saved settings and remains read-only after resizing",
     "profile": null,
     "setupScope": "isolated",

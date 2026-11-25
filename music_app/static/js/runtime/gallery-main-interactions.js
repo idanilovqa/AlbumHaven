@@ -187,6 +187,9 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   if (revealSpace) scroll.style?.setProperty?.('--artist-info-reveal-space', `${Math.ceil(revealSpace)}px`);
   else scroll.style?.removeProperty?.('--artist-info-reveal-space');
   scroll.scrollTop += offset;
+  // The scroll event this reveal causes is not the user moving the gallery: it keeps the open-time fit.
+  const opening = galleryMainSurfaceController?.current?.();
+  if (opening?.surface === surface) opening.revealScrollTop = scroll.scrollTop;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
   requestAnimationFrame(() => {
     const active = galleryMainSurfaceController?.current?.();
@@ -1496,8 +1499,12 @@ function initGalleryMain() {
         }
         if (String(settled.anchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(settled.anchor, scroll)) {
-          settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
-          settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          // Later scrolling may carry the panel behind the player; the reveal's own scroll may not.
+          if (settled.revealScrollTop !== scroll.scrollTop) {
+            settled.revealScrollTop = null;
+            settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
+            settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          }
           positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
         } else {
           closeGalleryMainSurface(false);

@@ -13440,5 +13440,22 @@
       "pointer-hover-controls-retained"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab walks each notification card and then its delete button, and Shift+Tab walks back",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-then-delete-tab-order",
+      "no-extra-card-tab-stops",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
   }
 ]

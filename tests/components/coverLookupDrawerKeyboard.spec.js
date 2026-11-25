@@ -5,7 +5,7 @@ const staticRoot = path.join(__dirname, '..', '..', 'music_app', 'static');
 
 // The production drawer markup (closed), its renderer, the shared trigger-anchor owner and the
 // app's own click and keydown dispatchers. Only the network loaders are inert.
-async function mountClosedDrawer(page) {
+async function mountClosedDrawer(page, tasks = ['First', 'Second'].map(album => ({ album, status: 'completed' }))) {
   await page.setContent(`<!doctype html>
     <input id="before-trigger" aria-label="Before">
     <button class="cover-lookup-drawer-button" id="cover-lookup-drawer-button" type="button" data-toggle-cover-lookup-drawer="1" aria-label="Cover art lookups">Lookups</button>
@@ -21,16 +21,16 @@ async function mountClosedDrawer(page) {
       <div class="cover-lookup-drawer-body" id="cover-lookup-drawer-body"></div>
     </aside>`);
   await page.addStyleTag({ path: path.join(staticRoot, 'css/runtime/cover-lookup-drawer-and-related.css') });
-  await page.evaluate(() => {
+  await page.evaluate((tasks) => {
     window.state = {
       coverLookup: {
         drawerOpen: false,
         elapsedTimer: 0,
         modal: { taskId: '' },
         pollingTimer: 0,
-        tasks: ['First', 'Second'].map((album, index) => ({
+        tasks: tasks.map(({ album, status }, index) => ({
           id: `task-${index}`,
-          status: 'completed',
+          status,
           progress: 100,
           artist: 'Artist',
           album,
@@ -43,7 +43,7 @@ async function mountClosedDrawer(page) {
     window.escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
     window.formatCoverLookupTaskElapsedLabel = () => 'Took 20s';
     window.scheduleBrowserTimeout = (callback, delay) => window.setTimeout(callback, delay);
-  });
+  }, tasks);
   for (const file of ['button-component.js', 'runtime/trigger-anchor.js', 'runtime/cover-lookup-modal-and-drawer.js', 'runtime/bootstrap-utility-event-handlers.js']) {
     await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
   }
@@ -115,4 +115,40 @@ test('Escape closes a pointer-opened notifications drawer and keeps focus on its
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
   await expect(trigger).toBeFocused();
+});
+
+test('Tab walks each notification card and then its delete button, and Shift+Tab walks back', async ({ page }) => {
+  // A failed lookup also renders Retry: it is not a Tab stop of its own.
+  const { trigger, close } = await mountClosedDrawer(page, [
+    { album: 'First', status: 'completed' },
+    { album: 'Second', status: 'failed' },
+    { album: 'Third', status: 'completed' },
+  ]);
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await expect(close).toBeFocused();
+  await expect(page.locator('[data-retry-cover-lookup-task="task-1"]')).toHaveCount(1);
+
+  const focusedStop = () => page.evaluate(() => {
+    const active = document.activeElement;
+    const card = active?.closest('.cover-lookup-task-card');
+    const taskId = card?.querySelector('[data-open-cover-lookup-task]')?.getAttribute('data-open-cover-lookup-task');
+    if (!taskId) return active?.getAttribute('aria-label') || active?.id || '';
+    return active.matches('[data-open-cover-lookup-task]') ? `card:${taskId}`
+      : active.matches('[data-clear-cover-lookup-task]') ? `delete:${taskId}` : `other:${taskId}:${active.getAttribute('aria-label')}`;
+  });
+  const expected = ['card:task-0', 'delete:task-0', 'card:task-1', 'delete:task-1', 'card:task-2', 'delete:task-2'];
+  const forward = [];
+  for (let index = 0; index < expected.length; index += 1) {
+    await page.keyboard.press('Tab');
+    forward.push(await focusedStop());
+  }
+  expect(forward).toEqual(expected);
+
+  const backward = [];
+  for (let index = 0; index < expected.length - 1; index += 1) {
+    await page.keyboard.press('Shift+Tab');
+    backward.push(await focusedStop());
+  }
+  expect(backward).toEqual(expected.slice(0, -1).reverse());
 });

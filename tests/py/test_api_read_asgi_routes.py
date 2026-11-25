@@ -2255,6 +2255,83 @@ def test_asgi_selected_artist_serves_its_gallery_while_the_root_sidebar_is_rebui
     )
 
 
+def _selected_page_with_pending_root_header(monkeypatch, root_sidebar):
+    """The selected artist's gallery request while the root header rebuilds, then the sidebar follow-up it names,
+    both through the real route selection. ``root_sidebar`` answers the root sidebar route's own builder."""
+    from starlette.datastructures import QueryParams
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class PendingHeaderRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_selected_artist_payload(self, **_kwargs):
+            return {
+                "selected_artist": "Broadcast",
+                "artist_groups": [{"artist": "Broadcast", "albums": [{"key": "broadcast-tender-buttons"}]}],
+            }
+
+        def build_projected_root_sidebar_payload(self, **_kwargs):
+            raise asgi_read_routes.GalleryProjectionPending("Gallery is being prepared.")
+
+        def build_root_sidebar_payload(self, *, query_params=None):
+            assert query_params.getlist("category") == ["main_library"], "the page's own root view"
+            assert "artist" not in query_params, "the root sidebar, never the selected artist's"
+            return root_sidebar()
+
+    def request(query):
+        return SimpleNamespace(query_params=QueryParams(query),
+                               app=SimpleNamespace(state=SimpleNamespace(config={}, library_state={})))
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", PendingHeaderRepository)
+    monkeypatch.setattr(asgi_read_routes, "select_runtime_persistence_adapter", lambda *_args: SimpleNamespace(
+        effective_backend=asgi_read_routes.PERSISTENCE_BACKEND_POSTGRES))
+    monkeypatch.setattr(asgi_read_routes, "_should_use_transient_scan_browse_state", lambda *_args: False)
+    monkeypatch.setattr(asgi_read_routes, "_project_missing_album_actions_for_request", lambda *_args: None)
+    selected = asgi_read_routes.view_data(request("surface=albums&artist=Broadcast&root_sidebar=1&category=main_library"))
+    followup = json.loads(selected.body)["root_sidebar_followup_endpoint"] if selected.status_code == 200 else None
+    sidebar = asgi_read_routes.view_data(request(followup.split("?", 1)[1])) if followup else None
+    return selected, sidebar
+
+
+def test_asgi_selected_artist_page_ends_with_the_complete_root_sidebar_after_its_follow_up(monkeypatch):
+    """A pending root header doesn't hold the selected gallery, and the sidebar request the page makes next
+    answers with the complete root sidebar of the page's own view."""
+    selected, sidebar = _selected_page_with_pending_root_header(monkeypatch, lambda: {
+        "artist_groups": [{"artist": "Root preview", "albums": []}],
+        "artists_sidebar": [{"artist": "Broadcast", "count": 1}, {"artist": "Mono", "count": 2}],
+        "artist_count": 2,
+        "show_all_artists_sidebar_link": True,
+    })
+
+    assert selected.status_code == 200
+    payload = json.loads(selected.body)
+    assert payload["selected_artist"] == "Broadcast"
+    assert payload["artist_groups"] == [{"artist": "Broadcast", "albums": [{"key": "broadcast-tender-buttons"}]}]
+    assert sidebar.status_code == 200
+    root_sidebar = json.loads(sidebar.body)
+    assert root_sidebar["artists_sidebar"] == [{"artist": "Broadcast", "count": 1}, {"artist": "Mono", "count": 2}]
+    assert root_sidebar["artist_count"] == 2
+    assert root_sidebar["show_all_artists_sidebar_link"] is True
+
+
+def test_asgi_selected_artist_gallery_never_waits_and_its_sidebar_follow_up_retries_until_built(monkeypatch):
+    """Even when no root sidebar can be built yet, the gallery answers at once; the follow-up answers the
+    retryable pending response the page repeats, never an error."""
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    def relations_pending():
+        raise asgi_read_routes.SearchProjectionPending("Artist relationships are being prepared.")
+
+    selected, sidebar = _selected_page_with_pending_root_header(monkeypatch, relations_pending)
+
+    assert selected.status_code == 200
+    assert json.loads(selected.body)["artist_groups"][0]["albums"] == [{"key": "broadcast-tender-buttons"}]
+    assert sidebar.status_code == 503
+    assert json.loads(sidebar.body)["code"] == "gallery_projection_pending"
+    assert sidebar.headers["Retry-After"] == "1"
+
+
 def test_asgi_selected_artist_query_context_uses_postgres_browse(app, asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 

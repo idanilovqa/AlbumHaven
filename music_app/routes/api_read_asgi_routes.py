@@ -677,9 +677,16 @@ def view_data(request: Request) -> JSONResponse:
         return _transient_scan_view_response(request, browse_state)
 
     if _is_postgres_root_sidebar_request(request):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
-            query_params=request.query_params,
-        )
+        try:
+            payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
+                query_params=request.query_params,
+            )
+        except (GalleryProjectionPending, SearchProjectionPending):
+            # A selected page's sidebar follow-up retries this (fetchRetryingPendingProjection) until it is built.
+            return JSONResponse(
+                {"ok": False, "code": "gallery_projection_pending", "error": "Gallery is being prepared."},
+                status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
+            )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)

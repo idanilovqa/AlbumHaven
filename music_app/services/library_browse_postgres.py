@@ -3536,6 +3536,10 @@ class PostgresLibraryBrowseRepository:
             )
             for album in matching_albums:
                 album["_suggestion_aliases"] = aliases
+                album["_mixed_folder_fields"] = _mixed_folder_fields(connection, [
+                    str(entry.get("path") or "") for entry in album.get("_file_entries") or ()
+                    if isinstance(entry, Mapping) and entry.get("_mixed_album_folder") is True
+                ])
                 detail = _problematic_album_detail_payload(album)
                 if detail is not None:
                     return detail
@@ -7737,11 +7741,120 @@ def _iter_problematic_track_reasons(
         yield path, filename, reasons, reason_fields
 
 
+# The tag fields a row's problems concern, shown as its current values (owner, 2026-11-25).
+_CURRENT_VALUE_LABELS = {
+    "album_artist": "Album artist", "album": "Album", "year": "Year", "artist": "Artist", "title": "Title",
+    "track_number": "Track number", "album_rating": "Rating",
+}
+# What the mixed-folder rule compares (multi_album_folders._album_identity), and the release year.
+_MIXED_FOLDER_FIELDS = ("album_artist", "album", "year")
+_MIXED_REASON = "Mixed album metadata in one folder"
+
+
+def _current_tag_value(entry: Mapping[str, object], field: str) -> object:
+    if field == "album_artist":
+        return entry.get("album_artist") or entry.get("artist") or None
+    value = entry.get(field)
+    return None if value in (None, "") else value
+
+
+def _differing_fields(values: Iterable[Mapping[str, object]]) -> list[str]:
+    values = list(values)
+    return [field for field in _MIXED_FOLDER_FIELDS
+            if len({" ".join(str(value.get(field) or "").casefold().split()) for value in values}) > 1]
+
+
+def _mixed_entry_fields(
+    album: Mapping[str, object], entries_by_path: Mapping[str, Mapping[str, object]],
+) -> dict[str, list[str]]:
+    """The fields that differ across each mixed folder: from the folder read the detail laid, else from
+    the entry's own files (a loose folder group holds the whole folder)."""
+    laid = album.get("_mixed_folder_fields")
+    if isinstance(laid, Mapping) and laid:
+        return {str(path): list(fields) for path, fields in laid.items()}
+    mixed = [entry for entry in entries_by_path.values() if entry.get("_mixed_album_folder") is True
+             or entry.get("local_album_membership_problem") == _MIXED_REASON]
+    fields = _differing_fields({field: _current_tag_value(entry, field) for field in _MIXED_FOLDER_FIELDS}
+                               for entry in mixed)
+    return {str(entry.get("path") or ""): fields for entry in mixed}
+
+
+def _problem_row_current_values(
+    entry: Mapping[str, object], reasons: Iterable[str], reason_fields: Mapping[str, str],
+    mixed_fields: Mapping[str, list[str]],
+) -> list[dict[str, object]]:
+    """A row's current tag values for the fields its problems concern; a mixed-folder row shows the
+    fields that differ across its folder, or the compared identity when its folder read showed none."""
+    fields: list[str] = []
+    for reason in reasons:
+        if reason == _MIXED_REASON:
+            fields += mixed_fields.get(str(entry.get("path") or "")) or ["album_artist", "album"]
+        elif (field := reason_fields.get(reason)) in _CURRENT_VALUE_LABELS:
+            fields.append(field)
+    return [
+        {"field": field, "label": _CURRENT_VALUE_LABELS[field], "value": _current_tag_value(entry, field)}
+        for field in dict.fromkeys(fields)
+    ]
+
+
+_MIXED_FOLDER_PARENTS_SQL = """
+    select files.private_path, files.library_root_id, __PARENT__ as physical_parent
+    from library.local_track_files files
+    where files.private_path = any(%(paths)s::text[]) and files.scan_cache_stale is false
+"""
+_MIXED_FOLDER_VALUES_SQL = """
+    select folders.library_root_id, folders.physical_parent,
+      files.metadata #>> '{scan_cache,file_entry,album}' as album,
+      coalesce(nullif(files.metadata #>> '{scan_cache,file_entry,album_artist}', ''),
+               files.metadata #>> '{scan_cache,file_entry,artist}') as album_artist,
+      files.metadata #>> '{scan_cache,file_entry,year}' as year
+    from unnest(%(roots)s::bigint[], %(parents)s::text[]) as folders(library_root_id, physical_parent)
+    cross join lateral (
+      select files.metadata
+      from library.local_track_files files
+      where files.library_root_id = folders.library_root_id
+        and __FILE_PARENT__ = folders.physical_parent
+        and files.scan_cache_stale is false
+      offset 0
+    ) files
+"""
+
+
+def _mixed_folder_fields(connection: Any, paths: list[str]) -> dict[str, list[str]]:
+    """The fields that differ across the folders of ``paths``: their files, read by folder (the 0088
+    physical-parent index), never the library."""
+    paths = sorted({path for path in paths if path})
+    if not paths:
+        return {}
+    parents = {
+        str(row["private_path"]): (int(row["library_root_id"]), str(row["physical_parent"]))
+        for row in map(_row_mapping, connection.execute(
+            _MIXED_FOLDER_PARENTS_SQL.replace("__PARENT__", _physical_parent_sql("files.private_path")),
+            {"paths": paths},
+        ).fetchall())
+    }
+    folders = sorted(set(parents.values()))
+    if not folders:
+        return {}
+    values_by_folder: dict[tuple[int, str], list[dict[str, object]]] = {}
+    for row in map(_row_mapping, connection.execute(
+        _MIXED_FOLDER_VALUES_SQL.replace("__FILE_PARENT__", _physical_parent_sql("files.private_path")),
+        {"roots": [root for root, _parent in folders], "parents": [parent for _root, parent in folders]},
+    ).fetchall()):
+        values_by_folder.setdefault((int(row["library_root_id"]), str(row["physical_parent"])), []).append(dict(row))
+    fields_by_folder = {folder: _differing_fields(values) for folder, values in values_by_folder.items()}
+    return {path: fields_by_folder.get(folder, []) for path, folder in parents.items()}
+
+
 def _problematic_track_problem_rows(
     album: Mapping[str, object], *, include_repair_metadata: bool = True,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     track_order_issues = _track_order_issues(album)
+    entries_by_path = {
+        str(entry.get("path") or ""): entry for entry in album.get("_file_entries") or () if isinstance(entry, Mapping)
+    }
+    mixed_fields = _mixed_entry_fields(album, entries_by_path) if include_repair_metadata else {}
     for path, filename, reasons, reason_fields in _iter_problematic_track_reasons(
         album,
         track_order_issues=track_order_issues,
@@ -7751,6 +7864,8 @@ def _problematic_track_problem_rows(
         if reason_fields is not None:
             file_path = Path(path)
             row.update({
+                "current_values": _problem_row_current_values(
+                    entries_by_path.get(path) or {}, reasons, reason_fields, mixed_fields),
                 "file_type": file_path.suffix.lstrip(".").upper(),
                 "ignorable_reasons": [
                     {

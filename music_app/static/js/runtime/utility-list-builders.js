@@ -494,19 +494,19 @@ function buildDetectedProblemsHtml(album) {
               'data-problem-exclusion-reason': normalizeProblemFilterReason(reason), 'data-problem-exclusion-row-index': rowIndex },
           });
         }).join('')}</span>`,
-        suggested: `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
+        suggested: suggestions.length ? `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
           severity: 'info', message: formatProblemSuggestionLabel(proposal), interactive: true,
           pressed: Boolean(state.utility.proposalSelections?.[proposal.id]),
           disabled: !album.allowed_actions?.['library.files.edit_tags'] || Boolean(state.utility.proposalApplyBusy),
           className: 'utility-problem-suggestion', attributes: { 'data-problem-suggestion-id': proposal.id, 'data-label-intent': 'proposal' },
-        })).join('')}</span>`,
+        })).join('')}</span>` : buildProblemCurrentValuesHtml(row.current_values),
       },
     };
   }).filter(Boolean);
   const table = tableRows.length ? buildUtilityCompactTable({
     id: 'problematic-track-problems', ariaLabel: 'Detected problems',
     columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
-    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
+    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Current Value -> Suggested Value' }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', rows: tableRows,
   }) : '';
   const separateCandidate = album?.separate_release_candidate;
@@ -533,6 +533,12 @@ function buildProblematicFolderMeta(kind, folders, singular, plural) {
   if (!values.length) return '';
   return `<div class="utility-detail-meta" data-problematic-detail-folders="${kind}">${escapeHtml(values.length === 1 ? singular : plural)}:${
     values.map(folder => `<br><span data-problematic-detail-folder>${escapeHtml(folder)}</span>`).join('')}</div>`;
+}
+// A row without a suggested edit shows the current tag values its problems concern (owner, 2026-11-25).
+function buildProblemCurrentValuesHtml(values) {
+  const parts = (Array.isArray(values) ? values : [])
+    .map(item => `${item?.label}: ${item?.value === null || item?.value === undefined || item?.value === '' ? 'missing' : item.value}`);
+  return parts.length ? `<span class="utility-detail-meta" data-problem-current-values>${escapeHtml(parts.join(', '))}</span>` : '';
 }
 function buildProblematicAlbumDetail(album) {
   if (!album) {

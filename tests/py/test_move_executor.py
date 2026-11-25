@@ -921,7 +921,9 @@ def test_move_album_contract_publishes_only_the_moved_album_at_production_track_
         small=20,
         large=160_000,
         run=run,
-        budgets={"builder_calls": 0, "returned_rows": 6, "sql_statements": 31, "invalidations": 1},
+        # 32: a deferred write also publishes its own albums' gallery membership (FTC-TAGS-045), a constant
+        # number of keyed statements; with no library context here that is its one context read.
+        budgets={"builder_calls": 0, "returned_rows": 6, "sql_statements": 32, "invalidations": 1},
         growth=("returned_rows", 0),
     )
     assert small.invalidations == production.invalidations == 1

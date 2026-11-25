@@ -4898,8 +4898,8 @@
       "entrypoints": [
         "js:music_app/static/js/runtime/pending-projection-fetch.js#<top-level>:event:offline",
         "js:music_app/static/js/runtime/pending-projection-fetch.js#noteServerUnreachable:event:online",
-        "js:music_app/static/js/runtime/pending-projection-fetch.js#probeServerReachability:request:fetch",
-        "js:music_app/static/js/runtime/pending-projection-fetch.js#probeServerReachability:timer:setTimeout",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#serverAnswersHealthCheck:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#serverAnswersHealthCheck:timer:setTimeout",
         "js:music_app/static/js/runtime/pending-projection-fetch.js#scheduleReachabilityProbe:timer:setTimeout"
       ],
       "owners": [
@@ -4937,10 +4937,12 @@
     },
     {
       "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",
-      "action": "Retry a pending projection request once per second until it answers, cancels, or reaches its 60 s deadline",
+      "action": "Retry a pending projection request once per second until it answers, cancels, or reaches its 60 s deadline; a request unanswered after 4 s checks /health once and is given up when that does not answer either",
       "entrypoints": [
         "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:event:abort",
-        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchGivingUpWhenUnreachable:event:abort",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchGivingUpWhenUnreachable:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:request:fetchGivingUpWhenUnreachable",
         "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:timer:setTimeout"
       ],
       "owners": [
@@ -4955,6 +4957,7 @@
       "requestOwnership": {
         "allowed": [
           "/album-details",
+          "/health",
           "/home-data",
           "/utilities/problematic-files",
           "/utilities/problematic-files/detail",

@@ -753,6 +753,8 @@ function openTrackModal(album, options = {}) {
     const loadToken = invalidatePendingTrackModalLoad();
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
     openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
+    // Already offline: Offline at once instead of loading rows; an answer still replaces it.
+    if (isOfflineShown()) renderTrackModalUnreachableState(albumWithPlaybackContext);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
       albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
@@ -766,6 +768,7 @@ function openTrackModal(album, options = {}) {
         : refreshedAlbum;
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
+      trackModalUnreachableAlbum = null;
       invalidatePendingTrackModalLoad();
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch(async (error) => {

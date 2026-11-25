@@ -7863,6 +7863,42 @@ test('IAR-W10: the app\'s own "not ready yet" (503) is never taken for an unreac
   assert.equal(response.status, 503);
 });
 
+// A dead network behind a VPN fails no request: it hangs. Four seconds without an answer check the
+// server; no answer to that either gives the request up as unreachable instead of waiting a minute.
+function hangingRequestContext({ healthAnswers }) {
+  const { context } = createContext();
+  const due = [];
+  context.AbortController = AbortController;
+  context.AbortSignal = { timeout: () => { const controller = new AbortController(); due.push(controller); return controller.signal; } };
+  const urls = [];
+  context.fetch = (url, init = {}) => {
+    urls.push(String(url));
+    if (url === '/health') return healthAnswers ? Promise.resolve({ status: 200 }) : Promise.reject(new TypeError('Failed to fetch'));
+    return new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+  };
+  return { context, due, urls };
+}
+
+test('a request unanswered for 4 s with no answer to the health check either fails as unreachable', async () => {
+  const { context, due, urls } = hangingRequestContext({ healthAnswers: false });
+  const request = context.fetchRetryingPendingProjection('/view-data', {});
+  due[0].abort();
+  await assert.rejects(request, error => error.serverUnreachable === true);
+  assert.deepEqual(urls, ['/view-data', '/health']);
+  assert.equal(context.isServerUnreachable(), true);
+});
+
+test('a slow request is waited on while the server answers its health check', async () => {
+  const { context, due, urls } = hangingRequestContext({ healthAnswers: true });
+  let settled = false;
+  context.fetchRetryingPendingProjection('/view-data', {}).then(() => { settled = true; }, () => { settled = true; });
+  due[0].abort();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(urls, ['/view-data', '/health']);
+  assert.equal(settled, false);
+  assert.equal(context.isServerUnreachable(), false);
+});
+
 // v003: the end of the kept gallery says why nothing more loads, and stays
 // until more albums do; the short-lived error toast is gone for this case.
 test('IAR-W10: more albums that cannot load end the gallery with the offline line until some do', async () => {

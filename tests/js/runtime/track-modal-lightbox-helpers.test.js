@@ -3577,6 +3577,20 @@ test('IAR-W15: open Album Details showing Offline loads its album by itself once
   assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha'], 'the album is shown, loaded');
 });
 
+// Already offline, an album opened shows Offline at once rather than loading rows while its request waits.
+test('an album opened while the page is already offline shows Offline at once, before its request answers', async () => {
+  const album = { key: 'delta', name: 'Album Delta', preview_only: true };
+  const { context } = loadHelper({ onFetchAlbumDetails: () => new Promise(() => {}) });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'offline-notice.js'), 'utf8'), context);
+  context.noteServerUnreachable();
+  const elements = context.getTrackModalElements();
+
+  context.openTrackModal(album);
+
+  assert.match(elements.list.innerHTML, /data-offline-notice/);
+  assert.match(elements.list.innerHTML, /Can't load the details/);
+});
+
 test('IAR-W15: a failed load is never reused: reopening an album after recovery asks the server again', async () => {
   let online = false;
   const album = { key: 'beta', name: 'Album Beta', preview_only: true };

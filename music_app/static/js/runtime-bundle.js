@@ -2197,24 +2197,67 @@ function scheduleReachabilityProbe() {
   serverReachability.timer = setTimeout(() => { void probeServerReachability(); }, REACHABILITY_PROBE_INTERVAL_MS);
 }
 
+// Whether the server's health check answers within a few seconds.
+async function serverAnswersHealthCheck() {
+  const controller = new AbortController();
+  const giveUp = setTimeout(() => controller.abort(), REACHABILITY_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch('/health', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
+    return response.status < 500;
+  } catch (_error) {
+    return false;
+  } finally {
+    clearTimeout(giveUp);
+  }
+}
+
 async function probeServerReachability() {
   if (!serverReachability.unreachable || serverReachability.probing) return;
   serverReachability.probing = true;
   clearTimeout(serverReachability.timer);
-  const controller = new AbortController();
-  const giveUp = setTimeout(() => controller.abort(), REACHABILITY_PROBE_TIMEOUT_MS);
   let answered = false;
   try {
-    const response = await fetch('/health', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
-    answered = response.status < 500;
-  } catch (_error) {
-    answered = false;
+    answered = await serverAnswersHealthCheck();
   } finally {
-    clearTimeout(giveUp);
     serverReachability.probing = false;
   }
   if (answered) noteServerReachable();
   else if (serverReachability.unreachable) scheduleReachabilityProbe();
+}
+
+// A dead network often fails no request at all (a laptop whose VPN or virtual adapter stays up never
+// reports `offline`): the request just hangs until the system gives up, a minute or more. So a request
+// still unanswered after a few seconds checks the server: no answer to that either (or the server
+// already known unreachable) gives the request up as unreachable at once. A slow server that answers
+// its health check is waited on as long as it takes.
+async function fetchGivingUpWhenUnreachable(url, init) {
+  // Without abortable requests (a bare script host) the request is simply waited on.
+  if (typeof AbortController !== 'function' || typeof AbortSignal === 'undefined'
+      || typeof AbortSignal.timeout !== 'function') return fetch(url, init);
+  const own = new AbortController();
+  const callerSignal = init?.signal;
+  const forward = () => own.abort();
+  if (callerSignal?.aborted) own.abort();
+  else callerSignal?.addEventListener('abort', forward, { once: true });
+  let settled = false;
+  let givenUp = false;
+  const checkDue = AbortSignal.timeout(REACHABILITY_PROBE_TIMEOUT_MS);
+  const check = async () => {
+    if (settled || (!serverReachability.unreachable && await serverAnswersHealthCheck()) || settled) return;
+    givenUp = true;
+    own.abort();
+  };
+  checkDue.addEventListener('abort', check, { once: true });
+  try {
+    return await fetch(url, { ...init, signal: own.signal });
+  } catch (error) {
+    if (givenUp) throw new TypeError('Album Haven did not answer.');
+    throw error;
+  } finally {
+    settled = true;
+    checkDue.removeEventListener('abort', check);
+    callerSignal?.removeEventListener('abort', forward);
+  }
 }
 
 // While the server publishes the library, projection-backed requests answer 503
@@ -2227,7 +2270,7 @@ async function fetchRetryingPendingProjection(url, init) {
   while (true) {
     let response;
     try {
-      response = await fetch(url, init);
+      response = await fetchGivingUpWhenUnreachable(url, init);
     } catch (error) {
       // fetch rejects with a TypeError when no answer arrives; an abort is the caller's own.
       if (error?.name === 'TypeError') {
@@ -19201,6 +19244,8 @@ function openTrackModal(album, options = {}) {
     const loadToken = invalidatePendingTrackModalLoad();
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
     openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
+    // Already offline: Offline at once instead of loading rows; an answer still replaces it.
+    if (isOfflineShown()) renderTrackModalUnreachableState(albumWithPlaybackContext);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
       albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
@@ -19214,6 +19259,7 @@ function openTrackModal(album, options = {}) {
         : refreshedAlbum;
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
+      trackModalUnreachableAlbum = null;
       invalidatePendingTrackModalLoad();
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch(async (error) => {

@@ -782,6 +782,66 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
     assert other_settings == []
 
 
+def test_asgi_library_settings_save_keeps_the_corrections_mode_and_scans_only_for_changed_roots(
+    app, asgi_app, monkeypatch, ledger,
+):
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
+    from music_app.services.library_roots import save_library_root_settings
+
+    owner = ledger["own"]
+    app.config.update(ledger["config"])
+    app.config["PERSISTENCE_BACKENDS"] = {"library_roots": "postgres"}
+    asgi_app.state.config = app.config
+    actor = CurrentActor(
+        state=ActorState.ACTIVE, account_id=owner["account_id"], session_id=1,
+        username_display="fixture-library-owner", is_bootstrap_owner=True,
+        current_library_id=owner["library_id"],
+        library_relationships=(LibraryRelationship(owner["library_id"], "owner", True),),
+    )
+    asgi_app.state.current_actor_resolver = SimpleNamespace(resolve=lambda _token: actor)
+    asgi_app.state.media_host_library_id = owner["library_id"]
+    asgi_app.state.replace_library_watch_roots = lambda _roots: None
+    root_path = str(Path(app.config["MUSIC_DIR"]).resolve())
+    main_root = {"id": "main-1", "path": root_path, "layout_mode": "artist"}
+    save_library_root_settings(
+        app.config, {"main_library_roots": [main_root], "metadata_corrections": "write_tags"},
+        library_id=owner["library_id"], media_host_library_id=owner["library_id"],
+    )
+    refresh_calls = []
+    monkeypatch.setattr(
+        asgi_routes, "start_background_refresh_for_state",
+        lambda _state, _config, _logger, **kwargs: refresh_calls.append(kwargs),
+    )
+
+    # A client that does not send the corrections mode (an older build, or a save of the roots only).
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/library-settings", json_body={"settings": {"main_library_roots": [main_root]}},
+    )
+    _get_status, _get_headers, get_body = _run_asgi_request(asgi_app, "GET", "/library-settings")
+
+    payload = _decode_json(body)
+    assert (status, payload["ok"]) == (200, True)
+    assert payload["settings"]["metadata_corrections"] == "write_tags"
+    assert _decode_json(get_body)["settings"]["metadata_corrections"] == "write_tags"
+    with ledger["connect"]() as connection:
+        persisted = connection.execute(
+            "select settings_payload from library.library_root_settings where library_id=%s", (owner["library_id"],),
+        ).fetchone()
+    assert persisted["settings_payload"]["metadata_corrections"] == "write_tags"
+    # The roots are the ones already scanned, so the save starts no scan.
+    assert (payload["refresh_started"], payload["refresh_queued"]) == (False, False)
+    assert refresh_calls == []
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/library-settings",
+        json_body={"settings": {"main_library_roots": [main_root], "metadata_corrections": "display_only"}},
+    )
+    payload = _decode_json(body)
+    assert payload["settings"]["metadata_corrections"] == "display_only", "an explicit choice is still saved"
+    assert payload["refresh_started"] is False and refresh_calls == [], "a mode change reads no file again"
+
+
 @pytest.mark.parametrize("concurrent_save", [False, True])
 def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_serialized(
     asgi_app, monkeypatch, concurrent_save,

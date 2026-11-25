@@ -584,6 +584,11 @@ function loadLoopBuilderHelpers() {
   return context;
 }
 
+// The server has answered the current search or filter (its matches here are the loaded rows).
+function settleProblematicServerQuery(context) {
+  context.state.utility.problematicServerSearchSettledQuery = context.problematicServerQuery().key;
+}
+
 function loadProblematicTrackNavigationHelpers() {
   const trackPath = 'C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem.flac';
   const album = {
@@ -4633,6 +4638,9 @@ test('a save entry settles a filtered Problematic Files mutation at once: the al
     loaded: true,
     problematicFiles: [above, hidden, edited, below],
     selectedProblemFilters: ['Missing year'],
+    // The filter's server answer has arrived (its matches are loaded rows here).
+    problematicServerSearchSettledQuery: JSON.stringify(['', ['Missing year']]),
+    problematicServerSearchItems: [],
     selectedProblematicKey: edited.key,
   };
   context.getUtilityModalElements = () => ({ list: { scrollTop: 0, scrollHeight: 0, clientHeight: 0 } });
@@ -7560,6 +7568,7 @@ test('hydrated incomplete-order detail remains visible under the summary problem
   }];
   context.state.utility.selectedProblemFilters = ['Incomplete track order'];
   context.state.utility.searchQuery = '';
+  settleProblematicServerQuery(context);
 
   assert.deepEqual(
     Array.from(context.getProblemReasonTypes()),
@@ -7587,6 +7596,7 @@ test('problematic search always includes structured summary fields beside compac
 
   for (const query of ['structured match album', 'structured raw artist', '2026', 'only track title']) {
     context.state.utility.searchQuery = query;
+    settleProblematicServerQuery(context);
     assert.deepEqual(
       Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
       ['structured-search-album'],
@@ -7605,9 +7615,11 @@ test('problematic search does not treat problem reasons as artist, album, or tra
   context.state.utility.selectedProblemFilters = [];
 
   context.state.utility.searchQuery = 'art';
+  settleProblematicServerQuery(context);
   assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
 
   context.state.utility.searchQuery = 'album artist mismatch';
+  settleProblematicServerQuery(context);
   assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
 });
 
@@ -8271,7 +8283,7 @@ test('Problematic Files excludes library-wide warnings from album rows and count
 
   assert.equal(elements.count.textContent, '0');
   assert.doesNotMatch(elements.list.innerHTML, /Some library changes may have been missed|data-status-action/);
-  assert.match(elements.list.innerHTML, /No matching problematic albums found\./);
+  assert.match(elements.list.innerHTML, /Nothing found\./);
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
 });
 

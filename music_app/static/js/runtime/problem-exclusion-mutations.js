@@ -266,18 +266,7 @@ function restoreProblematicAlbumSnapshot(operation) {
   const album = operation?.snapshot?.album;
   if (!album) return;
   const albumKey = String(album.key || '');
-  const items = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles.slice()
-    : [];
-  const currentIndex = items.findIndex((item) => String(item?.key || '') === albumKey);
-  if (currentIndex >= 0) items.splice(currentIndex, 1);
-  const insertionIndex = Math.min(
-    Math.max(Number(operation.snapshot.albumIndex || 0), 0),
-    items.length,
-  );
-  items.splice(insertionIndex, 0, cloneProblemExclusionValue(album));
-
-  let projectedAlbum = items[insertionIndex];
+  let projectedAlbum = cloneProblemExclusionValue(album);
   const journal = getProblemExclusionMutationJournal();
   const acknowledgedSuccessors = (journal.acknowledgedCreates || [])
     .filter((candidate) => (
@@ -299,9 +288,20 @@ function restoreProblematicAlbumSnapshot(operation) {
         candidate.items,
       ).updatedAlbum;
     });
-  if (projectedAlbum) items[insertionIndex] = projectedAlbum;
-  else items.splice(insertionIndex, 1);
-  state.utility.problematicFiles = items;
+  // Back everywhere it was listed: the loaded pages, the search or filter results, or both.
+  const { albumIndex = -1, searchIndex = -1 } = operation.snapshot;
+  const placements = [
+    ['problematicFiles', searchIndex < 0 ? Math.max(albumIndex, 0) : albumIndex],
+    ['problematicServerSearchItems', searchIndex],
+  ];
+  for (const [owner, index] of placements) {
+    if (index < 0) continue;
+    const items = (Array.isArray(state.utility[owner]) ? state.utility[owner] : [])
+      .filter((item) => String(item?.key || '') !== albumKey);
+    if (projectedAlbum) items.splice(Math.min(index, items.length), 0, projectedAlbum);
+    state.utility[owner] = items;
+  }
+  rememberProblematicServerSearchAnswer();
   state.utility.selectedProblematicKey = projectedAlbum
     ? String(operation.snapshot.selectedProblematicKey || '')
     : '';
@@ -375,14 +375,18 @@ function buildProblemExclusionItemFromAlbum(album, rowKey) {
 
 function applyOptimisticProblemExclusionCard(album, updatedAlbum) {
   const albumKey = String(album?.key || '');
-  const current = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles
-    : [];
-  const index = current.findIndex((item) => String(item?.key || '') === albumKey);
-  if (index < 0) return;
-  state.utility.problematicFiles = updatedAlbum
-    ? current.map((item, itemIndex) => (itemIndex === index ? updatedAlbum : item))
-    : current.filter((_item, itemIndex) => itemIndex !== index);
+  // The card is listed by the loaded pages, the search or filter results (BUGFIX-14), or both.
+  let listed = false;
+  for (const owner of ['problematicFiles', 'problematicServerSearchItems']) {
+    const current = Array.isArray(state.utility[owner]) ? state.utility[owner] : [];
+    if (!current.some((item) => String(item?.key || '') === albumKey)) continue;
+    listed = true;
+    state.utility[owner] = updatedAlbum
+      ? current.map((item) => (String(item?.key || '') === albumKey ? updatedAlbum : item))
+      : current.filter((item) => String(item?.key || '') !== albumKey);
+  }
+  if (!listed) return;
+  rememberProblematicServerSearchAnswer();
   if (!updatedAlbum && String(state.utility.selectedProblematicKey || '') === albumKey) {
     state.utility.selectedProblematicKey = '';
   }
@@ -447,6 +451,9 @@ async function queueProblemExclusionCreate({ album, items }) {
   const albumIndex = (state.utility.problematicFiles || []).findIndex((item) => (
     String(item?.key || '') === String(album?.key || '')
   ));
+  const searchIndex = (state.utility.problematicServerSearchItems || []).findIndex((item) => (
+    String(item?.key || '') === String(album?.key || '')
+  ));
   const projection = projectProblemExclusionFromAlbum(album, selectedItems);
   const operation = beginProblemExclusionMutation({
     kind: 'create',
@@ -454,6 +461,7 @@ async function queueProblemExclusionCreate({ album, items }) {
     snapshot: {
       album,
       albumIndex,
+      searchIndex,
       selectedProblematicKey: state.utility.selectedProblematicKey,
       ruleItems: collectProblemIgnoreItems(currentRule)
         .filter((item) => selectedKeys.has(String(item?.row_key || ''))),

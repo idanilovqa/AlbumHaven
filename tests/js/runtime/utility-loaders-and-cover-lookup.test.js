@@ -21,6 +21,8 @@ function loadUtilityLoaders(capture, state, overrides = {}) {
     renderProblematicFilesTab() {},
     scheduleBrowserAnimationFrame(callback) { callback(); return 1; },
     showToast() {},
+    // utility-list-builders.js: no search or filter is active.
+    problematicServerQuery: () => ({ q: '', reasons: [], key: '' }),
     ...overrides,
   });
   loadPendingProjectionFetch(context);
@@ -42,13 +44,16 @@ function utilityState(items = []) {
 }
 
 test('request capture: Problematic Files loads one bounded page and one complete summary', async () => {
+  // The list is paged (BUGFIX-14): an open reads one page and never the complete list. The test keeps its
+  // registered identity.
   const id = 'js:runtime/utility-loaders-and-cover-lookup.js#fetchSummary';
   await measureInteractionContract(id, {
     setup(problematicAlbums) {
       const items = Array.from({ length: problematicAlbums }, (_, index) => ({ key: `album-${index}`, name: `Album ${index}`, detail_loaded: false }));
-      const capture = createRequestCapture(url => jsonResponse(url.endsWith('?limit=50')
-        ? { complete: false, items: items.slice(0, 50) }
-        : { complete: true, items }));
+      const capture = createRequestCapture(url => jsonResponse({
+        complete: false, has_more: problematicAlbums > 50, next_cursor: problematicAlbums > 50 ? 'next' : '',
+        items: items.slice(0, 50),
+      }));
       return { capture, context: loadUtilityLoaders(capture, utilityState(), {
         // Only an open Settings modal reconciles with the complete list (e01d0d613).
         getUtilityModalElements: () => ({ overlay: { hidden: false } }),
@@ -60,12 +65,9 @@ test('request capture: Problematic Files loads one bounded page and one complete
       const before = capture.requests.length;
       await Promise.all([context.loadProblematicFiles(true), context.loadProblematicFiles(true)]);
       await context.loadProblematicFiles();
-      assert.equal(context.state.utility.problematicFiles.length, problematicAlbums);
+      assert.equal(context.state.utility.problematicFiles.length, Math.min(50, problematicAlbums));
       const requests = capture.urls().slice(before);
-      // Reloading the complete list the open tab shows reads only the complete list (PF-NEW-PROBLEMS).
-      assert.deepEqual(requests, pass === 1
-        ? ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']
-        : ['/utilities/problematic-files']);
+      assert.deepEqual(requests, ['/utilities/problematic-files?limit=50']);
       return { requests };
     },
   });
@@ -87,6 +89,7 @@ test('Problematic Files summary and detail repeat a pending answer from a cold s
   const context = loadUtilityLoaders(capture, utilityState(), {
     setTimeout: (callback) => { timers.push(callback); return timers.length; },
     clearTimeout() {},
+    scheduleBrowserTimeout: () => 0,
   });
   const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await new Promise(setImmediate); };
   const runTimers = async () => { await settle(); while (timers.length) { timers.shift()(); await settle(); } };

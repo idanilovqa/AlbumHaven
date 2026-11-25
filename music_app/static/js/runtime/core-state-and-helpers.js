@@ -193,7 +193,6 @@ const state = {
       problematicServerSearchPendingQuery: '',
       problematicServerSearchSettledQuery: '',
       problematicServerSearchHasMore: false,
-      problematicServerSearchNextOffset: 0,
       problematicServerSearchNextCursor: '',
       problematicServerSearchLoadPromise: null,
       problematicServerSearchCache: {},

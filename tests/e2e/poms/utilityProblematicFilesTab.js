@@ -25,6 +25,8 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.searchSection = new UtilitySearchSection(page, testInfo);
     this.mainBody = new UtilityMainBody(page, testInfo);
     this.listItems = page.locator(this.listItemSelector);
+    // "Loading more results…" under the last row while more pages follow.
+    this.listFooter = page.locator(`${this.sidebarListSelector} [data-problematic-list-footer]`);
     this.activeListItem = page.locator(this.activeListItemSelector);
     this.listEmptyState = page.locator(this.listEmptyStateSelector).first();
     this.detailEmptyState = page.locator('#utility-problematic-detail .utility-empty-state').first();

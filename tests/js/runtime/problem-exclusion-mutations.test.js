@@ -206,6 +206,43 @@ test('album exclusion removes the matching album and track reasons and drops an 
   );
 });
 
+test('an excluded card leaves the search results as well as the loaded pages', () => {
+  // The list is paged (BUGFIX-14): a searched card may be listed by the search results alone.
+  const { context } = loadMutationHelpers();
+  const album = albumFixture();
+  context.state.utility.problematicFiles = [];
+  context.state.utility.problematicServerSearchItems = [album, { key: 'other' }];
+
+  context.applyOptimisticProblemExclusionCard(album, null);
+
+  assert.deepEqual(Array.from(context.state.utility.problematicServerSearchItems, (item) => item.key), ['other']);
+});
+
+test('searching again after an exclusion does not list the excluded album', () => {
+  const { context } = loadMutationHelpers({
+    clearBrowserTimeout() {},
+    isUtilityModalOpen() { return false; },
+  });
+  const album = albumFixture();
+  const other = { ...albumFixture(), key: 'other' };
+  context.state.utility.searchQuery = 'Album';
+  const { key } = context.problematicServerQuery();
+  context.state.utility.problematicServerSearchSettledQuery = key;
+  context.state.utility.problematicServerSearchItems = [album, other];
+  context.state.utility.problematicServerSearchCache = {
+    [key]: { items: [album, other], hasMore: false, nextCursor: '' },
+  };
+
+  context.applyOptimisticProblemExclusionCard(album, null);
+  context.state.utility.searchQuery = '';
+  context.scheduleProblematicServerSearch();
+  context.state.utility.searchQuery = 'Album';
+  context.scheduleProblematicServerSearch();
+
+  assert.equal(context.state.utility.problematicServerSearchSettledQuery, key);
+  assert.deepEqual(Array.from(context.state.utility.problematicServerSearchItems, (item) => item.key), ['other']);
+});
+
 test('album exclusion preserves unrelated reasons on the same card', () => {
   const { context } = loadMutationHelpers();
 
@@ -369,6 +406,26 @@ test('a rejected create restores both surfaces and uses exclusion-specific copy'
   assert.deepEqual(clone(context.state.utility.rules), clone([priorRule]));
   assert.equal(toasts.at(-1)[0], 'Failed to save problem exclusion');
   assert.equal(toasts.at(-1)[1], 'error');
+});
+
+test('a rejected create puts a searched album back into the search results where it was', async () => {
+  const album = albumFixture();
+  const { context } = loadMutationHelpers({
+    async fetch() {
+      return { ok: false, async json() { return { error: 'database unavailable' }; } };
+    },
+  });
+  const first = { key: 'first' };
+  const loaded = { key: 'loaded' };
+  context.state.utility.problematicFiles = [loaded];
+  context.state.utility.problematicServerSearchItems = [first, album];
+  context.state.utility.selectedProblematicKey = album.key;
+
+  await context.queueProblemExclusionCreate({ album, items: [albumItem()] });
+
+  assert.deepEqual(Array.from(context.state.utility.problematicServerSearchItems, (item) => item.key), ['first', album.key]);
+  assert.deepEqual(Array.from(context.state.utility.problematicFiles, (item) => item.key), ['loaded']);
+  assert.equal(context.state.utility.selectedProblematicKey, album.key);
 });
 
 test('an older failure cannot roll back a newer mutation for the same row key', () => {

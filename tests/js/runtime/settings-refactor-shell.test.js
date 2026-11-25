@@ -221,12 +221,24 @@ test('S03 a selected problem filter shows a check instead of the word on', () =>
   context.state.utility.problematicFilesComplete = true;
   context.getProblemReasonTypes = () => ['Missing year', 'Encoding'];
   context.state.utility.problemDropdownOpen = true;
+  context.renderProblemFilterControls(els);
+  assert.match(els.problemFilterMenu.innerHTML, /utility-problem-filter-check" aria-hidden="true"><\/span>/);
+  // A pick re-marks the rendered options in place.
+  const options = ['Missing year', 'Encoding'].map((value) => {
+    const option = element({ 'data-problem-filter-value': value, 'aria-selected': 'false' });
+    const check = { innerHTML: '' };
+    option.querySelector = () => check;
+    return { option, check };
+  });
+  els.problemFilterMenu.querySelectorAll = () => options.map(({ option }) => option);
   context.state.utility.selectedProblemFilters = ['Missing year'];
   context.renderProblemFilterControls(els);
-  const [selected, unselected] = els.problemFilterMenu.innerHTML.split('</button>');
-  assert.match(selected, /utility-problem-filter-check" aria-hidden="true"><svg viewBox="0 0 16 16"><path /);
-  assert.doesNotMatch(selected, />on</);
-  assert.match(unselected, /utility-problem-filter-check" aria-hidden="true"><\/span>/);
+  const [selected, unselected] = options;
+  assert.equal(selected.option.getAttribute('aria-selected'), 'true');
+  assert.match(selected.check.innerHTML, /^<svg viewBox="0 0 16 16"><path /);
+  assert.doesNotMatch(selected.check.innerHTML, /on/);
+  assert.equal(unselected.option.getAttribute('aria-selected'), 'false');
+  assert.equal(unselected.check.innerHTML, '');
 });
 
 test('S03 the filter menu stays closed and disabled until every problem type has loaded', () => {

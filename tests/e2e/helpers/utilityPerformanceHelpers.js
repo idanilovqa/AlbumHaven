@@ -124,7 +124,11 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
   const detailRequests = [];
   const summaryRequests = [];
   const recordDetailRequest = (request) => {
-    if (new URL(request.url()).pathname === summaryPathname) summaryRequests.push(request);
+    const url = new URL(request.url());
+    // A list's first page: later pages and Artist pages follow it as the list is scrolled.
+    if (url.pathname === summaryPathname && !url.searchParams.has('cursor') && !url.searchParams.has('artists')) {
+      summaryRequests.push(request);
+    }
     if (new URL(request.url()).pathname === detailPathname) {
       detailRequests.push(request);
     }
@@ -137,10 +141,6 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
     const summaryResponsePromise = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return url.pathname === summaryPathname && url.searchParams.has('limit');
-    }, { timeout });
-    const completeSummaryResponsePromise = page.waitForResponse((response) => {
-      const url = new URL(response.url());
-      return url.pathname === summaryPathname && !url.searchParams.has('limit');
     }, { timeout });
     let firstVisibleMs;
     const externalFirstVisible = options.onFirstVisible;
@@ -164,17 +164,12 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
         utilityProblematicFilesActions,
         timingOptions,
       );
-    const [readyResult, summaryResponseResult, completeSummaryResponseResult] = await Promise.allSettled(
-      [readyPromise, summaryResponsePromise, completeSummaryResponsePromise],
-    );
+    const [readyResult, summaryResponseResult] = await Promise.allSettled([readyPromise, summaryResponsePromise]);
     if (readyResult.status === 'rejected') {
       throw readyResult.reason;
     }
     if (summaryResponseResult.status === 'rejected') {
       throw summaryResponseResult.reason;
-    }
-    if (completeSummaryResponseResult.status === 'rejected') {
-      throw completeSummaryResponseResult.reason;
     }
     const preemptionAfter = await readGalleryCoverPreemptionSnapshot(page);
     const viewPreemptionAfter = await readStartupViewPreemptionSnapshot(page);
@@ -182,7 +177,6 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
       readyMs: readyResult.value,
       firstVisibleMs,
       summaryResponse: summaryResponseResult.value,
-      completeSummaryResponse: completeSummaryResponseResult.value,
       detailRequestCount: detailRequests.length,
       summaryRequestCount: summaryRequests.length,
       coverPreemptionWindow: {

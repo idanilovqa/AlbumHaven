@@ -192,6 +192,7 @@ async function handleUtilityBootstrapClick(event) {
       state.utility.selectedProblemFilters = nextSelectedFilters;
       state.utility.deferProblematicAutoSelection = true;
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
+      scheduleProblematicServerSearch();
       state.utility.problemDropdownOpen = true;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
@@ -211,6 +212,7 @@ async function handleUtilityBootstrapClick(event) {
     state.utility.selectedProblemFilters = nextSelectedFilters;
     state.utility.deferProblematicAutoSelection = true;
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
+    scheduleProblematicServerSearch();
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
     renderUtilityModalContent();

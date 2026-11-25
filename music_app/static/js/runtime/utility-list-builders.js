@@ -1995,6 +1995,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (problematicAlbum && !listed.placed && !searched.placed) listed.items.push(problematicAlbum);
     state.utility.problematicFiles = listed.items;
     state.utility.problematicServerSearchItems = searched.items;
+    rememberProblematicServerSearchAnswer();
   }
   if (reconcileSelection && mutationOwnsView) {
     const items = getFilteredProblematicAlbums();
@@ -3329,31 +3330,67 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    const optionsHtml = completeReasonTypesAvailable && reasonTypes.length
-      ? reasonTypes.map((reason) => `
-          <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
-            <span class="utility-problem-filter-check" aria-hidden="true">${selectedSet.has(reason) ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>' : ''}</span>
+    const options = completeReasonTypesAvailable ? reasonTypes : [];
+    const optionsKey = JSON.stringify([completeReasonTypesAvailable, options]);
+    // List refreshes and picks re-render the controls while the menu is open: the options are rebuilt
+    // only when the reasons change, keeping the menu's scroll position either way, and a pick
+    // only re-marks them, so the picked option stays where it was.
+    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsKey) {
+      const scrollTop = els.problemFilterMenu.querySelector?.('.trigger-anchor-scroll')?.scrollTop || 0;
+      const optionsHtml = options.length
+        ? options.map((reason) => `
+          <button class="utility-problem-filter-option" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="false">
+            <span class="utility-problem-filter-check" aria-hidden="true"></span>
             <span class="utility-problem-filter-label">${escapeHtml(reason)}</span>
           </button>
         `).join('')
-      : completeReasonTypesAvailable ? '<div class="utility-problem-filter-empty">No problem types found.</div>' : '';
-    // List refreshes re-render the controls while the menu is open; rewriting
-    // unchanged options would reset its scroll position and keyboard focus.
-    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
+        : completeReasonTypesAvailable ? '<div class="utility-problem-filter-empty">No problem types found.</div>' : '';
       els.problemFilterMenu.innerHTML = `<div class="trigger-anchor-scroll">${optionsHtml}</div>`;
-      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
+      const scroller = els.problemFilterMenu.querySelector?.('.trigger-anchor-scroll');
+      if (scroller && scrollTop) scroller.scrollTop = scrollTop;
+      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsKey);
     }
+    (els.problemFilterMenu.querySelectorAll?.('[data-problem-filter-value]') || []).forEach((option) => {
+      const picked = selectedSet.has(option.getAttribute('data-problem-filter-value'));
+      if ((option.getAttribute('aria-selected') === 'true') === picked) return;
+      option.classList.toggle('is-selected', picked);
+      option.setAttribute('aria-selected', String(picked));
+      option.querySelector('.utility-problem-filter-check').innerHTML = picked
+        ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>'
+        : '';
+    });
   }
+}
+
+// A search or a problem filter asks the server, page by page, so matches beyond the rows loaded so far
+// are found without loading the whole list. Its key names the query and the filters together.
+function problematicServerQuery() {
+  const q = String(state.utility.searchQuery || '').trim();
+  const reasons = Array.from(new Set(state.utility.selectedProblemFilters || [])).sort();
+  const key = q || reasons.length ? JSON.stringify([q.toLocaleLowerCase(), reasons]) : '';
+  return { q, reasons, key };
+}
+
+// Reopening a search reuses its answer as the list now shows it, not as the server first sent it.
+function rememberProblematicServerSearchAnswer() {
+  const key = state.utility.problematicServerSearchSettledQuery;
+  state.utility.problematicServerSearchCache = key ? {
+    [key]: {
+      items: state.utility.problematicServerSearchItems,
+      hasMore: state.utility.problematicServerSearchHasMore,
+      nextCursor: state.utility.problematicServerSearchNextCursor,
+    },
+  } : {};
 }
 
 function getFilteredProblematicAlbums() {
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
-  const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
-  const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
-  if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
-  const list = query.length >= 2 && serverQuery === query
-    ? getAllProblematicList()
-    : getProblematicBaseList();
+  // A search or filter shows the server's matches with the loaded rows that match; while its request is
+  // out, nothing (the list says it is searching).
+  const serverKey = problematicServerQuery().key;
+  const settled = Boolean(serverKey) && state.utility.problematicServerSearchSettledQuery === serverKey;
+  if (serverKey && !settled && state.utility.problematicServerSearchPendingQuery === serverKey) return [];
+  const list = settled ? getAllProblematicList() : getProblematicBaseList();
   const selectedFilters = state.utility.selectedProblemFilters || [];
   if (!query && !selectedFilters.length) return list.items;
   // A view is filtered once per committed list, query and selected problem types.

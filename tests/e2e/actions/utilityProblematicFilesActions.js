@@ -356,17 +356,16 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
     };
     const initialMatch = await reveal();
     if (initialMatch) return initialMatch;
-    await this.utilityProblematicFilesTab.waitForPageCondition(
-      () => state.utility?.problematicFilesComplete === true,
-      { timeout: options.timeout || 30000 },
-      { completeInventory: true },
-    );
+    // The list is paged: load every page (or every page of the active search or filter), then look again.
+    await this.scrollListToEnd({ timeout: options.timeout || 30000 });
     const completeMatch = await reveal();
     if (completeMatch) return completeMatch;
     throw new Error(`Exact Problematic Files identity was not found: ${key || `${title} / ${meta}`}`);
   }
 
   async readCompleteListItems(options = {}) {
+    // The list is paged: its every page loads first, and the list returns to where it was.
+    await this.scrollListToEnd({ ...options, returnToStart: true });
     const items = new Map();
     for await (const window of this.walkListWindows({ ...options, restoreScroll: true })) {
       for (const item of window) items.set(item.key, item);
@@ -391,6 +390,33 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       title: ((await this.utilityProblematicFilesTab.titleForListItem(activeItem).textContent()) || '').trim(),
       meta: await this.utilityProblematicFilesTab.readListItemMeta(activeItem),
     };
+  }
+
+  // Scrolls the paged list down with the wheel until its last page has loaded (no "Loading more results…"
+  // under the last row) and its last row is in view; returns the count of rows the list holds.
+  async scrollListToEnd(options = {}) {
+    const tab = this.utilityProblematicFilesTab;
+    const list = tab.sidebar.list;
+    // parity-check: allow-read-only-measurement-evaluate -- read the list's native scroll offset
+    const readOffset = () => list.evaluate(node => node.scrollTop);
+    const startOffset = options.returnToStart ? await readOffset() : null;
+    const box = await list.boundingBox();
+    assert.ok(box, 'The Problematic Files list must be visible');
+    await tab.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(async () => {
+      await tab.page.mouse.wheel(0, 20000);
+      await expect(tab.listFooter).toHaveCount(0, { timeout: 2000 });
+      await expect(tab.listItems.last()).toBeInViewport({ timeout: 2000 });
+    }).toPass({ timeout: options.timeout || 120000 });
+    if (startOffset !== null) {
+      // Back where the list was, with the wheel, once every page has loaded.
+      await expect(async () => {
+        const offset = await readOffset();
+        if (offset !== startOffset) await tab.page.mouse.wheel(0, startOffset - offset);
+        expect(await readOffset()).toBe(startOffset);
+      }).toPass({ timeout: 30000 });
+    }
+    return this.readVisibleResultCount();
   }
 
   async readMountedListItemCount() {
@@ -442,10 +468,18 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       problemType,
       selectedOptionSelector: searchSection.selectedFilterOptionSelector(problemType),
     });
+    await this.waitForServerQueryAnswered();
     if (await searchSection.problemFilterMenu.isVisible()) {
       await searchSection.problemFilterButton.click();
       await searchSection.problemFilterMenu.waitFor({ state: 'hidden', timeout: 60000 });
     }
+  }
+
+  // A problem filter (or search) is answered by the server, page by page (BUGFIX-14): wait for its answer.
+  async waitForServerQueryAnswered(options = {}) {
+    await this.utilityProblematicFilesTab.waitForPageCondition(() => (
+      typeof state !== 'undefined' && !state.utility?.problematicServerSearchPendingQuery
+    ), { timeout: options.timeout || 60000 });
   }
 
   async clearProblemFilter(problemType) {
@@ -468,6 +502,7 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
     }
     await searchSection.filterOptionByValue(problemType).click();
     await waitForFilterRemoved();
+    await this.waitForServerQueryAnswered();
     if (await this.utilityProblematicFilesTab.searchSection.problemFilterMenu.isVisible()) {
       await this.utilityProblematicFilesTab.searchSection.problemFilterButton.click();
       await this.utilityProblematicFilesTab.searchSection.problemFilterMenu.waitFor({ state: 'hidden', timeout: 60000 });
@@ -1163,7 +1198,28 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
         if (!Array.from(document.querySelectorAll(selectors.itemSelector)).includes(active)) observer.disconnect();
       });
       observer.observe(list, { childList: true, subtree: true, characterData: true, attributes: true });
-      return Object.assign(snapshot, { observer });
+      // The overlay can end within milliseconds of a fast acknowledgement: the continuity it shows is read
+      // in the same task that first sees it.
+      const readWhileOverlaid = () => {
+        const overlay = document.querySelector(selectors.overlaySelector);
+        if (!overlay || snapshot.atOverlay) return;
+        const items = Array.from(document.querySelectorAll(selectors.itemSelector));
+        snapshot.atOverlay = {
+          listMutations: snapshot.listMutations,
+          sameNodes: items.length === snapshot.nodes.length && items.every((item, index) => item === snapshot.nodes[index]),
+          sameOrder: items.every((item, index) => item.getAttribute('data-problematic-album-key') === snapshot.order[index]),
+          sameText: items.every((item, index) => String(item.textContent || '').trim() === snapshot.text[index]),
+          scrollTop: Number(list.scrollTop || 0),
+          expectedScrollTop: Number(snapshot.scrollTop || 0),
+          overlayText: String(overlay.textContent || '').trim(),
+          spinnerCount: overlay.querySelectorAll(selectors.spinnerSelector).length,
+          detailBusy: document.querySelector(selectors.detailSelector)?.getAttribute('aria-busy'),
+        };
+        overlayObserver.disconnect();
+      };
+      const overlayObserver = new MutationObserver(readWhileOverlaid);
+      overlayObserver.observe(document.querySelector(selectors.detailSelector), { childList: true, subtree: true, attributes: true });
+      return Object.assign(snapshot, { observer, overlayObserver });
     }, {
       listSelector: this.utilityProblematicFilesTab.sidebarListSelector,
       activeSelector: this.utilityProblematicFilesTab.activeListItemSelector,
@@ -1171,6 +1227,9 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       titleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
       subtitleSelector: this.utilityProblematicFilesTab.listItemSubtitleSelector,
       yearSelector: this.utilityProblematicFilesTab.listItemYearSelector,
+      overlaySelector: this.utilityProblematicFilesTab.mutationOverlaySelector,
+      spinnerSelector: this.utilityProblematicFilesTab.mutationSpinnerSelector,
+      detailSelector: this.utilityProblematicFilesTab.detailScrollerSelector,
     });
     // parity-check: allow-read-only-measurement-evaluate -- read the retained MutationObserver snapshot without changing application state
     return this.mutationObservation.evaluate((snapshot) => ({
@@ -1183,36 +1242,11 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
   }
 
   async waitForMutationOverlayAndReadContinuity() {
-    await this.utilityProblematicFilesTab.mutationOverlay.waitFor({ state: 'visible', timeout: 60000 });
     if (!this.mutationObservation) throw new Error('Mutation continuity observation was not prepared.');
-    // parity-check: allow-read-only-measurement-evaluate -- compare the retained DOM snapshot while the detail overlay is visible
-    return this.mutationObservation.evaluate((snapshot, selectors) => {
-      const list = document.querySelector(selectors.listSelector);
-      const items = Array.from(document.querySelectorAll(selectors.itemSelector));
-      const overlay = document.querySelector(selectors.overlaySelector);
-      return {
-        listMutations: Number(snapshot?.listMutations || 0),
-        sameNodes: Boolean(snapshot) && items.length === snapshot.nodes.length
-          && items.every((item, index) => item === snapshot.nodes[index]),
-        sameOrder: Boolean(snapshot) && items.every((item, index) => (
-          item.getAttribute('data-problematic-album-key') === snapshot.order[index]
-        )),
-        sameText: Boolean(snapshot) && items.every((item, index) => (
-          String(item.textContent || '').trim() === snapshot.text[index]
-        )),
-        scrollTop: Number(list?.scrollTop || 0),
-        expectedScrollTop: Number(snapshot?.scrollTop || 0),
-        overlayText: String(overlay?.textContent || '').trim(),
-        spinnerCount: overlay?.querySelectorAll(selectors.spinnerSelector).length || 0,
-        detailBusy: document.querySelector(selectors.detailSelector)?.getAttribute('aria-busy'),
-      };
-    }, {
-      listSelector: this.utilityProblematicFilesTab.sidebarListSelector,
-      itemSelector: this.utilityProblematicFilesTab.listItemSelector,
-      overlaySelector: this.utilityProblematicFilesTab.mutationOverlaySelector,
-      spinnerSelector: this.utilityProblematicFilesTab.mutationSpinnerSelector,
-      detailSelector: this.utilityProblematicFilesTab.detailScrollerSelector,
-    });
+    // parity-check: allow-read-only-measurement-evaluate -- wait for the snapshot the page took when the overlay first showed
+    await expect.poll(() => this.mutationObservation.evaluate(snapshot => Boolean(snapshot.atOverlay)), { timeout: 60000 }).toBe(true);
+    // parity-check: allow-read-only-measurement-evaluate -- read that retained snapshot without changing application state
+    return this.mutationObservation.evaluate(snapshot => ({ ...snapshot.atOverlay }));
   }
 
   async waitForMutationRemovalAndPreviousSelection(expected, options = {}) {
@@ -1268,6 +1302,35 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
       mutationOverlaySelector: this.utilityProblematicFilesTab.mutationOverlaySelector,
     });
+  }
+
+  // Detail requests and rendered details from now on, until finished after every list load has settled.
+  async startDetailLoadObservation() {
+    const page = this.utilityProblematicFilesTab.page;
+    const detailRequests = [];
+    const recordDetailRequest = (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/utilities/problematic-files/detail') detailRequests.push(url.searchParams.get('album_key'));
+    };
+    page.on('request', recordDetailRequest);
+    await this.startNavigationRenderObservation();
+    return {
+      finish: async () => {
+        await this.utilityProblematicFilesTab.waitForPageCondition(() => (
+          !state.utility?.loadPromise && !state.utility?.problematicPageLoadPromise
+          && !state.utility?.problematicArtistLoadPromise && !Object.keys(state.utility?.detailLoadPromises || {}).length
+        ), { timeout: 30000 });
+        // The renders those loads scheduled land within two frames.
+        await page.waitForFunction(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
+        page.off('request', recordDetailRequest);
+        const records = await this.finishNavigationRenderObservation();
+        return {
+          detailRequests,
+          // Renders of a populated detail (its title shown), not of a loading state.
+          detailContentRenders: records.filter((record) => record.detailRender && record.detailTitle).length,
+        };
+      },
+    };
   }
 
   async isMutationOverlayShown() {

@@ -3182,26 +3182,34 @@ class PostgresLibraryBrowseRepository:
             )
         return payload
 
-    def build_problematic_files_page(self, *, limit: int, cursor: str = "") -> dict[str, object]:
+    def build_problematic_files_page(
+        self, *, limit: int, cursor: str = "", reasons: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        """A page of the list; with ``reasons``, only albums with one of those filter reasons."""
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
-        indexed = self._indexed_problematic_page(limit=limit, cursor=cursor)
+        indexed = self._indexed_problematic_page(limit=limit, cursor=cursor, reasons=reasons)
         if indexed is not None:
             return indexed
-        return self._evaluated_problematic_page(limit=limit, cursor=cursor)
+        return self._evaluated_problematic_page(limit=limit, cursor=cursor, reasons=reasons)
 
-    def _evaluated_problematic_page(self, *, limit: int, cursor: str, needle: str = "") -> dict[str, object]:
+    def _evaluated_problematic_page(
+        self, *, limit: int, cursor: str, needle: str = "", reasons: tuple[str, ...] = (),
+    ) -> dict[str, object]:
         """A page of the directly evaluated list, with the index's cursors."""
+        scope = _problematic_cursor_scope(needle, reasons)
         after: tuple[str, str, str, str] | None = None
         if cursor:
             after = (
-                _decode_problematic_search_cursor(cursor, needle) if needle
+                _decode_problematic_search_cursor(cursor, scope) if scope
                 else _decode_problematic_page_cursor(cursor)
             )[0]
         payload = self.build_problematic_files_payload()
         items = sorted(
             (item for item in payload["items"]
              if (not needle or _problematic_summary_matches_query(item, needle))
+             and (not reasons or set(reasons) & {
+                 _problematic_filter_reason(reason) for reason in item.get("problem_reasons") or ()})
              and (after is None or _problematic_summary_sort_key(item) > after)),
             key=_problematic_summary_sort_key,
         )
@@ -3211,7 +3219,7 @@ class PostgresLibraryBrowseRepository:
         if has_more and items:
             last = _problematic_summary_sort_key(items[-1])
             next_cursor = (
-                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, needle) if needle
+                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, scope) if scope
                 else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
             )
         initial_detail = payload.get("initial_detail")
@@ -3220,11 +3228,11 @@ class PostgresLibraryBrowseRepository:
             "items": items,
             "count": len(items),
             "initial_detail": (
-                initial_detail if not needle and after is None and items
+                initial_detail if not scope and after is None and items
                 and isinstance(initial_detail, Mapping) and initial_detail.get("key") == items[0].get("key")
                 else None
             ),
-            "complete": bool(needle) and not has_more,
+            "complete": bool(scope) and not has_more,
             "has_more": has_more,
             "next_cursor": next_cursor,
             "cursor_restarted": False,
@@ -3276,18 +3284,26 @@ class PostgresLibraryBrowseRepository:
             "view_data_source": _SOURCE_TELEMETRY,
         }
 
-    def _indexed_problematic_page(self, *, limit: int, cursor: str, needle: str = "") -> dict[str, object] | None:
+    def _indexed_problematic_page(
+        self, *, limit: int, cursor: str, needle: str = "", reasons: tuple[str, ...] = (),
+    ) -> dict[str, object] | None:
         """A page (or search page) read from the persisted index; None until it is ready."""
+        scope = _problematic_cursor_scope(needle, reasons)
         after: tuple[str, str, str, str] | None = None
         cursor_restarted = False
         if cursor:
             after, cursor_generation = (
-                _decode_problematic_search_cursor(cursor, needle) if needle
+                _decode_problematic_search_cursor(cursor, scope) if scope
                 else _decode_problematic_page_cursor(cursor)
             )
             if cursor_generation != _PROBLEMATIC_INDEX_CURSOR_GENERATION:
                 after, cursor_restarted = None, True
-        items = problematic_index.read_page(self, limit=limit, after=after, needle=needle)
+        opening = after is None and not scope
+        if opening:
+            read = problematic_index.read_first_page(self, limit=limit)
+            items, reason_types = read if read is not None else (None, [])
+        else:
+            items = problematic_index.read_page(self, limit=limit, after=after, needle=needle, reasons=reasons)
         if items is None:
             return self._problematic_indexing_payload()
         has_more = len(items) > limit
@@ -3296,25 +3312,23 @@ class PostgresLibraryBrowseRepository:
         if has_more and items:
             last = _problematic_summary_sort_key(items[-1])
             next_cursor = (
-                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, needle) if needle
+                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, scope) if scope
                 else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
             )
-        # The first page opens on its first album's detail (no separate detail request).
-        initial_detail = (
-            self.build_problematic_file_detail_payload(items[0]["key"])
-            if items and after is None and not needle else None
-        )
+        # The first page opens on its first album's detail (no separate detail request), and names every
+        # filter reason of the list, which no client holds in full.
+        initial_detail = self.build_problematic_file_detail_payload(items[0]["key"]) if items and opening else None
         return {
             "items": items,
             "count": len(items),
             "initial_detail": initial_detail,
-            "complete": bool(needle) and not has_more,
+            "complete": bool(scope) and not has_more,
             "has_more": has_more,
             "next_cursor": next_cursor,
             "cursor_restarted": cursor_restarted,
             "total_candidate_count": None,
             "projection_cache_status": "indexed",
-            "problem_reason_types": _problematic_filter_reason_types(items),
+            "problem_reason_types": reason_types if opening else _problematic_filter_reason_types(items),
             "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
@@ -3326,16 +3340,18 @@ class PostgresLibraryBrowseRepository:
         *,
         limit: int = 50,
         cursor: str = "",
+        reasons: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        """Every problematic album whose summary text contains ``query``, a page at a time."""
+        """Every problematic album whose summary text contains ``query`` (and, with ``reasons``, that has one
+        of those filter reasons), a page at a time."""
         needle = str(query or "").strip().lower()
         if not needle:
             raise ValueError("Problematic Files search needs a query.")
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files search limit must be between 1 and 200.")
-        page = self._indexed_problematic_page(limit=limit, cursor=cursor, needle=needle)
+        page = self._indexed_problematic_page(limit=limit, cursor=cursor, needle=needle, reasons=reasons)
         if page is None:
-            page = self._evaluated_problematic_page(limit=limit, cursor=cursor, needle=needle)
+            page = self._evaluated_problematic_page(limit=limit, cursor=cursor, needle=needle, reasons=reasons)
         page.update(query=query, search_truncated=False)
         return page
 
@@ -7742,15 +7758,24 @@ def _problematic_track_problem_rows(
     return sorted(rows, key=lambda row: str(row.get("filename") or "").casefold())
 
 
+def _problematic_filter_reason(value: object) -> str:
+    """A problem reason as the filter names it (the index's _FILTER_REASON_SQL; the client's
+    normalizeProblemFilterReason)."""
+    reason = str(value or "").strip()
+    if reason == "Inconsistent year" or reason.startswith("Year mismatch"):
+        return "Year mismatch"
+    return "Incomplete track order" if reason.startswith("Incomplete track order:") else reason
+
+
+def _problematic_cursor_scope(needle: str, reasons: tuple[str, ...]) -> str:
+    """What a filtered page's cursor is bound to: its query and its filter reasons."""
+    return needle if not reasons else "\x1f".join((needle, *sorted(reasons)))
+
+
 def _problematic_filter_reasons(reasons: Iterable[object]) -> list[str]:
     filter_reasons: list[str] = []
     for value in reasons:
-        reason = str(value or "")
-        filter_reason = (
-            "Incomplete track order"
-            if reason.startswith("Incomplete track order:")
-            else reason
-        )
+        filter_reason = _problematic_filter_reason(value)
         if filter_reason and filter_reason not in filter_reasons:
             filter_reasons.append(filter_reason)
     return filter_reasons

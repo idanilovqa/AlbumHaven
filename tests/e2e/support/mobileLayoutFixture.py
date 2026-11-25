@@ -82,6 +82,9 @@ def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[s
                 item['track_number'] = None
             elif item['artist'] == 'Orion Field' and item['album'] == 'Collected Skies 03':
                 item['year'] = None
+            elif item['album'] in {'Collected Skies 01', 'Collected Skies 04', 'Collected Skies 05'}:
+                # A Problematic Files list taller than a phone screen.
+                item['track_number'] = None
     return inventory
 
 

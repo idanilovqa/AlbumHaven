@@ -732,6 +732,13 @@
               "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
               "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 412px",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/mobileTreeModeButtons.functional.spec.js",
+              "case": "FTC-MOBILE-TREE-MODE-001 mode buttons switch the tree without loading; choosing an artist loads the gallery once",
+              "area": "gallery-search"
             }
           ]
         }

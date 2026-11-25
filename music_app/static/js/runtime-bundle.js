@@ -26928,6 +26928,13 @@ async function watchSaveTask(taskId, context = {}) {
     || Number(state.ui?.viewStateRevision || 0) === originatingViewStateRevision
   );
   const originatingViewRequestUrl = String(context.originatingViewRequestUrl || '').trim();
+  // A content search's top artist is refreshed as the same search so its other matches stay. A search for
+  // an artist's own name keeps that artist: re-running it as a search reshuffled the open utilities.
+  const saveTaskRefreshView = () => (
+    (state.view?.search_context?.artist_name_match_artists || []).length
+      ? state.view
+      : viewForSearchRefresh(state.view)
+  );
   const currentViewMatchesOriginRequest = () => (
     Boolean(originatingViewRequestUrl)
     && typeof buildApiUrl === 'function'
@@ -27239,7 +27246,7 @@ async function watchSaveTask(taskId, context = {}) {
             try {
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await ownViewRequest(fetchAndRender(
-                buildApiUrl(viewForSearchRefresh(state.view), { rootFullPayload: true }),
+                buildApiUrl(saveTaskRefreshView(), { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -27338,7 +27345,7 @@ async function watchSaveTask(taskId, context = {}) {
           renderView(currentRenderOptions());
         } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
-            await fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, currentViewRenderOptions());
+            await fetchAndRender(buildApiUrl(saveTaskRefreshView()), false, currentViewRenderOptions());
           } catch (refreshError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but the navigated view could not be refreshed.',
@@ -27455,7 +27462,7 @@ async function watchSaveTask(taskId, context = {}) {
         if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
-              buildApiUrl(viewForSearchRefresh(state.view)),
+              buildApiUrl(saveTaskRefreshView()),
               false,
               currentViewRenderOptions(),
             );

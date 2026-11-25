@@ -3939,7 +3939,7 @@ for (const scenario of [
   { name: 'nonstructural edit', source: 'auto_top_match', field: 'title', reselects: true },
   { name: 'superseded view', source: 'auto_top_match', superseded: true, reselects: true },
   { name: 'changed query', source: 'auto_top_match', changedQuery: true },
-  { name: 'artist-name search', source: 'auto_top_match', artistNameMatch: true, reselects: true },
+  { name: 'artist-name search', source: 'auto_top_match', artistNameMatch: true },
   { name: 'explicit family filter', source: 'auto_top_match', familyFilter: true },
   { name: 'explicit primary filter', source: 'auto_top_match', primaryFilter: true },
   { name: 'failed refresh', source: 'auto_top_match', failedRefresh: true, reselects: true },

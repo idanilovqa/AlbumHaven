@@ -15184,6 +15184,21 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:app-copy.js#setServerUnreachable",
+      "action": "One timer per unreachable spell: the Offline line shows only once the server has stayed unreachable for 10 s",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy.js#setServerUnreachable:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     }
   ]
 }

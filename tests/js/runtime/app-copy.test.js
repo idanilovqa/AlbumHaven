@@ -398,22 +398,33 @@ test('IAR-W14: an ordinary copy on a connected device still waits for the accoun
   assert.equal(notice.hidden, true);
 });
 
-test('a page loaded online shows the Offline line while the server cannot be reached', async () => {
-  const { client, env, notice, settle } = setup({ marker: 'network' });
+test('a page loaded online shows the Offline line once the server stays unreachable for 10 s', async () => {
+  const { client, env, notice, settle, timers } = setup({ marker: 'network' });
   await settle();
+  const grace = () => timers.filter(({ delay }) => delay === 10000).at(-1);
+
+  // A short drop: the server answers again before the grace ends, and the line never shows.
+  client.setServerUnreachable(true);
+  assert.equal(notice.hidden, true, 'not at once: a brief drop must not flash Offline');
+  const brief = grace();
+  client.setServerUnreachable(false);
+  brief.callback();
+  assert.equal(notice.hidden, true);
 
   client.setServerUnreachable(true);
-  assert.equal(notice.hidden, false, 'the line shows without a request having to fail on screen');
+  grace().callback();
+  assert.equal(notice.hidden, false, 'still unreachable after the grace: the line shows');
   assert.deepEqual(env.readOnlyCalls, [], 'a page loaded online keeps its controls');
 
   client.setServerUnreachable(false);
-  assert.equal(notice.hidden, true);
+  assert.equal(notice.hidden, true, 'an answer takes it away at once');
 });
 
 test('a page started from the copy keeps its line after the server answers until its account check does', async () => {
-  const { client, notice } = setup({ marker: 'cache', answer: () => new Promise(() => {}) });
+  const { client, notice, timers } = setup({ marker: 'cache', answer: () => new Promise(() => {}) });
 
   client.setServerUnreachable(true);
+  timers.filter(({ delay }) => delay === 10000).at(-1).callback();
   client.setServerUnreachable(false);
 
   assert.equal(notice.hidden, false, 'its own account check is still on its way');

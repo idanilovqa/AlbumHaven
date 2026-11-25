@@ -24,6 +24,9 @@
   const RETRY_DELAY_MS = 2500;
   const ACCOUNT_CHECK_TIMEOUT_MS = 4000;
   const WEB_SAVE_INTERVAL_MS = 10 * 60 * 1000;
+  // How long the server must stay unreachable before the Offline line shows: a brief network drop,
+  // which playback and loading ride out, never flashes it.
+  const OFFLINE_NOTICE_GRACE_MS = 10000;
 
   function createAppCopyClient({
     document, window, navigator, location, fetch, setTimeout, clearTimeout, capabilities, MessageChannel,
@@ -42,6 +45,7 @@
     // The runtime's one reachability state: a failed request or probe, a silent playback socket, or
     // the device going offline.
     let serverUnreachable = false;
+    let noticeTimer = 0;
     let answered = false;
     let retryTimer = 0;
     // A browser's last save; a page the worker loaded from the server is already kept.
@@ -92,13 +96,21 @@
       if (notice) notice.hidden = !on;
     }
 
-    // The server is unreachable or answers again, in any tab: the line follows. A page started from
-    // the copy keeps it, and stays read-only, until its own account check is answered.
+    // The server is unreachable or answers again, in any tab: the line follows. A short drop never
+    // shows it: only a server still unreachable after OFFLINE_NOTICE_GRACE_MS does, and an answer
+    // takes it away at once. A page started from the copy keeps it, and stays read-only, until its
+    // own account check is answered.
     function setServerUnreachable(on) {
       if (serverUnreachable === on) return;
       serverUnreachable = on;
-      if (on) showNotice(true);
-      else if (!startedFromCopy || answered) showNotice(false);
+      clearTimeout(noticeTimer);
+      noticeTimer = 0;
+      if (on) {
+        noticeTimer = setTimeout(() => {
+          noticeTimer = 0;
+          if (serverUnreachable) showNotice(true);
+        }, OFFLINE_NOTICE_GRACE_MS);
+      } else if (!startedFromCopy || answered) showNotice(false);
     }
 
     function setReadOnly(on) {

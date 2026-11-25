@@ -164,6 +164,7 @@
     },
     {
       "paths": [
+        "music_app/services/child_process.py",
         "music_app/static/js/audio-worklets/gapless-playback-processor.js",
         "music_app/static/js/runtime/player-streaming-engine.js"
       ],
@@ -202,6 +203,15 @@
         "idle-memory",
         "selected-artist",
         "artist-tree-scroll-navigation"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "targets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
       ]
     },
     {

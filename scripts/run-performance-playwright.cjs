@@ -19,6 +19,7 @@ const {
   classifyPerformanceThreshold,
 } = require('./performance-threshold-classification.cjs');
 const { resolveTimingBudget } = require('./performance-times-contract.cjs');
+const { describeQuarantine, listRegisteredCases } = require('./ci/performance-quarantine.cjs');
 const {
   _private: { loadDotEnvFile },
 } = require('./run-playwright.cjs');
@@ -130,18 +131,21 @@ const PERFORMANCE_GROUPS = Object.freeze({
   ],
   'library-browse': [
     'all-artists',
-    'artist-family',
-    'search-all-artists',
     'utility-rules',
-    'selected-artist',
     'album-title-search',
     'track-title-search',
-    'search-browse',
     'root-album-browse',
-    'artist-tree-scroll-navigation',
     'app-open-all-artists',
     'rules-focused',
     'paired-search-calibration',
+  ],
+  // Needs the production-calibration release of synthetic-large-library.
+  'library-browse-production': [
+    'artist-family',
+    'search-all-artists',
+    'selected-artist',
+    'search-browse',
+    'artist-tree-scroll-navigation',
     'notification-history',
   ],
   'idle-memory': [
@@ -251,6 +255,7 @@ const PERFORMANCE_TARGETS = {
     supportsAggregatedThresholdRetries: true,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'search-all-artists': {
@@ -272,6 +277,7 @@ const PERFORMANCE_TARGETS = {
     metricCasePattern: 'FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'utility-problematic-files': {
@@ -404,6 +410,7 @@ const PERFORMANCE_TARGETS = {
     casePattern: 'FTC-GALLERY-STARTUP-005R',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'root-album-browse': {
@@ -785,6 +792,42 @@ function assertScanPerformanceDatabaseConfiguration(targets, env) {
   }
 }
 
+const SYNTHETIC_SCALE_PRESET_ENV = 'ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET';
+const PRODUCTION_CALIBRATION_COUNTS = Object.freeze({ artists: 6345, albums: 14673, tracks: 159547 });
+
+function targetSyntheticScale(target) {
+  return String(target?.env?.[SYNTHETIC_SCALE_PRESET_ENV] || '').trim();
+}
+
+// A target labelled production-calibration must get the library of that size, and an unlabelled
+// target must not silently get it: the released manifest beside the fixture says which one loaded.
+function assertSyntheticFixtureScale(target, fixtureRoot, readFile = fs.readFileSync) {
+  const targetName = target.aliasNames?.[0] || target.specPath;
+  const scale = targetSyntheticScale(target);
+  if (scale && scale !== 'production-calibration') {
+    throw new Error(`Performance target ${targetName} names unknown synthetic scale ${scale}.`);
+  }
+  let counts;
+  try {
+    const manifest = JSON.parse(readFile(path.join(fixtureRoot, 'manifest.json'), 'utf8'));
+    counts = manifest?.profiles?.[target.fixtureProfile]?.counts;
+  } catch (error) {
+    throw new Error(`Performance target ${targetName} cannot read the released fixture manifest: ${error.message}`);
+  }
+  if (!counts) {
+    throw new Error(`Performance target ${targetName} fixture manifest has no ${target.fixtureProfile} counts.`);
+  }
+  const calibrated = Object.entries(PRODUCTION_CALIBRATION_COUNTS)
+    .every(([key, value]) => Number(counts[key]) === value);
+  if (Boolean(scale) !== calibrated) {
+    throw new Error(
+      `Performance target ${targetName} requires ${scale ? 'the production-calibration' : 'the standard'} `
+      + `${target.fixtureProfile} fixture, but ALBUM_HAVEN_FIXTURE_ROOT holds ${counts.artists} artists, `
+      + `${counts.albums} albums and ${counts.tracks} tracks.`,
+    );
+  }
+}
+
 function assertPerformanceTargetFixtureConfiguration(targets, env) {
   for (const target of targets) {
     const targetName = target.aliasNames?.[0] || target.specPath;
@@ -821,6 +864,9 @@ function assertPerformanceTargetFixtureConfiguration(targets, env) {
         throw new Error(
           `Performance target ${targetName} requires ALBUM_HAVEN_MEDIA_ROOT to be the exact media directory under ALBUM_HAVEN_FIXTURE_ROOT.`,
         );
+      }
+      if (target.fixtureMode === PRELOADED_RELEASE_FIXTURE_MODE && expectedProfile === 'synthetic-large-library') {
+        assertSyntheticFixtureScale(target, fixtureRoot);
       }
       continue;
     }
@@ -1181,6 +1227,15 @@ function assertSinglePreloadedFixtureProfile(targets) {
       + 'Run one --test target at a time or use the cloud performance matrix.',
     );
   }
+  const syntheticScales = [...new Set(
+    targets.filter((target) => target.kind === 'synthetic').map(targetSyntheticScale),
+  )];
+  if (syntheticScales.length > 1) {
+    throw new Error(
+      'A grouped performance run cannot combine the standard and production-calibration synthetic libraries. '
+      + 'Run them as separate groups or use the cloud performance matrix.',
+    );
+  }
   const fixtureModes = [...new Set(
     targets
       .filter((target) => target.kind === 'synthetic')
@@ -1406,7 +1461,7 @@ function createAttemptRecord(
   return {
     attemptNumber,
     status,
-    measurementExpected: target.measurementExpected !== false && Boolean(target.reportId),
+    measurementExpected: expectsMeasurement(target),
     expectedCasePatterns: listTargetCasePatterns(target),
     runId: latestMetricsRecord?.runMetrics?.runId || null,
     metricCaseId: latestMetricsRecord?.runMetrics?.caseId || null,
@@ -1448,13 +1503,56 @@ function isFinalizedPlaywrightJsonReport(report) {
   return countKeys.reduce((total, key) => total + stats[key], 0) > 0;
 }
 
+let registeredPerformanceCases = listRegisteredCases();
+
+// Tests that pin the full default suite replace the live registry so a quarantine does not reshape them.
+function setRegisteredPerformanceCases(cases) {
+  const previous = registeredPerformanceCases;
+  registeredPerformanceCases = cases;
+  return previous;
+}
+
+function listTargetRegisteredCases(target) {
+  return registeredPerformanceCases.filter((entry) => entry.target === target.aliasNames?.[0]);
+}
+
+// A pattern is quarantined only when every registered case it selects is quarantined, so a shared
+// case-ID pattern keeps running while any of its cases still runs.
+function isQuarantinedPattern(target, pattern) {
+  const normalizedPattern = normalizeTestHierarchy(pattern);
+  const selectedCases = listTargetRegisteredCases(target)
+    .filter((entry) => normalizeTestHierarchy(entry.case).includes(normalizedPattern));
+  return Boolean(normalizedPattern) && selectedCases.length > 0 && selectedCases.every((entry) => entry.quarantine);
+}
+
+// A target whose metric case is quarantined records no measurement, so the performance reporter never
+// prints its flush marker; such an attempt proves completion with Playwright's JSON report instead.
+function expectsMeasurement(target) {
+  return target.measurementExpected !== false && Boolean(target.reportId)
+    && !isQuarantinedPattern(target, target.metricCasePattern || target.casePattern);
+}
+
+function isFullyQuarantinedTarget(target) {
+  const cases = listTargetRegisteredCases(target);
+  return cases.length > 0 && cases.every((entry) => entry.quarantine);
+}
+
+function announceQuarantinedCases(target) {
+  const lines = listTargetRegisteredCases(target)
+    .filter((entry) => entry.quarantine)
+    .map((entry) => `[performance-quarantine] ${entry.target} > ${entry.case}: ${describeQuarantine(entry)}`);
+  for (const line of lines) console.log(line);
+  const summaryPath = String(process.env.GITHUB_STEP_SUMMARY || '').trim();
+  if (lines.length && summaryPath) fs.appendFileSync(summaryPath, lines.map((line) => `- ${line}\n`).join(''));
+}
+
 function listTargetCasePatterns(target) {
   const configuredPatterns = Array.isArray(target.casePatterns)
     ? target.casePatterns
     : [target.casePattern || target.grep];
   return configuredPatterns
     .map((pattern) => String(pattern || '').trim())
-    .filter(Boolean);
+    .filter((pattern) => pattern && !isQuarantinedPattern(target, pattern));
 }
 
 function normalizeTestHierarchy(value) {
@@ -1999,7 +2097,7 @@ function runPerformanceAttempt(
     : runnerArgs;
   const attemptEnv = buildAttemptEnv(baseEnv, verificationGroup, attemptNumber);
   delete attemptEnv.PLAYWRIGHT_JSON_OUTPUT_FILE;
-  if (target.measurementExpected === false && artifactDir) {
+  if (!expectsMeasurement(target) && artifactDir) {
     attemptEnv.PLAYWRIGHT_JSON_OUTPUT_FILE = path.join(artifactDir, 'report.json');
   }
   if (artifactRoot) {
@@ -2037,7 +2135,7 @@ function runPerformanceAttempt(
   const combinedOutput = `${result.stdout || ''}${result.stderr || ''}`;
   assertNoLiveCoverProviderDomains(combinedOutput, verificationGroup?.label);
   const structuredLastRun = readPlaywrightLastRun(lastRunPath);
-  const structuredJsonReport = target.measurementExpected === false && artifactDir
+  const structuredJsonReport = !expectsMeasurement(target) && artifactDir
     ? readJson(path.join(artifactDir, 'report.json'), null)
     : null;
   return {
@@ -2659,7 +2757,13 @@ function runBatchedPerformanceSuite(targets, options) {
 }
 
 function runSequentialPerformanceSuite(options) {
-  const targets = resolveRequestedTargets(options);
+  const targets = resolveRequestedTargets(options).filter((target) => {
+    announceQuarantinedCases(target);
+    return !isFullyQuarantinedTarget(target);
+  });
+  if (targets.length === 0) {
+    return 0;
+  }
   if (!String(options.targetInput || '').trim()) {
     return runBatchedPerformanceSuite(targets, options);
   }
@@ -2709,6 +2813,7 @@ module.exports = {
   _private: {
     applyTargetEnvOverrides,
     assertSinglePreloadedFixtureProfile,
+    assertSyntheticFixtureScale,
     assertNoLiveCoverProviderDomains,
     buildAggregatedThresholdEvaluation,
     classifyPerformanceAttempt,
@@ -2726,6 +2831,11 @@ module.exports = {
     buildRunnerArgs,
     hasAggregateValidationResults,
     groupBatchesForFullSuiteBudgets,
+    isFullyQuarantinedTarget,
+    isQuarantinedPattern,
+    listTargetCasePatterns,
+    createAttemptRecord,
+    setRegisteredPerformanceCases,
     listDefaultPerformanceTargets,
     listGroupedPerformanceTargets,
     mean,

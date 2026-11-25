@@ -1080,9 +1080,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & "${{ github.workspace }}\album-haven-trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.30 `
+            -Release ${{ matrix.shard == 'synthetic-production-library' && 'fixtures-v1.0.30-production-calibration' || 'fixtures-v1.0.30' }} `
             -Profile ${{ matrix.shard == 'utility-problematic-files' && 'utility-problematic-files' || 'synthetic-large-library' }} `
-            -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752
+            -ManifestSha256 ${{ matrix.shard == 'synthetic-production-library' && '8A2D3DF55A3944338D0D2948BFF21C873EC27DB21140527DF62E9F8EA42B5D97' || '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -2489,11 +2489,13 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      # Every attempt of this run, not only the current one: rerunning failed
+      # jobs leaves the passing shards' evidence in the attempt that ran them.
       - name: Download Python contract evidence
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.test_python.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
-          pattern: foundation-versions-python-windows-*-${{ github.run_attempt }}
+          pattern: foundation-versions-python-windows-*
           path: ${{ runner.temp }}/python-shards
 
       # Every Python bounded-interaction contract must have measured its own

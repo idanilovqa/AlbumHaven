@@ -1701,6 +1701,59 @@ function handleTrackModalCoverImageLoad(imageElement) {
   }
 }
 
+const trackModalCoverRenderTokens = new WeakMap();
+
+function loadTrackModalCoverImage(imageElement, coverSrc, isCurrent) {
+  void loadGalleryCoverPreviewImage(imageElement, coverSrc, { isCurrent }).catch((error) => {
+    if (!isCurrent()) return;
+    console.error('[AlbumHaven][Covers] Failed to load the track-modal cover preview.', error);
+    handleAlbumDisplayCoverImageError(imageElement);
+  });
+}
+
+function isCoverDecodedOnPage(coverSrc) {
+  const absoluteSrc = new URL(coverSrc, window.location.href).href;
+  return Array.from(document.images || []).some((image) => (
+    image.currentSrc === absoluteSrc && image.complete && image.naturalWidth > 0
+  ));
+}
+
+// A changed cover never blanks the one on screen. One already decoded on the page, such as the
+// cover just picked in Cover Look Up, takes its place at once; any other loads and decodes off
+// the page first. One that cannot decode goes through the ordinary visible load, which owns the
+// retry, remote fallback and placeholder.
+async function replaceTrackModalCoverWhenDecoded(shownImage, coverSrc, visualHtml, ownsSwap, ownsModalCover) {
+  const createVisual = () => {
+    const host = document.createElement('span');
+    host.innerHTML = visualHtml;
+    const image = host.querySelector('img');
+    return { image, visual: image.closest('.track-modal-cover-visual') };
+  };
+  if (isCoverDecodedOnPage(coverSrc)) {
+    const next = createVisual();
+    next.image.setAttribute('data-production-cover-src', coverSrc);
+    next.image.setAttribute('src', coverSrc);
+    shownImage.closest('.track-modal-cover-visual').replaceWith(next.visual);
+    if (next.image.complete && next.image.naturalWidth > 0) handleTrackModalCoverImageLoad(next.image);
+    return;
+  }
+  const replacement = createVisual();
+  let decoded = false;
+  try {
+    if (await loadGalleryCoverPreviewImage(replacement.image, coverSrc, { isCurrent: ownsSwap })) {
+      if (typeof replacement.image.decode === 'function') await replacement.image.decode();
+      decoded = true;
+    }
+  } catch (_error) {
+    decoded = false;
+  }
+  if (!ownsSwap()) return;
+  const next = decoded ? replacement : createVisual();
+  if (decoded) handleTrackModalCoverImageLoad(next.image);
+  shownImage.closest('.track-modal-cover-visual').replaceWith(next.visual);
+  if (!decoded) loadTrackModalCoverImage(next.image, coverSrc, () => ownsModalCover(next.image));
+}
+
 function getAlbumDuplicateSources(album) {
   return Array.isArray(album?.duplicate_sources) ? album.duplicate_sources.filter((source) => source && Array.isArray(source.tracks)) : [];
 }
@@ -2006,12 +2059,23 @@ function renderTrackModalRelease(album) {
     const reusableCoverImage = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
       && (
         existingProductionSrc === coverSrc
-        ||
-        existingCoverImage.getAttribute('src') === coverSrc
+        // The preview loader records the absolute URL of the cover it loaded.
+        || existingProductionSrc === new URL(coverSrc, window.location.href).href
+        || existingCoverImage.getAttribute('src') === coverSrc
         || existingCoverImage.currentSrc === new URL(coverSrc, window.location.href).href
       )
       ? existingCoverImage
       : null;
+    const existingCoverIsDecoded = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
+      && existingCoverImage.getAttribute('data-cover-visual-state') === 'ready'
+      && existingCoverImage.complete
+      && existingCoverImage.naturalWidth > 0;
+    const retainedCoverImage = !reusableCoverImage
+      && existingCoverIsDecoded
+      && els.cover.dataset?.coverAlbumKey === resolvedAlbumKey
+      ? existingCoverImage
+      : null;
+    const mountedCoverImage = reusableCoverImage || retainedCoverImage;
     const localCoverRefRaw = String(album?.cover_ref || '').trim();
     const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     const localCoverRef = escapeHtml(localCoverRefRaw);
@@ -2035,34 +2099,36 @@ function renderTrackModalRelease(album) {
       ? els.cover.querySelector('.track-modal-cover-image-slot')
       : null;
     if (canInspectHtmlElements && coverImageSlot instanceof HTMLElement) {
+      const renderToken = {};
+      trackModalCoverRenderTokens.set(els.cover, renderToken);
+      if (els.cover.dataset) els.cover.dataset.coverAlbumKey = resolvedAlbumKey;
+      const coverVisualHtml = buildTrackModalCoverVisualHtml({
+        albumName: String(album?.name || ''),
+        localCoverRef: localCoverRefRaw,
+        remoteCoverUrl: remoteCoverUrlRaw,
+      });
       let modalCoverImage = null;
-      if (reusableCoverImage instanceof HTMLImageElement) {
+      if (mountedCoverImage instanceof HTMLImageElement) {
         const visual = document.createElement('span');
         visual.classList.add('track-modal-cover-visual');
-        const coverIsPending = (
-          reusableCoverImage.getAttribute('data-cover-visual-state') !== 'ready'
-          || !reusableCoverImage.complete
-          || reusableCoverImage.naturalWidth <= 0
-        );
-        if (coverIsPending) {
+        if (!existingCoverIsDecoded) {
           visual.classList.add('is-loading');
           const placeholder = document.createElement('span');
           placeholder.classList.add('cover-placeholder');
           placeholder.setAttribute('aria-hidden', 'true');
           visual.appendChild(placeholder);
         }
-        reusableCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
-        reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
-        reusableCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
-        visual.appendChild(reusableCoverImage);
+        // A retained cover keeps describing itself until its replacement takes its place.
+        if (mountedCoverImage === reusableCoverImage) {
+          mountedCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
+          mountedCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
+          mountedCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
+        }
+        visual.appendChild(mountedCoverImage);
         coverImageSlot.replaceWith(visual);
-        modalCoverImage = reusableCoverImage;
+        modalCoverImage = mountedCoverImage;
       } else {
-        coverImageSlot.outerHTML = buildTrackModalCoverVisualHtml({
-          albumName: String(album?.name || ''),
-          localCoverRef: localCoverRefRaw,
-          remoteCoverUrl: remoteCoverUrlRaw,
-        });
+        coverImageSlot.outerHTML = coverVisualHtml;
         modalCoverImage = els.cover.querySelector('.track-modal-cover-visual img');
       }
       if (
@@ -2070,19 +2136,20 @@ function renderTrackModalRelease(album) {
         && modalCoverImage instanceof HTMLImageElement
         && typeof loadGalleryCoverPreviewImage === 'function'
       ) {
-        const ownsCurrentModalCover = () => {
-          if (els.overlay.hidden || !modalCoverImage.isConnected) return false;
-          if (els.cover.querySelector('.track-modal-cover-visual img') !== modalCoverImage) return false;
+        const ownsModalCover = (imageElement) => {
+          if (els.overlay.hidden || !imageElement.isConnected) return false;
+          if (els.cover.querySelector('.track-modal-cover-visual img') !== imageElement) return false;
           const currentAlbum = state.modalReleases[state.modalReleaseIndex] || null;
           return getTrackModalAlbumRequestKey(currentAlbum) === resolvedAlbumKey;
         };
-        void loadGalleryCoverPreviewImage(modalCoverImage, coverSrc, {
-          isCurrent: ownsCurrentModalCover,
-        }).catch((error) => {
-          if (!ownsCurrentModalCover()) return;
-          console.error('[AlbumHaven][Covers] Failed to load the track-modal cover preview.', error);
-          handleAlbumDisplayCoverImageError(modalCoverImage);
-        });
+        if (retainedCoverImage) {
+          // A later render supersedes a swap; a visible load survives same-cover re-renders.
+          const ownsSwap = () => ownsModalCover(retainedCoverImage)
+            && trackModalCoverRenderTokens.get(els.cover) === renderToken;
+          void replaceTrackModalCoverWhenDecoded(retainedCoverImage, coverSrc, coverVisualHtml, ownsSwap, ownsModalCover);
+        } else {
+          loadTrackModalCoverImage(modalCoverImage, coverSrc, () => ownsModalCover(modalCoverImage));
+        }
       }
     }
   } else {

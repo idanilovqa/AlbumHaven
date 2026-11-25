@@ -65,13 +65,69 @@ def test_app_page_fetched_as_a_copy_is_marked_for_its_account_only(asgi_app):
     _account_status, _account_headers, account_body = run_asgi_request(asgi_app, "GET", "/app-copy/account")
 
     assert status == 200
-    assert headers["cache-control"] == "private, no-cache"
+    assert headers["cache-control"] == "private, no-store"
     assert "pragma" not in headers
     assert headers["x-album-haven-app-copy"] == decode_json(account_body)["account"]
     assert f'<meta name="album-haven-app-copy" content="network" data-account="{headers["x-album-haven-app-copy"]}">'.encode() in body
     assert headers["x-album-haven-asset-version"] == asgi_app.state.runtime_asset_version
     # The page is rendered as for any request; the worker removes file paths before storing it.
     assert _bootstrap(body)["initial_view"]["music_dir"] == str(asgi_app.state.config["MUSIC_DIR"])
+
+
+# The worker keeps a marked page as it arrives, so only a page that fits a copy is marked. All made up.
+@pytest.mark.parametrize("view", [
+    {"playback_context": {"tracks": [{"path": "Q:\\Made Up\\01.flac"}]}},
+    {"groups": [{"albums": [{"open_directory_paths": ["/opt/made-up/Album"]}]}]},
+    {"non_album_tracks": [{"display_path": "Artist\\loose.flac"}]},
+    {"duplicate_sources": [{"folder": "made-up/Album"}]},
+    {"tracks": [{"track_path": "made-up/01.flac"}]},
+    {"unlisted": "Q:\\Made Up\\x"},
+    {"unlisted": "Q:/Made Up/x"},
+    {"unlisted": "\\\\made-up\\share\\x"},
+    {"unlisted": "cannot read Q:\\Made Up\\x"},
+    {"by_path": {"Q:\\Made Up\\x": 1}},
+    {"stream": "/track?path=Q%3A%5CMade%20Up%5C01.flac"},
+    {"unlisted": "/music/made-up/01.flac"},
+    {"unlisted": "/data/made-up/01.flac"},
+])
+def test_only_a_page_that_fits_a_copy_is_marked(asgi_app, monkeypatch, view):
+    from music_app.routes import web_asgi
+
+    build = web_asgi._build_bootstrap_payload
+
+    def with_view(**kwargs):
+        payload, *rest = build(**kwargs)
+        payload["initial_view"] = {**payload["initial_view"], **view}
+        return (payload, *rest)
+
+    monkeypatch.setattr(web_asgi, "_build_bootstrap_payload", with_view)
+    status, headers, body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+
+    assert status == 200
+    assert "x-album-haven-app-copy" not in headers
+    assert "no-store" in headers["cache-control"]
+    assert b'name="album-haven-app-copy"' not in body
+
+
+def test_an_address_naming_a_path_is_never_a_copy(asgi_app):
+    _status, headers, _body = run_asgi_request(
+        asgi_app, "GET", "/", headers=COPY_REQUEST, query={"surface": "albums", "note": "Q:\\Made Up\\x"},
+    )
+
+    assert "x-album-haven-app-copy" not in headers
+
+
+@pytest.mark.parametrize("view", [
+    {"cover_path": "Q:\\Made Up\\cover.jpg"},
+    {"music_dir": "Q:\\Made Up"},
+    {"cover_preview_url": "/cover?path=Q%3A%5CMade%20Up%5Ccover.jpg&size=480"},
+    {"remote_cover_url": "https://covers.example/a/b.jpg"},
+    {"name": "Side A: B / C", "key": "artist::album", "open_directory_paths": [], "path": ""},
+])
+def test_what_a_copy_already_handles_still_fits(view):
+    from music_app.services.app_copy import fits_app_copy
+
+    assert fits_app_copy({"initial_view": view}, [])
 
 
 def test_copy_account_key_is_opaque_and_stable(asgi_app):
@@ -292,7 +348,7 @@ def test_data_fetched_by_the_copy_is_marked_for_its_account_with_the_fields_it_m
 
     assert status == 200
     assert decode_json(body)["album"]["key"] == "Broadcast::Tender"
-    assert headers["cache-control"] == "private, no-cache"
+    assert headers["cache-control"] == "private, no-store"
     assert headers["x-album-haven-app-copy"] == app_copy_account(SimpleNamespace(account_id=7))
     assert headers["x-album-haven-asset-version"] == "v9"
     assert int(headers["x-album-haven-app-copy-expires"]) > 0

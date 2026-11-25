@@ -16,6 +16,15 @@ from urllib.parse import urlparse
 
 import pytest
 
+from tests.e2e.support import localPostgresGuard
+
+# Before any test or app module can connect: a local run reaches only a throwaway cluster it names.
+if not localPostgresGuard.is_github_actions():
+    if os.environ.get("PGPORT", "").strip() in {"", localPostgresGuard.INSTALLED_SERVER_PORT}:
+        os.environ["PGPORT"] = localPostgresGuard.UNSERVED_PORT
+    os.environ.pop("PGSERVICE", None)
+    localPostgresGuard.install()
+
 
 _SAFE_PYTEST_ENV = {
     "LASTFM_API_ENABLED": "false",
@@ -693,8 +702,8 @@ def asgi_request():
 def unreachable_postgres_pool(monkeypatch: pytest.MonkeyPatch):
     """Every pool checkout fails at once, as `psycopg.connect` does against a missing database.
 
-    A real pool's first checkout before it has ever connected may wait up to 5 s while its
-    background attempts fail, which breaks tests that time their own threads in seconds.
+    A real pool fails only once the driver's attempt has failed, which takes seconds against a
+    closed port on Windows and breaks tests that time their own threads in seconds.
     """
     import psycopg
 

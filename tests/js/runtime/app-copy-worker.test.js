@@ -124,6 +124,33 @@ test('a fresh copy answers the navigation without waiting for the network', asyn
   assert.match(await response.text(), /content="cache" data-account="acct-a"/);
 });
 
+test('a page answered from the copy is no-store, as the page the server sends', async () => {
+  const { calls, handle } = setup();
+  await handle(navigation('/'));
+
+  const response = await handle(navigation('/'));
+
+  assert.equal(calls.length, 1, 'still answered at once');
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+  assert.match(await response.text(), /content="cache"/);
+});
+
+test('a save reads each page it asked for to the end, also one that is not kept', async () => {
+  const answers = [];
+  const { worker } = setup({
+    respond: () => {
+      const answer = new Response('<html></html>', { headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' } });
+      answers.push(answer);
+      return answer;
+    },
+  });
+
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+
+  assert.equal(answers.length, 2, 'the view, and Home beside it');
+  assert.deepEqual(answers.map(answer => answer.bodyUsed), [true, true]);
+});
+
 test('a copy of another page is not shown for this one', async () => {
   const { calls, handle } = setup();
   await handle(navigation('/?artist=Broadcast'));
@@ -164,10 +191,77 @@ test('a copy just under seven days old is still shown', async () => {
   assert.equal(calls.length, 1);
 });
 
-test('IAR-009: responses the server did not mark as copies, or marked no-store, are never kept', async () => {
+test('IAR-009: a marked page is kept by its mark, whatever the HTTP cache may store', async () => {
+  const { caches, handle } = setup({ respond: () => page('acct-a', { cacheControl: 'private, no-store' }) });
+
+  await handle(navigation('/'));
+
+  assert.deepEqual(accountCaches(caches), [`${CACHE_PREFIX}acct-a`]);
+});
+
+test('saving a page the server did not mark still keeps Home, which a full restart opens', async () => {
+  const unmarked = () => new Response('<html></html>', { headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' } });
+  const { caches, worker } = setup({ respond: request => (new URL(request.url).search ? unmarked() : page('acct-a')) });
+
+  const reply = await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+
+  assert.deepEqual(reply, { stored: true });
+  const kept = [...caches.stores.get(`${CACHE_PREFIX}acct-a`).entries.keys()];
+  assert.ok(kept.includes(`${ORIGIN}/`));
+  assert.ok(!kept.some(url => url.includes('artist=')));
+});
+
+test('signing out deletes copies of every format', async () => {
+  const { caches, handle } = setup();
+  await (await caches.open('album-haven-app-copy-v1:acct-a')).put(`${ORIGIN}/`, new Response('old'));
+
+  await handle(resource('/logout', 'POST'));
+
+  assert.deepEqual(await caches.keys(), []);
+});
+
+async function activatedOver(oldCopy, open) {
+  const caches = fakeCaches();
+  await (await caches.open('album-haven-gallery-previews-v2')).put(`${ORIGIN}/preview`, new Response('preview'));
+  if (oldCopy) await (await caches.open(oldCopy)).put(`${ORIGIN}/`, new Response('old'));
+  const listeners = new Map();
+  const sent = [];
+  const scope = {
+    caches, fetch: async () => assert.fail('activation itself fetches nothing'),
+    location: { origin: ORIGIN, href: `${ORIGIN}/app-copy-worker.js?mode=web` }, crypto: globalThis.crypto,
+    registration: { active: { postMessage: message => sent.push({ ...message }) } },
+    clients: { claim: async () => {}, matchAll: async () => open.map(url => ({ url: `${ORIGIN}${url}` })) },
+    skipWaiting: async () => {},
+    addEventListener: (type, listener) => listeners.set(type, listener),
+  };
+  const file = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy-worker.js');
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), { self: scope, URL, Request, Response, TextEncoder }, { filename: file });
+  let work;
+  listeners.get('activate')({ waitUntil: (promise) => { work = promise; } });
+  await work;
+  return { sent, names: await caches.keys() };
+}
+
+test('a new format deletes the earlier copy and saves the open app pages, at most as many as a copy holds', async () => {
+  const open = ['/?artist=Mono', '/account', '/?artist=Mono', '/', ...Array.from({ length: 500 }, (_, index) => `/?artist=${index}`)];
+
+  const { sent, names } = await activatedOver('album-haven-app-copy-v1:acct-a', open);
+
+  assert.deepEqual(names, ['album-haven-gallery-previews-v2']);
+  assert.equal(sent.length, 4);
+  assert.deepEqual(sent.slice(0, 2), [{ type: 'save', url: `${ORIGIN}/?artist=Mono` }, { type: 'save', url: `${ORIGIN}/` }]);
+});
+
+test('an update within the format deletes and saves nothing', async () => {
+  const { sent, names } = await activatedOver(`${CACHE_PREFIX}acct-a`, ['/']);
+
+  assert.equal(names.length, 2);
+  assert.deepEqual(sent, []);
+});
+
+test('IAR-009: responses the server did not mark as copies are never kept', async () => {
   for (const response of [
     new Response('<html></html>', { headers: { 'Content-Type': 'text/html' } }),
-    page('acct-a', { cacheControl: 'no-store, max-age=0' }),
     page('acct-a', { status: 500 }),
   ]) {
     const { caches, handle } = setup({ respond: () => response });
@@ -1593,7 +1687,7 @@ const REDACT_HEADER = 'X-Album-Haven-App-Copy-Redact';
 const REDACTED = 'path,src,track_paths,music_dir';
 
 function dataAnswer(payload, {
-  account = 'acct-a', status = 200, cacheControl = 'private, no-cache', marked = true, expires,
+  account = 'acct-a', status = 200, cacheControl = 'private, no-store', marked = true, expires,
 } = {}) {
   const headers = { 'Content-Type': 'application/json', 'Cache-Control': cacheControl };
   if (marked) Object.assign(headers, { [COPY_HEADER]: account, [REDACT_HEADER]: REDACTED });
@@ -1690,12 +1784,12 @@ test('IAR-W20: an answer still holding a path outside the listed fields is not k
   await assert.rejects(handle(resource(other)), TypeError);
 });
 
-test('IAR-W20: data the server did not mark, marked no-store, failed or searched is never kept', async () => {
+test('IAR-W20: data the server did not mark, failed or searched is never kept; marked, it is kept whatever the HTTP cache may store', async () => {
   const urls = ['/album-details?album_key=A', '/album-details?album_key=B', '/album-details?album_key=C',
     '/view-data?surface=albums&q=Broad', '/album-details?track_path=D%3A%5CMusic%5Cx.flac'];
   const answers = [
     () => dataAnswer({ ok: true }, { marked: false }),
-    () => dataAnswer({ ok: true }, { cacheControl: 'no-store' }),
+    () => dataAnswer({ ok: false, error: 'Server error' }, { status: 500 }),
     () => dataAnswer({ ok: false, error: 'Album not found' }, { status: 404 }),
     () => dataAnswer({ ok: true }),
     () => dataAnswer({ ok: true }),

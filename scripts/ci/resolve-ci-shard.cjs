@@ -41,9 +41,20 @@ const PERFORMANCE_SHARDS = Object.freeze({
     harness: 'managed-app',
     basePort: 4173,
     targets: [
-      'idle-memory', 'all-artists', 'artist-family', 'search-all-artists', 'utility-rules',
-      'selected-artist', 'edit-tags-post-edit', 'cover-lookup', 'album-title-search', 'track-title-search', 'search-browse', 'root-album-browse', 'artist-tree-scroll-navigation', 'app-open-all-artists', 'notification-history',
-      'rules-focused', 'paired-search-calibration',
+      'idle-memory', 'all-artists', 'utility-rules', 'album-title-search', 'track-title-search',
+      'root-album-browse', 'app-open-all-artists', 'rules-focused', 'paired-search-calibration',
+    ],
+  },
+  // The same profile released at the owner's library size (fixtures-v1.0.30-production-calibration).
+  'synthetic-production-library': {
+    fixtureProfile: 'synthetic-large-library',
+    fixtureDownloadProfile: 'synthetic-large-library',
+    fixtureMode: 'preloaded-release',
+    harness: 'managed-app',
+    basePort: 4373,
+    targets: [
+      'artist-family', 'search-all-artists', 'selected-artist', 'edit-tags-post-edit', 'cover-lookup',
+      'search-browse', 'artist-tree-scroll-navigation', 'notification-history',
     ],
   },
   'utility-problematic-files': {

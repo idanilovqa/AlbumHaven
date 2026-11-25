@@ -7,6 +7,47 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.52 - 2026-11-24
+
+- Cover provider answers (cover searches, MusicBrainz release lists, Cover Art Archive results) are kept in indexed database rows instead of one JSON file that every refresh loaded and every new answer rewrote. An app that may write imports an existing file once, after start-up readiness, with logged progress; the file stays on disk. Cover refreshes in one process share one answer store per database, so a provider miss is not searched again by the next refresh; answers a browse-only app cannot store are kept in memory, capped at 4096.
+- Saved loops keep waiting for their waveform while the server builds waveforms one at a time, so a fifth loop no longer stays blank.
+- Album Details keeps the current cover on screen while a changed cover loads, instead of showing an empty image; a cover just picked in Cover Look Up, already loaded on the page, shows at once.
+- Opening an artist right after a restart no longer waits for the whole-library sidebar to be rebuilt: the artist's gallery shows at once and the sidebar loads on its own.
+- Test and CI only: library-size performance targets run on the published production-calibration fixture.
+
+## 0.11.51 - 2026-11-24
+
+- Signing in no longer gets stuck on the login page when the page was left open too long or another tab opened the login page. The app quietly gets a fresh sign-in token and signs you in with what you typed; if it still can't, it asks you to sign in again.
+- When a track moved back into its album while another album split from it still shared the folder, the album's cover could vanish for a few seconds. Every album in a split folder now keeps the folder's cover through the next library pass. Covers you chose yourself are never touched.
+- A startup response set aside because a cover or tag save happened meanwhile is now asked for again, so the page finishes its first refresh instead of keeping a partial view.
+- Search, browsing and Problematic Files details share the cached artist alias maps instead of copying them on every request.
+- Browser history entries hold only their place in the app's navigation, not a copy of the view: a view is named by its address. Entries saved earlier keep only that place when the page loads again, and a tag save that moves the current view replaces the address the same way.
+- Test and CI only: local tests and test runners refuse the installed Postgres server's port outside GitHub Actions, and the Android in-app update test rides out dropped device connections.
+
+## 0.11.50 - 2026-11-23
+
+- One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.
+- Problematic Files no longer loads its full list twice when opened right after the page loads: the first status check takes the folder watcher's health as its starting point instead of a change.
+- Test and CI only: the freeze guard reads an f-string as one SQL text and follows callbacks handed over inside unpacked options, a failed functional gate shard uploads its trace, the startup hydration contract stubs its history scope lookup, and a Cover Lookup timing failure names the longest animation frames and their scripts.
+
+## 0.11.49 - 2026-11-23
+
+- Albums the watcher finds now appear in the Artist Tree without another navigation: a gallery answered before the library change was published is fetched again after 3, 6, 12, 24, 48 and 96 seconds, six times at most.
+
+## 0.11.48 - 2026-11-22
+
+- Scrolling the gallery while its next page loads no longer leaves that scroll unfinished: the page added after the scroll settles now counts as rendered for it.
+- Test and CI only: three end-to-end and live database tests no longer race the app's own background work, and the required check reads the Python shards' results from every attempt of a run.
+
+## 0.11.47 - 2026-11-22
+
+- Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.
+
+## 0.11.46 - 2026-11-22
+
+- Fixed a 0.11.45 regression: one failed attempt to open another database connection could make requests fail even though working connections were free. Requests now fail fast only when no working connection exists, a slow first connection is waited for, and the app reconnects within seconds after Postgres returns.
+- Fixed a second 0.11.45 regression: a database setting made by one task could carry over to the next one, so a later change could be saved only partly if it failed. Every borrowed connection now starts with standard settings, Edit Tags locks use connections nothing else reuses, and the freeze guard rejects session state on shared connections.
+
 ## 0.11.45 - 2026-11-22
 
 - Every request and background check now borrows a database connection from a shared pool instead of opening a new one, and the freeze guard rejects any new code that opens its own. If the database is unreachable, requests fail at once instead of waiting 30 seconds.

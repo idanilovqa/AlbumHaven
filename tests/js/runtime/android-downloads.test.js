@@ -19,6 +19,8 @@ function loadRuntime({ handshake = handshakePayload, shell = true, answer = () =
   const sent = [];
   const fetches = [];
   const anchors = [];
+  const revoked = [];
+  let objectUrls = 0;
   const bridge = {
     postMessage(raw) {
       const message = JSON.parse(raw);
@@ -35,7 +37,10 @@ function loadRuntime({ handshake = handshakePayload, shell = true, answer = () =
     queueMicrotask,
     TextEncoder,
     Blob,
-    URL: { createObjectURL: () => 'blob:page-file', revokeObjectURL() {} },
+    URL: {
+      createObjectURL: () => ((objectUrls += 1) === 1 ? 'blob:page-file' : `blob:page-file-${objectUrls}`),
+      revokeObjectURL: url => revoked.push(url),
+    },
     document: {
       body: { appendChild() {} },
       createElement: () => {
@@ -53,7 +58,7 @@ function loadRuntime({ handshake = handshakePayload, shell = true, answer = () =
   loadCapabilityUi(context);
   vm.runInContext(fs.readFileSync(path.join(runtimeDir, 'android-bridge-client.js'), 'utf8'), context);
   vm.runInContext('globalThis.api = { connectAndroidBridge, downloadPageFile };', context);
-  return { api: context.api, bridge, sent, fetches, anchors };
+  return { api: context.api, bridge, sent, fetches, anchors, revoked };
 }
 
 async function askForLink(runtime, request = fixture.downloadLinkRequest) {
@@ -132,3 +137,12 @@ for (const [name, options] of [['a browser', { shell: false }], ['a shell withou
     assert.equal(runtime.sent.filter(message => message.name === 'files.save').length, 0);
   });
 }
+
+test('a page-built download keeps its blob URL until the next download replaces it', async () => {
+  const runtime = loadRuntime({ shell: false });
+  await runtime.api.downloadPageFile('first.json', 'application/json', '{}');
+  assert.deepEqual(runtime.revoked, []);
+  await runtime.api.downloadPageFile('second.json', 'application/json', '{}');
+  assert.deepEqual(runtime.revoked, ['blob:page-file']);
+  assert.deepEqual(runtime.anchors.map(anchor => anchor.href), ['blob:page-file', 'blob:page-file-2']);
+});

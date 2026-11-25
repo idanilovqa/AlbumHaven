@@ -10,11 +10,13 @@
 // - `web` (a browser, `?mode=web`): the server answers first, however slowly; the copy answers only
 //   when the server cannot be reached or fails at its gateway.
 // A copy is shown for at most seven days, and never past the end of the session the server named.
-// Only responses the server marked as copies for an account are kept, never anything no-store.
-// Signing in or out deletes every copy, as does a page for another account. The copy is only for
-// showing: every write goes to the server.
+// Only responses the server marked as copies for an account are kept, and no asset or cover that
+// is no-store. A page or a data answer always is: its mark alone lets it be kept. Signing in or out
+// deletes every copy, as does a page for another account. The copy is only for showing: every
+// write goes to the server.
 //
-// No file path is stored on the device: the server names covers by opaque reference
+// No file path is stored on the device: the server marks no page that carries one (app_copy.py,
+// fits_app_copy), beside what is emptied here. The server names covers by opaque reference
 // (`/cover/<reference>`), their bytes are kept under that reference and size, least recently seen
 // out first past 200 MB, and any `cover_path` or `music_dir` left in a page is emptied. Data loses
 // every field the server lists as a path; an answer still holding one is not kept.
@@ -26,7 +28,8 @@
   const EXPIRES_HEADER = 'X-Album-Haven-App-Copy-Expires';
   const COPY_FAMILY = 'album-haven-app-copy-';
   // v2: covers kept by server reference (v1 copies named them by an on-device hash of their path).
-  const CACHE_PREFIX = `${COPY_FAMILY}v2:`;
+  // v2.1: only pages that fit a copy are marked. Copies of earlier formats go on activation.
+  const CACHE_PREFIX = `${COPY_FAMILY}v2.1:`;
   const META_PATH = '/__app-copy__/meta';
   const MAX_COPY_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   const MAX_PAGES = 4;
@@ -327,7 +330,7 @@
       })).then(answer => ({
         answer,
         signedOut: answer.type === 'opaqueredirect' || (answer.status >= 300 && answer.status < 400),
-        copy: answer.status === 200 && answer.headers.get(COPY_HEADER) && !noStore(answer)
+        copy: answer.status === 200 && answer.headers.get(COPY_HEADER)
           && (answer.headers.get('Content-Type') || '').startsWith('text/html') ? answer.clone() : null,
       }));
       page.kept = later(event, async () => {
@@ -422,10 +425,19 @@
       return (await freshCopy(url)) || (await standInCopy(url)) || network;
     }
 
+    // A kept page is stored with no policy of its own, and would then be restorable from memory by
+    // Back, whoever is signed in by then: it is answered no-store, as the server's page is.
+    function pageAnswer(response) {
+      if (response.status !== 200 || noStore(response)) return response;
+      const headers = new Headers(response.headers);
+      headers.set('Cache-Control', 'private, no-store');
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    }
+
     async function navigate(request, event) {
       const url = new URL(request.url);
-      if (mode === 'web') return serverFirst(url, event);
-      return (await freshCopy(url)) || fetchPage(url, { running: true }, event);
+      if (mode === 'web') return pageAnswer(await serverFirst(url, event));
+      return pageAnswer((await freshCopy(url)) || await fetchPage(url, { running: true }, event));
     }
 
     // Stores [response] for [request] unless signing out came after [fetchedIn]. The body is read
@@ -1016,7 +1028,7 @@
       const fetchedIn = generation;
       // Past the browser's HTTP cache, like the page: it would store the answer with its file paths.
       const arrived = fetch(new Request(request, { headers, cache: 'no-store' })).then((response) => {
-        if (response.status === 200 && response.headers.get(COPY_HEADER) && !noStore(response)) {
+        if (response.status === 200 && response.headers.get(COPY_HEADER)) {
           const copy = response.clone();
           later(event, () => keepData(url, copy, fetchedIn, event));
         }
@@ -1084,6 +1096,13 @@
     };
     const handle = (name, request, event) => handlers[name](request, event);
 
+    // A save reads its answer to the end (unread, a no-store one never finishes), then waits for the
+    // copy to be updated from it.
+    async function savePage(url, page) {
+      await (await fetchPage(url, page)).arrayBuffer();
+      await page.kept;
+    }
+
     // The page asks to keep its current view, to forget every copy, or whether a copy exists.
     async function message(data) {
       if (data?.type === 'forget') await forget();
@@ -1091,15 +1110,13 @@
         const url = new URL(String(data.url || ''), origin);
         if (url.origin === origin && isAppPage(url)) {
           try {
-            const page = { running: false };
-            await fetchPage(url, page);
-            await page.kept;
-            // A full restart opens Home, so "a copy exists" must cover it too.
+            const savedIn = generation;
+            await savePage(url, { running: false });
+            // A full restart opens Home, so "a copy exists" must cover it too, also when the view was
+            // not kept; not once signing out came since.
             const target = await accountCache();
-            if (target && pageKey(url) !== '/' && !isFresh((await readMeta(target.cache)).pages['/'])) {
-              const home = { running: false, beside: true };
-              await fetchPage(new URL('/', origin), home);
-              await home.kept;
+            if (savedIn === generation && pageKey(url) !== '/' && !(target && isFresh((await readMeta(target.cache)).pages['/']))) {
+              await savePage(new URL('/', origin), { running: false, beside: true });
             }
             await fillAssets();
             await fillCovers();
@@ -1121,10 +1138,12 @@
       }));
     }
 
-    // Copies kept by earlier versions of the worker are never shown, so they go now.
+    // Copies kept by earlier versions of the worker are never shown, so they go now. True when one
+    // went: the pages open then have none until they save.
     async function activate() {
       const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY) && !key.startsWith(CACHE_PREFIX));
       await Promise.all(names.map(name => caches.delete(name)));
+      return names.length > 0;
     }
 
     return {
@@ -1143,7 +1162,17 @@
       caches: root.caches, fetch: root.fetch.bind(root), origin: root.location.origin, mode,
     });
     root.addEventListener('install', event => event.waitUntil(worker.install(event).then(() => root.skipWaiting())));
-    root.addEventListener('activate', event => event.waitUntil(worker.activate().then(() => root.clients.claim())));
+    // After a new format, the open app pages save as their own saves do. Each is a message to this
+    // worker: activation holds every request, and a save's fills must not.
+    root.addEventListener('activate', event => event.waitUntil(worker.activate().then(async (replaced) => {
+      await root.clients.claim();
+      if (!replaced) return;
+      const open = (await root.clients.matchAll({ type: 'window' })).map(client => client.url)
+        .filter(url => isAppPage(new URL(url)));
+      for (const url of Array.from(new Set(open)).slice(0, MAX_PAGES)) {
+        root.registration.active?.postMessage({ type: 'save', url });
+      }
+    })));
     root.addEventListener('fetch', (event) => {
       const name = worker.route(event.request);
       // Sign-in and sign-out requests go on unchanged; only the copy goes, at once.

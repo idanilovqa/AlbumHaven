@@ -26,7 +26,8 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Pgbin)) { $Pgbin = "C:\PostgreSQL\$PostgresMajor\bin" }
 
 $gates = @{
-    'search' = @{ FixtureProfiles = @('functional-core', 'synthetic-large-library') }
+    # synthetic-production-library is the synthetic-large-library profile at the owner's library size.
+    'search' = @{ FixtureProfiles = @('functional-core', 'synthetic-production-library') }
     'problematic-files' = @{
         FixtureProfiles = @('functional-core', 'utility-problematic-files')
         RequiredEnvironment = @('ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL')
@@ -46,19 +47,19 @@ $gates = @{
         Performance = @{ Profile = 'utility-problematic-files'; Targets = 'utility-problematic-files,problematic-files-focused' }
     }
     'html-reload' = @{
-        FixtureProfiles = @('synthetic-large-library')
+        FixtureProfiles = @('synthetic-production-library')
         Pytest = @(, @('tests/py/test_web_bootstrap.py', 'tests/py/test_runtime_asset_versions.py',
                 'tests/py/test_runtime_shutdown.py'))
-        Performance = @{ Profile = 'synthetic-large-library'; Targets = 'artist-tree-scroll-navigation' }
+        Performance = @{ Profile = 'synthetic-production-library'; Targets = 'artist-tree-scroll-navigation' }
     }
     'edit-tags' = @{
-        FixtureProfiles = @('functional-core', 'synthetic-large-library')
+        FixtureProfiles = @('functional-core', 'synthetic-large-library', 'synthetic-production-library')
         Pytest = @(, @('tests/py/test_edit_workflows.py', 'tests/py/test_save_tasks.py', 'tests/py/test_edit_state.py',
                 'tests/py/test_tag_edit_recovery.py', 'tests/py/test_tag_edit_intents_postgres.py',
                 'tests/py/test_postgres_structural_tag_edit.py'))
         Node = @('tests/js/runtime/tag-editor-*.test.js', 'tests/js/runtime/utility-tag-edit-optimistic.test.js')
         FunctionalShard = 'metadata-mutations'
-        Performance = @{ Profile = 'synthetic-large-library'; Targets = 'edit-tags-post-edit' }
+        Performance = @{ Profile = 'synthetic-production-library'; Targets = 'edit-tags-post-edit' }
     }
     'bounded-interactions' = @{ FixtureProfiles = @() }
     'focused' = @{ FixtureProfiles = @() }
@@ -86,12 +87,26 @@ if ($Gate -eq 'focused') {
     }
     $registry = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $dataRoot 'tests\ci\performance-targets.json') | ConvertFrom-Json
     $targetProfiles = [ordered]@{}
+    $targetModes = [ordered]@{}
+    # As in PR Gates, a generated-isolated target seeds its covers from its shard's download profile.
+    $seedByTarget = @{}
+    $shardScript = Join-Path $dataRoot 'scripts\ci\resolve-ci-shard.cjs'
+    $seedJson = & node -e "const s=require(process.argv[1]).PERFORMANCE_SHARDS;const o={};for(const c of Object.values(s))for(const t of c.targets)o[t]=c.fixtureDownloadProfile||c.fixtureProfile;process.stdout.write(JSON.stringify(o))" $shardScript
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read the performance shard seed profiles.' }
+    ($seedJson | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $seedByTarget[$_.Name] = [string]$_.Value }
+    $targetSeedProfiles = [ordered]@{}
     foreach ($targetName in $focusedTargets) {
         $target = @($registry.targets | Where-Object { $_.name -ceq $targetName })
         if ($target.Count -ne 1) { throw "Unknown measured target: $targetName" }
-        $targetProfiles[$targetName] = [string]$target[0].fixtureProfile
+        $targetProfiles[$targetName] = if ($target[0].fixtureScale -eq 'production-calibration') {
+            'synthetic-production-library'
+        } else {
+            [string]$target[0].fixtureProfile
+        }
+        $targetModes[$targetName] = [string]$target[0].fixtureMode
+        $targetSeedProfiles[$targetName] = if ($targetModes[$targetName] -eq 'generated-isolated') { $seedByTarget[$targetName] } else { '' }
     }
-    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) |
+    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) + @($targetSeedProfiles.Values) |
         Where-Object { $_ } | Select-Object -Unique)
 }
 
@@ -153,7 +168,8 @@ if ($Gate -eq 'search') {
     Invoke-Checked {
         & (Join-Path $PSScriptRoot 'run-search-regressions.ps1') `
             -PythonPath $PythonPath `
-            -FixtureRoot (Get-ProfileRoot 'synthetic-large-library') `
+            -FixtureRoot (Get-ProfileRoot 'synthetic-production-library') `
+            -SyntheticScalePreset production-calibration `
             -FunctionalFixtureDistribution $FixtureDistribution `
             -Pgbin $Pgbin `
             -ChromeExecutable $ChromeExecutable `
@@ -206,19 +222,34 @@ $functionalCommon = @{
     PostgresMajor = $PostgresMajor
     Pgbin = $Pgbin
 }
-function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName) {
+function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName, [string]$FixtureMode = 'preloaded-release', [string]$SeedProfile = '') {
     $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-$ShardName-performance-$PID"
     New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
-    $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
-    $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
-    $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
+    $loaderProfile = if ($FixtureProfile -eq 'synthetic-production-library') { 'synthetic-large-library' } else { $FixtureProfile }
+    $env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET = if ($loaderProfile -ne $FixtureProfile) { 'production-calibration' } else { '' }
+    $env:ALBUM_HAVEN_FIXTURE_PROFILE = $loaderProfile
+    if ($FixtureMode -eq 'generated-isolated') {
+        # As in PR Gates: a generated-isolated target builds its own library from the released profile's approved
+        # covers and refuses inherited fixture paths.
+        $seed = if ($SeedProfile) { $SeedProfile } else { $FixtureProfile }
+        $approvedCoverRoot = Join-Path (Get-ProfileRoot $seed) 'media\covers\approved'
+        if (-not (Test-Path -LiteralPath $approvedCoverRoot -PathType Container)) {
+            throw "Generated performance targets require the verified released approved-cover seed ($seed)."
+        }
+        $env:ALBUM_HAVEN_APPROVED_COVER_ROOT = $approvedCoverRoot
+        Remove-Item Env:ALBUM_HAVEN_FIXTURE_ROOT, Env:ALBUM_HAVEN_MEDIA_ROOT -ErrorAction SilentlyContinue
+    } else {
+        Remove-Item Env:ALBUM_HAVEN_APPROVED_COVER_ROOT -ErrorAction SilentlyContinue
+        $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
+        $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
+    }
     Invoke-Checked {
         & (Join-Path $PSScriptRoot 'ci\run-performance-shard.ps1') `
             -Targets $TargetList `
-            -FixtureProfile $FixtureProfile `
-            -FixtureMode preloaded-release `
+            -FixtureProfile $loaderProfile `
+            -FixtureMode $FixtureMode `
             -BasePort $PerformanceBasePort `
-            -DatabaseSuffixBase "$($ShardName.Replace('-', '_'))_$PID" `
+            -DatabaseSuffixBase "$($ShardName.Replace('synthetic-production-library', 'synprod').Replace('-', '_'))_$PID" `
             -ExpectedPostgresMajor $PostgresMajor `
             -Pgbin $Pgbin `
             -RepositoryRoot $repositoryRoot `
@@ -247,8 +278,12 @@ if ($Gate -eq 'focused') {
         $titles = @($group.Group | ForEach-Object { $_.Title } | Select-Object -Unique)
         Invoke-Checked { & $functionalRunner -Shard $group.Name -Cases $titles @functionalCommon } "Functional cases in $($group.Name)"
     }
-    foreach ($group in @($focusedTargets | Group-Object { $targetProfiles[$_] })) {
-        Invoke-MeasuredTargets ($group.Group -join ',') $group.Name "focused-$($group.Name)"
+    # One performance shard per fixture profile and mode, each run the way PR Gates runs that kind of target.
+    # Shard names are numbered: they also name the shard's databases, whose suffix is capped at 39 characters.
+    $targetGroups = @($focusedTargets | Group-Object { "$($targetProfiles[$_])|$($targetModes[$_])|$($targetSeedProfiles[$_])" })
+    for ($index = 0; $index -lt $targetGroups.Count; $index++) {
+        $groupProfile, $groupMode, $groupSeed = $targetGroups[$index].Name.Split('|')
+        Invoke-MeasuredTargets ($targetGroups[$index].Group -join ',') $groupProfile "focused-$($index + 1)" $groupMode $groupSeed
     }
     Complete-Gate
 }

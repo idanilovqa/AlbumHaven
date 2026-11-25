@@ -25,12 +25,23 @@
   const readSessionCsrfCookie = () => readCookie(csrfCookieName);
   window.readSessionCsrfCookie = readSessionCsrfCookie;
 
+  // The browser finishes an unread body by itself only when the answer may be stored. An unread
+  // no-store one keeps its request open, and a large one its connection, so a copy is read to the
+  // end here, whether or not the caller ever reads its own.
+  const fetchSameOrigin = async (input, init) => {
+    const response = await originalFetch(input, init);
+    if (response?.body && /\bno-store\b/i.test(response.headers.get('Cache-Control') || '')) {
+      response.clone().arrayBuffer().catch(() => {});
+    }
+    return response;
+  };
+
   const fetchSameOriginRead = async (input, init) => {
     try {
-      return await originalFetch(input, init);
+      return await fetchSameOrigin(input, init);
     } catch (error) {
       if (error?.name !== 'TypeError') throw error;
-      return originalFetch(input, init);
+      return fetchSameOrigin(input, init);
     }
   };
 
@@ -51,11 +62,11 @@
     if (url.origin !== window.location.origin) return originalFetch(input, init);
     const csrfToken = readSessionCsrfCookie();
     if (!csrfToken) {
-      return originalFetch(input, init);
+      return fetchSameOrigin(input, init);
     }
     const headers = new Headers(requestInit?.headers || input?.headers || undefined);
     headers.set('X-Album-Haven-CSRF', csrfToken);
-    return originalFetch(input, {
+    return fetchSameOrigin(input, {
       ...(requestInit || {}),
       credentials: requestInit?.credentials ?? input?.credentials ?? 'same-origin',
       headers,
@@ -2474,6 +2485,10 @@ function parseUrlState(url) {
 
 // BEGIN js/runtime/browser-navigation-helpers.js
 
+// What the readers of history state use. A view is named by its address, so the state is only where
+// the entry is in the app's navigation.
+const HISTORY_NAVIGATION_KEYS = ['albumHavenNavigationPosition', 'albumHavenDiscoveryPosition', 'mobilePages', 'imageLightbox'];
+
 function getBrowserLocationOrigin() {
   return window.location.origin;
 }
@@ -2490,13 +2505,31 @@ function parseCurrentBrowserUrlState() {
   return parseBrowserUrlState(getBrowserLocationHref());
 }
 
-function pushBrowserViewState(view, stateSnapshot = view) {
+function pushBrowserViewState(view) {
   const settingsNavigation = window.AlbumHavenSettingsNavigation?.instance;
   if (settingsNavigation?.pushLibraryHistory) {
-    settingsNavigation.pushLibraryHistory(buildUrl(view), stateSnapshot);
+    settingsNavigation.pushLibraryHistory(buildUrl(view), {});
   } else {
-    window.history.pushState(stateSnapshot, '', buildUrl(view));
+    window.history.pushState({}, '', buildUrl(view));
   }
+}
+
+function historyNavigationState() {
+  return Object.fromEntries(
+    Object.entries(window.history.state || {}).filter(([key]) => HISTORY_NAVIGATION_KEYS.includes(key)),
+  );
+}
+
+function replaceBrowserViewState(view) {
+  window.history.replaceState(historyNavigationState(), '', buildUrl(view));
+}
+
+// An entry loaded again keeps only the keys above.
+function dropViewFromHistoryState() {
+  if (!window.history?.state) return;
+  const kept = historyNavigationState();
+  if (Object.keys(window.history.state || {}).length === Object.keys(kept).length) return;
+  window.history.replaceState(kept, '', getBrowserLocationHref());
 }
 
 // END js/runtime/browser-navigation-helpers.js
@@ -13297,6 +13330,10 @@ function androidBase64(bytes) {
   return window.btoa(binary);
 }
 
+// The browser reads a download's blob URL after the click returns, so a URL revoked in the same task
+// can lose the download. Each page-built download keeps its URL until the next one replaces it.
+let pageFileDownloadUrl = '';
+
 async function downloadPageFile(filename, mimeType, text) {
   if (await connectAndroidBridge() && hasAndroidCapability(ANDROID_FILES_CAPABILITY)) {
     const bytes = new TextEncoder().encode(text);
@@ -13308,9 +13345,10 @@ async function downloadPageFile(filename, mimeType, text) {
     }
     return;
   }
-  const objectUrl = URL.createObjectURL(new Blob([text], { type: mimeType }));
+  if (pageFileDownloadUrl) URL.revokeObjectURL(pageFileDownloadUrl);
+  pageFileDownloadUrl = URL.createObjectURL(new Blob([text], { type: mimeType }));
   const anchor = document.createElement('a');
-  anchor.href = objectUrl;
+  anchor.href = pageFileDownloadUrl;
   anchor.download = filename;
   anchor.hidden = true;
   document.body.appendChild(anchor);
@@ -13318,7 +13356,6 @@ async function downloadPageFile(filename, mimeType, text) {
     anchor.click();
   } finally {
     anchor.remove();
-    URL.revokeObjectURL(objectUrl);
   }
 }
 
@@ -17643,8 +17680,9 @@ function attachModalEvents() {
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
-// The server builds one waveform at a time, so player peaks keep waiting out another build
-// at this pace for as long as their playback generation lasts.
+// The server builds one waveform at a time, so peaks keep waiting out another build at this
+// pace: the player's for as long as their playback generation lasts, a saved loop's for as
+// long as a caller still shows that loop.
 const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
@@ -17734,16 +17772,17 @@ function getCachedSavedLoopWaveformPeaks(loopId) {
   return savedLoopWaveformPeakCache.get(String(loopId || '').trim())?.peaks || null;
 }
 
-async function loadSavedLoopWaveformPeaks(loopId) {
+async function loadSavedLoopWaveformPeaks(loopId, isWanted = null) {
   const identity = String(loopId || '').trim();
   if (!identity || identity.length > 256) return null;
   if (savedLoopWaveformPeakCache.has(identity)) {
     const cached = savedLoopWaveformPeakCache.get(identity);
+    if (isWanted && !cached.peaks) cached.waiters.push(isWanted);
     return cached.promise;
   }
 
   const controller = new AbortController();
-  const entry = { controller, promise: null, peaks: null };
+  const entry = { controller, promise: null, peaks: null, waiters: isWanted ? [isWanted] : [] };
   entry.promise = (async () => {
     let retained = false;
     try {
@@ -17755,9 +17794,12 @@ async function loadSavedLoopWaveformPeaks(loopId) {
         const response = await fetch(`/playback/waveform?${query}`, {
           signal: controller.signal,
         });
-        if (response.status === 429 && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length) {
+        if (response.status === 429
+            && (attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length
+              || entry.waiters.some((wanted) => wanted()))) {
           await new Promise((resolve) => {
-            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]);
+            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
+              ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
           });
           if (controller.signal.aborted) return null;
           continue;
@@ -19121,6 +19163,9 @@ function formatLogHistoryTimestamp(value) {
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
+// Refetches of a view whose gallery projection was stale, after 3, 6, 12, 24, 48 and 96 seconds.
+const STALE_PROJECTION_VIEW_REFRESH_LIMIT = 6;
+const STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS = 3000;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -20553,12 +20598,28 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
       return false;
     }
-    // A response dispatched before a tag edit must not replace its optimistic view.
-    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
-      return false;
-    }
-    // Artwork published after this request started owns the album cover state.
-    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
+    if (
+      // A response dispatched before a tag edit must not replace its optimistic view.
+      requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      // Artwork published after this request started owns the album cover state.
+      || requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)
+    ) {
+      // Startup has no other request to finish it. A pending cover draws from its own overlay;
+      // a pending tag edit has none, so that one is not asked again.
+      if (
+        requestOptions.startupRefresh
+        && !state.ui.pendingViewRequest
+        && !(typeof hasPendingTagEditViewMutations === 'function' && hasPendingTagEditViewMutations())
+      ) {
+        state.ui.pendingViewRequest = {
+          url: apiUrl,
+          push: state.ui.activeViewRequestPush,
+          options: retainsMountedSelectedViewState
+            ? { ...requestOptions, retainMountedSelectedViewState: { ...state.view } }
+            : requestOptions,
+          originatingViewStateRevision: requestViewStateRevision,
+        };
+      }
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
@@ -20683,6 +20744,19 @@ async function fetchAndRender(url, push = true, options = {}) {
         && appliedInventoryMutationRevision >= observedInventoryMutationRevision
       ) {
         state.ui.pendingInventoryMutationViewRefresh = false;
+      }
+    }
+    if (responseProjectionIsCurrent) {
+      state.ui.staleProjectionViewRefreshCount = 0;
+      state.ui.staleProjectionViewRefreshDueAt = null;
+    } else {
+      // The library change is not published in the gallery yet, and the status revision has
+      // already moved for it, so nothing else would ask again: an idle poll refetches, backing off.
+      const staleProjectionViewRefreshCount = Number(state.ui.staleProjectionViewRefreshCount || 0);
+      if (staleProjectionViewRefreshCount < STALE_PROJECTION_VIEW_REFRESH_LIMIT) {
+        state.ui.staleProjectionViewRefreshCount = staleProjectionViewRefreshCount + 1;
+        state.ui.staleProjectionViewRefreshDueAt = Date.now()
+          + STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS * (2 ** staleProjectionViewRefreshCount);
       }
     }
     finishPendingViewTransition(requestId);
@@ -21360,7 +21434,9 @@ async function pollStatus() {
     && !startedDuringPendingStart;
   let nextPollDelay = null;
   const knownStatus = state.status || {};
-  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
+  // Like the inventory revision, the first observed watcher health is a baseline: the loaded lists already reflect it.
+  const knownWatcherHealth = Object.prototype.hasOwnProperty.call(knownStatus, 'watcher_health')
+    ? watcherHealthRefreshSignature(knownStatus) : null;
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -21430,7 +21506,8 @@ async function pollStatus() {
       }
     }
     const utility = state.utility;
-    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    const healthChanged = knownWatcherHealth !== null
+      && knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
     if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
       utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
     }
@@ -21579,6 +21656,11 @@ async function pollStatus() {
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    const staleProjectionViewRefreshDueAt = Number(state.ui.staleProjectionViewRefreshDueAt);
+    if (staleProjectionViewRefreshDueAt > 0 && Date.now() >= staleProjectionViewRefreshDueAt) {
+      state.ui.staleProjectionViewRefreshDueAt = null;
+      state.ui.pendingInventoryMutationViewRefresh = true;
+    }
     if (
       state.ui.pendingInventoryMutationViewRefresh
       && !busyNow
@@ -24789,11 +24871,7 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
     }
   }
   if (typeof buildUrl === 'function' && window?.history?.replaceState) {
-    window.history.replaceState(
-      { ...window.history.state, ...state.view },
-      '',
-      buildUrl(state.view),
-    );
+    replaceBrowserViewState(state.view);
   }
   return true;
 }
@@ -25153,9 +25231,7 @@ async function watchSaveTask(taskId, context = {}) {
                 continue;
               }
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
-                window.history.replaceState(
-                  { ...window.history.state, ...state.view }, '', buildUrl(state.view),
-                );
+                replaceBrowserViewState(state.view);
               }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
@@ -29566,6 +29642,11 @@ function disposeUtilityTabAlignment(els = getUtilityModalElements()) {
 
 const utilityLoopStereoLoads = new WeakMap();
 
+function isSavedLoopPaneShown() {
+  if (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden) return false;
+  return !state.utility.activeTab || state.utility.activeTab === 'loops';
+}
+
 function updateUtilityLoopStereoWaveform(loopId, audio) {
   const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
   if (!canvas || !audio) return;
@@ -29583,13 +29664,16 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
     drawCombinedLoopWaveform(canvas, peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
     return;
   }
-  if (cached?.loading) return;
-  const entry = { peaks: null, loading: true, retryAt: 0 };
+  if (cached?.loading || (cached?.abandoned && !isSavedLoopPaneShown())) return;
+  const entry = { peaks: null, loading: true, retryAt: 0, abandoned: false };
   utilityLoopStereoLoads.set(canvas, entry);
-  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).catch(() => null).then(peaks => {
+  const isWanted = () => canvas.isConnected && isSavedLoopPaneShown();
+  Promise.resolve(loadSavedLoopWaveformPeaks(loopId, isWanted)).catch(() => null).then(peaks => {
     entry.loading = false;
     entry.peaks = peaks;
-    entry.retryAt = Date.now() + 5000;
+    // A wait given up because the loop left the screen is not a failure to back off from.
+    entry.abandoned = !peaks && !isWanted();
+    entry.retryAt = entry.abandoned ? 0 : Date.now() + 5000;
     if (canvas.isConnected
         && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`) === canvas) {
       updateUtilityLoopStereoWaveform(loopId, audio);
@@ -30426,17 +30510,16 @@ async function openSavedLoopCreation(loopId) {
     durationSeconds: sessionDurationSeconds,
   };
   setSavedLoopEditorBusy(id, true);
+  const isOpenWanted = () => state.utility.savedLoopOpenEpoch[id] === openEpoch && isSavedLoopPaneShown();
   let elements = null;
   try {
     elements = mountSavedLoopControls(id);
     syncSavedLoopRange(id, { startSeconds: 0, endSeconds: sessionDurationSeconds });
     const mountedActionController = elements.actionRoot?._loopActionController;
-    const waveform = await loadSavedLoopWaveformPeaks(id);
+    const waveform = await loadSavedLoopWaveformPeaks(id, isOpenWanted);
     if (elements.actionRoot?._loopActionController !== mountedActionController) return false;
     if (!waveform) throw new Error('Failed to load saved loop waveform.');
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
-        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
-        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
+    if (!isOpenWanted()) return false;
     const currentElements = getSavedLoopRangeElements(id);
     if (currentElements.root !== elements.root) {
       elements = mountSavedLoopControls(id);
@@ -30453,9 +30536,7 @@ async function openSavedLoopCreation(loopId) {
     startSavedLoopExpirySession(id);
     return true;
   } catch (error) {
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
-        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
-        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
+    if (!isOpenWanted()) return false;
     setSavedLoopEditMode(id, false);
     console.error('[AlbumHaven][Loops] Failed to open saved-loop editor.', error);
     showToast(error.message || 'Failed to open loop editor.', 'error', 4200);
@@ -39390,6 +39471,59 @@ function handleTrackModalCoverImageLoad(imageElement) {
   }
 }
 
+const trackModalCoverRenderTokens = new WeakMap();
+
+function loadTrackModalCoverImage(imageElement, coverSrc, isCurrent) {
+  void loadGalleryCoverPreviewImage(imageElement, coverSrc, { isCurrent }).catch((error) => {
+    if (!isCurrent()) return;
+    console.error('[AlbumHaven][Covers] Failed to load the track-modal cover preview.', error);
+    handleAlbumDisplayCoverImageError(imageElement);
+  });
+}
+
+function isCoverDecodedOnPage(coverSrc) {
+  const absoluteSrc = new URL(coverSrc, window.location.href).href;
+  return Array.from(document.images || []).some((image) => (
+    image.currentSrc === absoluteSrc && image.complete && image.naturalWidth > 0
+  ));
+}
+
+// A changed cover never blanks the one on screen. One already decoded on the page, such as the
+// cover just picked in Cover Look Up, takes its place at once; any other loads and decodes off
+// the page first. One that cannot decode goes through the ordinary visible load, which owns the
+// retry, remote fallback and placeholder.
+async function replaceTrackModalCoverWhenDecoded(shownImage, coverSrc, visualHtml, ownsSwap, ownsModalCover) {
+  const createVisual = () => {
+    const host = document.createElement('span');
+    host.innerHTML = visualHtml;
+    const image = host.querySelector('img');
+    return { image, visual: image.closest('.track-modal-cover-visual') };
+  };
+  if (isCoverDecodedOnPage(coverSrc)) {
+    const next = createVisual();
+    next.image.setAttribute('data-production-cover-src', coverSrc);
+    next.image.setAttribute('src', coverSrc);
+    shownImage.closest('.track-modal-cover-visual').replaceWith(next.visual);
+    if (next.image.complete && next.image.naturalWidth > 0) handleTrackModalCoverImageLoad(next.image);
+    return;
+  }
+  const replacement = createVisual();
+  let decoded = false;
+  try {
+    if (await loadGalleryCoverPreviewImage(replacement.image, coverSrc, { isCurrent: ownsSwap })) {
+      if (typeof replacement.image.decode === 'function') await replacement.image.decode();
+      decoded = true;
+    }
+  } catch (_error) {
+    decoded = false;
+  }
+  if (!ownsSwap()) return;
+  const next = decoded ? replacement : createVisual();
+  if (decoded) handleTrackModalCoverImageLoad(next.image);
+  shownImage.closest('.track-modal-cover-visual').replaceWith(next.visual);
+  if (!decoded) loadTrackModalCoverImage(next.image, coverSrc, () => ownsModalCover(next.image));
+}
+
 function getAlbumDuplicateSources(album) {
   return Array.isArray(album?.duplicate_sources) ? album.duplicate_sources.filter((source) => source && Array.isArray(source.tracks)) : [];
 }
@@ -39695,12 +39829,23 @@ function renderTrackModalRelease(album) {
     const reusableCoverImage = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
       && (
         existingProductionSrc === coverSrc
-        ||
-        existingCoverImage.getAttribute('src') === coverSrc
+        // The preview loader records the absolute URL of the cover it loaded.
+        || existingProductionSrc === new URL(coverSrc, window.location.href).href
+        || existingCoverImage.getAttribute('src') === coverSrc
         || existingCoverImage.currentSrc === new URL(coverSrc, window.location.href).href
       )
       ? existingCoverImage
       : null;
+    const existingCoverIsDecoded = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
+      && existingCoverImage.getAttribute('data-cover-visual-state') === 'ready'
+      && existingCoverImage.complete
+      && existingCoverImage.naturalWidth > 0;
+    const retainedCoverImage = !reusableCoverImage
+      && existingCoverIsDecoded
+      && els.cover.dataset?.coverAlbumKey === resolvedAlbumKey
+      ? existingCoverImage
+      : null;
+    const mountedCoverImage = reusableCoverImage || retainedCoverImage;
     const localCoverRefRaw = String(album?.cover_ref || '').trim();
     const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     const localCoverRef = escapeHtml(localCoverRefRaw);
@@ -39724,34 +39869,36 @@ function renderTrackModalRelease(album) {
       ? els.cover.querySelector('.track-modal-cover-image-slot')
       : null;
     if (canInspectHtmlElements && coverImageSlot instanceof HTMLElement) {
+      const renderToken = {};
+      trackModalCoverRenderTokens.set(els.cover, renderToken);
+      if (els.cover.dataset) els.cover.dataset.coverAlbumKey = resolvedAlbumKey;
+      const coverVisualHtml = buildTrackModalCoverVisualHtml({
+        albumName: String(album?.name || ''),
+        localCoverRef: localCoverRefRaw,
+        remoteCoverUrl: remoteCoverUrlRaw,
+      });
       let modalCoverImage = null;
-      if (reusableCoverImage instanceof HTMLImageElement) {
+      if (mountedCoverImage instanceof HTMLImageElement) {
         const visual = document.createElement('span');
         visual.classList.add('track-modal-cover-visual');
-        const coverIsPending = (
-          reusableCoverImage.getAttribute('data-cover-visual-state') !== 'ready'
-          || !reusableCoverImage.complete
-          || reusableCoverImage.naturalWidth <= 0
-        );
-        if (coverIsPending) {
+        if (!existingCoverIsDecoded) {
           visual.classList.add('is-loading');
           const placeholder = document.createElement('span');
           placeholder.classList.add('cover-placeholder');
           placeholder.setAttribute('aria-hidden', 'true');
           visual.appendChild(placeholder);
         }
-        reusableCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
-        reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
-        reusableCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
-        visual.appendChild(reusableCoverImage);
+        // A retained cover keeps describing itself until its replacement takes its place.
+        if (mountedCoverImage === reusableCoverImage) {
+          mountedCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
+          mountedCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
+          mountedCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
+        }
+        visual.appendChild(mountedCoverImage);
         coverImageSlot.replaceWith(visual);
-        modalCoverImage = reusableCoverImage;
+        modalCoverImage = mountedCoverImage;
       } else {
-        coverImageSlot.outerHTML = buildTrackModalCoverVisualHtml({
-          albumName: String(album?.name || ''),
-          localCoverRef: localCoverRefRaw,
-          remoteCoverUrl: remoteCoverUrlRaw,
-        });
+        coverImageSlot.outerHTML = coverVisualHtml;
         modalCoverImage = els.cover.querySelector('.track-modal-cover-visual img');
       }
       if (
@@ -39759,19 +39906,20 @@ function renderTrackModalRelease(album) {
         && modalCoverImage instanceof HTMLImageElement
         && typeof loadGalleryCoverPreviewImage === 'function'
       ) {
-        const ownsCurrentModalCover = () => {
-          if (els.overlay.hidden || !modalCoverImage.isConnected) return false;
-          if (els.cover.querySelector('.track-modal-cover-visual img') !== modalCoverImage) return false;
+        const ownsModalCover = (imageElement) => {
+          if (els.overlay.hidden || !imageElement.isConnected) return false;
+          if (els.cover.querySelector('.track-modal-cover-visual img') !== imageElement) return false;
           const currentAlbum = state.modalReleases[state.modalReleaseIndex] || null;
           return getTrackModalAlbumRequestKey(currentAlbum) === resolvedAlbumKey;
         };
-        void loadGalleryCoverPreviewImage(modalCoverImage, coverSrc, {
-          isCurrent: ownsCurrentModalCover,
-        }).catch((error) => {
-          if (!ownsCurrentModalCover()) return;
-          console.error('[AlbumHaven][Covers] Failed to load the track-modal cover preview.', error);
-          handleAlbumDisplayCoverImageError(modalCoverImage);
-        });
+        if (retainedCoverImage) {
+          // A later render supersedes a swap; a visible load survives same-cover re-renders.
+          const ownsSwap = () => ownsModalCover(retainedCoverImage)
+            && trackModalCoverRenderTokens.get(els.cover) === renderToken;
+          void replaceTrackModalCoverWhenDecoded(retainedCoverImage, coverSrc, coverVisualHtml, ownsSwap, ownsModalCover);
+        } else {
+          loadTrackModalCoverImage(modalCoverImage, coverSrc, () => ownsModalCover(modalCoverImage));
+        }
       }
     }
   } else {
@@ -44291,6 +44439,9 @@ class VirtualArtistGrid {
   replayDeferredAppends(deferredAppends) {
     this._renderGeneration += 1;
     this._preserveExistingChildrenGeneration = this._renderGeneration;
+    // The replay completes the scroll that deferred it, as a setGroups render does.
+    const scrollRenderOwner = Number(this.diagnostics.latestScroll?.renderRafOwner || 0);
+    if (scrollRenderOwner) this.updateScrollDiagnostic(scrollRenderOwner, true);
     for (const { groups, replacedGroups, regroup } of deferredAppends) {
       if (this.appendGroupsNow(groups, replacedGroups)) continue;
       regroup?.();
@@ -53689,6 +53840,7 @@ if (typeof prepareStreamingPlaybackEngine === 'function'
     scheduleBrowserTimeout(prepareIdlePlayback, 0);
   }
 }
+if (typeof dropViewFromHistoryState === 'function') dropViewFromHistoryState();
 const bootstrapSearchParams = new URL(window.location.href).searchParams;
 const galleryDisplayPreferenceResolutionOptions = {
   hasExplicitGalleryDisplayOverride: bootstrapSearchParams.has('gallery_display'),

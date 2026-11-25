@@ -21,6 +21,12 @@ to the same functional-shard runner used by CI, and removes its state afterward.
   variable is unset, the command uses the current user's standard application-data
   path at `postgresql\pgpass.conf`.
 
+- `ALBUM_HAVEN_TEST_POSTGRES_PORT` names the port of a throwaway PostgreSQL
+  cluster. Outside GitHub Actions the runner refuses 5432, the installed
+  server's port, which can serve real data, and never starts or changes a
+  Windows service. The cluster must already be running and must be the data
+  directory of the configured service; otherwise run the hosted gates.
+
 The runner connects through `localhost`. Do not replace it with `127.0.0.1`:
 pgpass host matching is exact, and the supported local entry is scoped to
 `localhost`.
@@ -136,5 +142,6 @@ low-level multi-config Playwright command; use the `:local` command when running
 the approved fixture-backed shard contract on a developer machine.
 
 If setup fails before Playwright starts, verify the fixture release, PostgreSQL
-18 service, Python dependency environment, and the `localhost:5432` postgres
-entry in `PGPASSFILE`. No interactive password prompt should be required.
+18 service, Python dependency environment, and the throwaway cluster's
+`localhost:<port>` postgres entry in `PGPASSFILE`. No interactive password
+prompt should be required.

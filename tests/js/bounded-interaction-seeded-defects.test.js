@@ -34,8 +34,8 @@ const DEFECTS = [
     id: 'BI-H01 direct row scan inside a registered scroll handler',
     language: 'js',
     file: 'music_app/static/js/runtime/problematic-files-virtual-list.js',
-    anchor: "list.addEventListener('scroll', schedule, { passive: true });",
-    replacement: "list.addEventListener('scroll', () => { list.querySelectorAll('[data-problematic-row]').forEach(row => row.classList.add('seen')); schedule(); }, { passive: true });",
+    anchor: "scrollTarget.addEventListener('scroll', schedule, { passive: true });",
+    replacement: "scrollTarget.addEventListener('scroll', () => { list.querySelectorAll('[data-problematic-row]').forEach(row => row.classList.add('seen')); schedule(); }, { passive: true });",
     expected: /^rejected BI-01 querySelectorAll at music_app\/static\/js\/runtime\/problematic-files-virtual-list\.js:\d+ from js:music_app\/static\/js\/runtime\/problematic-files-virtual-list\.js#create:event:scroll$/,
   },
   {

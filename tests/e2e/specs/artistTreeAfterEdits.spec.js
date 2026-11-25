@@ -65,9 +65,9 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     const other = `Infinity Vale ${suffix}`;
     await openLibrary({ managedAppLifecycle, galleryActions, appBarActions }, [
       ...albumTracks(band, 'Shadow Vale', ['Shadow Vale', 'North Gate']),
-      // The other band's track is credited to an accented spelling of it, and its file name names the band.
+      // The other band's first track is a guest's, and only its file name names the searched band.
       ...albumTracks(other, 'Open Orbit', ['Stone Hall', 'Open Orbit'], {
-        artist: `Infínity Vale ${suffix}`,
+        artist: index => (index === 0 ? `Guest Voice ${suffix}` : other),
         fileName: (index, title) => (index === 0
           ? `01. ${title} [feat. members of '${band}'].mp3`
           : `0${index + 1}. ${title}.mp3`),
@@ -109,7 +109,7 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     await expect.poll(() => galleryActions.readArtistDiscographySections(band).then(sections => (
       sections.map(({ title, albums }) => ({ title, names: albums.map(({ name }) => name).sort() }))
     )), { message: 'Both albums are the band\'s own, with no Featured On section.', timeout: 30000 }).toEqual([
-      { title: null, names: ['Paper Lines', 'Night Score'] },
+      { title: null, names: ['Night Score', 'Paper Lines'] },
     ]);
     expect(await navigationPanelActions.readSidebarArtistAlbumCount(band), 'The band\'s count includes the album.').toBe(2);
     expect(await navigationPanelActions.readHydratedSidebarArtistNames()).not.toContain(`${band} / ${band}`);
@@ -191,6 +191,7 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
 
     // While it runs, the album is given its old album artist back.
     await navigationPanelActions.selectSidebarArtistByName(renamed);
+    await galleryActions.waitForSelectedArtistGallery(renamed);
     await galleryActions.openAlbumTagEditorFromContextMenu(album);
     await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
     await tagEditorActions.selectAllTracks();

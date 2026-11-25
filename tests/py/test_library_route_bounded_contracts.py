@@ -77,6 +77,13 @@ def library_app(tmp_path, monkeypatch):
     refusal = pytest.MonkeyPatch()
     refusal.setattr(psycopg, "connect", refuse_connection)
     refusal.setattr(psycopg.Connection, "connect", classmethod(lambda cls, *args, **kwargs: refuse_connection()))
+    # A refresh or rule write here queues an ignored-repair drain against this unreachable database. Run in the
+    # background, it fails and retries every minute for the rest of the session, and its work was counted
+    # against later contracts (news_center, 11-25). These contracts record the request instead.
+    from music_app.services import ignored_repair_intents
+
+    app.state.queued_ignored_repair_drains = []
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", app.state.queued_ignored_repair_drains.append)
     monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", _RootSettingsStore)
     # The in-memory inventory below is the published library: no hydration runs.
     monkeypatch.setattr(api_read_asgi_routes, "request_library_hydration_for_state", lambda *_args, **_kwargs: True)

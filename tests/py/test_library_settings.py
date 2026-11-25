@@ -18,6 +18,7 @@ def test_save_library_settings_workflow_uses_injected_root_settings_writer():
         start_background_refresh=lambda **kwargs: refresh_calls.append(kwargs),
         build_status_payload=lambda: {"scan_in_progress": True},
         save_root_settings=lambda config, payload: seen.append((config, payload)) or {"normalized": True},
+        load_root_settings=lambda _config: {},
         replace_watch_roots=lambda roots: watcher_root_calls.append(roots),
     )
 
@@ -51,6 +52,7 @@ def test_save_library_settings_replaces_live_watcher_roots_before_refresh():
         start_background_refresh=lambda **kwargs: sequence.append(("refresh", kwargs)),
         build_status_payload=lambda: {},
         save_root_settings=lambda _config, _payload: normalized,
+        load_root_settings=lambda _config: {},
         replace_watch_roots=lambda roots: sequence.append(("watch", roots)),
     )
 
@@ -79,6 +81,7 @@ def test_saved_settings_still_refresh_when_watcher_attachment_fails(caplog):
     result = save_library_settings_and_start_refresh(
         {}, normalized, library_state=state,
         save_root_settings=lambda *_args: sequence.append("persist") or normalized,
+        load_root_settings=lambda _config: {},
         replace_watch_roots=replace,
         start_background_refresh=lambda **_kwargs: sequence.append("refresh"),
         build_status_payload=lambda: {"scan_in_progress": True},
@@ -96,7 +99,6 @@ def test_saved_settings_still_refresh_when_watcher_attachment_fails(caplog):
 def test_save_library_settings_during_a_scan_saves_and_queues_one_reconcile_only_for_changed_roots(roots_changed):
     seen = []
     queued = []
-    identities = iter(["roots-before", "roots-after" if roots_changed else "roots-before"])
     library_state = {"scan_in_progress": True, "last_error": "shown", "pending_cover_refresh_after_scan": False}
 
     result = save_library_settings_and_start_refresh(
@@ -105,8 +107,9 @@ def test_save_library_settings_during_a_scan_saves_and_queues_one_reconcile_only
         library_state=library_state,
         start_background_refresh=lambda **kwargs: pytest.fail("a running scan is never started again"),
         build_status_payload=lambda: {},
-        save_root_settings=lambda config, payload: seen.append((config, payload)) or {},
-        load_root_identity=lambda _config: next(identities),
+        save_root_settings=lambda config, payload: seen.append((config, payload)) or {"roots": "after" if roots_changed else "before"},
+        load_root_settings=lambda _config: {"roots": "before"},
+        load_root_identity=lambda _config: "roots-after",
         queue_root_change_scan=lambda identity: queued.append(identity) or True,
     )
 
@@ -119,11 +122,10 @@ def test_save_library_settings_during_a_scan_saves_and_queues_one_reconcile_only
 def test_save_library_settings_starts_the_reconcile_when_the_scan_ended_during_the_save():
     started = []
     library_state = {"scan_in_progress": True}
-    identities = iter(["roots-before", "roots-after"])
 
     def save(_config, _payload):
         library_state["scan_in_progress"] = False
-        return {}
+        return {"roots": "after"}
 
     result = save_library_settings_and_start_refresh(
         {},
@@ -132,10 +134,31 @@ def test_save_library_settings_starts_the_reconcile_when_the_scan_ended_during_t
         start_background_refresh=lambda **kwargs: started.append(kwargs),
         build_status_payload=lambda: {},
         save_root_settings=save,
-        load_root_identity=lambda _config: next(identities),
+        load_root_settings=lambda _config: {"roots": "before"},
+        load_root_identity=lambda _config: "roots-after",
         queue_root_change_scan=lambda _identity: False,
     )
 
     assert started == [{"force": True, "scan_mode": "library_settings_update"}]
     assert (result["refresh_started"], result["refresh_queued"]) == (True, False)
     assert "pending_cover_refresh_after_scan" not in library_state, "no whole-library cover refresh (case 65)"
+
+
+def test_a_save_without_the_corrections_mode_keeps_the_stored_mode_and_starts_no_scan_for_the_same_roots():
+    stored = {"main_library_roots": [{"id": "main", "path": "C:/Music"}], "metadata_corrections": "write_tags"}
+    saved = []
+
+    result = save_library_settings_and_start_refresh(
+        {},
+        {"main_library_roots": [{"id": "main", "path": "C:/Music"}]},
+        library_state={},
+        start_background_refresh=lambda **_kwargs: pytest.fail("the same roots need no scan"),
+        build_status_payload=lambda: {},
+        save_root_settings=lambda _config, payload: saved.append(payload) or dict(payload),
+        load_root_settings=lambda _config: stored,
+        load_root_identity=lambda _config: pytest.fail("no scan is queued for the same roots"),
+    )
+
+    assert saved == [stored]
+    assert result["settings"]["metadata_corrections"] == "write_tags"
+    assert (result["refresh_started"], result["refresh_queued"]) == (False, False)

@@ -3552,12 +3552,15 @@ class PostgresLibraryBrowseRepository:
 
             if listed_missing is not False and (detail := missing_detail()) is not None:
                 return detail
-            albums = _problematic_album_projection_payloads(
+            # A projected album takes its album facts (cover, size) from its first row. The stored album whose
+            # key is the requested one goes first, as on the list, never an emptied base of a separated release.
+            albums = _problematic_album_projection_payloads(sorted(
                 _lay_pending_ignored_repairs(
                     self._load_problematic_file_rows(album_key=normalized_album_key, connection=connection),
                     connection,
-                )
-            )
+                ),
+                key=lambda row: str(_row_mapping(row).get("album_key") or "") != normalized_album_key,
+            ))
             requested_keys = set(_problematic_album_key_candidates(normalized_album_key))
             matching_albums = [album for album in albums if str(album.get("key") or "") in requested_keys]
             # One relation-alias read serves every matching album.

@@ -287,6 +287,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
+              "case": "FTC-TAGS-048 keeps every other search match on screen through a merge and an album rename saved from the results",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/ddtStudioRecordsRenderer.spec.js",
               "case": "FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores",
               "area": "tag-edit"

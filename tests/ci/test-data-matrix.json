@@ -2573,6 +2573,30 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
+    "case": "FTC-TAGS-048 keeps every other search match on screen through a merge and an album rename saved from the results",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "gallery:ddt-remixes-search-matches-after-save"
+    ],
+    "filesystemScenarios": [
+      "media-copy:ddt-remixes"
+    ],
+    "expectedContracts": [
+      "search-matches-preserved-after-save"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ddt-remixes-search-matches",
+      "filesystemCopy": "media/cases/ddt-remixes-search-matches"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/ddtStudioRecordsRenderer.spec.js",
     "case": "FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores",
     "profile": "functional-core",

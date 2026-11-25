@@ -300,3 +300,95 @@ test('FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just
     }
   }
 });
+
+test('FTC-TAGS-048 keeps every other search match on screen through a merge and an album rename saved from the results', { tag: '@area:tag-edit' }, async ({
+  galleryActions,
+  searchToolbarActions,
+  stepLogger,
+  tagEditorActions,
+}) => {
+  const QUERY = 'ремиксы';
+  const SECOND = 'Ремиксы2';
+  const THIRD = 'Ремиксы3';
+  const RENAMED = 'Ремиксы22';
+  const secondFilenames = TRACKS.slice(0, 3).map((track) => track.filename);
+  const thirdFilenames = TRACKS.slice(3, 5).map((track) => track.filename);
+  const { albumCard } = galleryActions.galleryPage;
+  const splitAlbums = new Set();
+  const visibleTitles = async () => (await albumCard.visibleTitles.allTextContents())
+    .map((title) => title.trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+  // Every match other than the edited albums stays on screen, before and after the save settles.
+  const expectMatches = async (expected) => {
+    await searchToolbarActions.waitForQuery(QUERY);
+    await expect.poll(visibleTitles).toEqual([...expected].sort((left, right) => left.localeCompare(right)));
+  };
+  const saveFromContextMenu = async (album, filenames, albumName) => {
+    await galleryActions.openAlbumTagEditorFromContextMenu(album);
+    await tagEditorActions.waitForOpen();
+    if (filenames) await tagEditorActions.selectTracksByFilenames(filenames);
+    else await tagEditorActions.selectAllTracks();
+    await tagEditorActions.setAlbumName(albumName);
+    return tagEditorActions.applyAndReturnAcceptedEdit();
+  };
+
+  try {
+    await stepLogger.step('Split Ремиксы into Ремиксы, Ремиксы2 and Ремиксы3', async () => {
+      await galleryActions.goto(ARTIST_VIEW_URL);
+      await galleryActions.waitForGalleryReady();
+      for (const [album, filenames] of [[SECOND, secondFilenames], [THIRD, thirdFilenames]]) {
+        const accepted = await saveFromContextMenu(SOURCE_ALBUM, filenames, album);
+        splitAlbums.add(album);
+        await accepted.waitForCompletion({ timeout: 90000 });
+        await galleryActions.waitForAlbumVisible(album);
+      }
+    });
+
+    let baseline = [];
+    await stepLogger.step('Search ремиксы and record every match', async () => {
+      await galleryActions.goto('/');
+      await galleryActions.waitForGalleryReady();
+      await searchToolbarActions.search(QUERY, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(QUERY);
+      await galleryActions.waitForAlbumVisible(THIRD);
+      baseline = await visibleTitles();
+      expect(baseline).toEqual(expect.arrayContaining([SOURCE_ALBUM, SECOND, THIRD]));
+    });
+
+    await stepLogger.step('Merging Ремиксы3 into Ремиксы keeps every other match', async () => {
+      const expected = baseline.filter((title) => title !== THIRD);
+      const accepted = await saveFromContextMenu(THIRD, null, SOURCE_ALBUM);
+      splitAlbums.delete(THIRD);
+      await expectMatches(expected);
+      await accepted.waitForCompletion({ timeout: 90000 });
+      await expectMatches(expected);
+      await galleryActions.galleryPage.page.waitForTimeout(3000);
+      await expectMatches(expected);
+      baseline = expected;
+    });
+
+    await stepLogger.step('Renaming Ремиксы2 keeps every other match', async () => {
+      const expected = baseline.map((title) => (title === SECOND ? RENAMED : title));
+      const accepted = await saveFromContextMenu(SECOND, null, RENAMED);
+      splitAlbums.delete(SECOND);
+      splitAlbums.add(RENAMED);
+      await expectMatches(expected);
+      await accepted.waitForCompletion({ timeout: 90000 });
+      await expectMatches(expected);
+      await galleryActions.galleryPage.page.waitForTimeout(3000);
+      await expectMatches(expected);
+    });
+  } finally {
+    if (splitAlbums.size) {
+      await tagEditorActions.closeIfOpen();
+      await galleryActions.goto(ARTIST_VIEW_URL);
+      await galleryActions.waitForGalleryReady();
+      for (const album of splitAlbums) {
+        const restored = await saveFromContextMenu(album, null, SOURCE_ALBUM);
+        await restored.waitForCompletion({ timeout: 90000 });
+        await galleryActions.waitForAlbumHidden(album);
+      }
+    }
+  }
+});

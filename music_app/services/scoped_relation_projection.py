@@ -813,6 +813,12 @@ def _publish_own_gallery_membership(connection, options):
                  'paths': track_paths}).fetchall()
             album_ids.update(int(row['id']) for row in rows)
             album_keys.update(str(row['album_key']) for row in rows if row['album_key'])
+            # The keys these albums had before the write (a vacated album is gone from local_albums): its
+            # triggers journaled them, so the patch also clears the albums' previous membership rows.
+            for row in connection.execute(
+                    'select album_keys from library.local_relation_dirty_albums '
+                    'where library_id=%s and album_id=any(%s::bigint[])', (library_id, sorted(album_ids))).fetchall():
+                album_keys.update(str(key) for key in row['album_keys'] or () if key)
             floor = _first_row(connection.execute(
                 'select min(first_gallery_generation) as floor from library.local_relation_dirty_albums '
                 'where library_id=%s', (library_id,)))

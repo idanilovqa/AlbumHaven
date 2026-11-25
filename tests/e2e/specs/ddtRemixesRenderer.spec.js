@@ -234,6 +234,7 @@ test('FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремик
 
 test('FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just created, with no frame left on its card', { tag: '@area:tag-edit' }, async ({
   galleryActions,
+  page,
   searchToolbarActions,
   stepLogger,
   tagEditorActions,
@@ -281,8 +282,20 @@ test('FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just
       await tagEditorActions.close();
     });
 
+    // The finished save re-reads the search; that refresh dropped the card's album from the index.
+    const searchRefreshed = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data' && url.searchParams.get('q') === ARTIST;
+    }, { timeout: 90000 });
     await stepLogger.step('Edit Tags on Ремиксы2 still opens after the save completes', async () => {
       await accepted.waitForCompletion({ timeout: 90000 });
+      await openEditorFromContextMenu(SPLIT_ALBUM, splitFilenames);
+      await tagEditorActions.close();
+    });
+
+    await stepLogger.step('Edit Tags on Ремиксы2 still opens after the finished save refreshed the search', async () => {
+      await searchRefreshed;
+      await expect(albumCard.cardByAlbumName(SPLIT_ALBUM)).toBeVisible();
       await openEditorFromContextMenu(SPLIT_ALBUM, splitFilenames);
       await tagEditorActions.close();
     });

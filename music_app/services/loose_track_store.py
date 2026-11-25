@@ -19,7 +19,8 @@ import threading
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-BUILDER_VERSION = 1
+# 2: rows keep their artist scope keys (0300), so a selected artist reads only its own rows.
+BUILDER_VERSION = 2
 # A read drains inline only while this few tracks wait; more wait for the background drain.
 INLINE_DRAIN_LIMIT = 50
 DRAIN_BATCH = 500
@@ -101,6 +102,43 @@ def _load_candidates(inventory: Any, connection: Any, track_ids: Iterable[int] |
     )
 
 
+def scope_keys(candidates: Iterable[Mapping[str, object]]) -> list[str]:
+    """The keys the selected-artist scope matches a track on: 'a:' + each file's artist identity key and
+    'p:' + each folder name of its path, built exactly as the read's matcher builds them."""
+    from pathlib import Path
+
+    from music_app.services.library_browse_postgres import _non_album_entry_from_inventory_candidate
+    from music_app.services.library_inventory_postgres import local_inventory_identity_key
+    from music_app.services.view_search import normalize_search_text
+
+    keys = set()
+    for candidate in candidates:
+        entry = _non_album_entry_from_inventory_candidate(candidate)
+        artist_key = local_inventory_identity_key(str(entry.get("album_artist") or entry.get("artist") or "").strip())
+        if artist_key:
+            keys.add("a:" + artist_key)
+        path = str(candidate.get("relative_path") or candidate.get("private_path") or "")
+        keys.update("p:" + part for part in (normalize_search_text(name) for name in Path(path).parts[:-1]) if part)
+    return sorted(keys)
+
+
+def read_scoped_candidates(connection: Any, keys: Iterable[str], *, limit: int) -> list[dict[str, object]]:
+    """Active roots' stored candidate rows of the tracks whose scope keys meet ``keys`` (the 0300 index)."""
+    rows = connection.execute(
+        f"""select stored.value as candidate
+            from library.non_album_track_rows track_rows
+            cross join lateral jsonb_array_elements(track_rows.track -> 'files') as stored(value)
+            join library.library_roots roots
+              on roots.id = (stored.value ->> 'root_id')::bigint and roots.is_active is true
+            where track_rows.library_id = {_LIBRARY_SQL} and track_rows.scope_keys && %(keys)s::text[]
+            order by stored.value -> '_order' ->> 0, stored.value -> '_order' ->> 1,
+              stored.value -> '_order' ->> 2, (stored.value -> '_order' ->> 3)::bigint
+            limit %(limit)s""",
+        {"keys": sorted(set(keys)), "limit": int(limit)},
+    ).fetchall()
+    return [dict(dict(row)["candidate"]) for row in rows]
+
+
 def read_candidates(connection: Any, *, limit: int) -> list[dict[str, object]]:
     """Active roots' stored candidate rows, in the loader's order, capped as the loader caps them."""
     rows = connection.execute(
@@ -122,12 +160,17 @@ def _write_rows(connection: Any, rows: Mapping[int, Mapping[str, object]]) -> No
     if not rows:
         return
     connection.execute(
-        f"""insert into library.non_album_track_rows (library_id, track_id, track, updated_at)
-            select {_LIBRARY_SQL}, (item ->> 'track_id')::bigint, item -> 'track', now()
+        f"""insert into library.non_album_track_rows (library_id, track_id, track, scope_keys, updated_at)
+            select {_LIBRARY_SQL}, (item ->> 'track_id')::bigint, item -> 'track',
+              array(select jsonb_array_elements_text(item -> 'scope_keys')), now()
             from jsonb_array_elements(%(rows)s::jsonb) as rows(item)
-            on conflict (library_id, track_id) do update set track = excluded.track, updated_at = now()""",
+            on conflict (library_id, track_id) do update
+              set track = excluded.track, scope_keys = excluded.scope_keys, updated_at = now()""",
         # Written in track_id order, so concurrent drains lock rows in one order.
-        {"rows": json.dumps([{"track_id": track_id, "track": rows[track_id]} for track_id in sorted(rows)])},
+        {"rows": json.dumps([
+            {"track_id": track_id, "track": rows[track_id], "scope_keys": scope_keys(rows[track_id]["files"])}
+            for track_id in sorted(rows)
+        ])},
     )
 
 

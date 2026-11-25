@@ -653,6 +653,49 @@ def test_live_one_changed_loose_track_rewrites_one_stored_row(watcher_repair_inv
     assert _marks(fixture) == 0
 
 
+@pytest.mark.parametrize("stored", [20, 6_000])
+def test_live_selected_artist_reads_only_its_own_loose_track_rows_by_scope_key(watcher_repair_inventory, stored):
+    """FTC-GALLERY-STARTUP-005Q (0300): a selected artist's loose tracks come from the store by its scope keys.
+    With 20 and 6,000 other artists' rows stored (past the 5,000-row cap), the read returns that artist's own
+    rows, through the scope-key index, and reads no other artist's rows."""
+    from music_app.services import library_browse_postgres as browse
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts
+
+    fixture = watcher_repair_inventory
+    synthetic_base = 9_000_000_000
+    _entries, loose_entries = _loose_library(fixture, 3, loose=2)
+    _prepare_store(fixture)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        # Other artists' rows, written straight into the store as copies of a real stored row.
+        connection.execute("""
+            insert into library.non_album_track_rows (library_id, track_id, track, scope_keys, updated_at)
+            select seed.library_id, %(base)s + n, jsonb_build_object('files', jsonb_build_array(
+                (seed.track -> 'files' -> 0) || jsonb_build_object('track_id', %(base)s + n,
+                  'track_file_id', %(base)s + n,
+                  'private_path', (seed.track -> 'files' -> 0 ->> 'private_path') || '.stored-' || n))),
+              array['a:stored artist ' || n, 'p:stored ' || n], now()
+            from (select library_id, track from library.non_album_track_rows
+                  where track_id < %(base)s order by track_id limit 1) seed,
+              generate_series(1, %(stored)s) n
+        """, {"base": synthetic_base, "stored": stored})
+        connection.execute("analyze library.non_album_track_rows")
+    artist = "Owner"  # the fixture's album artist of every real loose track
+    counts = OperationCounts()
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    with isolatedPostgres._connect(fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+        scope = browse._non_album_artist_scope([artist], {}, {})
+        rows = repository._stored_loose_candidates_in_scope(CountingConnection(connection, counts), scope)
+        keys = ["a:" + key for key in scope[0]] + ["p:" + part for part in scope[1]]
+        plan = " ".join(str(next(iter(dict(row).values()))) for row in connection.execute(
+            "explain select track_id from library.non_album_track_rows where scope_keys && %s::text[]", (keys,),
+        ).fetchall())
+
+    assert len(rows) == len(loose_entries) and all(int(row["track_id"]) < synthetic_base for row in rows), rows
+    assert counts.returned_rows <= len(loose_entries) + 2, f"the read returned {counts.returned_rows} rows at {stored} stored"
+    if stored > 5_000:
+        assert "non_album_track_rows_scope_keys" in plan, plan
+
+
 def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size(watcher_repair_inventory, monkeypatch):
     """Case 64 (selected-set contract, keyed by waiting marks): with INLINE_DRAIN_LIMIT marks waiting, the
     read request drains them itself in one keyed candidate load. At 20 and 20,000 stored loose rows it reads

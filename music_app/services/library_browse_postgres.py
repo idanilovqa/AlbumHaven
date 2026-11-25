@@ -928,23 +928,28 @@ class PostgresLibraryBrowseRepository:
             }
 
 
-    def _current_stored_loose_candidates(self, connection: Any) -> list[dict[str, object]] | None:
-        """The Loose Tracks store's candidate rows (case 64), or None while they are not complete and current.
+    def _stored_loose_candidates_in_scope(
+        self, connection: Any, scope: tuple[set[str], set[str]],
+    ) -> list[dict[str, object]] | None:
+        """The artist's own Loose Tracks store rows (case 64), read by their scope keys (0300); None only while
+        no store build has started, when the loader still answers.
 
-        Read on the caller's connection, which may hold a snapshot, so nothing is drained or committed here:
-        waiting marks are left to the background drain and the caller reads through the loader meanwhile.
+        Read on the caller's connection, which may hold a snapshot, so nothing is drained or committed here.
+        Rows of marked tracks are served as stored while the background drain catches up, as the Loose Tracks
+        page serves them, and during a build the rows built so far are served.
         """
         from music_app.services import loose_track_store
 
-        if not loose_track_store.is_ready(loose_track_store.load_state(connection)):
+        if loose_track_store.load_state(connection) is None:
             return None
-        if loose_track_store.waiting_marks(connection, at_most=1):
-            if not self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
-                self.queue_utility_projection_prewarm("loose-tracks")  # the background drain, never a build
-            return None
-        rows = loose_track_store.read_candidates(connection, limit=MAX_NON_ALBUM_CANDIDATE_LIMIT)
-        # At the cap, the artist's own rows may lie past it: the loader filters by artist before its cap.
-        return rows if len(rows) < MAX_NON_ALBUM_CANDIDATE_LIMIT else None
+        if loose_track_store.waiting_marks(connection, at_most=1) and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+            self.queue_utility_projection_prewarm("loose-tracks")  # the background drain, never a build
+        artist_keys, path_parts = scope
+        return loose_track_store.read_scoped_candidates(
+            connection,
+            [*("a:" + key for key in artist_keys if key), *("p:" + part for part in path_parts if part)],
+            limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+        )
 
     def _load_non_album_entries(
         self,
@@ -977,10 +982,12 @@ class PostgresLibraryBrowseRepository:
         options = {"track_ids": cached["track_ids"]} if reuse else {}
         if scope_inventory_query:
             options["artist_names"] = scoped_artist_names
-        # An artist's loose tracks come from the case 64 store's rows when they are current: the loader's
+        # An artist's loose tracks come from the case 64 store's rows read by their scope keys: the loader's
         # artist filter matches every track file's path, a whole-library scan on each request.
         stored = (
-            self._current_stored_loose_candidates(connection)
+            self._stored_loose_candidates_in_scope(
+                connection, _non_album_artist_scope(scoped_artist_names, alias_to_canonical, canonical_to_aliases),
+            )
             if scope_inventory_query and connection is not None
             else None
         )

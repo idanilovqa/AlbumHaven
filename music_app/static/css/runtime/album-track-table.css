@@ -205,6 +205,14 @@
 @media (prefers-reduced-motion: reduce) {
   .album-track-table__secondary.is-credit-overflowing > span { animation: none; }
 }
+/* Default density (pages of loose tracks): larger type and a clear gap between the title and its second line.
+   Album Details keeps the approved compact rows. */
+.album-track-table[data-density='default'] .compact-data-table-row:not(.album-track-table__section-row) { font-size: max(1.08em, .875rem); }
+.album-track-table[data-density='default'] .album-track-table__secondary { margin-top: 6px; font-size: max(.78em, .7rem); line-height: 1.25; }
+.album-track-table[data-density='default'] .album-track-table__disc--collapsible .album-track-table__row { contain-intrinsic-block-size: auto 34px; }
+.album-track-table[data-density='default'] .album-track-table__disc--collapsible .album-track-table__row--secondary {
+  contain-intrinsic-block-size: auto calc(1.2em + 1rem + 20px);
+}
 .album-track-table__path { display: block; min-width: 0; overflow: hidden; color: var(--appearance-muted, var(--muted)); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }
 .album-track-table [data-cdt-column="duration"] { text-align: right; font-variant-numeric: tabular-nums; }

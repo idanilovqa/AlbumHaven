@@ -10726,6 +10726,182 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-001 the navigation-tree header sits on the Gallery title baseline",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:loose-nav-tree-header"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "navigation-tree-header-gallery-title-baseline"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-nav-tree-header",
+      "filesystemCopy": "media/cases/loose-nav-tree-header"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-002 reopening the Artist Tree over Loose Tracks selects no artist after a search",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:loose-nav-tree-selection"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-page-keeps-loose-tracks-open-on-tree-reopen",
+      "loose-tracks-page-artist-tree-has-no-selection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-nav-tree-selection",
+      "filesystemCopy": "media/cases/loose-nav-tree-selection"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-003 Loose Tracks opened from the drawer shows the hamburger that reopens the tree",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:loose-tracks-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "loose-tracks-drawer-page-shows-hamburger-not-back",
+      "loose-tracks-page-hamburger-reopens-navigation-tree"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeSearchScroll.functional.spec.js",
+    "case": "FTC-NAV-TREE-SCROLL-001 a search shows no tree scrollbar while it runs or once its short results fit",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:nav-tree-search-scroll"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-tree-search-pending-has-no-scrollbar",
+      "artist-tree-short-results-fit-at-top"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:nav-tree-search-scroll",
+      "filesystemCopy": "media/cases/nav-tree-search-scroll"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksScanNote.functional.spec.js",
+    "case": "FTC-LOOSE-SCAN-NOTE-001 Loose Tracks notes that a running scan may add tracks and drops the note when it ends",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "loose-tracks:scan-note-rarities"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-note-below-table-while-scan-runs",
+      "loose-tracks-note-removed-when-scan-ends",
+      "loose-tracks-no-note-without-scan"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-tracks-scan-note",
+      "filesystemCopy": "media/cases/loose-tracks-scan-note"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 360px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-360",
+      "phone-header-main-text-one-slot-360"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 390px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-390",
+      "phone-header-main-text-one-slot-390"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 412px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-412",
+      "phone-header-main-text-one-slot-412"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/dropdownControl.spec.js",
@@ -12991,6 +13167,71 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": ["loose-tracks-mobile-back-title-alignment"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksTableDensity.spec.js",
+    "case": "Loose Tracks rows use the larger table density with a gap under the title at 1440px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["loose-tracks-default-density-title-gap-1440"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksTableDensity.spec.js",
+    "case": "Loose Tracks rows use the larger table density with a gap under the title at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["loose-tracks-default-density-title-gap-390"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 360px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["phone-gallery-bar-slots-360"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["phone-gallery-bar-slots-390"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 412px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["phone-gallery-bar-slots-412"],
     "ownerApproval": "approved"
   },
   {

@@ -2069,6 +2069,7 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  if (typeof syncLooseTracksPartialNote === 'function') syncLooseTracksPartialNote();
   const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
   const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
   state.loopCreateAllowed = loopCreateAllowed;
@@ -6853,12 +6854,17 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 
 
 let searchPendingRailFallback = null;
+// NEW-005: a running search hides the stale tree until its results render.
+function setRailTreesPending(rail, pending) {
+  rail?.querySelectorAll?.('.navigation-tree').forEach((tree) => window.NavigationTree?.setPending?.(tree, pending));
+}
 function releaseSearchPendingRail() {
   if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
   searchPendingRailFallback = null;
   const rail = document.getElementById('shell-navigation-rail');
   rail?.removeAttribute?.('data-search-pending');
   rail?.setAttribute?.('aria-busy', 'false');
+  setRailTreesPending(rail, false);
 }
 function holdSearchPendingRail(searching) {
   const rail = document.getElementById('shell-navigation-rail');
@@ -6867,6 +6873,7 @@ function holdSearchPendingRail(searching) {
     searchPendingRailFallback = null;
     rail?.setAttribute?.('data-search-pending', '');
     rail?.setAttribute?.('aria-busy', 'true');
+    setRailTreesPending(rail, true);
   } else if (rail?.hasAttribute?.('data-search-pending') && searchPendingRailFallback === null) {
     // renderSidebar releases it with the new tree; a search whose tree needs no re-render releases it shortly.
     searchPendingRailFallback = setTimeout(releaseSearchPendingRail, 1000);
@@ -6887,7 +6894,9 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.scanPageReturnContext
+  // A scan page or library-wide Loose Tracks is the page: no tree row is the current selection.
+  const selectionSuppressed = Boolean(state.ui.scanPageReturnContext || state.ui.looseTracksNavigationActive);
+  const effectiveView = selectionSuppressed
     ? {
       ...v,
       selected_artist: '',
@@ -6904,7 +6913,7 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.scanPageReturnContext
+    !selectionSuppressed
     && effectiveSurface === 'albums'
     && (
       effectiveView.all_artists_active
@@ -13065,6 +13074,7 @@ function syncArtistsDrawerVisibility() {
     rail.inert = isDrawerVisible && !isOpen;
     const mobileLibraryButton = document.getElementById('mobile-library-button');
     mobileLibraryButton?.setAttribute('aria-expanded', String(isOpen));
+    document.getElementById('mobile-page-library-button')?.setAttribute('aria-expanded', String(isOpen));
     if (isOpen) {
       mobileLibraryButton?.removeAttribute('data-search-results');
       mobileLibraryButton?.removeAttribute('aria-description');
@@ -16321,6 +16331,22 @@ function buildLooseTracksPartialNoteHtml() {
     + 'Still indexing loose tracks, so more may appear.</div>';
 }
 
+// A running library scan may add loose tracks too, so the same note shows under any listed Loose Tracks.
+function looseTracksScanRunning() {
+  return Boolean(state.status?.scan_in_progress);
+}
+
+// Each status update keeps the note in step with the scan without re-reading or re-rendering the list.
+function syncLooseTracksPartialNote() {
+  const table = getNonAlbumModalElements().table;
+  if (!table?.querySelector('.album-track-table:not([aria-busy])')) return;
+  const note = table.querySelector('[data-loose-tracks-partial-note]');
+  const wanted = looseTracksScanRunning()
+    || (state.ui?.nonAlbumLibraryWide === true && hasPartialLibraryNonAlbumTracks());
+  if (wanted && !note) table.insertAdjacentHTML('beforeend', buildLooseTracksPartialNoteHtml());
+  else if (!wanted) note?.remove();
+}
+
 // The bounded wait ran out with no stored row (owner-approved wording, 2026-11-22).
 const LOOSE_TRACKS_STILL_PREPARING = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
 
@@ -16657,6 +16683,7 @@ function buildNonAlbumTrackLoadingMarkup() {
     collapsibleGroups: true,
     ariaLabel: 'Loading loose tracks',
     idPrefix: 'loose-track-loading',
+    density: 'default',
   });
 }
 
@@ -16690,6 +16717,10 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
   if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
+  // While library-wide Loose Tracks is the page, no artist (or All artists) is the tree's selection.
+  if (Boolean(state.ui.looseTracksNavigationActive) === libraryWideOpen) return;
+  state.ui.looseTracksNavigationActive = libraryWideOpen;
+  if (typeof renderSidebar === 'function') renderSidebar();
 }
 
 function syncCompactLibraryNavigation(looseTracks) {
@@ -16787,6 +16818,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
+    density: 'default',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
@@ -16914,7 +16946,7 @@ function openNonAlbumModal(options = {}) {
     : hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
-      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial ? buildLooseTracksPartialNoteHtml() : ''}`
+      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial || looseTracksScanRunning() ? buildLooseTracksPartialNoteHtml() : ''}`
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
@@ -24487,6 +24519,8 @@ function buildAlbumTrackTableHtml(config = {}) {
   const collapsibleGroups = Boolean(config.collapsibleGroups);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
+  // Album Details keeps the approved compact rows; a page of loose tracks asks for the roomier default density.
+  const density = config.density === 'default' ? 'default' : 'compact';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const totalLength = String(config.totalLength || '').trim();
@@ -24560,7 +24594,7 @@ function buildAlbumTrackTableHtml(config = {}) {
           fullSpanContent: `<span class="album-track-table__section-title">${escapeHtml(sectionTitle)}</span>`,
         }, row] : [row];
       }),
-      density: 'compact',
+      density,
       frame: 'outline',
       overflow: 'none',
       mobile: 'preserve',
@@ -24587,7 +24621,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
-  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}" data-density="${density}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
 }
 
 // A playback tick reaches only the rows whose state can change: those marked current or
@@ -58272,7 +58306,11 @@ function syncMobilePageShell({ syncNavigation = true } = {}) {
   outlet.hidden = !active;
   outlet.dataset.mobilePageKind = active?.kind || '';
   header.dataset.galleryBarLayout = active ? 'mobile-primary' : '';
-  document.getElementById('mobile-back-button').hidden = !active;
+  // Library-wide Loose Tracks is a library navigation destination: its header reopens the tree instead of Back.
+  const libraryNavigationPage = active?.kind === 'non-album' && active.libraryWide;
+  document.getElementById('mobile-back-button').hidden = !active || libraryNavigationPage;
+  const pageLibraryButton = document.getElementById('mobile-page-library-button');
+  if (pageLibraryButton) pageLibraryButton.hidden = !libraryNavigationPage;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);

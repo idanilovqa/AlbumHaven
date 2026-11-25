@@ -94,13 +94,16 @@
 .album-track-table__disc--collapsible .album-track-table__row--secondary {
   contain-intrinsic-block-size: auto max(28px, calc(1.2em + .805rem));
 }
-.album-track-table .compact-data-table-row:hover,
-:root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table-row:hover { background: color-mix(in srgb, var(--appearance-ink, white) 5%, transparent); }
+/* Hover looks need a device that can hover: a tap leaves :hover on the row, and a touch screen never clears it. */
+@media (hover: hover) {
+  .album-track-table .compact-data-table-row:hover,
+  :root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table-row:hover { background: color-mix(in srgb, var(--appearance-ink, white) 5%, transparent); }
+}
 .album-track-table__row--search-match {
   background: color-mix(in srgb, var(--album-track-accent) 11%, transparent);
   box-shadow: inset 3px 0 0 var(--album-track-accent), inset 12px 0 18px -16px var(--album-track-accent);
 }
-.album-track-table .album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
+@media (hover: hover) { .album-track-table .album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); } }
 .album-track-table__row--playing {
   border-radius: 8px;
   outline: 1px solid color-mix(in srgb, var(--album-track-accent) 86%, transparent);
@@ -155,10 +158,12 @@
 .album-track-table__spectrum::after { --album-track-spectrum-offset: 0.5turn; }
 @keyframes album-track-perimeter-spectrum { from { rotate: 0turn; } to { rotate: 1turn; } }
 .album-track-table__play { position: relative; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid color-mix(in srgb, var(--appearance-ink, white) 58%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 80%, transparent); color: var(--appearance-ink, var(--text)); cursor: pointer; }
-.album-track-table__play:hover:not(:disabled) {
-  border-color: var(--album-track-play-hover);
-  outline: 2px solid var(--album-track-play-hover);
-  outline-offset: 2px;
+@media (hover: hover) {
+  .album-track-table__play:hover:not(:disabled) {
+    border-color: var(--album-track-play-hover);
+    outline: 2px solid var(--album-track-play-hover);
+    outline-offset: 2px;
+  }
 }
 .album-track-table__row--playing .album-track-table__play { border-color: var(--album-track-accent); color: var(--album-track-accent); box-shadow: 0 0 10px color-mix(in srgb, var(--album-track-accent) 42%, transparent); }
 .album-track-table__play::before,
@@ -261,8 +266,14 @@
 .album-track-table__number-play { position: relative; display: grid; place-items: center; width: 28px; height: 28px; }
 .album-track-table__number-play > .album-track-table__play { position: absolute; inset: 0; opacity: 0; }
 .album-track-table__number { font-variant-numeric: tabular-nums; }
-.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__number { visibility: hidden; }
-.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__play { opacity: 1; }
+/* The play button replaces the number on the playing or current track and for keyboard focus;
+   hover reveals it only where the device can hover (a tapped row would keep it). */
+.album-track-table__row:is(:has(:focus-visible), .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__number { visibility: hidden; }
+.album-track-table__row:is(:has(:focus-visible), .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__play { opacity: 1; }
+@media (hover: hover) {
+  .album-track-table__row:hover .album-track-table__number { visibility: hidden; }
+  .album-track-table__row:hover .album-track-table__play { opacity: 1; }
+}
 .album-track-table__title, .album-track-table__path { user-select: text; }
 .album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
 

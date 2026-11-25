@@ -296,7 +296,7 @@ test('a paused current track keeps a dim, still highlight and its play button', 
   assert.match(paused[1], /outline:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 50%/);
   assert.match(paused[1], /background:\s*color-mix\(in srgb, var\(--album-track-accent\) 8%/);
   assert.doesNotMatch(paused[1], /animation|box-shadow/, 'only the playing row glows and moves');
-  assert.match(css, /:is\([^)]*\.album-track-table__row--current\) \.album-track-table__play \{ opacity: 1; \}/);
+  assert.match(css, /:is\(.*\.album-track-table__row--current\) \.album-track-table__play \{ opacity: 1; \}/);
 });
 
 test('play activation is transient and live playback refresh can own the component state classes', () => {

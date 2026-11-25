@@ -1355,9 +1355,12 @@ test.describe('a browser that has just signed in', () => {
     expect(waveform.rightBins).toBe(720);
     expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
     expect(waveform.leftPeaks.some((peak) => peak > 0)).toBe(true);
-    // It appears with playback: about a second after the first audio frame at most.
-    expect(waveform.firstFrameAtMs).toBeGreaterThan(0);
-    const afterAudioMs = Math.max(0, waveform.renderedAtMs - waveform.firstFrameAtMs);
+    // It appears with playback: about a second after the first audio frame at most. Play asks the server
+    // before it sounds, so the waveform may also draw before the first frame, which is within the budget.
+    await expect.poll(async () => (await globalPlayerActions.globalPlayer.readRenderedWaveformCheckpoint()).firstFrameAtMs,
+      { timeout: 30000 }).toBeGreaterThan(0);
+    const { firstFrameAtMs } = await globalPlayerActions.globalPlayer.readRenderedWaveformCheckpoint();
+    const afterAudioMs = Math.max(0, waveform.renderedAtMs - firstFrameAtMs);
     testInfo.annotations.push({ type: 'waveform after first audio frame (ms)', description: String(Math.round(afterAudioMs)) });
     expectTimingBudget(expect, afterAudioMs, FIRST_SONG_WAVEFORM_BUDGET, 'First song waveform after its first audio frame');
     await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });

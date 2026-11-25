@@ -285,3 +285,33 @@ test('the Appearance section picker is the shared dropdown component an Edit Tag
   expect(appearance).toEqual(editTags);
 }
 );
+
+for (const width of [1440, 390]) {
+  test(`the PF filter icon stays put closed, open, and with a selection at ${width} px`, async ({ page }) => {
+    await mountApp(page, width);
+    await page.evaluate(() => { document.getElementById('utility-modal').hidden = false; });
+    const icon = page.locator('#utility-problem-filter-button svg');
+    const box = async () => {
+      await page.mouse.move(1, 1);
+      return icon.evaluate(element => {
+        const { left, top, width, height } = element.getBoundingClientRect();
+        return { left, top, width, height };
+      });
+    };
+    const render = state => page.evaluate(({ open, selected }) => {
+      window.getProblemReasonTypes = () => ['Album not found', 'Encoding problem', 'Missing cover art', 'Missing year'];
+      Object.assign(window.state.utility, { problematicFilesComplete: true, selectedProblemFilters: selected, problemDropdownOpen: open });
+      renderProblemFilterControls({
+        problemFilterButton: document.getElementById('utility-problem-filter-button'),
+        problemFilterMenu: document.getElementById('utility-problem-filter-menu'),
+      });
+    }, state);
+    await render({ open: false, selected: [] });
+    const closed = await box();
+    for (const state of [{ open: true, selected: [] }, { open: true, selected: ['Album not found'] },
+      { open: false, selected: ['Album not found'] }]) {
+      await render(state);
+      expect(await box(), `icon position with ${JSON.stringify(state)}`).toEqual(closed);
+    }
+  });
+}

@@ -30,8 +30,9 @@ from music_app.services.runtime_shutdown import create_daemon_executor
 _LOGGER = logging.getLogger(__name__)
 
 # Bump when an item's content for the same library data changes; a different
-# version backfills the index again.
-BUILDER_VERSION = "1"
+# version backfills the index again. 2: the strict multi-album folder rule and proven copies
+# (2026-11-24) changed which entries and reasons are listed.
+BUILDER_VERSION = "2"
 # Bump when a stored duplicate result changes for the same library data; a different
 # version backfills only library.album_duplicate_results.
 DUPLICATE_RESULTS_VERSION = "1"

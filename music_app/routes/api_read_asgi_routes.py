@@ -615,6 +615,7 @@ def library_loose_tracks(request: Request) -> JSONResponse:
         query_params=request.query_params,
     )
     payload["inventory_mutation_revision"] = int(_library_state(request).get("inventory_mutation_revision") or 0)
+    _project_missing_album_actions_for_request(request, payload)
     return JSONResponse(payload)
 
 

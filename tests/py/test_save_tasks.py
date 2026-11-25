@@ -1487,6 +1487,42 @@ def test_structural_tag_edit_schedules_stale_projection_rebuild_after_commit(tmp
     assert "warnings" not in terminal_task
 
 
+def test_structural_tag_edit_with_deferred_relation_publication_completes_without_warnings(tmp_path):
+    """FTC-TAGS-045: a relation publication deferred to the journal is background work, not a failure. The save
+    completes with no warning, so the page shows only the normal saved message; the deferral queued its replay."""
+    task_id = create_save_task("edit-tags")
+
+    finalize_structural_tag_edit_save_task(
+        task_id,
+        config=_explicit_config(tmp_path),
+        logger=_logger_stub(),
+        get_state=lambda: {"albums": [], "file_cache": {}},
+        rebuild_affected_albums_in_state=lambda *_args, **_kwargs: None,
+        persist_structural_tag_edit=lambda **_kwargs: {
+            "album_rows_updated": 1,
+            "relation_publication_deferred": True,
+        },
+        schedule_relation_projection_rebuild=lambda _reason: None,
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        find_albums_by_track_paths=lambda _paths: [],
+        find_problematic_album_by_track_paths=lambda _paths: None,
+        updated_file_cache={"track-1.mp3": {"path": "track-1.mp3", "album_artist": "New Artist"}},
+        previous_file_cache={"track-1.mp3": {"path": "track-1.mp3", "album_artist": "Old Artist"}},
+        changed_paths={"track-1.mp3"},
+        requested_track_paths={"track-1.mp3"},
+        separate_release_keys=set(),
+        changed_field_names={"album_artist"},
+        structural_edit_fields={"album_artist"},
+        relation_projection_edit_fields={"album_artist", "artist"},
+        log_entry={"action": "Tags edited"},
+    )
+
+    terminal_task = save_task_result(task_id)
+    assert terminal_task["status"] == "completed"
+    assert "warnings" not in terminal_task
+
+
 @pytest.mark.parametrize("multiple", [False, True])
 def test_structural_year_edit_publishes_committed_separate_release_key_before_rebuild(
     tmp_path,

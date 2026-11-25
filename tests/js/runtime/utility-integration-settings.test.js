@@ -678,3 +678,8 @@ test('a failed run rolls back even when the refresh after it fails',async()=>{
  assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary), JSON.stringify({ scrobbled: 17, lastfm_total: 12000, pending: 120, can_submit: true }));
  assert.deepEqual(alerts, [['Last.fm is unavailable.', 'error', null]]);
 });
+
+test('Playback statistics has a divider above it in Integrations (owner, 2026-11-25)', () => {
+  const css = fs.readFileSync(path.join(root, 'music_app/static/css/runtime/utilities.css'), 'utf8');
+  assert.match(css, /#utility-modal\[data-active-tab="integrations"\] \.settings-playback-statistics\s*\{[^}]*border-top:\s*1px solid var\(--border\)/);
+});

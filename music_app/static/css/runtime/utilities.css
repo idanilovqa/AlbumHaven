@@ -1979,6 +1979,8 @@
 .lastfm-scrobble-status p { margin: 0; }
 .settings-lastfm-submit-action { display: flex; justify-content: flex-end; margin-top: auto; padding-top: 12px; }
 .settings-lastfm-submit-action .ui-button:disabled { opacity: .42; }
+/* A divider above Playback statistics, like the one below it (owner, 2026-11-25). */
+#utility-modal[data-active-tab="integrations"] .settings-playback-statistics { margin-top: 18px; border-top: 1px solid var(--border); }
 .settings-playback-statistics dl { display: grid; gap: 12px; }
 .settings-playback-statistics dl > div { display: flex; gap: 24px; justify-content: space-between; }
 .settings-playback-statistics dd { margin: 0; }

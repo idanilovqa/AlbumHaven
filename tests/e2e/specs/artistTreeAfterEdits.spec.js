@@ -115,7 +115,7 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     expect(await navigationPanelActions.readHydratedSidebarArtistNames()).not.toContain(`${band} / ${band}`);
   });
 
-  test('FTC-TAGS-045an Album Artist edit of some tracks shows the new artist with its album, and restoring it leaves no empty artist behind', { tag: '@area:tag-edit' }, async ({
+  test('FTC-TAGS-045 an Album Artist edit of some tracks shows the new artist with its album, and restoring it leaves no empty artist behind', { tag: '@area:tag-edit' }, async ({
     page, managedAppLifecycle, galleryActions, appBarActions, navigationPanelActions, tagEditorActions,
   }) => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 8);

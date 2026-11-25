@@ -21,12 +21,12 @@ import binascii
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
-import json
 import os
 import re
 import secrets
 from uuid import UUID, uuid4
 
+from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -83,20 +83,36 @@ def software_attestation_allowed(channel: str, environ=None) -> bool:
     return str((os.environ if environ is None else environ).get(ALLOW_SOFTWARE_ENV) or "").strip().lower() in {"1", "true", "yes"}
 
 
-def revoked_serials(environ=None) -> frozenset[str]:
-    """Google's attestation status list (https://android.googleapis.com/attestation/status), if configured."""
-    path = str((os.environ if environ is None else environ).get(ATTESTATION_STATUS_ENV) or "").strip()
-    if not path:
-        return frozenset()
-    try:
-        with open(path, "rb") as handle:
-            entries = json.load(handle).get("entries", {})
-    except (OSError, ValueError, AttributeError):
-        entries = None
-    if not isinstance(entries, dict):
-        # A configured but unreadable list must not silently disable revocation.
+def status_list_configured(environ=None) -> bool:
+    """Whether this server uses Google's attestation status list. The list itself lives in
+    ``app.android_attestation_revocations``; ``scripts/android_attestation_revocations.py`` loads it."""
+    return bool(str((os.environ if environ is None else environ).get(ATTESTATION_STATUS_ENV) or "").strip())
+
+
+def _chain_serials(chain_der: list[bytes]) -> list[str]:
+    """Each parseable certificate's serial as the revocation rows store it; an unparseable one is
+    refused later by ``verify_attestation_chain``."""
+    serials = []
+    for item in chain_der:
+        try:
+            serials.append(format(x509.load_der_x509_certificate(item).serial_number, "x"))
+        except ValueError:
+            continue
+    return serials
+
+
+def _revoked_serials(connection, chain_der: list[bytes], status_list_required: bool) -> frozenset[str]:
+    row = connection.execute(
+        """select exists(select 1 from app.android_attestation_revocation_sources
+                          where source = 'status-list') as loaded,
+                  array(select serial from app.android_attestation_revocations
+                         where serial = any(%s)) as revoked""",
+        (_chain_serials(chain_der),),
+    ).fetchone()
+    if status_list_required and not row["loaded"]:
+        # A configured list that was never loaded must not silently disable revocation.
         raise ArtifactAccessError(503, "attestation_unavailable")
-    return frozenset(str(serial).lower().lstrip("0") or "0" for serial in entries)
+    return frozenset(row["revoked"])
 
 
 def request_message(method: str, path: str, challenge: str, body: bytes) -> bytes:
@@ -197,9 +213,10 @@ class AndroidArtifactAccess:
             signing_certificate_sha256=certificates,
             allow_software=software_attestation_allowed(channel, self._environ),
         )
-        revoked = revoked_serials(self._environ)
         now = self._clock()
         with self._connect(self._database_url) as connection:
+            # Raised before the challenge is spent: the refusal rolls back this transaction.
+            revoked = _revoked_serials(connection, chain_der, status_list_configured(self._environ))
             raw = self._consume_challenge(connection, account_id, session_id, channel, "attest", challenge)
         if raw is None:
             raise ArtifactAccessError(403, "challenge_invalid")

@@ -57,15 +57,21 @@ def _pooled(library):
         return connection.info.backend_pid, connection.autocommit
 
 
+def _maintain_index(repository):
+    """One background maintenance pass, as startup, saves and watcher passes queue it."""
+    problematic_index.queue_maintenance(repository)
+    problematic_index.wait_for_background_work()
+    readiness = problematic_index.serving_readiness(repository)
+    assert readiness["problematic_index"] == "ready", "the index maintenance did not run"
+
+
 def _index_maintenance(library, _monkeypatch):
-    ready = problematic_index.maintain_now(browse.PostgresLibraryBrowseRepository(library.config))
-    assert ready, "the index maintenance did not run"
+    _maintain_index(browse.PostgresLibraryBrowseRepository(library.config))
 
 
 def _index_refresh(library, _monkeypatch):
     repository = browse.PostgresLibraryBrowseRepository(library.config)
-    ready = problematic_index.maintain_now(repository)
-    assert ready, "the index maintenance did not run"
+    _maintain_index(repository)
     postgres_connections.close_pools()  # only the refresh may have used the publisher's connection
     with isolatedPostgres._connect(library.setup_url) as connection:
         connection.execute(

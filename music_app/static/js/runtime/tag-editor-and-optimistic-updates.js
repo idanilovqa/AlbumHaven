@@ -1263,7 +1263,8 @@ function isInstrumentalVariant(album) {
 // Release title case, matching the server's title_case_tag_value: capitalise each
 // word, keep all-caps (CD, MTV) and inner-capital words (iTunes) as tagged.
 function titleCaseReleaseText(text) {
-  return String(text || '').replace(/\p{L}+(?:['’]\p{L}+)?/gu, (word) => {
+  // A word glued to digits (the "th" of "20th") is not a new word (owner, 2026-11-25).
+  return String(text || '').replace(/(?<![\p{L}\p{N}])\p{L}+(?:['’]\p{L}+)?/gu, (word) => {
     const letters = word.replace(/['’]/g, '');
     if (letters.length > 1 && letters === letters.toUpperCase() && letters !== letters.toLowerCase()) return word;
     if (word.length > 1 && /\p{Lu}/u.test(word.slice(1))) return word;

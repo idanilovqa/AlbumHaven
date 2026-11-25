@@ -5769,3 +5769,10 @@ test('a save answered "finishing" keeps the edit and hands it to the pending-edi
   assert.deepEqual(JSON.parse(JSON.stringify(added[0].payload.updates)), { [trackPath]: { title: 'Renamed Song' } });
   assert.ok(!alerts.some(([, variant]) => variant === 'error'), 'a finishing save was reported as failed');
 });
+
+test('release tab names keep ordinals lower case after their digits (owner, 2026-11-25)', () => {
+  const context = loadHelper([]);
+  assert.equal(context.titleCaseReleaseText('20th anniversary edition remix - 2018'), '20th Anniversary Edition Remix - 2018');
+  assert.equal(context.titleCaseReleaseText('1st press, 2nd edition, 3rd mix, 4th cut'), '1st Press, 2nd Edition, 3rd Mix, 4th Cut');
+  assert.equal(context.titleCaseReleaseText('2005 remaster'), '2005 Remaster');
+});

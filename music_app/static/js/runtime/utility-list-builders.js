@@ -1840,11 +1840,19 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
         (artist) => artist !== selectedArtist,
         false,
       );
-    const allFamilyArtists = Array.from(new Set([
-      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : []),
-      ...allFamilyGroups
+    const nextFamilyArtists = allFamilyGroups
+      .map((group) => String(group.artist || '').trim())
+      .filter((artist) => artist && artist !== selectedArtist);
+    // An artist whose mounted family group this edit emptied (an undone credit move) is no longer family.
+    const emptiedFamilyArtists = new Set(
+      ((hasMountedRoleGroups ? state.view.family_artist_groups : state.view.artist_groups) || [])
         .map((group) => String(group.artist || '').trim())
-        .filter((artist) => artist && artist !== selectedArtist),
+        .filter((artist) => artist && artist !== selectedArtist && !nextFamilyArtists.includes(artist)),
+    );
+    const allFamilyArtists = Array.from(new Set([
+      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : [])
+        .filter((artist) => !emptiedFamilyArtists.has(String(artist || '').trim())),
+      ...nextFamilyArtists,
     ])).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
     const visibleFamilyGroups = activeRelatedSet.size
       ? allFamilyGroups.filter((group) => groupMatchesRelatedArtists(group, activeRelatedSet))

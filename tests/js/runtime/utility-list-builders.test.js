@@ -982,6 +982,53 @@ test('applyUpdatedAlbumsToCurrentView keeps a restored album beside an existing 
   assert.equal(context.state.view.album_count, 3);
 });
 
+test('undoing a credit move drops the family artist that only the move created (FTC-TAGS-040)', () => {
+  // A failed save undoes its optimistic credit move. The moved-to artist stayed in related_artists,
+  // so the selected artist's bar became a one-artist family and lost its "N albums" count.
+  const context = loadHelpers();
+  const path = 'D:\\Music\\Save Artist\\Twin Release\\01.mp3';
+  const twin = {
+    key: 'save artist::twin release',
+    name: 'Twin Release',
+    album_artist: 'Save Artist',
+    year: 2020,
+    tracks: [{ path, album: 'Twin Release', artist: 'Save Artist', album_artist: 'Save Artist' }],
+  };
+  const group = { artist: 'Save Artist', artist_display: 'Save Artist', albums: [twin] };
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Save Artist',
+    selected_artist_family_display_mode: 'grouped',
+    related_artists: ['Kept Relative'],
+    primary_artist_groups: [group],
+    family_artist_groups: [],
+    artist_groups: [group],
+  };
+  const moved = {
+    ...twin,
+    key: 'save artist moved::twin release',
+    album_artist: 'Save Artist moved',
+    tracks: [{ ...twin.tracks[0], artist: 'Save Artist moved', album_artist: 'Save Artist moved' }],
+  };
+  context.applyUpdatedAlbumsToCurrentView([moved], {
+    originalAlbum: twin,
+    skipRender: true,
+    tagEdits: { [path]: { artist: 'Save Artist moved', album_artist: 'Save Artist moved' } },
+  });
+  assert.deepEqual([...context.state.view.related_artists], ['Kept Relative', 'Save Artist moved']);
+
+  context.applyUpdatedAlbumsToCurrentView([twin], {
+    originalAlbum: twin,
+    skipRender: true,
+    tagEdits: { [path]: { artist: 'Save Artist', album_artist: 'Save Artist' } },
+  });
+  assert.deepEqual([...context.state.view.related_artists], ['Kept Relative']);
+  assert.deepEqual(
+    context.state.view.primary_artist_groups.map((primary) => primary.albums.length),
+    [1],
+  );
+});
+
 test('applyUpdatedAlbumsToCurrentView preserves chronological selected-artist family display', () => {
   const context = loadHelpers();
   const monoAlbum = {

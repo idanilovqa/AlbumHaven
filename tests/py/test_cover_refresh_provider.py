@@ -30,7 +30,7 @@ def test_disc_folder_lookup_reuses_parent_album_cover(tmp_path):
         None,
         2001,
         {".png"},
-        CoverSearchCache(tmp_path / "cover-cache.json"),
+        CoverSearchCache(),
         "AlbumHavenTests/1.0",
         search_remote_cover_func=lambda **_kwargs: (
             None,
@@ -126,7 +126,7 @@ def test_automatic_write_guard_receives_final_encoded_cover_revision(tmp_path):
         None,
         2026,
         {".jpg"},
-        CoverSearchCache(tmp_path / "cache.json"),
+        CoverSearchCache(),
         "AlbumHavenTests/1.0",
         cover_selection_origin="automatic",
         reject_if_user_controlled=True,
@@ -153,7 +153,7 @@ def test_satisfactory_local_cover_skips_remote_without_lookup_cache(tmp_path):
 
     resolved, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
         folder, "Artist", "Album", None, 2001, {".jpg"},
-        CoverSearchCache(tmp_path / "lookup.json"), "AlbumHavenTests/1.0",
+        CoverSearchCache(), "AlbumHavenTests/1.0",
         search_remote_cover_func=lambda *_args, **_kwargs: pytest.fail("remote search should not run"),
     )
 
@@ -176,7 +176,7 @@ def test_background_refresh_prefers_viable_front_art_before_remote_search(tmp_pa
 
     resolved, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
         folder, "Artist", "Album", None, 2007, {".jpg"},
-        CoverSearchCache(tmp_path / "lookup.json"), "AlbumHavenTests/1.0",
+        CoverSearchCache(), "AlbumHavenTests/1.0",
         search_remote_cover_func=lambda *_args, **_kwargs: pytest.fail(
             "viable release-local front art must prevent remote search"
         ),
@@ -196,7 +196,7 @@ def test_background_refresh_still_searches_when_local_art_is_not_viable(tmp_path
 
     resolved, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
         folder, "Artist", "Album", None, 2007, {".jpg"},
-        CoverSearchCache(tmp_path / "lookup.json"), "AlbumHavenTests/1.0",
+        CoverSearchCache(), "AlbumHavenTests/1.0",
         search_remote_cover_func=lambda *_args, **_kwargs: (
             searches.append("remote") or None,
             [{"resolver": "_search_apple", "status": "no_candidate"}],
@@ -753,7 +753,7 @@ def test_slow_provider_budget_expires_and_next_provider_can_progress(monkeypatch
 def test_timed_out_automatic_lookup_is_not_negative_cached(tmp_path):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
-    cache = CoverSearchCache(tmp_path / "lookup.json")
+    cache = CoverSearchCache()
 
     selected, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
         folder, "Artist", "Album", None, 2001, {".jpg"}, cache,
@@ -783,7 +783,7 @@ def test_candidate_transfer_failure_keeps_normal_search_retryable(
         image = pytest.importorskip("PIL.Image")
         image.new("RGB", (300, 300), "blue").save(selected_cover)
     original_artwork = selected_cover.read_bytes() if selected_cover else None
-    cache = CoverSearchCache(tmp_path / "lookup.json")
+    cache = CoverSearchCache()
     cache_key = cover_query_key("Artist", "Album", None, 2001)
     baseline = {"updated_at": 1.0, "missing": True} if expired_negative else None
     if baseline:
@@ -843,7 +843,7 @@ def test_candidate_transfer_failure_keeps_normal_search_retryable(
 def test_failed_automatic_lookup_is_not_negative_cached(tmp_path):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
-    cache = CoverSearchCache(tmp_path / "lookup.json")
+    cache = CoverSearchCache()
 
     selected, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
         folder, "Artist", "Album", None, 2001, {".jpg"}, cache,
@@ -885,7 +885,7 @@ def test_bandcamp_only_group_reaches_resolver_from_album_refresh(tmp_path):
         return None, [{"resolver": "_search_bandcamp", "status": "no_candidate"}]
 
     _selected, _downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
-        folder, "Artist", "Album", None, 2001, {".jpg"}, CoverSearchCache(tmp_path / "cache.json"),
+        folder, "Artist", "Album", None, 2001, {".jpg"}, CoverSearchCache(),
         "AlbumHavenTests/1.0", enabled_provider_groups=frozenset({"bandcamp"}),
         search_remote_cover_func=search,
     )
@@ -1039,7 +1039,7 @@ def test_cover_refresh_suppresses_external_search_for_manual_only_and_offline_po
         None,
         2001,
         {".jpg"},
-        CoverSearchCache(tmp_path / "cover-cache.json"),
+        CoverSearchCache(),
         "AlbumHavenTests/1.0",
         enabled_provider_groups=policy,
         search_remote_cover_func=fail_external_search,
@@ -1100,7 +1100,7 @@ def test_user_controlled_cover_publishes_improvement_without_writing_bytes(
         None,
         2001,
         {".jpg"},
-        CoverSearchCache(tmp_path / "cover-cache.json"),
+        CoverSearchCache(),
         "AlbumHavenTests/1.0",
         cover_selection_origin="user", cover_selection_provenance="explicit",
         reject_if_user_controlled=True,
@@ -1129,7 +1129,7 @@ def test_user_controlled_cover_bypasses_positive_result_cache_to_find_new_candid
     folder.mkdir(parents=True)
     current_cover = folder / "cover.jpg"
     current_cover.write_bytes(b"user-selected-cover")
-    cache = CoverSearchCache(tmp_path / "cover-cache.json")
+    cache = CoverSearchCache()
     cache.set(
         "artist::album::::2001",
         {
@@ -1285,7 +1285,7 @@ def test_user_controlled_cover_accepts_better_same_art_upgrade_and_marks_guard_p
         None,
         2001,
         {".jpg"},
-        CoverSearchCache(tmp_path / "cover-cache.json"),
+        CoverSearchCache(),
         "AlbumHavenTests/1.0",
         cover_selection_origin="user", cover_selection_provenance="explicit",
         reject_if_user_controlled=True,
@@ -1360,7 +1360,7 @@ def test_automatic_cover_write_guard_blocks_before_write_or_commits_with_origin(
         None,
         2001,
         {".jpg"},
-        CoverSearchCache(tmp_path / "blocked-cache.json"),
+        CoverSearchCache(),
         "AlbumHavenTests/1.0",
         cover_selection_origin="automatic",
         reject_if_user_controlled=True,
@@ -1393,7 +1393,7 @@ def test_automatic_cover_write_guard_blocks_before_write_or_commits_with_origin(
         None,
         2001,
         {".jpg"},
-        CoverSearchCache(tmp_path / "accepted-cache.json"),
+        CoverSearchCache(),
         "AlbumHavenTests/1.0",
         cover_selection_origin="automatic",
         reject_if_user_controlled=True,

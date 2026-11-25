@@ -362,3 +362,31 @@ for (const [label, databaseUrl] of [
     assert.equal(calls.length, 0);
   });
 }
+
+test('a target whose metric case is quarantined proves completion with the JSON report', (t) => {
+  const { listRegisteredCases } = require('../../scripts/ci/performance-quarantine.cjs');
+  const target = performanceRunner.PERFORMANCE_TARGETS['selected-artist'];
+  const quarantine = { reason: 'contract', owner: '#1', failedRun: '1', since: '2026-01-01' };
+  const previous = _private.setRegisteredPerformanceCases(listRegisteredCases().map((entry) => ({
+    ...entry,
+    quarantine: entry.target === 'selected-artist' && !entry.case.includes('FTC-ARTIST-FAMILY-004') ? quarantine : null,
+  })));
+  t.after(() => _private.setRegisteredPerformanceCases(previous));
+  const passingLine = `  ok 3 [synthetic-large-library] › ${target.specPath}:468:3 › FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › ${target.casePatterns[2]} (1.6s)`;
+
+  const calls = [];
+  const { result } = runThreeExplicitDiagnosticAttempts(t, 'selected-artist', (call) => {
+    if (call.command !== process.execPath) return null;
+    const reportPath = call.options.env.PLAYWRIGHT_JSON_OUTPUT_FILE;
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+    fs.writeFileSync(reportPath, JSON.stringify({
+      suites: [{ title: 'selectedArtist.spec.js' }],
+      errors: [],
+      stats: { expected: 1, unexpected: 0, skipped: 2, flaky: 0 },
+    }));
+    return { error: null, status: 0, stdout: `${passingLine}\n`, stderr: '' };
+  }, calls);
+
+  assert.equal(calls.filter((call) => call.command === process.execPath).length, 3);
+  assert.equal(result.exitCode, 0);
+});

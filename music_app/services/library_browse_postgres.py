@@ -68,8 +68,10 @@ from music_app.services.metadata import (
     build_text_repairs_for_entry,
     normalize_exception_value,
 )
+from music_app.services.multi_album_folders import strict_multi_album_folders_sql
 from music_app.services.album_local_membership import (
     local_album_membership_ctes_sql,
+    physical_album_folder_sql,
 )
 from music_app.services.non_album_view_payloads import (
     build_non_album_album_groups,
@@ -3981,6 +3983,7 @@ class PostgresLibraryBrowseRepository:
             sql = _album_detail_sql().replace(
                 "legacy_scrobble_counts as (",
                 local_album_membership_ctes_sql(scope_album_key=True)
+                + ", " + _ALBUM_DETAIL_STRICT_FOLDERS_SQL
                 + ", legacy_scrobble_counts as (",
                 1,
             )
@@ -3989,7 +3992,12 @@ class PostgresLibraryBrowseRepository:
                 "(library.local_track_files.metadata #> '{scan_cache,file_entry}') || "
                 "jsonb_build_object('local_album_membership_problem', "
                 "(select problem from local_album_membership "
-                "where file_id = library.local_track_files.id)) as file_entry",
+                "where file_id = library.local_track_files.id)) as file_entry, "
+                # The album's verdict by the strict rule, as the Problematic Files rows carry it.
+                "exists (select 1 from strict_mixed_folders strict "
+                "where strict.library_root_id = library.local_track_files.library_root_id "
+                f"and strict.physical_parent = {physical_album_folder_sql('library.local_track_files.private_path')}"
+                ") as file_mixed_album_folder",
                 1,
             )
             cursor = active_connection.execute(sql, {"album_key": album_key})
@@ -4441,7 +4449,7 @@ class PostgresLibraryBrowseRepository:
                 return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
 
             def album_rows(cursor: Any) -> list[object]:
-                return _narrow_mixed_album_folders(active_connection, list(cursor.fetchall()))
+                return list(cursor.fetchall())
 
             def standalone_rows() -> list[object]:
                 return self._load_problematic_loose_file_rows(
@@ -5694,80 +5702,6 @@ def _effective_row_exception_type(row_payload: Mapping[str, object]) -> str:
 
 _OUTSIDE_COPY_REASON = "Duplicate track outside album folder"
 
-# Every file of the folders that hold the given files, with whether its album also has files elsewhere:
-# the private-path index seeds the folders, the 0088 physical-parent index lists them.
-_CANDIDATE_FOLDER_FILES_SQL = """
-    with folders as materialized (
-      select distinct seed.library_root_id, __SEED_PARENT__ as physical_parent
-      from library.local_track_files seed
-      where seed.private_path = any(%(paths)s::text[]) and seed.scan_cache_stale is false
-    ), folder_files as materialized (
-      select files.*
-      from folders
-      cross join lateral (
-        select files.private_path, files.track_id, files.metadata
-        from library.local_track_files files
-        where files.library_root_id = folders.library_root_id
-          and __FILE_PARENT__ = folders.physical_parent
-          and files.scan_cache_stale is false
-        offset 0
-      ) files
-    )
-    select folder_files.private_path,
-      folder_files.metadata #>> '{scan_cache,file_entry,album}' as album,
-      folder_files.metadata #>> '{scan_cache,file_entry,album_artist}' as album_artist,
-      folder_files.metadata #>> '{scan_cache,file_entry,artist}' as artist,
-      folder_files.metadata #>> '{scan_cache,file_entry,track_number}' as track_number,
-      folder_files.metadata #>> '{scan_cache,file_entry,disc_number}' as disc_number,
-      folder_files.metadata #>> '{scan_cache,file_entry,total_tracks}' as total_tracks,
-      folder_files.metadata #>> '{scan_cache,file_entry,exception_type}' as exception_type,
-      folder_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as membership_problem,
-      tracks.album_id is not null and exists (
-        select 1 from library.local_tracks album_tracks
-        join library.local_track_files album_files
-          on album_files.track_id = album_tracks.id and album_files.scan_cache_stale is false
-        where album_tracks.album_id = tracks.album_id
-          and album_files.private_path <> all(array(select private_path from folder_files))
-      ) as album_files_elsewhere
-    from folder_files
-    join library.local_tracks tracks on tracks.id = folder_files.track_id
-"""
-
-
-def _narrow_mixed_album_folders(connection: Any, rows: list[object]) -> list[object]:
-    """Keep "Mixed album metadata in one folder" only in real multi-album folders (the owner's strict rule,
-    2026-11-24). The SQL marks a folder holding more than one album; this reads just those folders' files
-    in one statement and applies strict_multi_album_folders to them."""
-    from music_app.services.album_local_membership import physical_album_folder
-    from music_app.services.multi_album_folders import strict_multi_album_folders
-
-    flagged = sorted({
-        path for row in rows
-        if (payload := _row_mapping(row)).get("file_mixed_album_folder") is True
-        and (path := str(payload.get("file_private_path") or "").strip())
-    })
-    if not flagged:
-        return rows
-    folder_files = [_row_mapping(row) for row in connection.execute(
-        _CANDIDATE_FOLDER_FILES_SQL.replace("__SEED_PARENT__", _physical_parent_sql("seed.private_path"))
-        .replace("__FILE_PARENT__", _physical_parent_sql("files.private_path")),
-        {"paths": flagged},
-    ).fetchall()]
-    strict = strict_multi_album_folders(
-        {**entry, "path": entry.get("private_path"), "local_album_membership_problem": entry.get("membership_problem"),
-         "_album_files_elsewhere": entry.get("album_files_elsewhere") is True}
-        for entry in folder_files
-    )
-    narrowed: list[object] = []
-    for row in rows:
-        payload = _row_mapping(row)
-        if payload.get("file_mixed_album_folder") is True and physical_album_folder(
-            str(payload.get("file_private_path") or "")
-        ) not in strict:
-            row = {**payload, "file_mixed_album_folder": False}
-        narrowed.append(row)
-    return narrowed
-
 # The copies of one album's tracks: files the scan classified as a duplicate outside their album folder,
 # found through the album's own duplicate identities (0093 index), never by reading the library.
 _OUTSIDE_COPIES_SQL = """
@@ -5799,6 +5733,22 @@ _OUTSIDE_COPIES_SQL = """
     join library.local_tracks tracks on tracks.id = copies.track_id
     where own.artist_identity <> '' and own.album_identity <> ''
 """
+
+
+# Album Details decides its album's folders by the strict multi-album rule over the files the membership CTEs
+# already scoped to them (local_membership_candidate_file_ids: the album's files and its folders' files).
+_ALBUM_DETAIL_STRICT_FOLDERS_SQL = strict_multi_album_folders_sql(
+    f"""select tracks.library_id, files.library_root_id,
+         {physical_album_folder_sql("files.private_path")} as physical_parent, files.id as file_id, tracks.album_id,
+         coalesce(nullif(tracks.disc_number, 0), 1) as disc_number,
+         case when tracks.track_number > 0 then tracks.track_number end as track_number,
+         membership.problem as membership_problem
+       from local_membership_candidate_file_ids candidates
+       join library.local_track_files files on files.id = candidates.file_id and files.scan_cache_stale is false
+       join library.local_tracks tracks on tracks.id = files.track_id
+       left join local_album_membership membership on membership.file_id = files.id""",
+    physical_album_folder_sql,
+)
 
 
 def _annotate_album_tracks_with_outside_copies(connection: Any, album: dict[str, object]) -> None:
@@ -13269,25 +13219,14 @@ def _problematic_files_sql(
           where library.local_track_files.scan_cache_stale is false
             and __PATH_KEY_PRESENT__
         ),
-        mixed_physical_folders as (
-          -- Two hash aggregates: a distinct count per group forces a full sort.
-          select library_id, library_root_id, physical_parent
-          from (
-            select distinct library_id, library_root_id, physical_parent, album_id
-            from active_problem_rows
-            -- Loose tracks have no album, so they never make a folder mixed.
-            where album_id is not null
-          ) folder_albums
-          group by library_id, library_root_id, physical_parent
-          having count(*) > 1
-        ),
+        __STRICT_MIXED_FOLDERS__,
         physical_file_context as materialized (
           select files.*,
             mixed.library_id is not null as file_mixed_album_folder,
             membership.problem as local_album_membership_problem
           from active_problem_rows files
           left join local_album_membership membership on membership.file_id = files.file_id
-          left join mixed_physical_folders mixed
+          left join strict_mixed_folders mixed
             on mixed.library_id = files.library_id
            and mixed.library_root_id = files.library_root_id
            and mixed.physical_parent = files.physical_parent
@@ -13369,6 +13308,17 @@ def _problematic_files_sql(
             "library.local_track_files.scan_path_key_present is true" if path_columns
             else "library.local_path_key(library.local_track_files.private_path) <> ''",
         ).replace(
+            "__STRICT_MIXED_FOLDERS__",
+            strict_multi_album_folders_sql(
+                """select files.library_id, files.library_root_id, files.physical_parent, files.file_id,
+                     files.album_id, files.disc_number, files.effective_track_number as track_number,
+                     membership.problem as membership_problem
+                   from active_problem_rows files
+                   left join local_album_membership membership on membership.file_id = files.file_id""",
+                (lambda path: path.replace("private_path", "scan_physical_parent")) if path_columns
+                else _physical_parent_sql,
+            ),
+        ).replace(
             "__FILE_ALBUM_IDENTITY__",
             "library.local_track_files.scan_file_album_identity" if path_columns
             else "library.duplicate_identity_text(nullif(lower(btrim(library.local_track_files.scan_file_album)), ''))",
@@ -13435,7 +13385,7 @@ def _problematic_files_sql(
             "select album_id from active_candidate_ids",
             "select album_id from active_problem_rows where file_size = 0",
             """select problem.album_id from active_problem_rows problem
-               join mixed_physical_folders mixed
+               join strict_mixed_folders mixed
                  on mixed.library_id = problem.library_id
                 and mixed.library_root_id = problem.library_root_id
                 and mixed.physical_parent = problem.physical_parent""",

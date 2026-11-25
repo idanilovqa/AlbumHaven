@@ -774,12 +774,13 @@ def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artis
         "affected_album_keys": ["artist::surviving album"],
         "new_track_paths": [],
     }
-    featured_sync_params = next(
-        params
-        for sql, params in connection.executed
-        if "delete from library.local_album_featured_artists" in _normalized_sql(sql)
+    # Credits are republished only from an album's retained active members
+    # (_publish_album_credits). This album has none left in the transaction's
+    # view, so it keeps its historical credits: no featured-artist prune runs.
+    assert not any(
+        "delete from library.local_album_featured_artists" in _normalized_sql(sql)
+        for sql, _params in connection.executed
     )
-    assert featured_sync_params["affected_album_keys"] == []
 
 
 def test_noop_targeted_subtree_deletion_does_not_advance_inventory_revision(

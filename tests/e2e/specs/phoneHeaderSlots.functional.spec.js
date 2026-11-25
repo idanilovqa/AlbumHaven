@@ -18,17 +18,22 @@ async function readHeaderSlots(page) {
     const textNode = [...title.childNodes].find((node) => node.nodeType === 3 && node.textContent.trim()) || title;
     const range = document.createRange();
     range.selectNodeContents(textNode);
+    const textX = Math.round(range.getBoundingClientRect().x);
+    // The probe sits inline beside the text itself: a probe appended to a flex title would be a flex item, not
+    // on the text baseline.
+    const host = document.createElement('span');
     const probe = document.createElement('span');
     probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
-    title.appendChild(probe);
+    textNode.replaceWith(host);
+    host.append(textNode, probe);
     const baseline = Math.round(probe.getBoundingClientRect().bottom);
-    probe.remove();
+    host.replaceWith(textNode);
     return {
       menu: menu ? box(menu) : null,
       menuIcon: menu ? box(menu.querySelector('svg')) : null,
       back: back ? box(back) : null,
       text: title.textContent.trim(),
-      textX: Math.round(range.getBoundingClientRect().x),
+      textX,
       baseline,
     };
   });

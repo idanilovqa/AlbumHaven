@@ -13359,7 +13359,7 @@
       "tab-within-open-drawer",
       "escape-closes-drawer-to-trigger"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -13374,7 +13374,7 @@
     "expectedContracts": [
       "close-button-returns-focus-to-trigger"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -13389,7 +13389,7 @@
     "expectedContracts": [
       "escape-closes-drawer-to-trigger"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -13405,7 +13405,7 @@
       "one-tab-stop-per-card",
       "no-hover-control-tab-stops"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -13421,7 +13421,7 @@
       "one-tab-stop-per-card",
       "no-hover-control-tab-stops"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -13439,6 +13439,6 @@
       "keyboard-context-menu-on-card",
       "pointer-hover-controls-retained"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   }
 ]

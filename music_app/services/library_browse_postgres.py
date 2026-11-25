@@ -4,6 +4,7 @@ from contextlib import ExitStack, contextmanager
 import base64
 import binascii
 from copy import deepcopy
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
 from functools import lru_cache, partial
@@ -6525,6 +6526,7 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "cover_path": row_payload.get("album_cover_path"),
                 "spotify_cover_quota_exceeded": bool(row_payload.get("spotify_cover_quota_exceeded")),
                 "file_rating_mismatch": bool(row_payload.get("file_rating_mismatch")),
+                "_app_album_rating": row_payload.get("file_rating_mismatch_app_rating"),
                 "cover_revision": metadata.get("cover_revision"),
                 "cover_selection_origin": (
                     str(metadata.get("cover_selection_origin") or "").strip().casefold()
@@ -7617,6 +7619,47 @@ def _text_correction_problem_reasons(corrections: object) -> Iterable[str]:
         yield text_correction_reason(field, correction.get("kind") if isinstance(correction, Mapping) else None)
 
 
+def _album_problem_tracks(
+    album: Mapping[str, object], entries: list[dict[str, object]],
+) -> dict[str, list[tuple[str, str]]]:
+    """The tracks that carry an album-level problem, where the files say which (owner, 2026-11-24): an
+    open entry lists them in its per-track table, as Incomplete track order lists its tracks."""
+    tracks: dict[str, list[tuple[str, str]]] = {}
+
+    def mark(paths: Iterable[str], reason: str, field: str) -> None:
+        for path in paths:
+            tracks.setdefault(path, []).append((reason, field))
+
+    def differing_from_album(field: str, album_value: object) -> list[str]:
+        # The files whose tag differs from the album's own value; none when no file carries that value.
+        values = {str(entry.get(field) or "").strip().casefold() for entry in entries}
+        values.discard("")
+        reference = str(album_value or "").strip().casefold()
+        if len(values) < 2 or reference not in values:
+            return []
+        return [str(entry.get("path") or "") for entry in entries
+                if str(entry.get(field) or "").strip().casefold() not in ("", reference)]
+
+    mark(differing_from_album("album", album.get("name")), "Album name mismatch", "album")
+    if not album.get("is_compilation"):
+        mark(differing_from_album("album_artist", album.get("album_artist")), "Album artist mismatch", "album_artist")
+    app_rating = album.get("_app_album_rating")
+    if album.get("file_rating_mismatch") and type(app_rating) is int:
+        mark((str(entry.get("path") or "") for entry in entries
+              if type(entry.get("album_rating")) is int and 1 <= entry["album_rating"] <= 10
+              and entry["album_rating"] != app_rating), "File rating mismatch", "album_rating")
+    if album.get("has_duplicate_files"):
+        counts = album.get("_duplicate_file_counts") or {}
+        key_counts = Counter(str(track.get("key") or "") for track in album.get("tracks") or []
+                             if isinstance(track, Mapping))
+        repeated = {key for key, count in key_counts.items() if key and count > 1}
+        mark((str(track.get("path") or "") for track in album.get("tracks") or []
+              if isinstance(track, Mapping) and (str(track.get("key") or "") in repeated
+                                                 or _coerce_int(counts.get(track.get("path"))) > 1)),
+             "Duplicate files", "duplicate")
+    return tracks
+
+
 def _iter_problematic_track_reasons(
     album: Mapping[str, object],
     *,
@@ -7665,6 +7708,7 @@ def _iter_problematic_track_reasons(
     duplicate_problem_by_path = (
         rejected_local_album_paths(ordered_entries) if mixed_paths else {}
     )
+    album_problem_tracks = _album_problem_tracks(album, ordered_entries)
     for entry in ordered_entries:
         if not isinstance(entry, dict):
             continue
@@ -7700,6 +7744,8 @@ def _iter_problematic_track_reasons(
             add(reason, "problem-file")
         if path in mixed_paths and duplicate_problem_by_path.get(path) == "Duplicate track outside album folder":
             add("Duplicate track outside album folder", "problem-file")
+        for reason, field in album_problem_tracks.get(path, ()):
+            add(reason, field)
         for field_name, label in (
             ("album", "Album"),
             ("title", "Track title"),
@@ -13170,7 +13216,7 @@ def _problematic_files_sql(
         file_rating_mismatch_albums as materialized (
           -- The library owner's app rating is authoritative; a differing file
           -- tag is reported for the user to resolve, never applied.
-          select library.local_albums.id as album_id
+          select library.local_albums.id as album_id, app.album_ratings.rating as app_rating
           from app.album_ratings
           join bootstrap_context on bootstrap_context.library_id = app.album_ratings.library_id
           join library.libraries
@@ -14084,6 +14130,8 @@ def _problematic_files_sql(
     diagnostic_result_projection = "" if duplicate_sources_only else f"""
           , (selected_albums.id::text || ':search_spotify') in (select task_key from spotify_quota_albums) as spotify_cover_quota_exceeded
           , selected_albums.id in (select album_id from file_rating_mismatch_albums) as file_rating_mismatch
+          , (select app_rating from file_rating_mismatch_albums
+             where file_rating_mismatch_albums.album_id = selected_albums.id) as file_rating_mismatch_app_rating
           , coalesce(ignored_repair_rollup.ignored_repair_keys, array[]::text[]) as ignored_repair_keys,
           coalesce(separate_release_rollup.separate_release_keys, array[]::text[]) as separate_release_keys,
           {duplicate_candidate_projection} as duplicate_candidate,

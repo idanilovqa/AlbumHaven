@@ -3783,6 +3783,47 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
 
 
 @pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
+def test_asgi_cover_lookup_delete_selected_cover_selects_the_card_the_lookup_chose(app, monkeypatch):
+    # Owner (2026-11-24): after deleting the selected cover, the first LOCAL card is selected (the 11-12 rule).
+    # The lookup names that card; the server uses it rather than its own best-remaining choice, so nothing jumps.
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    active_cover = track_path.parent / "cover.jpg"
+    active_cover.write_bytes(_jpeg_bytes((40, 180, 220)))
+    first_card = track_path.parent / "front.jpg"
+    first_card.write_bytes(_jpeg_bytes((220, 160, 30)))
+    larger = track_path.parent / "folder.jpg"
+    larger.write_bytes(_jpeg_bytes((30, 60, 200), size=(64, 64)))
+    _seed_album_state(app.library_state, track_path)
+    app.library_state["file_cache"][str(track_path)]["cover_path"] = str(active_cover)
+    persisted = []
+    monkeypatch.setattr(
+        asgi_routes, "persist_cover_selection_for_tracks",
+        lambda _paths, cover, **_kwargs: persisted.append(cover),
+    )
+    monkeypatch.setattr(
+        asgi_routes, "apply_cover_path_for_tracks",
+        lambda _paths, cover, **_kwargs: ([{"cover_path": str(cover)}], None),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/local-delete",
+        json_body={"album": _album_payload(track_path), "source_path": str(active_cover),
+                   "next_cover_path": str(first_card)},
+    )
+
+    assert status == 200, body
+    assert not active_cover.exists()
+    assert persisted == [first_card]
+    assert _decode_json(body)["updated_album"]["cover_path"] == str(first_card)
+
+
+@pytest.mark.usefixtures("seeded_state_is_the_stored_selection")
 def test_cover_lookup_names_images_by_reference_and_acts_on_the_named_one(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services.cover_reference_boundary import CoverReferenceBoundary

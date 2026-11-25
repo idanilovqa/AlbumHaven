@@ -897,11 +897,14 @@ def delete_local_cover_and_choose_next(
     image_dimensions,
     is_squareish_cover,
     score_image,
+    chosen_next: Path | None = None,
 ) -> Path | None:
     with suppress_library_watch_events((source_path,)):
         source_path.unlink()
     if not active_cover_path or source_path != active_cover_path:
         return active_cover_path
+    if chosen_next is not None and chosen_next != source_path and chosen_next.is_file():
+        return chosen_next
     next_source = choose_best_remaining_local_cover(
         album_root,
         image_extensions=image_extensions,

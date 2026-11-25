@@ -1346,6 +1346,7 @@ test('a deleted selected cover never reappears while its delete is in flight', a
   // The folder index has not caught up yet: a refresh still lists the deleted file.
   await h.context.refreshCoverLookupGallery(false);
   const deleteRequest = h.requests.find(request => request.url === '/utilities/cover-lookup/local-delete');
+  assert.equal(deleteRequest.body.next_cover_ref, '/A/second.jpg', 'the server selects the card the lookup shows selected');
   const afterDelete = { ok: true, active_cover_ref: '/A/second.jpg', selected_source_cover_ref: '/A/second.jpg',
     local_covers: [{ candidate_cover_ref: '/A/second.jpg', is_active: true, is_squareish: true },
       { candidate_cover_ref: '/A/third.jpg', is_squareish: true }] };

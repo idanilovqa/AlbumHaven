@@ -5322,7 +5322,12 @@ async function deleteLocalCoverFromLookup(sourceRef) {
     const response = await fetch('/utilities/cover-lookup/local-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album, source_cover_ref: sourceRef }),
+      // The server selects the card this lookup already shows selected (owner, 2026-11-24).
+      body: JSON.stringify({
+        album,
+        source_cover_ref: sourceRef,
+        ...(deletedActiveLocalSelection && fallbackLocalCoverPath ? { next_cover_ref: fallbackLocalCoverPath } : {}),
+      }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {

@@ -1930,10 +1930,13 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     if album_error is not None:
         return _json_response(album_error)
     source_path = str(payload.get("source_path") or "").strip()
+    next_cover_path = str(payload.get("next_cover_path") or "").strip()
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    outcome = await run_in_threadpool(_delete_local_cover, config, logger, library_state, album_context, source_path)
+    outcome = await run_in_threadpool(
+        _delete_local_cover, config, logger, library_state, album_context, source_path, next_cover_path,
+    )
     if isinstance(outcome, Response):
         return outcome
     updated_albums, updated_problematic_album, deleted_path = outcome
@@ -1961,6 +1964,7 @@ def _delete_local_cover(
     library_state: dict[str, object],
     album_context: CoverAlbumContext,
     source_path: str,
+    next_cover_path: str = "",
 ) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
     """Deletes the selected local image and repoints the album, off the event loop."""
     try:
@@ -1974,9 +1978,17 @@ def _delete_local_cover(
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+    # Owner (2026-11-24): the lookup names the card it selects next (its first remaining LOCAL card); a name
+    # that is no longer one of the album's images falls back to the best remaining one.
+    try:
+        chosen_next = validate_local_cover_source(
+            config, album_context.album_root, next_cover_path, track_paths=album_context.track_paths,
+        ) if next_cover_path else None
+    except (ValueError, FileNotFoundError):
+        chosen_next = None
     return run_serialized_cover_selection(
         album_context.album_root,
-        lambda: _delete_cover_and_repoint(config, logger, library_state, album_context, resolved),
+        lambda: _delete_cover_and_repoint(config, logger, library_state, album_context, resolved, chosen_next),
         resolved.parent,
     )
 
@@ -1987,6 +1999,7 @@ def _delete_cover_and_repoint(
     library_state: dict[str, object],
     album_context: CoverAlbumContext,
     resolved: Path,
+    chosen_next: Path | None = None,
 ) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
     if not resolved.is_file():  # another request deleted it while this one waited for the folder
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
@@ -2010,6 +2023,7 @@ def _delete_cover_and_repoint(
         image_dimensions=image_dimensions,
         is_squareish_cover=_is_squareish_cover,
         score_image=score_image,
+        chosen_next=chosen_next,
     )
     updated_albums: list[dict[str, object]] = []
     updated_problematic_album = None

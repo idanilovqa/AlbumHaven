@@ -27,6 +27,8 @@ test(`large loose-track sections stay responsive and stable at ${width}px`, asyn
         path: `/fixture/track-${i}.flac`, title: `Loose track ${i}`, secondaryArtist: i % 2 ? 'Fixture artist' : '', duration: '3:00',
       }; }) })), showPath: true, forceGroupLabels: true, collapsibleGroups: true, totalLength: '300 hours',
     });
+    // The Loose Tracks page binds its sections this way once the table is in the DOM.
+    syncAlbumTrackTableSections(document.getElementById('host'));
     window.originalFirstRow = document.querySelector('[data-track-row-path]');
   });
   const heading = page.locator('summary').first();
@@ -41,6 +43,7 @@ test(`large loose-track sections stay responsive and stable at ${width}px`, asyn
     await heading.click();
     timings.push(await page.evaluate(() => window.toggleTiming));
     expect(await page.locator('details').first().evaluate(node => node.open)).toBe(Boolean(i % 2));
+    await expect(heading).toHaveAttribute('aria-expanded', i % 2 ? 'true' : 'false');
     if (i % 2) await expect(page.locator('.album-track-table__total')).toBeVisible();
     else await expect(page.locator('.album-track-table__total')).toBeHidden();
     expect((await heading.boundingBox()).y).toBe(top);

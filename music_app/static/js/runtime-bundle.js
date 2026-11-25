@@ -17045,17 +17045,7 @@ function openNonAlbumModal(options = {}) {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
       if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.table);
-      els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
-        const summary = details.querySelector?.('summary');
-        const trackTable = details.closest?.('.album-track-table');
-        const syncExpanded = () => {
-          summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
-          trackTable?.classList?.toggle('album-track-table--collapsed-disc',
-            Boolean(trackTable.querySelector?.('.album-track-table__disc--collapsible:not([open])')));
-        };
-        syncExpanded();
-        details.addEventListener?.('toggle', syncExpanded);
-      });
+      syncAlbumTrackTableSections(els.table);
       attachSharedPlayer();
     });
   });
@@ -24731,6 +24721,23 @@ function buildAlbumTrackTableHtml(config = {}) {
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
   return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}" data-density="${density}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+}
+
+// Collapsible sections keep their summary's aria-expanded current, and the table hides its
+// aggregate totals while any section is collapsed. A class set here replaces a relational
+// selector on [open] that restyled every row of a long Loose Tracks list per toggle (INT-034).
+function syncAlbumTrackTableSections(root) {
+  root?.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
+    const summary = details.querySelector?.('summary');
+    const trackTable = details.closest?.('.album-track-table');
+    const syncExpanded = () => {
+      summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+      trackTable?.classList?.toggle('album-track-table--collapsed-disc',
+        Boolean(trackTable.querySelector?.('.album-track-table__disc--collapsible:not([open])')));
+    };
+    syncExpanded();
+    details.addEventListener?.('toggle', syncExpanded);
+  });
 }
 
 // A playback tick reaches only the rows whose state can change: those marked current or

@@ -46,43 +46,26 @@
     list.scrollTop = savedOffset.vertical;
 
     // The list's own layout names its axis and what scrolls it: a row strip scrolls itself sideways; a
-    // column scrolls itself, or with the page around it when it does not clip (the phone Settings page).
-    const style = (element) => global.getComputedStyle?.(element) || null;
-    const listStyle = style(list);
+    // column scrolls itself, or, when it does not clip (the phone Settings page), moves with the page:
+    // then the screen is its viewport and any scroll may move it.
+    const listStyle = global.getComputedStyle?.(list) || null;
     const horizontal = Boolean(listStyle && /flex/.test(listStyle.display) && listStyle.flexDirection.startsWith('row'));
-    const scrollsItself = (element, elementStyle = style(element)) => !elementStyle
-      || /auto|scroll/.test(horizontal ? elementStyle.overflowX : elementStyle.overflowY);
-    let scroller = list;
-    if (!scrollsItself(list, listStyle)) {
-      scroller = null;
-      for (let element = list.parentElement; element; element = element.parentElement) {
-        if (/auto|scroll/.test(style(element)?.overflowY || '')) { scroller = element; break; }
-      }
-    }
-    const scrollTarget = scroller || global;
+    const scrollsItself = !listStyle || /auto|scroll/.test(horizontal ? listStyle.overflowX : listStyle.overflowY);
+    const scrollTarget = scrollsItself ? list : list.ownerDocument;
+    const scrollListenerOptions = { passive: true, capture: !scrollsItself };
+    let forcedOffset = null;
     const getStride = () => (
       horizontal ? Math.min(240, Math.max(1, Number(list.clientWidth) * 0.78)) + 8 : rowStride
     );
-    // The list's own scroll offset and visible extent along its axis, whichever element scrolls it.
+    // The list's scroll offset and visible extent along its axis.
     const readViewport = () => {
-      if (scroller === list) {
+      if (forcedOffset !== null) return { offset: forcedOffset, viewport: Number(global.innerHeight) };
+      if (scrollsItself) {
         return horizontal
           ? { offset: Number(list.scrollLeft), viewport: Number(list.clientWidth) }
           : { offset: Number(list.scrollTop), viewport: Number(list.clientHeight) };
       }
-      const listTop = list.getBoundingClientRect().top;
-      const viewTop = scroller ? scroller.getBoundingClientRect().top : 0;
-      return {
-        offset: Math.max(0, viewTop - listTop),
-        viewport: scroller ? Number(scroller.clientHeight) : Number(global.innerHeight),
-      };
-    };
-    const scrollBy = (delta) => {
-      if (scroller === list) {
-        if (horizontal) list.scrollLeft = Number(list.scrollLeft) + delta;
-        else list.scrollTop = Number(list.scrollTop) + delta;
-      } else if (scroller) scroller.scrollTop = Number(scroller.scrollTop) + delta;
-      else global.scrollBy?.(0, delta);
+      return { offset: Math.max(0, -list.getBoundingClientRect().top), viewport: Number(global.innerHeight) };
     };
 
     const renderNow = () => {
@@ -131,7 +114,7 @@
         if (previous.nextElementSibling !== row) list.insertBefore(row, previous.nextElementSibling);
         previous = row;
       }
-      if (scroller === list) {
+      if (scrollsItself) {
         if (horizontal) list.scrollLeft = offset;
         else list.scrollTop = offset;
       }
@@ -166,6 +149,17 @@
       const index = items.findIndex((item) => String(item?.key || '') === String(key || ''));
       if (index < 0) return;
       const stride = getStride();
+      if (!scrollsItself) {
+        // Mount the row's window, then let the page bring the row into view.
+        if (!mountedRows.has(String(key))) {
+          forcedOffset = index * stride;
+          renderNow();
+          forcedOffset = null;
+        }
+        mountedRows.get(String(key))?.scrollIntoView?.({ block: 'nearest' });
+        schedule();
+        return;
+      }
       const { offset: current, viewport } = readViewport();
       const start = index * stride;
       const end = start + stride;
@@ -173,7 +167,8 @@
       if (start < current) next = start;
       else if (end > current + viewport) next = Math.max(0, end - viewport);
       if (next === current) return;
-      scrollBy(next - current);
+      if (horizontal) list.scrollLeft = next;
+      else list.scrollTop = next;
       schedule();
     };
 
@@ -210,7 +205,7 @@
         horizontal: Number(list.scrollLeft) || 0,
         vertical: Number(list.scrollTop) || 0,
       });
-      scrollTarget.removeEventListener('scroll', schedule);
+      scrollTarget.removeEventListener('scroll', schedule, scrollListenerOptions);
       list.removeEventListener('keydown', handleKeydown);
       global.removeEventListener?.('resize', schedule);
       resizeObserver?.disconnect();
@@ -221,7 +216,7 @@
       delete list.dataset.problematicVirtualAxis;
     };
 
-    scrollTarget.addEventListener('scroll', schedule, { passive: true });
+    scrollTarget.addEventListener('scroll', schedule, scrollListenerOptions);
     list.addEventListener('keydown', handleKeydown);
     global.addEventListener?.('resize', schedule, { passive: true });
     return { render, reveal, dispose };

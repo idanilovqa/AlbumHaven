@@ -191,7 +191,8 @@ function buildMissingAlbumDetailsHtml(config = {}) {
     severity: 'error',
     title: 'Album details unavailable',
     message,
-    actionsHtml: `${rescanButton}${removeButton}${keepButton}`,
+    // Remove from library is the right-most action (owner, 2026-11-25).
+    actionsHtml: `${rescanButton}${keepButton}${removeButton}`,
   });
 }
 

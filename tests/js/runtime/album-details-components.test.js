@@ -152,6 +152,9 @@ test('missing Album Details uses OnPageAlert and renders no track table', () => 
   assert.match(html, /Remove from library/);
   assert.match(html, /Keep as missing/);
   assert.match(html, /data-rescan-missing-album="1"[^>]*>[\s\S]*?Re-scan/);
+  // Remove from library is the right-most action (owner, 2026-11-25).
+  const order = ['data-rescan-missing-album', 'data-keep-missing-album', 'data-remove-missing-album'].map((attr) => html.indexOf(attr));
+  assert.ok(order.every((index) => index >= 0) && order[0] < order[1] && order[1] < order[2], `action order: ${order}`);
   assert.doesNotMatch(html, /small-alert/);
   assert.doesNotMatch(html, /album-track-table/);
 });

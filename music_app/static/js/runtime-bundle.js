@@ -27594,11 +27594,18 @@ function completeTagEditMergeDestination(candidate) {
   const key = String(getAlbumRequestKey(candidate) || '').trim();
   const candidateTracks = Array.isArray(candidate?.tracks) ? candidate.tracks : [];
   if (!key || !candidateTracks.length) return candidate;
-  const cached = typeof getCachedHydratedTrackModalAlbum === 'function'
-    ? getCachedHydratedTrackModalAlbum(key)
-    : null;
-  const indexed = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
-  const known = [cached, indexed].find((album) => (
+  const cachedAlbum = (albumKey) => (
+    typeof getCachedHydratedTrackModalAlbum === 'function' ? getCachedHydratedTrackModalAlbum(albumKey) : null
+  );
+  // The destination card can carry another key than the edit computes (a card keyed by a collaboration
+  // credit), so a missed key falls back to the one visible album with the same release identity.
+  const visibleMatches = collectVisibleAlbumsUnique().filter((album) => (
+    album !== candidate && albumsShareLogicalReleaseIdentity(album, candidate)
+  ));
+  const indexed = (typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null)
+    || (visibleMatches.length === 1 ? visibleMatches[0] : null);
+  const indexedKey = String(indexed ? getAlbumRequestKey(indexed) || '' : '').trim();
+  const known = [cachedAlbum(key), indexedKey && cachedAlbum(indexedKey), indexed].find((album) => (
     album && album !== candidate
     && albumIsDemonstrablyFullyHydrated(album)
     && albumsShareLogicalReleaseIdentity(album, candidate)

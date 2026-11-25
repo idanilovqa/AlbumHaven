@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { expect, test } from '../support/baseFixtures.js';
 import { restoreDdtStudioRecordsFixture } from '../helpers/ddtStudioRecordsFixture.js';
 import { readGeneratedMp3TagSnapshots } from '../helpers/physicalTagHelpers.js';
@@ -321,6 +322,18 @@ test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons an
     ).toEqual([SPLIT_TRACKS[1].filename]);
     expect([...new Set(detectedRows.flatMap((row) => row.reasons))].sort())
       .toEqual(EXPECTED_TRACK_PROBLEM_REASONS);
+    // Owner (2026-11-25): the owner sees the album's folders, one per line, and no duplicate line
+    // on an entry without a duplicate problem.
+    const { rendered, payload } = await utilityProblematicFilesActions.readSelectedDetailFolders();
+    const folders = rendered.album.folders;
+    expect(payload.hasAlbumFolders, 'the owner receives the album folders').toBe(true);
+    expect(payload.hasDuplicateFolders).toBe(false);
+    expect(rendered.album.label).toBe(folders.length === 1 ? 'Path:' : 'Paths:');
+    expect(new Set(folders).size, 'each folder appears once').toBe(folders.length);
+    for (const row of detectedRows) {
+      expect(folders.some((folder) => row.path.startsWith(folder + path.sep)), `${row.path} lies in a named folder`).toBe(true);
+    }
+    expect(rendered.duplicates).toBeUndefined();
     await utilityProblematicFilesActions.openTagEditor();
     await tagEditorActions.waitForOpen({ expectedTrackCount: TRACKS.length });
     expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(

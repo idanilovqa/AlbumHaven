@@ -411,7 +411,7 @@ document.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   clearAlbumCardLongPressGesture();
   const trigger = albumCard.querySelector('[data-album-key]');
-  const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
+  const album = trigger ? resolveGalleryCardAlbum(trigger.getAttribute('data-album-key') || '') : null;
   showAlbumCardContextMenu(event.clientX, event.clientY, album);
 }, true);
 

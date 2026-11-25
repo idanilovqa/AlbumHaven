@@ -48801,6 +48801,25 @@ function getIndexedAlbum(albumKey) {
   return state.gallery.albumIndex.get(String(albumKey || '').trim()) || null;
 }
 
+// A card gesture acts on the album its card shows. Invalidating a hydrated copy can drop the card's
+// key from the index while the mounted card stays, so a miss looks the key up in the current view.
+function resolveGalleryCardAlbum(albumKey) {
+  const key = String(albumKey || '').trim();
+  if (!key) return null;
+  const indexed = getIndexedAlbum(key);
+  if (indexed) return indexed;
+  const view = state.view || {};
+  for (const groups of [view.primary_artist_groups, view.family_artist_groups, view.artist_groups]) {
+    for (const group of Array.isArray(groups) ? groups : []) {
+      for (const album of Array.isArray(group?.albums) ? group.albums : []) {
+        if (getAlbumRequestKey(album) === key || getAlbumIdentity(album) === key
+            || getAlbumCardVersionKey(album) === key) return album;
+      }
+    }
+  }
+  return null;
+}
+
 var CARD_GALLERY_LAYOUT_CONFIG = Object.freeze({
   mode: 'cards',
   cardMinWidth: 240,
@@ -55416,7 +55435,7 @@ function handleGalleryBootstrapClick(event) {
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
     const menuAlbumKey = menu?.dataset.albumKey || '';
-    const album = menu?.albumContext || getIndexedAlbum(menuAlbumKey);
+    const album = menu?.albumContext || resolveGalleryCardAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
 
@@ -56398,7 +56417,7 @@ function getAlbumCardLongPressTarget(target) {
   const card = target?.closest?.('.album-card');
   const trigger = card?.querySelector?.('[data-album-key]');
   const key = String(trigger?.getAttribute?.('data-album-key') || '').trim();
-  const album = key && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  const album = key && typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(key) : null;
   return album ? { key } : null;
 }
 
@@ -56425,7 +56444,7 @@ function beginAlbumCardLongPress(event) {
   albumCardLongPressGesture = gesture;
   gesture.timeoutId = scheduleBrowserTimeout(() => {
     if (albumCardLongPressGesture !== gesture) return;
-    const currentAlbum = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(gesture.key) : null;
+    const currentAlbum = typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(gesture.key) : null;
     if (!currentAlbum) {
       clearAlbumCardLongPressGesture();
       return;
@@ -59868,7 +59887,7 @@ document.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   clearAlbumCardLongPressGesture();
   const trigger = albumCard.querySelector('[data-album-key]');
-  const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
+  const album = trigger ? resolveGalleryCardAlbum(trigger.getAttribute('data-album-key') || '') : null;
   showAlbumCardContextMenu(event.clientX, event.clientY, album);
 }, true);
 

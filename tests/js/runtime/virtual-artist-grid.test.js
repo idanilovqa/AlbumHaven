@@ -7509,3 +7509,24 @@ test('a page appended after a scroll settles leaves that scroll reported as rend
   assert.equal(virtualGrid.hasDeferredMountedGroupUpdate(), false);
   assert.equal(settled(), true, 'the replayed page must not strand the scroll-render signal');
 });
+
+test('a card gesture resolves its album from the current view when the album index lost the key (FTC-TAGS-047)', () => {
+  // After a save completed, invalidating the hydrated copy deleted the card's key from the album index
+  // while the mounted gallery was kept, so the context menu found no album and disabled Edit Tags.
+  const { context } = createRuntimeContext();
+  const album = {
+    key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', year: 2000,
+    preview_only: true, track_count_preview: 3,
+    allowed_actions: { 'library.files.edit_tags': true },
+  };
+  context.state.view.primary_artist_groups = [{ artist: 'ДДТ', albums: [album] }];
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = [];
+  context.state.gallery.albumIndex = new Map();
+  assert.equal(context.getIndexedAlbum('ддт::ремиксы2'), null);
+  assert.equal(context.resolveGalleryCardAlbum('ддт::ремиксы2'), album);
+  assert.equal(context.resolveGalleryCardAlbum('ддт::unknown'), null);
+  const indexed = { ...album, tracks: [{ path: 'D:/M/1.mp3' }] };
+  context.state.gallery.albumIndex.set('ддт::ремиксы2', indexed);
+  assert.equal(context.resolveGalleryCardAlbum('ддт::ремиксы2'), indexed, 'a live index entry still wins');
+});

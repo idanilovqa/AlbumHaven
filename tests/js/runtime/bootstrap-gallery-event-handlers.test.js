@@ -460,7 +460,7 @@ test('touch long press opens the album card context menu and consumes the synthe
       return selector === '.album-card' ? card : null;
     },
   };
-  context.getIndexedAlbum = key => (key === album.key ? album : null);
+  context.resolveGalleryCardAlbum = key => (key === album.key ? album : null);
   context.showAlbumCardContextMenu = (...args) => opened.push(args);
 
   context.handleGalleryBootstrapPointerDown({
@@ -3154,7 +3154,7 @@ test('album context Edit Tags closes the menu before opening the full-album edit
   };
   const order = [];
   context.document.getElementById = (id) => (id === 'album-card-context-menu' ? menu : null);
-  context.getIndexedAlbum = (key) => (key === album.key ? album : null);
+  context.resolveGalleryCardAlbum = (key) => (key === album.key ? album : null);
   context.hideAlbumCardContextMenu = () => order.push('close');
   context.openTagEditor = (editedAlbum, options) => order.push({ editedAlbum, options });
 
@@ -3191,7 +3191,7 @@ test('album context Edit Tags retains its target across post-save gallery reconc
   context.document.getElementById = (id) => (id === 'album-card-context-menu' ? menu : null);
   // Save-task reconciliation can replace the gallery index after the menu is
   // painted but before the user clicks its action.
-  context.getIndexedAlbum = () => null;
+  context.resolveGalleryCardAlbum = () => null;
   context.hideAlbumCardContextMenu = () => {};
   context.openTagEditor = (album, options) => opened.push({ album, options });
 

@@ -746,3 +746,30 @@ def test_cover_gallery_contract_reads_only_the_selected_album_at_production_libr
         growth=("stat_calls", 0),
     )
     assert small == production
+
+
+def test_indexed_cover_gallery_announces_a_backup_only_when_the_save_keeps_one(tmp_path: Path):
+    # The announcement and the save compare the same bytes: a cover.jpg another album image already holds is
+    # never announced as cover-existing-N, whether or not the index has hashed either file yet.
+    from music_app.services.cover_state import _inventory_cover_backup_name
+
+    album_root = (tmp_path / "Album").resolve()
+    album_root.mkdir()
+    cover = album_root / "cover.jpg"
+    _write_jpeg(cover, (10, 200, 40))
+    copy = album_root / "front.jpg"
+    copy.write_bytes(cover.read_bytes())
+    other = album_root / "back.jpg"
+    _write_jpeg(other, (200, 10, 40))
+    digest = hashlib.sha256(cover.read_bytes()).hexdigest()
+
+    for cover_hash, copy_hash in ((None, None), (digest, None), (None, digest)):
+        candidates = [
+            {"path": str(cover), "sha256": cover_hash},
+            {"path": str(copy), "sha256": copy_hash},
+            {"path": str(other), "sha256": None},
+        ]
+        assert _inventory_cover_backup_name(candidates, album_root) is None, (cover_hash, copy_hash)
+
+    unique = [{"path": str(cover), "sha256": None}, {"path": str(other), "sha256": None}]
+    assert _inventory_cover_backup_name(unique, album_root) == "cover-existing-1.jpg"

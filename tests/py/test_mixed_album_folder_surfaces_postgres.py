@@ -47,6 +47,11 @@ def _surfaces(fixture, album, paths):
     }
 
 
+def _mentions(payload, path):
+    """Whether the payload names the file (as JSON text escapes a Windows path, compare escaped)."""
+    return json.dumps(path)[1:-1] in json.dumps(payload, default=str)
+
+
 def _saying_mixed(surfaces):
     return sorted(name for name, payload in surfaces.items() if MIXED in json.dumps(payload, default=str))
 
@@ -130,7 +135,37 @@ def test_a_file_whose_only_label_is_the_stale_mixed_one_counts_in_its_album_card
         "the album card counts the file with the stale label")
     loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
     loose = repository.build_library_loose_tracks_payload(query_params={})
-    assert stale not in json.dumps(loose, default=str), "Loose Tracks lists a file of a formed album"
+    assert not _mentions(loose, stale), "Loose Tracks lists a file of a formed album"
+
+
+def test_an_albumless_file_whose_only_label_is_the_stale_mixed_one_stays_in_loose_tracks(watcher_repair_inventory):
+    """A file never vanishes (6, 2026-11-25): a file without an album whose only stored label is the obsolete
+    mixed-folder one stays a Loose Tracks candidate, listed without that reason."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    fixture = watcher_repair_inventory
+    home = [_entry(fixture, "Home", "Xi", 1, total=2), _entry(fixture, "Home", "Xi", 2, total=2)]
+    # A song without an album tag: the scan gives it no album.
+    copy = {**_entry(fixture, "Loose", "Untagged", 9), "album": ""}
+    fixture.seed(*home, copy)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albumless = connection.execute(
+            """select tracks.album_id from library.local_track_files files
+               left join library.local_tracks tracks on tracks.id = files.track_id
+               where files.private_path = %s""", (copy["path"],)).fetchone()
+        assert albumless is not None and albumless["album_id"] is None, "precondition: the copy has no album"
+        connection.execute(
+            """update library.local_track_files
+               set metadata = jsonb_set(metadata, '{scan_cache,file_entry,local_album_membership_problem}', to_jsonb(%s::text))
+               where private_path = %s""", (MIXED, copy["path"]))
+
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
+    loose = repository.build_library_loose_tracks_payload(query_params={})
+    listed = [track for track in loose.get("library_non_album_tracks") or []
+              if _mentions(track, copy["path"])]
+    assert len(listed) == 1, "the albumless file vanished from Loose Tracks"
+    assert MIXED not in json.dumps(listed, default=str)
 
 
 @pytest.fixture(autouse=True)

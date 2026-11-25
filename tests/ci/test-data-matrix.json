@@ -151,7 +151,7 @@
       "databaseIdentity": "case:watcher-long-disc-subtitle-search",
       "filesystemCopy": "media/cases/watcher-reconciliation"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",
@@ -4866,7 +4866,7 @@
       "databaseIdentity": "case:watcher-missing-album-rescan",
       "filesystemCopy": "media/cases/watcher-reconciliation"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",
@@ -12014,7 +12014,7 @@
     "expectedContracts": [
       "a-cd-the-search-matched-scrolls-into-view-below-the-album-header"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -12029,7 +12029,7 @@
     "expectedContracts": [
       "a-cd-the-search-matched-scrolls-into-view-below-a-pinned-page-header"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

@@ -79,6 +79,8 @@
   pointer-events: none;
 }
 .cover-lookup-drawer.is-open {
+  /* Visible from the first frame of the slide-in, so opening can move focus into it. */
+  transition: transform 220ms ease, opacity 220ms ease, visibility 0s;
   visibility: visible;
   transform: translateX(0);
   opacity: 1;

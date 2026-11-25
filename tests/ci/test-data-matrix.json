@@ -13343,5 +13343,102 @@
       "settings-header-gallery-structure"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "opening the notifications drawer with the keyboard moves focus into it and Escape returns it to the trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "keyboard-open-focuses-drawer",
+      "tab-within-open-drawer",
+      "escape-closes-drawer-to-trigger"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "closing the notifications drawer from its Close button by keyboard returns focus to the trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "close-button-returns-focus-to-trigger"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Escape closes a pointer-opened notifications drawer and keeps focus on its trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "escape-closes-drawer-to-trigger"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "Tab moves card to card in cards view without stopping on hover controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "one-tab-stop-per-card",
+      "no-hover-control-tab-stops"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "Tab moves card to card in covers view without stopping on hover controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "one-tab-stop-per-card",
+      "no-hover-control-tab-stops"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "a keyboard-focused card still reveals its markers, opens with Enter and offers actions with Shift+F10",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "focused-card-reveals-markers",
+      "enter-opens-focused-card",
+      "keyboard-context-menu-on-card",
+      "pointer-hover-controls-retained"
+    ],
+    "ownerApproval": "pending"
   }
 ]

@@ -7,7 +7,8 @@ function buildGalleryCardHtml(config = {}) {
   const sourceGradient = sourceCategories.length
     ? `conic-gradient(${sourceCategories.map((category, index) => `${sourceColors[category]} ${index * 100 / sourceCategories.length}% ${(index + 1) * 100 / sourceCategories.length}%`).join(', ')})`
     : 'none';
-  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
+  // The artbox trigger is the card's only Tab stop; these hover controls repeat its open action.
+  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" tabindex="-1" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
   const sourceActions = [
     sourceCategories.includes('hoard') ? sourceAction('hoard', 'Hoard', buildLibrarySourceGlyphHtml('hoard')) : '',
     sourceCategories.includes('new_arrivals') ? sourceAction('new_arrivals', 'New Arrivals', buildLibrarySourceGlyphHtml('new_arrivals')) : '',

@@ -379,7 +379,7 @@ function buildGalleryCardInfoHtml(config = {}) {
   const metadata = `${artist ? `<span class="gallery-card__artist"><span data-gallery-metadata-text>${escapeHtml(artist)}</span></span>` : ''}${year ? `<span class="gallery-card__year">${artist ? '· ' : ''}${escapeHtml(year)}</span>` : ''}`;
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
-    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
+    ? `<button class="album-open-trigger album-title-button" type="button" tabindex="-1" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
   return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle gallery-card__metadata">${metadata}</div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }

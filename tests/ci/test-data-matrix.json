@@ -13424,5 +13424,32 @@
       "filesystemCopy": "media/cases/concurrent-album-artist-saves"
     },
     "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+    "case": "FTC-GALLERY-034 an album whose Album Artist repeats one artist is that artist's own album, never Featured On",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "repeated-album-artist-credit",
+    "databaseScenarios": [
+      "gallery:owned-repeated-album-artist"
+    ],
+    "filesystemScenarios": [
+      "media-copy:repeated-album-artist-credit"
+    ],
+    "expectedContracts": [
+      "repeated-album-artist-is-own-album"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:repeated-album-artist-credit",
+      "filesystemCopy": "media/cases/repeated-album-artist-credit"
+    },
+    "ownerApproval": "pending"
   }
 ]

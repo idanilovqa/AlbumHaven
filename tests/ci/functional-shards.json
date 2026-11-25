@@ -648,6 +648,13 @@
               "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
               "case": "FTC-SEARCH-NAV-003 a reloaded exact-artist search shows the same tree as the typed search when only another artist's file name matches",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+              "case": "FTC-GALLERY-034 an album whose Album Artist repeats one artist is that artist's own album, never Featured On",
+              "area": "gallery-search"
             }
           ]
         }

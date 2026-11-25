@@ -94,7 +94,28 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     await expect(galleryActions.galleryPage.albumCard.cardByAlbumName('Shadow Vale')).toHaveCount(1);
   });
 
-  test('FTC-TAGS-045 an Album Artist edit of some tracks shows the new artist with its album, and restoring it leaves no empty artist behind', { tag: '@area:tag-edit' }, async ({
+  test('FTC-GALLERY-034 an album whose Album Artist repeats one artist is that artist\'s own album, never Featured On', { tag: '@area:gallery-search' }, async ({
+    managedAppLifecycle, galleryActions, appBarActions, navigationPanelActions,
+  }) => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 8);
+    const band = `Quartzline ${suffix}`;
+    await openLibrary({ managedAppLifecycle, galleryActions, appBarActions }, [
+      ...albumTracks(band, 'Paper Lines', ['Market Step', 'Quiet Song']),
+      // The tag names the band twice, as a joint credit of the band with itself.
+      ...albumTracks(`${band} / ${band}`, 'Night Score', ['City Lights', "Low Tide"], { artist: band }),
+    ]);
+
+    await openArtist(galleryActions, band);
+    await expect.poll(() => galleryActions.readArtistDiscographySections(band).then(sections => (
+      sections.map(({ title, albums }) => ({ title, names: albums.map(({ name }) => name).sort() }))
+    )), { message: 'Both albums are the band\'s own, with no Featured On section.', timeout: 30000 }).toEqual([
+      { title: null, names: ['Paper Lines', 'Night Score'] },
+    ]);
+    expect(await navigationPanelActions.readSidebarArtistAlbumCount(band), 'The band\'s count includes the album.').toBe(2);
+    expect(await navigationPanelActions.readHydratedSidebarArtistNames()).not.toContain(`${band} / ${band}`);
+  });
+
+  test('FTC-TAGS-045an Album Artist edit of some tracks shows the new artist with its album, and restoring it leaves no empty artist behind', { tag: '@area:tag-edit' }, async ({
     page, managedAppLifecycle, galleryActions, appBarActions, navigationPanelActions, tagEditorActions,
   }) => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 8);

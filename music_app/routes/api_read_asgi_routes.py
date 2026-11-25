@@ -693,15 +693,22 @@ def view_data(request: Request) -> JSONResponse:
                     query_params=request.query_params,
                 )
             except GalleryProjectionPending:
-                return JSONResponse(
-                    {
-                        "ok": False,
-                        "code": "gallery_projection_pending",
-                        "error": "Gallery is being prepared.",
-                    },
-                    status_code=503,
-                    headers={"Retry-After": "1", "Cache-Control": "no-store"},
-                )
+                # The selected gallery never waits for the root header's rebuild: the sidebar route's own
+                # builder, which needs no header, answers instead.
+                try:
+                    root_sidebar_payload = repository.build_root_sidebar_payload(
+                        query_params=request.query_params,
+                    )
+                except (GalleryProjectionPending, SearchProjectionPending):
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "code": "gallery_projection_pending",
+                            "error": "Gallery is being prepared.",
+                        },
+                        status_code=503,
+                        headers={"Retry-After": "1", "Cache-Control": "no-store"},
+                    )
             payload.update(
                 {
                     field: root_sidebar_payload[field]

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.52 - 2026-11-24
+
+- Cover provider answers (cover searches, MusicBrainz release lists, Cover Art Archive results) are kept in indexed database rows instead of one JSON file that every refresh loaded and every new answer rewrote. An app that may write imports an existing file once, after start-up readiness, with logged progress; the file stays on disk. Cover refreshes in one process share one answer store per database, so a provider miss is not searched again by the next refresh; answers a browse-only app cannot store are kept in memory, capped at 4096.
+- Saved loops keep waiting for their waveform while the server builds waveforms one at a time, so a fifth loop no longer stays blank.
+- Album Details keeps the current cover on screen while a changed cover loads, instead of showing an empty image; a cover just picked in Cover Look Up, already loaded on the page, shows at once.
+- Opening an artist right after a restart no longer waits for the whole-library sidebar to be rebuilt: the artist's gallery shows at once and the sidebar loads on its own.
+- Test and CI only: library-size performance targets run on the published production-calibration fixture.
+
 ## 0.11.51 - 2026-11-24
 
 - Signing in no longer gets stuck on the login page when the page was left open too long or another tab opened the login page. The app quietly gets a fresh sign-in token and signs you in with what you typed; if it still can't, it asks you to sign in again.

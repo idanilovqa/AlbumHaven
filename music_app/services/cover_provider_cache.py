@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import tempfile
 import threading
 import time
 import unicodedata
 from pathlib import Path
 
+from psycopg.types.json import Jsonb
+
 from config import Config
+from music_app.services.postgres_connections import leased_connection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,78 +71,166 @@ _SEARCH_SYMBOL_WORDS = {
 
 
 class CoverSearchCache:
-    def __init__(self, cache_path: Path):
-        self.cache_path = cache_path
-        self._payload = self._read()
-        self._dirty = False
+    """Cover provider answers, one `library.cover_provider_cache_entries` row per query key (migration 0293).
+
+    `get` reads one row by its primary key; `set` stages an answer and `save` upserts only the staged keys, so
+    no lookup or save loads or rewrites the whole cache. Without a database URL, or in a browse-only app
+    (`writable=False`), new answers live in this process only: nothing is written to a file or the database."""
+
+    def __init__(self, database_url: str | None = None, *, connect=None, writable: bool = True):
+        self.database_url = str(database_url or "").strip()
+        self.writable = writable
+        self._connect = connect or leased_connection
+        self._staged: dict[str, dict[str, object]] = {}
         self._lock = threading.Lock()
-
-    def _log_permission_error(self, action: str, exc: PermissionError) -> None:
-        _LOGGER.warning(
-            "Cover search cache %s skipped path=%r error=%r",
-            action,
-            str(self.cache_path),
-            exc,
-        )
-
-    def _read(self) -> dict[str, dict[str, object]]:
-        try:
-            if not self.cache_path.exists():
-                return {"queries": {}}
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict) and isinstance(payload.get("queries"), dict):
-                return payload
-        except PermissionError as exc:
-            self._log_permission_error("read", exc)
-        except Exception:
-            pass
-        return {"queries": {}}
 
     def get(self, key: str) -> dict[str, object] | None:
         with self._lock:
-            queries = self._payload.get("queries")
-            if not isinstance(queries, dict):
-                return None
-            entry = queries.get(key)
-            return dict(entry) if isinstance(entry, dict) else None
+            staged = self._staged.get(key)
+        if staged is not None:
+            return dict(staged)
+        if not self.database_url:
+            return None
+        try:
+            with self._connect(self.database_url) as connection:
+                row = connection.execute(_SELECT_ENTRY_SQL, (key,)).fetchone()
+        except Exception:
+            _LOGGER.warning("Cover provider cache read failed key=%r", key, exc_info=True)
+            return None
+        payload = _row_payload(row)
+        return dict(payload) if isinstance(payload, dict) else None
 
     def set(self, key: str, value: dict[str, object]) -> None:
         with self._lock:
-            queries = self._payload.setdefault("queries", {})
-            if isinstance(queries, dict):
-                queries[key] = dict(value)
-                self._dirty = True
+            self._staged.pop(key, None)
+            self._staged[key] = dict(value)
+            # Answers that are never written (browse-only, no database, failed saves) stay bounded.
+            while len(self._staged) > _STAGED_ENTRY_LIMIT:
+                del self._staged[next(iter(self._staged))]
 
     def save(self) -> None:
+        if not self.database_url or not self.writable:
+            return
         with self._lock:
-            if not self._dirty:
-                return
-            temporary_path: Path | None = None
-            try:
-                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(
-                    mode="w", encoding="utf-8", dir=self.cache_path.parent,
-                    prefix=f".{self.cache_path.name}.", suffix=".tmp", delete=False,
-                ) as temporary_file:
-                    temporary_path = Path(temporary_file.name)
-                    temporary_file.write(json.dumps(self._payload, indent=2))
-                    temporary_file.flush()
-                    os.fsync(temporary_file.fileno())
-                os.replace(temporary_path, self.cache_path)
-                temporary_path = None
-            except PermissionError as exc:
-                self._log_permission_error("write", exc)
-                return
-            finally:
-                if temporary_path is not None:
-                    try:
-                        temporary_path.unlink(missing_ok=True)
-                    except PermissionError as exc:
-                        self._log_permission_error("cleanup", exc)
-            self._dirty = False
+            staged = dict(self._staged)
+        if not staged:
+            return
+        try:
+            with self._connect(self.database_url) as connection:
+                connection.execute(_UPSERT_ENTRIES_SQL, (Jsonb(staged),))
+        except Exception:
+            _LOGGER.warning("Cover provider cache write failed entries=%d", len(staged), exc_info=True)
+            return
+        with self._lock:
+            for key, value in staged.items():
+                if self._staged.get(key) == value:
+                    del self._staged[key]
 
 
-_MUSICBRAINZ_RELEASE_DISK_CACHE = CoverSearchCache(Config.COVER_CACHE_PATH)
+_SELECT_ENTRY_SQL = "select payload from library.cover_provider_cache_entries where cache_key = %s"
+_UPSERT_ENTRIES_SQL = """
+    insert into library.cover_provider_cache_entries (cache_key, payload, updated_at)
+    select entry.key, entry.value, now() from jsonb_each(%s::jsonb) as entry
+    on conflict (cache_key) do update set payload = excluded.payload, updated_at = excluded.updated_at
+"""
+_IMPORT_ENTRIES_SQL = """
+    insert into library.cover_provider_cache_entries (cache_key, payload)
+    select entry.key, entry.value from jsonb_each(%s::jsonb) as entry
+    where btrim(entry.key) <> '' and jsonb_typeof(entry.value) = 'object'
+    on conflict (cache_key) do nothing
+"""
+_IMPORT_SOURCE = "cover_search_cache_json"
+_IMPORT_BATCH_SIZE = 500
+
+
+def _row_payload(row: object) -> object:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get("payload")
+    return row[0]
+
+
+def cover_cache_writable(config) -> bool:
+    """A browse-only app reads provider answers but never writes them (the shared-database writer rule)."""
+    return config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True
+
+
+_STAGED_ENTRY_LIMIT = 4096
+_PROCESS_CACHES: dict[tuple[str, bool], CoverSearchCache] = {}
+_PROCESS_CACHES_LOCK = threading.Lock()
+
+
+def cover_search_cache_for(config) -> CoverSearchCache:
+    """This process's cache for the app database and writer role. Cover batches share it, so an answer not
+    yet written, or never written in a browse-only app, still spares the next batch a provider search."""
+    key = (str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip(), cover_cache_writable(config))
+    with _PROCESS_CACHES_LOCK:
+        cache = _PROCESS_CACHES.get(key)
+        if cache is None:
+            cache = _PROCESS_CACHES[key] = CoverSearchCache(key[0], writable=key[1])
+        return cache
+
+
+_SHARED_CACHE_CONFIG: dict[str, object] = {"ALBUM_HAVEN_APP_DATABASE_URL": Config.ALBUM_HAVEN_APP_DATABASE_URL}
+
+
+def configure_shared_cover_search_cache(config) -> None:
+    """Points the provider helpers' default cache at this app's database and writer role."""
+    global _SHARED_CACHE_CONFIG
+    _SHARED_CACHE_CONFIG = {
+        key: config.get(key) for key in ("ALBUM_HAVEN_APP_DATABASE_URL", "SHARED_LIBRARY_BROWSE_ONLY")
+    }
+
+
+def _shared_cover_search_cache() -> CoverSearchCache:
+    return cover_search_cache_for(_SHARED_CACHE_CONFIG)
+
+
+def import_cover_search_cache_file(config, *, connect=None, stop_requested=None) -> dict[str, object]:
+    """One-time startup backfill of an existing cover_search_cache.json into Postgres, in logged batches.
+
+    Rows already in Postgres win. A finished import is recorded, so later startups read only that one row.
+    The file is left in place and no longer read."""
+    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    if not database_url or not cover_cache_writable(config):
+        return {"status": "skipped"}
+    connector = connect or leased_connection
+    with connector(database_url) as connection:
+        if connection.execute(
+            "select 1 from library.cover_provider_cache_imports where source = %s", (_IMPORT_SOURCE,)
+        ).fetchone() is not None:
+            return {"status": "done"}
+    source = Path(config.get("COVER_CACHE_PATH") or "")
+    queries: dict[str, object] = {}
+    if source.is_file():
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except Exception:
+            _LOGGER.warning("Cover provider cache import could not read the old cache file", exc_info=True)
+            return {"status": "failed"}
+        if isinstance(payload, dict) and isinstance(payload.get("queries"), dict):
+            queries = {str(key): value for key, value in payload["queries"].items() if isinstance(value, dict)}
+    keys = list(queries)
+    total = len(keys)
+    if total:
+        _LOGGER.info("Cover provider cache import started entries=%d", total)
+    for start in range(0, total, _IMPORT_BATCH_SIZE):
+        if stop_requested is not None and stop_requested.is_set():
+            _LOGGER.info("Cover provider cache import paused imported=%d of %d", start, total)
+            return {"status": "stopped", "imported": start, "total": total}
+        batch = {key: queries[key] for key in keys[start:start + _IMPORT_BATCH_SIZE]}
+        with connector(database_url) as connection:
+            connection.execute(_IMPORT_ENTRIES_SQL, (Jsonb(batch),))
+        _LOGGER.info("Cover provider cache import progress imported=%d of %d", start + len(batch), total)
+    with connector(database_url) as connection:
+        connection.execute(
+            "insert into library.cover_provider_cache_imports (source, entry_count) values (%s, %s)"
+            " on conflict (source) do nothing",
+            (_IMPORT_SOURCE, total),
+        )
+    _LOGGER.info("Cover provider cache import finished entries=%d", total)
+    return {"status": "imported", "total": total}
 
 
 def _replace_search_symbols(value: str) -> str:
@@ -197,7 +286,7 @@ def _get_musicbrainz_release_disk_cache(
     *,
     cache: CoverSearchCache | None = None,
 ) -> list[dict] | None:
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _MUSICBRAINZ_RELEASE_DISK_CACHE_LOCK:
         cached = disk_cache.get(_musicbrainz_release_disk_cache_key(cache_key))
     releases = cached.get("releases") if isinstance(cached, dict) else None
@@ -215,7 +304,7 @@ def _set_musicbrainz_release_disk_cache(
     sanitized_releases = [dict(item) for item in releases if isinstance(item, dict)]
     if not sanitized_releases:
         return
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _MUSICBRAINZ_RELEASE_DISK_CACHE_LOCK:
         disk_cache.set(
             _musicbrainz_release_disk_cache_key(cache_key),
@@ -236,7 +325,7 @@ def _get_caa_results_disk_cache(
     *,
     cache: CoverSearchCache | None = None,
 ) -> list[dict] | None:
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _CAA_RESULTS_CACHE_LOCK:
         cached = disk_cache.get(_caa_results_disk_cache_key(cache_key))
     if not isinstance(cached, dict):
@@ -259,7 +348,7 @@ def _set_caa_results_disk_cache(
     sanitized_candidates = [dict(item) for item in candidates if isinstance(item, dict)]
     if not sanitized_candidates:
         return
-    disk_cache = cache or _MUSICBRAINZ_RELEASE_DISK_CACHE
+    disk_cache = cache or _shared_cover_search_cache()
     with _CAA_RESULTS_CACHE_LOCK:
         disk_cache.set(
             _caa_results_disk_cache_key(cache_key),

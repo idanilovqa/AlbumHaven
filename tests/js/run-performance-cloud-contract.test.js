@@ -202,7 +202,8 @@ test('every discovered performance case has reviewed ownership selected by its r
         }],
         0,
       );
-      if (reportedStatus !== 1) unreportedCases.push(`${contractTarget.name}: ${identity}`);
+      // A quarantined case is skipped on purpose and must stay unreported until its owner releases it.
+      if ((reportedStatus === 1) === Boolean(ownedCase.quarantine)) unreportedCases.push(`${contractTarget.name}: ${identity}`);
     }
   }
 

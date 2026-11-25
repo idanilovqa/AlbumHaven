@@ -123,13 +123,18 @@ async function readLatestDiagnosticSequence(galleryActions) {
 // Response headers are not the commit: the body, parse and merge can land after
 // the 96 ms settle window, when merging immediately is correct. A gesture that
 // must overlap the merge stays alive until production has deferred the update.
+// The grid keeps only its last 24 diagnostic events, which a busy render can fill
+// before a second read, so the boundary hands on the event it saw.
 function deferredUpdateBoundary(galleryActions, afterSequence, responseAt) {
   return responseAt.then(async (epoch) => {
     const deadline = Date.now() + RESPONSE_BOUNDARY_TIMEOUT_MS;
-    while (Date.now() < deadline && !(await readDeferredGroupUpdate(galleryActions, afterSequence))) {
+    let deferredEvent = null;
+    while (Date.now() < deadline) {
+      deferredEvent = await readDeferredGroupUpdate(galleryActions, afterSequence);
+      if (deferredEvent) break;
       await new Promise(resolve => setTimeout(resolve, 8));
     }
-    return epoch;
+    return { responseAt: epoch, deferredEvent };
   });
 }
 
@@ -565,7 +570,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       }
       if (overlapFailures.length) throw overlapFailures[0];
       response = responseResult.value;
-      responseAt = boundaryResult.value;
+      ({ responseAt, deferredEvent } = boundaryResult.value);
       const responsePayload = await response.json();
       responseSummary = {
         viewDataSource: responsePayload?.view_data_source || null,
@@ -574,10 +579,6 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         groupAlbumCount: (responsePayload?.artist_groups || [])
           .reduce((count, group) => count + (group.albums || []).length, 0),
       };
-        deferredEvent = await waitForDeferredGroupUpdate(
-          galleryActions,
-          diagnosticSequenceBeforeInput,
-        );
       inputEndedAt = await ui.readBrowserEpoch();
         expect(response, 'native wheel sequence must overlap a full search refresh response').not.toBeNull();
         expect(deferredEvent, 'full refresh must reach the production deferred group-update path').not.toBeNull();
@@ -706,14 +707,10 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         deferredUpdateBoundary(galleryActions, diagnosticSequenceBeforeInput, responseBoundary.responseAt),
         distance => { commandedDistance += distance; },
       );
-      [response, responseAt] = await Promise.all([
+      [response, { responseAt, deferredEvent }] = await Promise.all([
         responseOverlap,
         activeInput.completion,
       ]);
-        deferredEvent = await waitForDeferredGroupUpdate(
-          galleryActions,
-          diagnosticSequenceBeforeInput,
-        );
         inputEndedAt = await ui.readBrowserEpoch();
         expect(response, 'native wheel sequence must overlap a real continuation response').not.toBeNull();
         expect(deferredEvent, 'real continuation must reach the production deferred group-update path').not.toBeNull();

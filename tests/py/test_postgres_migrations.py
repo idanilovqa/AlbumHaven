@@ -477,7 +477,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
     # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-113:] == [
+    assert migration_names[-114:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -588,6 +588,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0269_index_stray_decision_lookups.sql",
         "0290_index_user_cover_choices.sql",
         "0292_index_local_cover_inventory_roots.sql",
+        "0293_create_cover_provider_cache.sql",
         "0294_mark_loose_groups_for_problematic_index.sql",
         "0295_keep_loose_track_rows.sql",
         "0298_create_ignored_repair_intents.sql",

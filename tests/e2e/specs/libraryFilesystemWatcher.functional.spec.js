@@ -1070,6 +1070,87 @@ test('FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that di
   }
 });
 
+// Owner (2026-11-24): with the second CD far below the first, Album Details opens on the CD the search matched.
+test('FTC-SEARCH-NAV-038 a CD name search opens Album Details scrolled to that CD', {
+  tag: '@area:gallery-search',
+}, async ({
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  const album = 'Watcher Long First CD';
+  const firstDiscName = 'Moscow Club 2014';
+  const secondDiscName = 'V-ROX Festival 2015';
+  const firstDiscTitles = Array.from({ length: 30 }, (_, index) => `Moscow Song ${index + 1}`);
+  const secondDiscTitles = ['Festival Opener', 'Festival Second', 'Festival Closer'];
+  const trackTitles = [...firstDiscTitles, ...secondDiscTitles];
+  const discNumbers = trackTitles.map((_, index) => (index < firstDiscTitles.length ? 1 : 2));
+  const discSubtitles = discNumbers.map(disc => (disc === 1 ? firstDiscName : secondDiscName));
+  const { trackModal } = trackModalActions;
+
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add a two-CD album whose second CD starts below a 30-track first CD', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+      fixture = await createWatchedAlbumFixture({
+        artist: 'Watcher Long Disc Artist', album, year: 2016, trackTitles, discNumbers, discSubtitles,
+        context, managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+    });
+
+    await stepLogger.step('Search the second CD name and open the album it finds', async () => {
+      await searchToolbarActions.search(secondDiscName, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(secondDiscName);
+      await galleryActions.waitForAlbumVisible(album, { timeout: 60000 });
+      await galleryActions.clickAlbumDetailsByAlbumName(album);
+      await trackModalActions.waitForReady();
+      await expect(trackModal.trackRows).toHaveCount(trackTitles.length);
+    });
+
+    await stepLogger.step('Album Details shows the matched CD heading and its first matches, unobscured', async () => {
+      await expect(trackModal.header).toContainText(album);
+      await expect(trackModal.searchMatchDisc).toHaveCount(1);
+      // Settled: two reads 500 ms apart agree.
+      let placement;
+      await expect.poll(async () => {
+        const first = await trackModal.readSearchMatchDiscPlacement();
+        await page.waitForTimeout(500);
+        placement = await trackModal.readSearchMatchDiscPlacement();
+        return placement.scrollTop === first.scrollTop && placement.headingTop === first.headingTop;
+      }, { timeout: 10000 }).toBe(true);
+      expect(placement.headingText).toBe(`CD 2 • ${secondDiscName}`);
+      expect(placement.scrollTop).toBeGreaterThan(0);
+      expect(placement.headingTop).toBeGreaterThanOrEqual(placement.viewTop);
+      expect(placement.headingTop - placement.viewTop).toBeLessThanOrEqual(1);
+      expect(placement.headingUncovered).toBe(true);
+      expect(placement.rows.map(row => row.title)).toEqual(secondDiscTitles.slice(0, 2));
+      for (const row of placement.rows) {
+        expect(row.top).toBeGreaterThan(placement.headingTop);
+        expect(row.bottom).toBeLessThanOrEqual(placement.viewBottom);
+        expect(row.uncovered).toBe(true);
+      }
+      await expect(trackModal.discHeaders.nth(1)).toBeInViewport({ ratio: 1 });
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
 // Owner (2026-11-24): Re-scan answers in the Album Details alert and the answer stays there, for an album
 // still deleted, one whose drive cannot be reached, and one found again.
 test('FTC-LIBROOTS-021 Re-scan answers in the Album Details alert for each outcome', {

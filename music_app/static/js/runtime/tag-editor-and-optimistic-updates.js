@@ -2611,6 +2611,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discNumber: group.discNumber,
       discLabel,
       discSubtitle: group.discSubtitle,
+      discMatchesSearch,
       isBonus: Boolean(group.isBonus),
       lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
       discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,

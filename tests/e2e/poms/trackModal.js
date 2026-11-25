@@ -64,6 +64,7 @@ export class TrackModal extends BasePage {
     this.missingAlertMessage = this.missingAlert.locator('.on-page-alert__message');
     this.rescanFoundAlert = this.dialog.locator('#track-modal-missing-warning [data-on-page-alert="success"]');
     this.rescanFoundMessage = this.rescanFoundAlert.locator('.on-page-alert__message');
+    this.searchMatchDisc = this.dialog.locator('[data-disc-search-match="true"]');
     this.artbox = this.dialog.locator('#track-modal-cover .album-artbox');
     this.artboxOverlay = this.artbox.locator('.album-artbox__overlay');
     this.artboxCoverTools = this.artbox.locator('.track-modal-cover-tool');
@@ -490,6 +491,39 @@ export class TrackModal extends BasePage {
 
   toastWithText(text) {
     return this.page.locator('#toast-layer .toast', { hasText: text });
+  }
+
+  // The search-matched CD and its first matched rows: where they sit, and what is painted over them.
+  async readSearchMatchDiscPlacement({ rows = 2 } = {}) {
+    // parity-check: allow-read-only-measurement-evaluate -- read-only layout geometry and hit-testing of the matched CD
+    return this.searchMatchDisc.evaluate((disc, rowCount) => {
+      let scroller = disc.parentElement;
+      while (scroller && !(/(auto|scroll)/.test(getComputedStyle(scroller).overflowY) && scroller.scrollHeight > scroller.clientHeight)) {
+        scroller = scroller.parentElement;
+      }
+      const heading = disc.querySelector('.album-track-table__disc-heading');
+      const box = node => node.getBoundingClientRect();
+      const uncovered = (node) => {
+        const rect = box(node);
+        return [rect.top + 1, rect.top + rect.height / 2, rect.bottom - 1]
+          .every(y => node.contains(document.elementFromPoint(rect.left + Math.min(24, rect.width / 2), y)));
+      };
+      const view = box(scroller);
+      return {
+        scrollTop: scroller.scrollTop,
+        viewTop: view.top,
+        viewBottom: view.bottom,
+        headingText: heading.textContent.trim(),
+        headingTop: box(heading).top,
+        headingUncovered: uncovered(heading),
+        rows: [...disc.querySelectorAll('[data-track-search-match="true"]')].slice(0, rowCount).map(row => ({
+          title: row.querySelector('.album-track-table__title')?.textContent.trim() || '',
+          top: box(row).top,
+          bottom: box(row).bottom,
+          uncovered: uncovered(row),
+        })),
+      };
+    }, rows);
   }
 
   async readDetailedCoverImageCheckpoint() {

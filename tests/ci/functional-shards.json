@@ -390,6 +390,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-SEARCH-NAV-038 a CD name search opens Album Details scrolled to that CD",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/gallerySourceSwitchLoading.functional.spec.js",
               "case": "FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, never an empty Library",
               "area": "gallery-search"

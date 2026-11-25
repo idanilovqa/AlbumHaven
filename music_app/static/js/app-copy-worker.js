@@ -2,7 +2,9 @@
 // so it answers navigations to the app page (app-copy.js registers it).
 //
 // It keeps, for the one signed-in account, the app page as the server rendered it for a copy
-// request, the versioned assets that page loads, and cover thumbnails already seen. Two modes:
+// request, the versioned assets that page loads, cover thumbnails already seen, and the library data
+// it read while online (gallery pages, artist views, Home, album details), so a reload without the
+// server still opens every view already seen. Data is always server first. Two modes for the page:
 // - `app` (the Android app): a navigation to a page kept recently is answered from the copy at once;
 //   the page then brings itself up to date.
 //   Back and Forward wait for the server as `web` does: nothing of the library paints before it answers.
@@ -10,14 +12,15 @@
 //   when the server cannot be reached or fails at its gateway.
 // A copy is shown for at most seven days, and never past the end of the session the server named.
 // Only responses the server marked as copies for an account are kept, and no asset or cover that
-// is no-store. A page always is: its mark alone lets it be kept, and the worker answers every page
-// no-store too. Signing in or out deletes every copy, as does a page for another account. The copy
-// is only for showing: every write goes to the server.
+// is no-store. A page or a data answer always is: its mark alone lets it be kept, and the worker
+// answers every page no-store too. Signing in or out deletes every copy, as does a page for another
+// account. The copy is only for showing: every write goes to the server.
 //
 // No file path is stored on the device: the server marks no page that carries one (app_copy.py,
 // fits_app_copy), and names covers by opaque reference (`/cover/<reference>`, 22 random
 // characters). Their bytes are kept under that reference and size, least recently seen out first
-// past 200 MB, and any `cover_path` or `music_dir` left in a page is emptied.
+// past 200 MB, and any `cover_path` or `music_dir` left in a page is emptied. Data loses every
+// field the server lists as a path; an answer still holding one is not kept.
 (function appCopyWorker(root) {
   'use strict';
 
@@ -53,6 +56,51 @@
   const COPY_MARKER = '<meta name="album-haven-app-copy" content="cache"';
   const SIGN_IN_PAGES = /^\/(?:login|accept-invitation|password-reset|password-recovery)(?:\/|$)/;
   const SIGN_IN_POSTS = new Set(['/login', '/logout']);
+  // Library data the page reads: kept as answered, so views already seen open again offline.
+  const DATA_PATHS = new Set(['/view-data', '/album-details', '/home-data']);
+  // Searches and file-path lookups are never kept (a path must not name a kept entry).
+  const UNKEPT_DATA_PARAMS = ['q', 'track_path'];
+  // The server's list of fields whose values are file paths; the worker never stores those values.
+  const REDACT_HEADER = 'X-Album-Haven-App-Copy-Redact';
+  const DATA_INDEX_PATH = '/__app-copy__/data';
+  const INITIAL_GALLERY_PATH = '/__app-copy__/initial-gallery';
+  // The data the app page starts with (index.html), as its template writes it.
+  const BOOTSTRAP_PAYLOAD = /window\.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = (\{[\s\S]*?\});\n/;
+  // Approved limits (2026-11-17): least recently opened out first.
+  const MAX_DATA_VIEWS = 150;
+  const MAX_DATA_ALBUMS = 600;
+  const MAX_DATA_BYTES = 40 * 1024 * 1024;
+  const MAX_DATA_ENTRY_BYTES = 2 * 1024 * 1024;
+  // A data request still unanswered this long asks whether the server can be reached at all; the
+  // copy answers only if it cannot (a slow server is never replaced by what was kept). With the
+  // check's own limit, kept data answers by 3 s: the page gives up a request with no answer at 4 s
+  // (pending-projection-fetch.js), which would leave Offline where kept data could show.
+  const CHECK_TIMEOUT_MS = 800;
+  const DATA_CHECK_MS = 3000 - CHECK_TIMEOUT_MS;
+  // After a check found the server down (an error or a gateway failure, never a slow answer), data
+  // requests this soon after ask at once instead of waiting first: the copy still answers only after
+  // a check fails, so a slow but reachable server is waited for.
+  const UNREACHABLE_KNOWN_MS = 60000;
+  // What places one page of the paged gallery, or names one artist in it, rather than naming a
+  // different gallery (other categories, scope or display).
+  const GALLERY_PAGE_PARAMS = [
+    'gallery_cursor', 'gallery_anchor_artist', 'gallery_page_direction', 'gallery_page_size', 'omit_sidebar',
+    'payload_tier', 'all_artists',
+  ];
+  const ARTIST_VIEW_PARAMS = ['artist', 'family_display'];
+  // An artist view narrowed further than the artist (a search or a filter) is never made up.
+  const NARROWING_PARAMS = ['q', 'related_artist', 'primary_filter', 'genre', 'mood', 'style', 'duration_min', 'duration_max'];
+  // A file path that escaped the server's list, alone or as a URL parameter: the answer is then not
+  // kept at all. A POSIX path needs two folders, so app links like /home/recent-albums are not one.
+  const FILE_PATH = /(?:^|[?&=])(?:[A-Za-z]:[\\/]|\\\\[^\\]|\/(?:home|mnt|media|Users|Volumes|srv|data|music|var|opt|tmp|run|net|nas|share|storage|library)\/[^/?#\s]+\/)/i;
+  const namesFilePath = (text) => {
+    if (FILE_PATH.test(text)) return true;
+    try {
+      return text.includes('%') && FILE_PATH.test(decodeURIComponent(text));
+    } catch (_error) {
+      return false;
+    }
+  };
   // Busy paths the copy will never keep (audio, playback, server checks, downloads): Chrome sends
   // them straight to the network. Never route "everything but what this version keeps" there:
   // a tab keeps the routes of the version it started under, so a later version could not keep a
@@ -68,15 +116,25 @@
   const NO_ANSWER = Symbol('no answer');
   // What a page being written is waited for under (an asset is waited for under its URL).
   const PAGES = Symbol('pages');
+  // A gateway answering for a server it cannot reach; the app's own 503 means "not ready yet".
+  const gatewayFailure = status => status === 502 || status === 504 || (status >= 520 && status <= 530);
 
   function createAppCopyWorker({
     caches, fetch, origin, now = Date.now, maxCoverBytes = MAX_COVER_BYTES, mode = 'app', noAnswerMs = NO_ANSWER_MS,
+    dataLimits = {}, dataCheckMs = DATA_CHECK_MS,
   }) {
+    const limits = {
+      views: MAX_DATA_VIEWS, albums: MAX_DATA_ALBUMS, bytes: MAX_DATA_BYTES, entryBytes: MAX_DATA_ENTRY_BYTES,
+      ...dataLimits,
+    };
+    const dataIndexUrl = new URL(DATA_INDEX_PATH, origin).href;
     const metaUrl = new URL(META_PATH, origin).href;
     // What the copy keeps, listed from the cache once per worker so no later request or message lists
     // it again: covers by key in least-recently-seen order with their sizes and total, and the URLs
     // of versioned assets.
     let keptIndex = null;
+    // The kept data entries by key, read once per worker like keptIndex.
+    let dataIndex = null;
     // Covers named by kept pages, by key, to fetch once while online. Held in memory only.
     const unseenCovers = new Map();
     // Versioned assets kept pages load, to fetch once while online: a page kept by a save may be of
@@ -102,6 +160,8 @@
     };
     // Raised by every forget: a page or cover fetched before it is never stored after it.
     let generation = 0;
+    // When a reachability check last found the server down; 0 once the server answers one.
+    let unreachableAt = 0;
 
     // Work that continues after the answer; a storage failure only means nothing is kept.
     const keeping = new Set();
@@ -112,8 +172,11 @@
       event?.waitUntil?.(work);
       return work;
     };
+    // Data answers waiting for their turn to be written, by key: an offline request answers from
+    // them at once, so neither it nor a navigation waits behind the covers queued before them.
+    const pendingData = new Map();
     // Pages and versioned assets being written to the copy, under PAGES or the asset's URL (covers
-    // are not waited for).
+    // and data are not waited for).
     const writing = new Map();
     const written = (key, work) => {
       const works = writing.get(key) || new Set();
@@ -146,15 +209,19 @@
 
     async function deleteCopies() {
       keptIndex = null;
+      dataIndex = null;
       unseenCovers.clear();
       unseenAssets.clear();
       readStyles.clear();
       const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY));
       await Promise.all(names.map(name => caches.delete(name)));
+      // A read that overlapped the deletion must not carry the old copy's index into the next one.
+      dataIndex = null;
     }
 
     function forget() {
       generation += 1;
+      pendingData.clear();
       return exclusive(async () => {
         await coverQueue;
         await deleteCopies();
@@ -223,6 +290,7 @@
       const text = await response.text();
       if (PATH_COVER_URL.test(text)) return false;
       let started = false;
+      let initial = null;
       await written(PAGES, exclusive(async () => {
         if (fetchedIn !== generation) return;
         const html = withoutPaths(text.replace(NETWORK_MARKER, COPY_MARKER));
@@ -253,7 +321,11 @@
         }
         await writeMeta(cache, meta);
         await pruneAssets(cache, meta);
+        initial = { cache, name: CACHE_PREFIX + account, key, html, expiresAt };
       }));
+      // Outside the page's turn: an offline tab waits for the page being written, never for reading
+      // its gallery (100-170 ms of the worker's one thread).
+      if (initial) await keepInitialGallery(initial, fetchedIn);
       return started;
     }
 
@@ -588,6 +660,437 @@
       }
     }
 
+    // ----- Library data (gallery pages, artist views, Home, album details) -----
+
+    // One key per answer: the address with its parameters in order.
+    function dataKey(url) {
+      const params = Array.from(url.searchParams).sort(([a, x], [b, y]) => (a === b ? x.localeCompare(y) : a.localeCompare(b)));
+      return `${url.pathname}?${new URLSearchParams(params)}`;
+    }
+
+    // An album without a reference is asked for by its paths: those never name a kept entry either.
+    const keepsData = url => DATA_PATHS.has(url.pathname)
+      && !UNKEPT_DATA_PARAMS.some(name => url.searchParams.has(name))
+      && !Array.from(url.searchParams.values()).some(namesFilePath);
+
+    // The gallery [url] belongs to, without what places a page in it or names an artist.
+    function galleryBase(url) {
+      const base = new URL(url.href);
+      for (const name of [...GALLERY_PAGE_PARAMS, ...ARTIST_VIEW_PARAMS]) base.searchParams.delete(name);
+      return dataKey(base);
+    }
+
+    // A page of the unfiltered gallery: one place in it, named by a cursor or an artist.
+    function galleryPlace(url) {
+      if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums') return null;
+      if (url.searchParams.has('artist') || !url.searchParams.has('gallery_page_size')) return null;
+      return {
+        base: galleryBase(url),
+        cursor: readCursor(url.searchParams.get('gallery_cursor')),
+        previous: url.searchParams.get('gallery_page_direction') === 'previous',
+        artist: (url.searchParams.get('gallery_anchor_artist') || '').trim(),
+      };
+    }
+
+    // The server's gallery cursor: [1, revision, offset] as unpadded URL-safe base64 JSON.
+    function readCursor(cursor) {
+      if (!cursor) return null;
+      try {
+        const [version, revision, offset] = JSON.parse(atob(cursor.replaceAll('-', '+').replaceAll('_', '/')));
+        return version === 1 && Number.isInteger(offset) ? { revision, offset } : null;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    const writeCursor = (revision, offset) => btoa(`[1, ${JSON.stringify(revision)}, ${offset}]`)
+      .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+
+    // Where a kept gallery page sits: [start, end) in the gallery's albums, its artists, its revision.
+    function galleryPageSpan(place, payload) {
+      const page = payload?.gallery_page;
+      if (!page?.revision || !Array.isArray(payload.artist_groups)) return null;
+      const albums = payload.artist_groups.reduce((sum, group) => sum + (group.albums?.length || 0), 0);
+      const next = readCursor(page.next_cursor);
+      const end = page.has_more ? next?.offset ?? null : null;
+      let start = null;
+      if (place.cursor && !place.previous) start = place.cursor.offset;
+      else if (end !== null) start = end - albums;
+      else if (!place.cursor && !place.artist) start = 0;
+      return {
+        base: place.base,
+        revision: page.revision,
+        start,
+        end,
+        size: Number(page.page_size) || 50,
+        artists: payload.artist_groups.map(group => String(group.artist || '')),
+      };
+    }
+
+    // [value] with every value of a [redacted] field replaced by a token, and so every other string
+    // equal to one (a track's key is its path): the same token for the same path within one answer,
+    // so rows stay distinct and lists still match. Null when any other string still names a file
+    // path, also inside a URL, which keeps nothing rather than a path.
+    function withoutDataPaths(value, redacted) {
+      const tokens = new Map();
+      const collect = (node, field) => {
+        if (typeof node === 'string') {
+          if (node && redacted.has(field) && !tokens.has(node)) tokens.set(node, `offline:${tokens.size + 1}`);
+        } else if (Array.isArray(node)) {
+          node.forEach(item => collect(item, field));
+        } else if (node && typeof node === 'object') {
+          for (const [key, item] of Object.entries(node)) collect(item, key);
+        }
+      };
+      collect(value, '');
+      let leaked = false;
+      const walk = (node, field) => {
+        if (typeof node === 'string') {
+          if (tokens.has(node)) return tokens.get(node);
+          if (namesFilePath(node)) leaked = true;
+          return node;
+        }
+        if (Array.isArray(node)) return node.map(item => walk(item, field));
+        if (!node || typeof node !== 'object') return node;
+        // A listed field holding an object (not a path or a list of them) is dropped whole.
+        if (redacted.has(field)) return null;
+        const out = {};
+        for (const [key, item] of Object.entries(node)) {
+          if (namesFilePath(key)) leaked = true;
+          out[key] = walk(item, key);
+        }
+        return out;
+      };
+      const result = walk(value, '');
+      return leaked ? null : result;
+    }
+
+    async function readDataIndex(cache) {
+      if (!dataIndex) {
+        const reading = cache.match(dataIndexUrl).then(saved => (saved ? saved.json() : null))
+          .then(saved => ({ entries: saved?.entries || {} }));
+        dataIndex = reading;
+        reading.catch(() => {
+          if (dataIndex === reading) dataIndex = null;
+        });
+      }
+      return dataIndex;
+    }
+
+    const writeDataIndex = (cache, index) => cache.put(dataIndexUrl, new Response(JSON.stringify(index), {
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    // Least recently opened out first, until every limit holds; stale entries go first of all.
+    async function evictData(cache, index) {
+      const entries = Object.entries(index.entries).sort(([, a], [, b]) => a.seenAt - b.seenAt);
+      const totals = { views: 0, albums: 0, bytes: 0 };
+      for (const [, entry] of entries) {
+        totals[entry.kind === 'album' ? 'albums' : 'views'] += 1;
+        totals.bytes += entry.bytes;
+      }
+      for (const [key, entry] of entries) {
+        const kind = entry.kind === 'album' ? 'albums' : 'views';
+        if (isFresh(entry) && totals[kind] <= limits[kind] && totals.bytes <= limits.bytes) continue;
+        delete index.entries[key];
+        totals[kind] -= 1;
+        totals.bytes -= entry.bytes;
+        await cache.delete(new URL(key, origin).href);
+      }
+    }
+
+    // [payload] as it may be kept: without file paths and within the entry limit; null otherwise.
+    function keepable(payload, redacted) {
+      const kept = withoutDataPaths(payload, redacted);
+      if (!kept || kept.ok === false) return null;
+      const body = JSON.stringify(kept);
+      const bytes = new TextEncoder().encode(body).byteLength;
+      return bytes > limits.entryBytes ? null : { kept, body, bytes };
+    }
+
+    // Writes [prepared] under [key] with its index [entry], then holds the data to its limits.
+    // Runs in its turn (exclusive), with [cache] the account's copy.
+    async function storeData(cache, key, prepared, entry) {
+      const index = await readDataIndex(cache);
+      await cache.put(new URL(key, origin).href, new Response(prepared.body, { headers: { 'Content-Type': 'application/json' } }));
+      index.entries[key] = { ...entry, bytes: prepared.bytes, savedAt: now(), seenAt: now() };
+      await evictData(cache, index);
+      await writeDataIndex(cache, index);
+    }
+
+    // Keeps a data answer the server marked as a copy for an account, without its file paths.
+    async function keepData(url, response, fetchedIn, event) {
+      const account = response.headers.get(COPY_HEADER);
+      const redacted = new Set((response.headers.get(REDACT_HEADER) || '').split(',').map(name => name.trim()).filter(Boolean));
+      const text = await response.text();
+      if (text.length > limits.entryBytes) return;
+      const prepared = keepable(JSON.parse(text), redacted);
+      if (!prepared) return;
+      const place = galleryPlace(url);
+      const key = dataKey(url);
+      const pending = { account, kept: prepared.kept };
+      if (fetchedIn === generation) pendingData.set(key, pending);
+      const write = quietly(exclusive(async () => {
+        if (fetchedIn !== generation) return;
+        let target = await accountCache();
+        if (target && target.name !== CACHE_PREFIX + account) {
+          await deleteCopies();
+          target = null;
+        }
+        const cache = target ? target.cache : await caches.open(CACHE_PREFIX + account);
+        await storeData(cache, key, prepared, {
+          kind: url.pathname === '/album-details' ? 'album' : 'view',
+          expiresAt: Number(response.headers.get(EXPIRES_HEADER)) || undefined,
+          gallery: place ? galleryPageSpan(place, prepared.kept) : null,
+        });
+      })).then(() => {
+        if (pendingData.get(key) === pending) pendingData.delete(key);
+      });
+      event?.waitUntil?.(write);
+    }
+
+    // The first block of the gallery a kept app page shows, from its bootstrap, kept as gallery data
+    // so the artists in it open offline like those scrolled to. Its gallery is not named by data
+    // parameters (base null), so it stands in for any. Read outside any turn; only storing takes one.
+    async function keepInitialGallery({ cache, name, key, html, expiresAt }, fetchedIn) {
+      const match = html.match(BOOTSTRAP_PAYLOAD);
+      if (!match) return;
+      let view;
+      try {
+        view = JSON.parse(match[1])?.initial_view;
+      } catch (_error) {
+        return;
+      }
+      if (!view?.gallery_page || view.selected_artist || !Array.isArray(view.artist_groups)) return;
+      const prepared = keepable(view, new Set());
+      if (!prepared) return;
+      const gallery = galleryPageSpan({ base: null, cursor: null, previous: false, artist: '' }, prepared.kept);
+      await quietly(exclusive(async () => {
+        if (fetchedIn !== generation || (await accountCache())?.name !== name) return;
+        await storeData(cache, `${INITIAL_GALLERY_PATH}?page=${encodeURIComponent(key)}`, prepared, { kind: 'view', expiresAt, gallery });
+      }));
+    }
+
+    // Data the server never answered within the wait, as a gateway would say it.
+    const unansweredData = () => new Response(JSON.stringify({ ok: false, error: 'Album Haven cannot be reached' }), {
+      status: 504, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+
+    // A kept answer as the page reads it, marked as coming from the copy.
+    const dataAnswer = payload => new Response(JSON.stringify(payload), {
+      headers: { 'Content-Type': 'application/json', [COPY_HEADER]: 'cache' },
+    });
+
+    // The kept gallery page just before [entry], as a cursor the page can ask for next; without
+    // one, the page's own link (or none when its place is unknown).
+    function previousLink(index, entry, page) {
+      const { gallery } = entry;
+      if (gallery.start === 0) return { previous_cursor: null, has_previous: false };
+      if (gallery.start === null) return { previous_cursor: page.previous_cursor || null, has_previous: Boolean(page.has_previous) };
+      const before = Object.values(index.entries).find(other => isFresh(other) && other.gallery
+        && other.gallery.base === gallery.base && other.gallery.revision === gallery.revision
+        && other.gallery.end === gallery.start && other.gallery.start !== null);
+      const offset = before ? before.gallery.start : Math.max(0, gallery.start - gallery.size);
+      return { previous_cursor: writeCursor(gallery.revision, offset), has_previous: true };
+    }
+
+    // A gallery place never asked for while online, answered from the pages kept around it: a jump
+    // to an artist whose albums were scrolled past, or the page before or after a kept one.
+    async function keptGalleryPlace(cache, index, place) {
+      const pages = Object.entries(index.entries)
+        .filter(([, entry]) => isFresh(entry) && entry.gallery?.base === place.base)
+        .sort(([, a], [, b]) => b.savedAt - a.savedAt);
+      let found = null;
+      if (place.cursor) {
+        found = pages.find(([, entry]) => entry.gallery.revision === place.cursor.revision
+          && entry.gallery.start === place.cursor.offset);
+      } else if (place.artist) {
+        const wanted = place.artist.toLocaleLowerCase();
+        found = pages.find(([, entry]) => entry.gallery.artists.includes(place.artist))
+          || pages.find(([, entry]) => entry.gallery.artists.some(artist => artist.toLocaleLowerCase() === wanted));
+      }
+      if (!found) return null;
+      const [key, entry] = found;
+      const kept = await cache.match(new URL(key, origin).href);
+      if (!kept) return null;
+      const payload = await kept.json();
+      const page = { ...payload.gallery_page, ...previousLink(index, entry, payload.gallery_page) };
+      if (place.artist) {
+        Object.assign(page, { anchor_artist: place.artist, anchor_group_artist: String(artistGroup(payload, place.artist).artist) });
+      }
+      return { key, payload: { ...payload, gallery_page: page } };
+    }
+
+    // An artist's own view, asked for from the tree or a card, in the gallery it belongs to.
+    function artistPlace(url) {
+      if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums') return null;
+      const artist = (url.searchParams.get('artist') || '').trim();
+      if (!artist || NARROWING_PARAMS.some(name => url.searchParams.has(name))) return null;
+      return { base: galleryBase(url), artist };
+    }
+
+    // The group of [artist] in a kept gallery answer: the exact name first, then ignoring case.
+    function artistGroup(payload, artist) {
+      const groups = Array.isArray(payload?.artist_groups) ? payload.artist_groups : [];
+      const wanted = artist.toLocaleLowerCase();
+      return groups.find(group => String(group.artist || '') === artist)
+        || groups.find(group => String(group.artist || '').toLocaleLowerCase() === wanted) || null;
+    }
+
+    // An artist view never opened online, made from the newest kept gallery page that shows the
+    // artist's albums: those albums alone, as the artist's own view, with nothing else made up
+    // (no family, no tracks outside albums).
+    async function keptArtistView(cache, index, place) {
+      const wanted = place.artist.toLocaleLowerCase();
+      // This gallery's pages first, then the first block of a kept app page, then any other gallery.
+      const rank = entry => (entry.gallery.base === place.base ? 0 : entry.gallery.base === null ? 1 : 2);
+      const pages = Object.entries(index.entries)
+        .filter(([, entry]) => isFresh(entry) && entry.gallery
+          && entry.gallery.artists.some(artist => artist.toLocaleLowerCase() === wanted))
+        .sort(([, a], [, b]) => rank(a) - rank(b) || b.savedAt - a.savedAt);
+      for (const [key] of pages) {
+        const kept = await cache.match(new URL(key, origin).href);
+        if (!kept) continue;
+        const { gallery_page: _page, ...view } = await kept.json();
+        const group = artistGroup(view, place.artist);
+        if (!group) continue;
+        return {
+          key,
+          payload: {
+            ...view,
+            selected_artist: String(group.artist),
+            all_artists_active: false,
+            artist_groups: [group],
+            primary_artist_groups: [group],
+            family_artist_groups: [],
+            related_filter_base_primary_groups: [group],
+            related_filter_base_family_groups: [],
+            related_artists: [],
+            artist_family_filters: [],
+            artist_page: null,
+            artist_count: 1,
+            album_count: (group.albums || []).length,
+            non_album_tracks: [],
+            library_non_album_tracks: [],
+            non_album_tracks_deferred: false,
+            payload_tier: 'gallery_summary',
+          },
+        };
+      }
+      return null;
+    }
+
+    // The kept answer for [url], or one made from kept gallery pages; null when nothing was kept.
+    async function keptData(url) {
+      const target = await accountCache();
+      const key = dataKey(url);
+      const pending = pendingData.get(key);
+      if (pending && (!target || target.name === CACHE_PREFIX + pending.account)) return dataAnswer(pending.kept);
+      if (!target) return null;
+      const index = await readDataIndex(target.cache);
+      let answer = null;
+      if (isFresh(index.entries[key])) {
+        const kept = await target.cache.match(new URL(key, origin).href);
+        if (kept) answer = { key, payload: await kept.json() };
+      }
+      const place = answer ? null : galleryPlace(url);
+      if (place && (place.cursor || place.artist)) answer = await keptGalleryPlace(target.cache, index, place);
+      const artist = answer ? null : artistPlace(url);
+      if (artist) answer = await keptArtistView(target.cache, index, artist);
+      if (!answer) return null;
+      // Opened again: the last to go. Recorded in turn, never awaited, and never after a forget.
+      const readIn = generation;
+      void quietly(exclusive(async () => {
+        const entry = index.entries[answer.key];
+        if (!entry || readIn !== generation) return;
+        entry.seenAt = now();
+        await writeDataIndex(target.cache, index);
+      }));
+      return dataAnswer(answer.payload);
+    }
+
+    // Whether the server answers at all, asked of the account check with a short limit.
+    // 'reachable'; 'down' for a network error or a gateway failure; 'slow' for no answer in time,
+    // which a busy server gives as well as a cut network, so it never counts as offline by itself.
+    async function serverReachable() {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
+      try {
+        const response = await fetch(new Request(new URL('/app-copy/account', origin).href, {
+          credentials: 'same-origin', cache: 'no-store', redirect: 'manual', signal: controller.signal,
+        }));
+        const reachable = !gatewayFailure(response.status);
+        unreachableAt = reachable ? 0 : now();
+        return reachable ? 'reachable' : 'down';
+      } catch (_error) {
+        if (controller.signal.aborted) return 'slow';
+        unreachableAt = now();
+        return 'down';
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // Library data, server first: an answer the server marks is kept as it passes. The copy answers
+    // only when the server cannot be reached (no answer, a gateway failure, or still nothing after
+    // dataCheckMs and a reachability check that failed or timed out). Anything never kept fails as
+    // it would have, or answers 504 when the worker gave up waiting.
+    async function data(request, event) {
+      const url = new URL(request.url);
+      if (!keepsData(url)) return fetch(request);
+      const headers = new Headers(request.headers);
+      headers.set(COPY_HEADER, '1');
+      const fetchedIn = generation;
+      // Past the browser's HTTP cache, like the page: it would store the answer with its file paths.
+      const arrived = fetch(new Request(request, { headers, cache: 'no-store' })).then((response) => {
+        if (response.status === 200 && response.headers.get(COPY_HEADER)) {
+          const copy = response.clone();
+          later(event, () => keepData(url, copy, fetchedIn, event));
+        }
+        return response;
+      });
+      const settled = arrived.then(response => ({ response }), error => ({ error }));
+      const waitMs = unreachableAt && now() - unreachableAt < UNREACHABLE_KNOWN_MS ? 0 : dataCheckMs;
+      let timer;
+      let outcome = await Promise.race([
+        settled,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(NO_ANSWER), waitMs); }),
+      ]);
+      clearTimeout(timer);
+      if (outcome === NO_ANSWER) {
+        const server = await serverReachable();
+        if (server !== 'reachable') {
+          const kept = await keptData(url);
+          if (kept) return kept;
+        }
+        // Never kept and certainly unreachable: give up now. A slow check may be a busy server: its
+        // answer is waited for up to noAnswerMs in all, the check included (a cut network may hold
+        // the request forever). Giving up after waiting answers a gateway's 504, Offline to the page,
+        // and never rejects: the page's fetch (session-csrf-fetch.js) repeats a rejected read, which
+        // would wait the whole time again.
+        if (server === 'down') return unansweredData();
+        if (server === 'slow') {
+          outcome = await Promise.race([
+            settled,
+            new Promise((resolve) => {
+              timer = setTimeout(() => resolve(NO_ANSWER), Math.max(0, noAnswerMs - waitMs - CHECK_TIMEOUT_MS));
+            }),
+          ]);
+          clearTimeout(timer);
+          if (outcome === NO_ANSWER || (outcome.error && !request.signal?.aborted)) outcome = { response: unansweredData() };
+        } else outcome = await settled;
+      }
+      if (outcome.error) {
+        if (outcome.error?.name === 'AbortError' || request.signal?.aborted) throw outcome.error;
+        await keptSoFar(dataKey(url));
+        const kept = await keptData(url);
+        if (kept) return kept;
+        throw outcome.error;
+      }
+      if (gatewayFailure(outcome.response.status)) return (await keptData(url)) || outcome.response;
+      return outcome.response;
+    }
+
     // Which handler answers [request]; null leaves it to the network untouched.
     function route(request) {
       const url = new URL(request.url);
@@ -599,12 +1102,13 @@
         return SIGN_IN_PAGES.test(url.pathname) ? 'forget' : null;
       }
       if (url.pathname.startsWith('/static/')) return url.searchParams.has('v') ? 'versioned-asset' : 'asset';
+      if (DATA_PATHS.has(url.pathname)) return 'data';
       const size = url.searchParams.get('size');
       return COVER_PATH.test(url.pathname) && (size === null || COVER_SIZE.test(size)) ? 'cover' : null;
     }
 
     const handlers = {
-      page: navigate, 'versioned-asset': versionedAsset, asset, cover, forget,
+      page: navigate, 'versioned-asset': versionedAsset, asset, cover, data, forget,
     };
     const handle = (name, request, event) => handlers[name](request, event);
 

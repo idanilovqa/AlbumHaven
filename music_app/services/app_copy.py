@@ -3,9 +3,14 @@
 The app-copy service worker (static/js/app-copy-worker.js) asks for the app page with
 ``X-Album-Haven-App-Copy: 1``. Only that page, for a signed-in account, is answered as a copy:
 marked with the account it belongs to, the asset version it loads and the time it may be shown
-until. It is no-store like every other private answer: the worker keeps it by its mark alone, so it
-never keeps admin or account pages. The worker empties cover paths and the music directory; a page
-with any other file path is not marked (fits_app_copy).
+until. It is no-store like every other private answer: the worker keeps it by its mark alone, so
+it never keeps admin or account pages. The worker empties cover paths and the music directory; a
+page with any other file path is not marked (fits_app_copy).
+
+The library data the page reads (``APP_COPY_DATA_PATHS``) is answered the same way when the worker
+asks with the same header: a successful JSON answer for a signed-in account is marked as a copy,
+and ``X-Album-Haven-App-Copy-Redact`` lists the fields whose values are file paths, which the worker
+replaces before it keeps the answer (it keeps nothing that still looks like a path).
 
 ``ALBUM_HAVEN_APP_COPY=off`` switches the copy off: pages stop loading its client, and the worker
 URL serves a worker that deletes every copy and unregisters itself.
@@ -14,7 +19,7 @@ URL serves a worker that deletes every copy and unregisters itself.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 import re
@@ -26,6 +31,28 @@ from music_app.services.cover_reference_boundary import OUTBOUND_FIELDS
 APP_COPY_HEADER = "X-Album-Haven-App-Copy"
 ASSET_VERSION_HEADER = "X-Album-Haven-Asset-Version"
 EXPIRES_HEADER = "X-Album-Haven-App-Copy-Expires"
+REDACT_HEADER = "X-Album-Haven-App-Copy-Redact"
+APP_COPY_DATA_PATHS = frozenset({"/view-data", "/album-details", "/home-data"})
+# Every field of the data answers whose value is a file path, a URL naming one, or a list of them
+# (cover paths already leave as references, cover_reference_boundary.py). The worker also replaces
+# any other value equal to one of them (a track's `key` is its path). A contract test holds real
+# answers to this list.
+APP_COPY_REDACTED_KEYS = (
+    "path",
+    "src",
+    "track_path",
+    "trackPath",
+    "track_ref",
+    "track_paths",
+    "file_paths",
+    "problematic_track_paths",
+    "open_directory_paths",
+    "folder",
+    "music_dir",
+    "source_path",
+    "file_private_path",
+    "scan_current_path",
+)
 APP_COPY_CACHE_CONTROL = "private, no-store"
 MAX_COPY_AGE = timedelta(days=7)
 # Leave the server as cover references (cover_reference_boundary.py) or are emptied by the worker.
@@ -108,3 +135,29 @@ def mark_app_copy(response: Any, account: str, asset_version: str, expires: date
     response.headers[APP_COPY_HEADER] = account
     response.headers[ASSET_VERSION_HEADER] = asset_version
     response.headers[EXPIRES_HEADER] = str(int(expires.timestamp() * 1000))
+
+
+def mark_app_copy_data(request: Any, response: Any) -> None:
+    """Marks library data the copy's worker asked for, so it can be kept for the signed-in account."""
+    if (
+        request.url.path not in APP_COPY_DATA_PATHS
+        or response.status_code != 200
+        or not app_copy_requested(request)
+        or not app_copy_enabled()
+        or not str(response.headers.get("content-type") or "").startswith("application/json")
+    ):
+        return
+    actor = getattr(request.state, "current_actor", None)
+    if getattr(actor, "account_id", None) is None:
+        return
+    mark_app_copy(
+        response,
+        app_copy_account(actor),
+        request.app.state.runtime_asset_version,
+        app_copy_expires(
+            actor,
+            (getattr(request.app.state, "auth_policy_config", None) or {}).get("session") or {},
+            datetime.now(timezone.utc),
+        ),
+    )
+    response.headers[REDACT_HEADER] = ",".join(APP_COPY_REDACTED_KEYS)

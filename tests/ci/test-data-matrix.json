@@ -10653,7 +10653,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-    "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
+    "case": "FTC-IAR-W10 offline, reloading an artist opened online shows that artist's kept albums, and an artist never opened names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
     "profile": "functional-core",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10661,6 +10661,7 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
+      "offline-reload-opens-artist-seen-online",
       "browser-copy-offline-reload-names-unreachable-view"
     ],
     "ownerApproval": "approved"
@@ -10797,6 +10798,29 @@
     "expectedContracts": [
       "sign-in-keeps-library-before-offline",
       "unreachable-more-albums-message"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnOfflineData.spec.js",
+    "case": "FTC-IAR-W20 after browsing online, an offline reload still opens every artist and album already seen, by the tree and by scrolling, and their details",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "offline-reload-opens-artists-seen-from-the-tree",
+      "offline-reload-scrolls-gallery-pages-seen",
+      "offline-reload-opens-album-details-seen",
+      "offline-never-seen-album-says-offline",
+      "online-again-data-comes-from-the-server"
     ],
     "ownerApproval": "approved"
   },

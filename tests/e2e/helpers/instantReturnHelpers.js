@@ -136,10 +136,34 @@ export function requestedAlbumKeys(page) {
   return keys;
 }
 
-// The first album inside the window whose details were never asked for, so nothing holds them.
+// The first album inside the window whose details were never asked for, so nothing keeps them.
 export async function albumNeverRequested(galleryActions, requested) {
   for (const name of await visibleAlbumNames(galleryActions.galleryPage)) {
     if (name && !requested.has(await galleryActions.readAlbumKeyByName(name))) return name;
   }
   throw new Error('every album in the window had its details asked for');
+}
+
+// The library data kept on the device, by address, read from the browser's own storage.
+export async function keptDataKeys(page) {
+  // parity-check: allow-read-only-measurement-evaluate: lists the copy's data entries without changing the storage.
+  return page.evaluate(async () => {
+    const keys = [];
+    for (const name of (await caches.keys()).filter(key => key.startsWith('album-haven-app-copy-'))) {
+      for (const request of await (await caches.open(name)).keys()) {
+        const url = new URL(request.url);
+        if (['/view-data', '/album-details', '/home-data'].includes(url.pathname)) keys.push(`${url.pathname}${url.search}`);
+      }
+    }
+    return keys;
+  });
+}
+
+// Scrolls the gallery down, as a person does, until [artist]'s heading is rendered.
+export async function scrollToArtistHeading(galleryActions, artist, { timeout = 45_000 } = {}) {
+  await expect.poll(async () => {
+    if ((await galleryActions.readArtistHeadings()).some(heading => heading.trim() === artist)) return true;
+    await galleryActions.scrollGalleryBy(900);
+    return false;
+  }, { timeout, intervals: [300] }).toBe(true);
 }

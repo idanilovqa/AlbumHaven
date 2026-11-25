@@ -6,7 +6,8 @@ import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import {
-  albumNeverRequested, failedStaticRequests, primeCopy, keptPages, keptStaticPaths, requestedAlbumKeys, setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
+  albumNeverRequested, failedStaticRequests, primeCopy, keptPages, keptStaticPaths, requestedAlbumKeys,
+  setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -131,44 +132,55 @@ test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the save
   expect((await visibleAlbumNames(tabGallery.galleryPage)).length).toBeGreaterThan(0);
 });
 
-// Reloading, offline, an artist opened in the app after the last save: that address was never
-// kept. The page never lands on another kept view; it names the artist asked for and
-// says the server cannot be reached.
-test(`FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'`, {
+// Reloading, offline, an artist opened in the app after the last save: that address was never kept
+// as a page. Its data was (FTC-IAR-W20), so it opens from the device. An artist never opened has no
+// data on the device: the page never lands on another kept view; it names the artist asked
+// for and says the server cannot be reached.
+test(`FTC-IAR-W10 offline, reloading an artist opened online shows that artist's kept albums, and an artist never opened names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'`, {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions }, testInfo) => {
   await primeCopy(page, galleryActions);
+  const { galleryPage } = galleryActions;
   const artist = await navigationPanelActions.selectSidebarArtistAt(0);
   await expect.poll(() => new URL(page.url()).search).not.toBe(new URL(LIBRARY_PATH, page.url()).search);
+  await expect.poll(async () => (await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
+  const albumsOnline = await visibleAlbumNames(galleryPage);
   const artistUrl = new URL(page.url());
   expect((await keptPages(page)).map(kept => kept.key)).not.toContain(`${artistUrl.pathname}${artistUrl.search}`);
+  // An artist never opened and never shown in the gallery: the last in the tree, at its own address.
+  const artists = await navigationPanelActions.readSidebarArtistNames();
+  const unseen = artists[artists.length - 1];
+  const unseenUrl = new URL(artistUrl.href);
+  unseenUrl.searchParams.set('artist', unseen);
 
   await context.setOffline(true);
   const started = Date.now();
   // The whole page finishes loading, not only its first paint: nothing it asks for may hang.
   await page.reload({ waitUntil: 'load' });
   expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, `page load after reloading ${artist} offline`);
-  const { galleryPage } = galleryActions;
-  await expect(galleryPage.unreachable).toBeVisible();
-  expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, `unreachable view after reloading ${artist} offline`);
-
   await expect(page).toHaveURL(artistUrl.href);
   await expect(galleryPage.galleryContextName).toHaveText(artist);
-  await expect(galleryPage.unreachableTitle).toHaveText('Offline');
-  await expect(galleryPage.unreachableDetail).toHaveText(`Can't load ${artist}, check your network or try again later`);
-  await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
-  // One message only: the kept-library notice does not show above the artist's own.
-  await expect(galleryPage.appCopyOfflineNotice).toBeHidden();
-  expect(await visibleAlbumNames(galleryPage), 'no other view stands in for the artist').toEqual([]);
+  await expect.poll(async () => (await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
+  // The artist's own albums, as seen online.
+  expect((await visibleAlbumNames(galleryPage)).filter(name => !albumsOnline.includes(name))).toEqual([]);
+  await expect(galleryPage.unreachable).toHaveCount(0);
+  await expect(galleryPage.appCopyOfflineNotice).toBeVisible();
 
-  // The same address in a new tab (one was once seen never to finish loading).
-  const tab = await page.context().newPage();
-  const tabStarted = Date.now();
-  await tab.goto(artistUrl.href, { waitUntil: 'load' });
-  expectTimingBudget(expect, Date.now() - tabStarted, UNREACHABLE_VIEW_BUDGET, `page load of ${artist} in a new offline tab`);
-  const tabGallery = new GalleryPage(tab, testInfo);
-  await expect(tabGallery.unreachableTitle).toHaveText('Offline');
-  await expect(tabGallery.unreachableDetail).toHaveText(`Can't load ${artist}, check your network or try again later`);
+  // The artist never opened, reloaded at its address and in a new tab, says Offline by name.
+  for (const target of [page, await page.context().newPage()]) {
+    const targetStarted = Date.now();
+    await target.goto(unseenUrl.href, { waitUntil: 'load' });
+    expectTimingBudget(expect, Date.now() - targetStarted, UNREACHABLE_VIEW_BUDGET, `page load of ${unseen} offline`);
+    const targetGallery = new GalleryPage(target, testInfo);
+    await expect(targetGallery.unreachable).toBeVisible();
+    await expect(targetGallery.galleryContextName).toHaveText(unseen);
+    await expect(targetGallery.unreachableTitle).toHaveText('Offline');
+    await expect(targetGallery.unreachableDetail).toHaveText(`Can't load ${unseen}, check your network or try again later`);
+    await expect(targetGallery.appCopyMarker).toHaveAttribute('content', 'cache');
+    // One message only: the kept-library notice does not show above the artist's own.
+    await expect(targetGallery.appCopyOfflineNotice).toBeHidden();
+    expect(await visibleAlbumNames(targetGallery), 'no other view stands in for the artist').toEqual([]);
+  }
 });
 
 // Server down: an album's details spun forever and tree entries quietly kept the view
@@ -182,8 +194,8 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   // Album Details was never opened online; its close X (a CSS mask image) is kept by the save alone.
   await expect.poll(() => keptStaticPaths(page), { timeout: 15_000 }).toContain('/static/images/icons/tabler-x.svg');
   await context.setOffline(true);
-  // Details the gallery already asked for (its prewarm of visible albums) open offline as they are,
-  // so the album is chosen once offline, among those whose details were never asked for.
+  // Details already asked for (a prewarm included) are kept and open offline (FTC-IAR-W20); chosen
+  // once offline, so no prewarm can still keep the album's details.
   const album = await albumNeverRequested(galleryActions, requested);
   const failedAssets = failedStaticRequests(page);
 

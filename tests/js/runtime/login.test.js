@@ -35,7 +35,9 @@ function element(initial = {}) {
 
 // [copyWorker]: the sign-in page names the copy's worker; [workers] stands in for
 // navigator.serviceWorker, [bridge] for the Android shell's bridge.
-function loadLoginRuntime({ reply, replies = [reply], now = () => 0, copyWorker = false, workers = null, bridge = undefined, timers = [] } = {}) {
+function loadLoginRuntime({
+  reply, replies = [reply], now = () => 0, copyWorker = false, workers = null, bridge = undefined, timers = [],
+} = {}) {
   const csrfToken = element({ value: 'first-token' });
   const form = element({
     action: 'https://music.test/login',

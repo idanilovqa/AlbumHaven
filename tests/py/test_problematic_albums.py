@@ -969,8 +969,10 @@ def test_live_indexed_duplicate_cards_equal_the_live_overlay_and_follow_each_sav
             changed_paths={entry["path"]}, previous_file_entries={entry["path"]: entry},
             updated_file_entries={entry["path"]: updated}, changed_field_names=set(changes),
         )
+        # The save evaluates the albums it marked (conftest disables the index for other tests).
         refresh_postgres_utility_projections_after_edit(
-            fixture.config, track_paths={entry["path"]}, previous_entries=[dict(entry)],
+            {**fixture.config, problematic_index.ENABLED_KEY: "1"},
+            track_paths={entry["path"]}, previous_entries=[dict(entry)],
         )
         entry.update(updated)
 
@@ -1050,7 +1052,8 @@ def test_live_stored_duplicate_result_follows_a_stray_link_only_the_stray_album_
             )
         # A tag save writes the link, then evaluates the albums it marked before it completes.
         browse.refresh_postgres_utility_projections_after_edit(
-            fixture.config, track_paths={stray["path"]}, previous_entries=[dict(stray)],
+            {**fixture.config, problematic_index.ENABLED_KEY: "1"},
+            track_paths={stray["path"]}, previous_entries=[dict(stray)],
         )
 
     assert owner_marked() is False
@@ -1216,6 +1219,8 @@ def test_live_builder_bump_keeps_duplicate_results_readable_and_evaluates_their_
 
     if not identity_twin:
         set_stray_link({"album_id": owner_id, "album_key": owner_key})
+        # The save that wrote the link evaluates the albums it marked before it completes.
+        problematic_index.refresh(repository)
     assert owner_marked() is True
     assert sql("select linked_album_ids from library.album_duplicate_results where album_id = %s", (owner_id,)) == [
         ([other_id],),

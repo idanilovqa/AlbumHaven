@@ -1986,16 +1986,33 @@ async def _run_edit_tags_payload(
     if needs_postgres_edit_state or "proposal_ids" in payload:
         # Request-scoped overlays replace this copy's file cache, never the live one.
         get_state = lambda: dict(library_state)
-    if needs_postgres_edit_state and "proposal_ids" not in payload:
-        try:
-            postgres_edit_state = await run_in_threadpool(
-                _postgres_exception_only_edit_state, request, payload
-            )
-        except EditTagsTracksNotInLibrary as exc:
-            return ({"ok": False, "code": "tracks_not_in_library", "error": str(exc)}, 409)
-        except ValueError as exc:
-            return ({"ok": False, "error": str(exc)}, 400)
-        get_state = lambda: postgres_edit_state
+    # The tags this save compares against are read only once it holds its albums: read before a
+    # save of the same tracks finished, they would call a real change "already saved" and skip it.
+    reservation_started = perf_counter()
+    structural_tag_edit_reservation = (
+        await acquire_structural_tag_edit_reservation_async(
+            reservation_resource_keys
+        )
+        if reservation_resource_keys
+        else None
+    )
+    reservation_wait_ms = (perf_counter() - reservation_started) * 1000.0
+    reservation_kept = False
+    try:
+        if needs_postgres_edit_state and "proposal_ids" not in payload:
+            try:
+                postgres_edit_state = await run_in_threadpool(
+                    _postgres_exception_only_edit_state, request, payload
+                )
+            except EditTagsTracksNotInLibrary as exc:
+                return ({"ok": False, "code": "tracks_not_in_library", "error": str(exc)}, 409)
+            except ValueError as exc:
+                return ({"ok": False, "error": str(exc)}, 400)
+            get_state = lambda: postgres_edit_state
+        reservation_kept = True
+    finally:
+        if not reservation_kept and structural_tag_edit_reservation is not None:
+            structural_tag_edit_reservation.release()
     build_affected_album_dicts = _edit_tags_affected_album_dicts_builder(request, payload)
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
         build_affected_album_dicts = _empty_affected_album_dicts
@@ -2108,17 +2125,7 @@ async def _run_edit_tags_payload(
             return verified
 
         handler_options["validate_proposals"] = validate_proposals
-    reservation_started = perf_counter()
-    structural_tag_edit_reservation = (
-        await acquire_structural_tag_edit_reservation_async(
-            reservation_resource_keys
-        )
-        if reservation_resource_keys
-        else None
-    )
-    handler_options["reservation_wait_ms"] = (
-        perf_counter() - reservation_started
-    ) * 1000.0
+    handler_options["reservation_wait_ms"] = reservation_wait_ms
     result = await _run_edit_tags_handler_with_reservation(
         handler_options,
         _EditTagsReservation(intent_lease, structural_tag_edit_reservation),

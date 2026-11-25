@@ -106,7 +106,9 @@
     "music_app/services/cover_references.py",
     "migrations/postgres/0200_create_cover_references.sql",
     "migrations/postgres/0201_backfill_cover_references.sql",
-    "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+    "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+    "scripts/ci/load-fixture-profile.py",
+    "tests/e2e/helpers/postgresProjectionFixture.js"
   ],
   "rules": [
     {
@@ -457,6 +459,17 @@
         "tests/e2e/syntheticLargeLibrary/editTagsApiConsecutivePerformance.spec.js"
       ],
       "targets": ["edit-tags-split-merge", "edit-tags-api-consecutive"]
+    },
+    {
+      "paths": [
+        "music_app/services/loose_track_store.py",
+        "music_app/services/problematic_index.py",
+        "scripts/ci/load-fixture-profile.py",
+        "music_app/services/relation_projection_postgres.py",
+        "music_app/services/scoped_relation_projection.py",
+        "tests/e2e/helpers/postgresProjectionFixture.js"
+      ],
+      "targets": ["selected-artist", "cover-lookup", "artist-family", "search-all-artists", "search-browse"]
     }
   ]
 }

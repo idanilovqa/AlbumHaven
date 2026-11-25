@@ -100,9 +100,9 @@ def _measure_store(fixture, monkeypatch, interaction_id, prepare_once):
                 marks = connection.execute("select count(*) as marks from library.non_album_track_marks").fetchone()
             assert state["status"] == "ready" and marks["marks"] == 0, "the pass built the store and drained every mark"
             drain_batches = len(counted.drains)
-            # The state read, then (start-up only) the build's state write and its batch connection, then one
-            # connection per drain batch, the last finding nothing.
-            expected = 1 + (2 if setup is None else 0) + drain_batches
+            # The state read, then (start-up only) the build's owner session, its state write and its batch
+            # connection, then one connection per drain batch, the last finding nothing.
+            expected = 1 + (3 if setup is None else 0) + drain_batches
             assert counted.opened == expected, f"opened {counted.opened} connections, expected {expected}"
             build_loads = counted.loads[: len(counted.loads) - (drain_batches - 1)]
             build_batches = [after - before for before, after in zip(build_loads, build_loads[1:])]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from music_app.services import loose_track_store
 
 
@@ -95,3 +97,39 @@ def test_a_store_batch_refuses_to_load_candidates_without_its_callers_connection
     with pytest.raises(TypeError, match="connection"):
         loose_track_store._load_candidates(inventory, None, [1])
     assert loaded == [], "no candidates load without the caller's connection"
+
+
+def test_a_second_preparation_in_the_process_returns_at_once_without_any_database_call():
+    """The queued drain shares one prewarm worker with rules and duplicate identities: it never waits for a build."""
+    def connect():
+        raise AssertionError("a busy preparation opens no connection")
+
+    assert loose_track_store._PREPARE_LOCK.acquire(blocking=False)
+    try:
+        assert loose_track_store.prepare(object(), connect) == loose_track_store._BUSY_RECHECK_SECONDS
+    finally:
+        loose_track_store._PREPARE_LOCK.release()
+
+
+def test_a_build_another_process_holds_is_not_taken_for_an_interrupted_one(monkeypatch):
+    statements = []
+
+    class _Owner:
+        def execute(self, statement, *_args):
+            statements.append(statement)
+            return SimpleNamespace(fetchone=lambda: {"held": False})
+
+        def commit(self):
+            pass
+
+    class _Connect:
+        def __enter__(self):
+            return _Owner()
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(loose_track_store, "_build_rows", lambda *_args, **_kwargs: pytest.fail("built twice"))
+
+    assert loose_track_store.build(object(), _Connect) is None
+    assert statements == [loose_track_store._BUILD_LOCK_SQL]

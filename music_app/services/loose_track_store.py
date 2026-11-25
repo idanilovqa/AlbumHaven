@@ -29,6 +29,11 @@ FAILED_BUILD_RETRY_SECONDS = 300
 
 _LOGGER = logging.getLogger("music_app")
 _PREPARE_LOCK = threading.Lock()
+_BUSY_RECHECK_SECONDS = 1.0
+# Held for a whole build on a session of its own: the "building" state's owner across processes.
+_BUILD_LOCK_KEY = "hashtextextended('album-haven.loose-track-store.build', 0)"
+_BUILD_LOCK_SQL = f"select pg_try_advisory_lock({_BUILD_LOCK_KEY}) as held"
+_BUILD_UNLOCK_SQL = f"select pg_advisory_unlock({_BUILD_LOCK_KEY})"
 
 _LIBRARY_SQL = """(
   select libraries.id
@@ -202,8 +207,22 @@ def needs_build(state: Mapping[str, object] | None) -> bool:
     return _seconds_until_retry(state) == 0.0
 
 
-def build(inventory: Any, connect: Any, *, progress=None) -> int:
-    """Build every row once (start-up, builder change or owner rebuild); return the tracks written."""
+def build(inventory: Any, connect: Any, *, progress=None) -> int | None:
+    """Build every row once (start-up, builder change or owner rebuild); return the tracks written, or None
+    while another process holds the build (its "building" state is then not an interrupted build)."""
+    with connect() as owner:
+        held = bool(dict(owner.execute(_BUILD_LOCK_SQL).fetchone())["held"])
+        owner.commit()
+        if not held:
+            return None
+        try:
+            return _build_rows(inventory, connect, progress=progress)
+        finally:
+            owner.execute(_BUILD_UNLOCK_SQL)
+            owner.commit()
+
+
+def _build_rows(inventory: Any, connect: Any, *, progress=None) -> int:
     import time
 
     report = progress or (lambda stage, **values: _LOGGER.info("Loose Tracks store: %s %s", stage, values))
@@ -326,19 +345,24 @@ class LooseTrackStoreOwner:
 def prepare(inventory: Any, connect: Any) -> float | None:
     """The background owner: build when start-up preparation needs it, then drain every waiting mark. Returns
     how long a failed build still waits for its retry, or None once the store is ready and drained."""
-    # The start-up owner and a queued drain both prepare. One at a time: a second caller reading this
-    # process's own "building" state as an interrupted build would read every track a second time.
-    with _PREPARE_LOCK:
+    # The start-up owner and a queued drain both prepare. One at a time, and never waiting: the running
+    # preparation drains every mark, and the single prewarm worker's rules and duplicate-identity work must
+    # not queue behind a build. The owner checks again shortly; a queued drain just returns.
+    if not _PREPARE_LOCK.acquire(blocking=False):
+        return _BUSY_RECHECK_SECONDS
+    try:
         with connect() as connection:
             state = load_state(connection)
         wait = _seconds_until_retry(state)
         if wait:
             return wait  # a failed build whose retry time has not come
-        if needs_build(state):
-            build(inventory, connect)
+        if needs_build(state) and build(inventory, connect) is None:
+            return _BUSY_RECHECK_SECONDS  # another process holds the build
         while True:
             with connect() as connection:
                 cleared = drain(inventory, connection)
                 connection.commit()
             if not cleared:
                 return None
+    finally:
+        _PREPARE_LOCK.release()

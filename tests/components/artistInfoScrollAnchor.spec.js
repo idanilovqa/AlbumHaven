@@ -12,8 +12,12 @@ const ARTISTS = ['Alpha Fixture Band', 'Beta Single Release', 'Gamma Rating Set'
   'Epsilon Signal Lead', 'Zeta Fixture'];
 const gridSource = fs.readFileSync(path.join(repositoryRoot, 'music_app/static/js/runtime/virtual-artist-grid.js'), 'utf8');
 
-async function mountGallery(page) {
-  await page.setViewportSize({ width: 1440, height: 900 });
+// The panel content mirrors renderGalleryArtistInfo: portrait, heading, summary text.
+const FULL_PANEL = `<header><div class="artist-info-overlay__image" aria-hidden="true">♪</div><div><span>Artist</span><h2></h2></div></header>
+  <div class="artist-info-overlay__body"><p>${'Fixture artist biography sentence that fills the summary. '.repeat(12)}</p></div>`;
+
+async function mountGallery(page, { width = 1440, height = 900, playerHeight = 60, fullPanel = false } = {}) {
+  await page.setViewportSize({ width, height });
   await page.setContent(`<!doctype html><html data-appearance-mode="dark"><body>
     <main class="shell-main-surface" id="shell-main-surface">
       <header class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery"></header>
@@ -21,8 +25,8 @@ async function mountGallery(page) {
     </main>
     <div class="global-player" data-shell-slot="bottom_player"></div>
     <aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Artist information" hidden>
-      <header><div><span>Artist</span><h2></h2></div></header>
-      <div class="artist-info-overlay__body">Artist information.</div>
+      ${fullPanel ? FULL_PANEL : `<header><div><span>Artist</span><h2></h2></div></header>
+      <div class="artist-info-overlay__body">Artist information.</div>`}
     </aside>
   </body></html>`);
   for (const stylesheet of ['runtime/base-layout.css', 'runtime/non-album-and-player.css', 'app-chrome.css', 'gallery-main.css', 'runtime/trigger-anchor.css',
@@ -33,11 +37,11 @@ async function mountGallery(page) {
     :root { --appearance-card: #171717; --appearance-panel-background: #171717;
       --appearance-line: #526173; --appearance-selected-accent: #55c7ff; }
     body { margin: 0; background: #090909; }
-    #shell-main-surface { position: fixed; inset: 0 0 60px 0; display: flex; flex-direction: column; }
+    #shell-main-surface { position: fixed; inset: 0 0 ${playerHeight}px 0; display: flex; flex-direction: column; }
     .gallery-bar { flex: 0 0 auto; }
     #albums-scroll { flex: 1 1 auto; overflow: auto; overflow-anchor: none; padding-bottom: var(--artist-info-reveal-space, 0px); }
-    .global-player { position: fixed; left: 0; right: 0; bottom: 0; height: 60px; background: #102430; z-index: 200; }
-    [data-artist-info-overlay] { width: 420px; height: 220px; }
+    .global-player { position: fixed; left: 0; right: 0; bottom: 0; height: ${playerHeight}px; background: #102430; z-index: 200; }
+    ${fullPanel ? '' : '[data-artist-info-overlay] { width: 420px; height: 220px; }'}
   ` });
   await page.evaluate(() => {
     window.escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
@@ -127,8 +131,9 @@ async function openFromDivider(page, artist) {
   await expect.poll(async () => (await readPanel(page)).open).toBe(true);
 }
 
-test.beforeEach(async ({ page }) => {
-  await mountGallery(page);
+test.beforeEach(async ({ page }, testInfo) => {
+  await mountGallery(page, testInfo.title.includes('1200x500')
+    ? { width: 1200, height: 500, playerHeight: 76, fullPanel: true } : {});
   await page.evaluate(() => document.addEventListener('click', event => handleGalleryMainClick(event)));
 });
 
@@ -211,3 +216,16 @@ test(`wheel steps of ${wheel} px never leave the panel on an artist the gallery 
   expect((await readPanel(page)).open).toBe(false);
 });
 }
+
+test('at 1200x500 the opened panel fits above the player once its reveal scroll settles', async ({ page }) => {
+  await scrollGallery(page, 40);
+  await openFromDivider(page, ARTISTS[1]);
+  // The reveal scroll's own scroll event and two more frames must leave the fit in place.
+  await page.evaluate(() => new Promise(resolve => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(resolve)), 100)));
+  const geometry = await page.evaluate(() => ({
+    panelBottom: document.querySelector('[data-artist-info-overlay]').getBoundingClientRect().bottom,
+    playerTop: document.querySelector('[data-shell-slot="bottom_player"]').getBoundingClientRect().top,
+  }));
+  expect(geometry.panelBottom, 'panel bottom stays above the player').toBeLessThanOrEqual(geometry.playerTop + 1);
+  expect(await readPanel(page)).toMatchObject({ open: true, anchorArtist: ARTISTS[1], joined: true });
+});

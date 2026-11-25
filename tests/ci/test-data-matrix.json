@@ -13778,5 +13778,20 @@
       "wheel steps of 900 px never leave the panel on an artist the gallery has moved past"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "at 1200x500 the opened panel fits above the player once its reveal scroll settles",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "at 1200x500 the opened panel fits above the player once its reveal scroll settles"
+    ],
+    "ownerApproval": "approved"
   }
 ]

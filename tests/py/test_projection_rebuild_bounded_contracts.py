@@ -18,7 +18,7 @@ import pytest
 
 from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
 from tests.py.bounded_interactions import OperationCounts, assert_plateau, measure_scale_pair
-from tests.py.test_relation_projection_postgres import _config, _morse_rows, _ProjectionDatabase
+from tests.py.test_relation_projection_postgres import _config
 
 
 def _registered(interaction_id: str) -> dict[str, object]:
@@ -70,46 +70,42 @@ def _count_relation_builds(monkeypatch) -> list[int]:
 
 
 def test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at_production_trigger_count(monkeypatch):
+    """Saves' queued relation work coalesces into one running and one trailing journal replay at any trigger
+    count, and never builds the whole library's relations (FTC-TAGS-026P): no builder call, no publication."""
     from music_app.services import relation_projection_postgres as projection
+    from music_app.services import scoped_relation_projection as scoped
     from music_app.services import state as state_service
 
-    monkeypatch.setattr(projection, "Jsonb", None)
     executor = _CapturingExecutor()
     monkeypatch.setattr(state_service, "_HYDRATE_EXECUTOR", executor)
     builds = _count_relation_builds(monkeypatch)
-    ensure = projection.ensure_relation_projection_ready
+    monkeypatch.setattr(state_service, "ensure_relation_projection_ready",
+                        lambda *_args, **_kwargs: pytest.fail("a save ran the whole-library relation readiness"))
 
     def run(trigger_count: int) -> OperationCounts:
-        database = _ProjectionDatabase(source_rows=_morse_rows())
-        monkeypatch.setattr(projection, "_connect", database.connect)
         builds[0] = 0
         passes: list[int] = []
 
-        def ensure_with_triggers_arriving(config, **kwargs):
-            # More structural edits arrive while the rebuild runs.
+        def replay_with_triggers_arriving(config, **_kwargs):
+            # More structural edits arrive while the replay runs.
             if not passes:
                 for _ in range(trigger_count):
                     state_service.schedule_relation_projection_rebuild(_config(), reason="structural_tag_edit")
             passes.append(builds[0])
-            return ensure(config, **kwargs)
+            return {"initialized": True, "updated": False}
 
-        monkeypatch.setattr(state_service, "ensure_relation_projection_ready", ensure_with_triggers_arriving)
-        publications_after_wave = []
+        monkeypatch.setattr(scoped, "ensure_pending_relation_projection_ready", replay_with_triggers_arriving)
         for _wave in range(3):
             passes.clear()
             for _ in range(trigger_count):
                 state_service.schedule_relation_projection_rebuild(_config(), reason="structural_tag_edit")
             assert len(executor.submitted) == 1
             executor.run_all()
-            # One running pass, then one trailing pass for the triggers that
-            # arrived meanwhile; the trailing pass finds the sources unchanged.
+            # One running replay, then one trailing replay for the triggers that arrived meanwhile.
             assert len(passes) == 2
             assert state_service._RELATION_REBUILD_PENDING is False
-            publications_after_wave.append(database.events.count("scan_cache_save"))
-        # The first pass builds the missing projection once; later passes reuse it.
-        assert builds[0] == 1 and publications_after_wave[0] == 1
-        assert_plateau(publications_after_wave, warmup_samples=1, label="relation publications")
-        return OperationCounts(builder_calls=builds[0], generation_changes=publications_after_wave[-1])
+        assert builds[0] == 0, "the queued work never builds the whole library's relations"
+        return OperationCounts(builder_calls=builds[0], generation_changes=0)
 
     measure_scale_pair(
         run=run, **_registered("py:services/state.py#_run_scheduled_relation_projection_rebuild"),

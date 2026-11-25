@@ -15810,7 +15810,7 @@
     },
     {
       "id": "py:services/state.py#_run_scheduled_relation_projection_rebuild",
-      "action": "Rebuild the relation projection in the background, one running and one trailing pass",
+      "action": "Replay saves' journaled albums in the background, one running and one trailing pass, never a whole-library build",
       "entrypoints": [
         "py:music_app/services/state.py#_run_scheduled_relation_projection_rebuild:background:while"
       ],
@@ -15838,7 +15838,7 @@
       },
       "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at_production_trigger_count",
       "testIdentity": "test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at_production_trigger_count",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "rollback": "Falling back to the whole-library readiness from this queue fails the contract (its stub fails the test); a builder call makes builder_calls grow."
     },
     {
       "id": "py:services/state.py#_schedule_watcher_cover_refresh_retry",

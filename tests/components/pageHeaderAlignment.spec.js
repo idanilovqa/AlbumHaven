@@ -62,3 +62,33 @@ for (const viewport of [{ name: 'desktop', width: 1280, height: 700 }, { name: '
     }
   });
 }
+
+test('desktop page headers keep Back before the title; a narrow-only Back takes no room', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 700 });
+  await page.setContent(`<!doctype html><html><body>${markup.replace('</main>', `
+    <header class="gallery-bar page-gallery-bar" data-gallery-bar data-gallery-bar-instance="page" data-gallery-bar-layout="mobile-primary">
+      <a data-settings-parent class="action-button action-button--bare page-gallery-bar__back page-gallery-bar__back--narrow-only" href="/" aria-label="Back to Settings">${backIcon}</a>
+      <div class="gallery-bar__context"><h1 class="gallery-bar__title">Appearance</h1><p class="gallery-bar__summary">Your account</p></div>
+      <div class="gallery-bar__actions"></div>
+    </header>
+  </main>`)}</body></html>`);
+  for (const file of ['base.css', 'app-chrome.css', 'button-component.css', 'gallery-main.css', 'mobile-layout.css']) {
+    await page.addStyleTag({ path: path.join(root, 'music_app/static/css', file) });
+  }
+  const headers = page.locator('header.page-gallery-bar');
+  const withBack = headers.nth(0);
+  const back = withBack.getByRole('link', { name: 'Back to library' });
+  await expect(back).toBeVisible();
+  const backBox = await back.boundingBox();
+  const titleBox = await withBack.locator('.gallery-bar__title').boundingBox();
+  const summaryBox = await withBack.locator('.gallery-bar__summary').boundingBox();
+  expect(backBox.x + backBox.width, 'Back ends before the title starts').toBeLessThanOrEqual(titleBox.x);
+  expect(backBox.x + backBox.width, 'Back ends before the subtitle starts').toBeLessThanOrEqual(summaryBox.x);
+  expect(backBox.y, 'Back overlaps the title line').toBeLessThan(titleBox.y + titleBox.height);
+  // b0968c0e2: a Back that desktop hides no longer reserves a column before the title.
+  const narrowOnly = headers.nth(2);
+  await expect(narrowOnly.getByRole('link', { name: 'Back to Settings' })).toBeHidden();
+  const plainTitleX = (await headers.nth(1).locator('.gallery-bar__title').boundingBox()).x;
+  expect((await narrowOnly.locator('.gallery-bar__title').boundingBox()).x).toBe(plainTitleX);
+  expect(titleBox.x, 'a visible Back moves the title right').toBeGreaterThan(plainTitleX);
+});

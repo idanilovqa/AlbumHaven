@@ -1461,8 +1461,7 @@ function createAttemptRecord(
   return {
     attemptNumber,
     status,
-    measurementExpected: target.measurementExpected !== false && Boolean(target.reportId)
-      && !isQuarantinedPattern(target, target.metricCasePattern || target.casePattern),
+    measurementExpected: expectsMeasurement(target),
     expectedCasePatterns: listTargetCasePatterns(target),
     runId: latestMetricsRecord?.runMetrics?.runId || null,
     metricCaseId: latestMetricsRecord?.runMetrics?.caseId || null,
@@ -1524,6 +1523,13 @@ function isQuarantinedPattern(target, pattern) {
   const selectedCases = listTargetRegisteredCases(target)
     .filter((entry) => normalizeTestHierarchy(entry.case).includes(normalizedPattern));
   return Boolean(normalizedPattern) && selectedCases.length > 0 && selectedCases.every((entry) => entry.quarantine);
+}
+
+// A target whose metric case is quarantined records no measurement, so the performance reporter never
+// prints its flush marker; such an attempt proves completion with Playwright's JSON report instead.
+function expectsMeasurement(target) {
+  return target.measurementExpected !== false && Boolean(target.reportId)
+    && !isQuarantinedPattern(target, target.metricCasePattern || target.casePattern);
 }
 
 function isFullyQuarantinedTarget(target) {
@@ -2091,7 +2097,7 @@ function runPerformanceAttempt(
     : runnerArgs;
   const attemptEnv = buildAttemptEnv(baseEnv, verificationGroup, attemptNumber);
   delete attemptEnv.PLAYWRIGHT_JSON_OUTPUT_FILE;
-  if (target.measurementExpected === false && artifactDir) {
+  if (!expectsMeasurement(target) && artifactDir) {
     attemptEnv.PLAYWRIGHT_JSON_OUTPUT_FILE = path.join(artifactDir, 'report.json');
   }
   if (artifactRoot) {
@@ -2129,7 +2135,7 @@ function runPerformanceAttempt(
   const combinedOutput = `${result.stdout || ''}${result.stderr || ''}`;
   assertNoLiveCoverProviderDomains(combinedOutput, verificationGroup?.label);
   const structuredLastRun = readPlaywrightLastRun(lastRunPath);
-  const structuredJsonReport = target.measurementExpected === false && artifactDir
+  const structuredJsonReport = !expectsMeasurement(target) && artifactDir
     ? readJson(path.join(artifactDir, 'report.json'), null)
     : null;
   return {

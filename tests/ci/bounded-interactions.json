@@ -15511,6 +15511,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/scan_cache_persistence.py#_publish_album_credits",
+      "action": "Run publisher _publish_album_credits",
+      "entrypoints": [
+        "py:music_app/services/scan_cache_persistence.py#_publish_album_credits:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scan_cache_persistence.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:services/scan_cache_persistence.py#_published_path_key",
       "action": "Run publisher _published_path_key",
       "entrypoints": [

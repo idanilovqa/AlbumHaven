@@ -283,18 +283,23 @@ test('FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just
     });
 
     // The finished save re-reads the search; that refresh dropped the card's album from the index.
-    const searchRefreshed = page.waitForResponse((response) => {
+    const searchRefreshesAt = [];
+    page.on('response', (response) => {
       const url = new URL(response.url());
-      return url.pathname === '/view-data' && url.searchParams.get('q') === ARTIST;
-    }, { timeout: 90000 });
+      if (url.pathname === '/view-data' && url.searchParams.get('q') === ARTIST) searchRefreshesAt.push(Date.now());
+    });
+    let completionStartedAt = 0;
     await stepLogger.step('Edit Tags on Ремиксы2 still opens after the save completes', async () => {
+      completionStartedAt = Date.now();
       await accepted.waitForCompletion({ timeout: 90000 });
       await openEditorFromContextMenu(SPLIT_ALBUM, splitFilenames);
       await tagEditorActions.close();
     });
 
     await stepLogger.step('Edit Tags on Ремиксы2 still opens after the finished save refreshed the search', async () => {
-      await searchRefreshed;
+      await expect.poll(() => searchRefreshesAt.some((at) => at >= completionStartedAt), {
+        message: 'the finished save refreshes the search', timeout: 90000,
+      }).toBe(true);
       await expect(albumCard.cardByAlbumName(SPLIT_ALBUM)).toBeVisible();
       await openEditorFromContextMenu(SPLIT_ALBUM, splitFilenames);
       await tagEditorActions.close();

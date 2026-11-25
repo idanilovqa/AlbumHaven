@@ -361,6 +361,46 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         expect(restoredItems.length, 'Expected Problematic Files rows to remain visible after the problem-type review.').toBeGreaterThan(0);
       });
 
+      // Owner (2026-11-24): problem filters narrow the list only. An open entry shows every problem it has,
+      // album labels and per-track rows, whatever the filters, and changing a filter never changes it.
+      await stepLogger.step('Keep every problem of an open entry visible while problem filters change', async () => {
+        const readDetail = async () => {
+          const summary = await utilityProblematicFilesActions.readSelectedDetailSummary();
+          const trackRows = await utilityProblematicFilesActions.readDetectedTrackRows();
+          return {
+            title: summary.title,
+            labels: [...summary.problemReasons].sort(),
+            trackRows: trackRows.map(row => `${row.path}::${[...row.reasons].sort().join('|')}`).sort(),
+            filteredMessages: await utilityProblematicFilesActions.utilityProblematicFilesTab.noTrackProblems
+              .filter({ hasText: 'match the selected filters' }).count(),
+          };
+        };
+        const items = await utilityProblematicFilesActions.readVisibleListItems();
+        let target = null;
+        for (let index = 0; index < Math.min(items.length, 25) && !target; index += 1) {
+          await utilityProblematicFilesActions.selectListItemByIndex(index);
+          const detail = await readDetail();
+          const filters = [...new Set(detail.labels)].filter(reason => problemTypes.includes(reason));
+          if (filters.length >= 2) target = { key: items[index].key, detail, filters };
+        }
+        expect(target, 'Expected an entry with at least two filterable problem types.').not.toBeNull();
+        const selectTarget = async () => {
+          const index = (await utilityProblematicFilesActions.readVisibleListItems())
+            .findIndex(item => item.key === target.key);
+          expect(index, `Expected ${target.detail.title} to stay listed under its own problem type.`).toBeGreaterThanOrEqual(0);
+          await utilityProblematicFilesActions.selectListItemByIndex(index);
+        };
+        const [first, second] = target.filters;
+        await utilityProblematicFilesActions.applySingleProblemFilter(first);
+        await selectTarget();
+        expect(await readDetail(), `"${first}" filters the list, not ${target.detail.title}'s detail.`).toEqual(target.detail);
+        await utilityProblematicFilesActions.clearProblemFilter(first);
+        await utilityProblematicFilesActions.applySingleProblemFilter(second);
+        expect(await readDetail(), `Switching the filter to "${second}" leaves the open detail unchanged.`).toEqual(target.detail);
+        await utilityProblematicFilesActions.clearProblemFilter(second);
+        expect(await readDetail(), 'Clearing the filter leaves the open detail unchanged.').toEqual(target.detail);
+      });
+
       const finalMemory = await stepLogger.step('Sample idle memory after the full Problematic Files review cycle', async () => (
         utilityProblematicFilesLocalReport.recordPeakMemoryCheckpoint({
           key: 'problematic-files-final-memory',

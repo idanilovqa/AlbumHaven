@@ -1198,7 +1198,28 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
         if (!Array.from(document.querySelectorAll(selectors.itemSelector)).includes(active)) observer.disconnect();
       });
       observer.observe(list, { childList: true, subtree: true, characterData: true, attributes: true });
-      return Object.assign(snapshot, { observer });
+      // The overlay can end within milliseconds of a fast acknowledgement: the continuity it shows is read
+      // in the same task that first sees it.
+      const readWhileOverlaid = () => {
+        const overlay = document.querySelector(selectors.overlaySelector);
+        if (!overlay || snapshot.atOverlay) return;
+        const items = Array.from(document.querySelectorAll(selectors.itemSelector));
+        snapshot.atOverlay = {
+          listMutations: snapshot.listMutations,
+          sameNodes: items.length === snapshot.nodes.length && items.every((item, index) => item === snapshot.nodes[index]),
+          sameOrder: items.every((item, index) => item.getAttribute('data-problematic-album-key') === snapshot.order[index]),
+          sameText: items.every((item, index) => String(item.textContent || '').trim() === snapshot.text[index]),
+          scrollTop: Number(list.scrollTop || 0),
+          expectedScrollTop: Number(snapshot.scrollTop || 0),
+          overlayText: String(overlay.textContent || '').trim(),
+          spinnerCount: overlay.querySelectorAll(selectors.spinnerSelector).length,
+          detailBusy: document.querySelector(selectors.detailSelector)?.getAttribute('aria-busy'),
+        };
+        overlayObserver.disconnect();
+      };
+      const overlayObserver = new MutationObserver(readWhileOverlaid);
+      overlayObserver.observe(document.querySelector(selectors.detailSelector), { childList: true, subtree: true, attributes: true });
+      return Object.assign(snapshot, { observer, overlayObserver });
     }, {
       listSelector: this.utilityProblematicFilesTab.sidebarListSelector,
       activeSelector: this.utilityProblematicFilesTab.activeListItemSelector,
@@ -1206,6 +1227,9 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       titleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
       subtitleSelector: this.utilityProblematicFilesTab.listItemSubtitleSelector,
       yearSelector: this.utilityProblematicFilesTab.listItemYearSelector,
+      overlaySelector: this.utilityProblematicFilesTab.mutationOverlaySelector,
+      spinnerSelector: this.utilityProblematicFilesTab.mutationSpinnerSelector,
+      detailSelector: this.utilityProblematicFilesTab.detailScrollerSelector,
     });
     // parity-check: allow-read-only-measurement-evaluate -- read the retained MutationObserver snapshot without changing application state
     return this.mutationObservation.evaluate((snapshot) => ({
@@ -1218,36 +1242,11 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
   }
 
   async waitForMutationOverlayAndReadContinuity() {
-    await this.utilityProblematicFilesTab.mutationOverlay.waitFor({ state: 'visible', timeout: 60000 });
     if (!this.mutationObservation) throw new Error('Mutation continuity observation was not prepared.');
-    // parity-check: allow-read-only-measurement-evaluate -- compare the retained DOM snapshot while the detail overlay is visible
-    return this.mutationObservation.evaluate((snapshot, selectors) => {
-      const list = document.querySelector(selectors.listSelector);
-      const items = Array.from(document.querySelectorAll(selectors.itemSelector));
-      const overlay = document.querySelector(selectors.overlaySelector);
-      return {
-        listMutations: Number(snapshot?.listMutations || 0),
-        sameNodes: Boolean(snapshot) && items.length === snapshot.nodes.length
-          && items.every((item, index) => item === snapshot.nodes[index]),
-        sameOrder: Boolean(snapshot) && items.every((item, index) => (
-          item.getAttribute('data-problematic-album-key') === snapshot.order[index]
-        )),
-        sameText: Boolean(snapshot) && items.every((item, index) => (
-          String(item.textContent || '').trim() === snapshot.text[index]
-        )),
-        scrollTop: Number(list?.scrollTop || 0),
-        expectedScrollTop: Number(snapshot?.scrollTop || 0),
-        overlayText: String(overlay?.textContent || '').trim(),
-        spinnerCount: overlay?.querySelectorAll(selectors.spinnerSelector).length || 0,
-        detailBusy: document.querySelector(selectors.detailSelector)?.getAttribute('aria-busy'),
-      };
-    }, {
-      listSelector: this.utilityProblematicFilesTab.sidebarListSelector,
-      itemSelector: this.utilityProblematicFilesTab.listItemSelector,
-      overlaySelector: this.utilityProblematicFilesTab.mutationOverlaySelector,
-      spinnerSelector: this.utilityProblematicFilesTab.mutationSpinnerSelector,
-      detailSelector: this.utilityProblematicFilesTab.detailScrollerSelector,
-    });
+    // parity-check: allow-read-only-measurement-evaluate -- wait for the snapshot the page took when the overlay first showed
+    await expect.poll(() => this.mutationObservation.evaluate(snapshot => Boolean(snapshot.atOverlay)), { timeout: 60000 }).toBe(true);
+    // parity-check: allow-read-only-measurement-evaluate -- read that retained snapshot without changing application state
+    return this.mutationObservation.evaluate(snapshot => ({ ...snapshot.atOverlay }));
   }
 
   async waitForMutationRemovalAndPreviousSelection(expected, options = {}) {

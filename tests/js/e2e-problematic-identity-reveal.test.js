@@ -217,7 +217,8 @@ test('continuity observer exposes mutations on the same retained snapshot', asyn
       const snapshot = require('node:vm').runInNewContext(`(${callback.toString()})(selectors)`, {
         selectors, HTMLElement: Element,
         document: { querySelector: selector => selector === '#list' ? list : active, querySelectorAll: () => items },
-        MutationObserver: class { constructor(fn) { capture = fn; } observe() {} disconnect() {} },
+        // The list observer is the first; the second waits for the overlay.
+        MutationObserver: class { constructor(fn) { capture ??= fn; } observe() {} disconnect() {} },
       });
       return { evaluate: async fn => fn(snapshot) };
     } },

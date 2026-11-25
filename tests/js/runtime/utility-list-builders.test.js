@@ -8075,7 +8075,7 @@ test('Problematic Files detail renders the approved three-column compact table c
   assert.equal(context.lastCompactTableConfig.columnsConfig.length, 3);
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.columnsConfig, (column) => column.label),
-    ['Track / file', 'Problems', 'Suggested edits'],
+    ['Track / file', 'Problems', 'Current Value -> Suggested Value'],
   );
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.rows, (row) => row.key),
@@ -9190,4 +9190,31 @@ test('the Problematic Files detail header names the album and duplicate folders 
   assert.deepEqual(folderRows(context.buildProblematicAlbumDetail(memberAlbum)), []);
   assert.deepEqual(folderRows(context.buildProblematicAlbumDetail({ ...album, duplicate_folders: undefined })),
     [['album', 'Path', ['D:\Music\Real Album']]]);
+});
+
+// Owner (2026-11-25): the third column is "Current Value -> Suggested Value": a suggested edit shows
+// current -> suggested as before; a row without one shows its current values, so a mixed-folder row
+// names the fields that differ across its folder.
+test('a problem row without a suggested edit shows its current values', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
+  context.state.utility.searchQuery = '';
+  const mixed = 'C:\Music\Mixed\01.flac';
+  const year = 'C:\Music\Mixed\02.flac';
+  const album = {
+    key: 'mixed', tracks: [{ path: mixed }, { path: year }], problem_reasons: ['Mixed album metadata in one folder', 'Missing year'],
+    album_problem_rows: [],
+    track_problem_rows: [
+      { path: mixed, reasons: ['Mixed album metadata in one folder'], ignorable_reasons: [],
+        current_values: [{ field: 'album_artist', label: 'Album artist', value: 'Cyan' }, { field: 'album', label: 'Album', value: 'Crown' }] },
+      { path: year, reasons: ['Missing year'], ignorable_reasons: [], current_values: [{ field: 'year', label: 'Year', value: null }] },
+    ],
+    suggested_edits: [{ id: 'y', path: year, field: 'year', type: 'year', reason: 'Missing year', original: null, corrected: 2008 }],
+    allowed_actions: {},
+  };
+  const html = context.buildDetectedProblemsHtml(album);
+  assert.ok(html.includes('Current Value -&gt; Suggested Value') || html.includes('Current Value -> Suggested Value'));
+  const current = [...html.matchAll(/data-problem-current-values>([^<]*)</g)].map(match => match[1]);
+  assert.deepEqual(current, ['Album artist: Cyan, Album: Crown'], 'only the row without a suggestion shows current values');
+  assert.ok(html.includes('data-problem-suggestion-id="y"'), 'the suggested edit still shows current -> suggested');
 });

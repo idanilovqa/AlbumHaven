@@ -49,3 +49,29 @@ def test_duplicate_files_lists_the_tracks_held_twice():
 def test_an_album_without_those_problems_lists_no_such_tracks():
     album = _album()
     assert not _problematic_track_problem_rows(album)
+
+
+def _current(album, path):
+    row = next(row for row in _problematic_track_problem_rows(album) if row["path"] == path)
+    return [(value["label"], value["value"]) for value in row["current_values"]]
+
+
+def test_a_problem_row_carries_the_current_values_of_the_fields_its_problems_concern():
+    album = _album(entries={"A/02.flac": {"year": None}})
+    assert _current(album, "A/02.flac") == [("Year", None)]
+
+
+def test_a_mixed_folder_row_carries_the_values_that_differ_across_its_folder():
+    """Owner (2026-11-25): a Mixed album metadata row says what is mixed: the fields that differ."""
+    album = _album(entries={
+        "A/01.flac": {"_mixed_album_folder": True},
+        "A/02.flac": {"_mixed_album_folder": True, "album": "Crown", "year": 1993},
+    })
+    assert _current(album, "A/01.flac") == [("Album", "Tales"), ("Year", 2013)]
+    assert _current(album, "A/02.flac") == [("Album", "Crown"), ("Year", 1993)]
+
+
+def test_a_mixed_row_uses_the_fields_its_folder_read_found():
+    album = _album(entries={"A/01.flac": {"_mixed_album_folder": True}},
+                   _mixed_folder_fields={"A/01.flac": ["album_artist", "album"]})
+    assert _current(album, "A/01.flac") == [("Album artist", "Juha"), ("Album", "Tales")]

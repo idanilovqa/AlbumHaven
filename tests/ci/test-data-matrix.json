@@ -10175,6 +10175,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/problemExclusionRuleOrder.spec.js",
+    "case": "a queued and then saved Ignore shows each rule at its reload position",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a queued and then saved Ignore shows each rule at its reload position"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/triggerAnchorSurface.spec.js",
     "case": "nested calendar dates remain clickable beyond the parent panel clipping boundary",
     "profile": null,

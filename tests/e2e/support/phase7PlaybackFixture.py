@@ -72,8 +72,6 @@ def persist_settings_playback_inventory(
     config = {
         "ALBUM_HAVEN_APP_DATABASE_URL": setup_database_url,
         "MUSIC_DIR": library_root.resolve(),
-        "CACHE_PATH": library_root.parent / "app-data" / "inert-library-cache.json",
-        "LIBRARY_ROOTS_PATH": library_root.parent / "app-data" / "inert-library-roots.json",
         "PERSISTENCE_BACKENDS": {
             "library_roots": PERSISTENCE_BACKEND_POSTGRES,
             "scan_cache": PERSISTENCE_BACKEND_POSTGRES,
@@ -88,7 +86,7 @@ def persist_settings_playback_inventory(
     })
     if not file_cache or not include_missing_inventory:
         PostgresScanCacheAdapter(config).save_snapshot(
-            config["CACHE_PATH"], file_cache, library_root_cache_identity(config), time.time(),
+            file_cache, library_root_cache_identity(config), time.time(),
             rebuild_relation_projection=rebuild_relations,
         )
         return
@@ -104,13 +102,13 @@ def persist_settings_playback_inventory(
     adapter = PostgresScanCacheAdapter(config)
     root_identity = library_root_cache_identity(config)
     adapter.save_snapshot(
-        config["CACHE_PATH"], {**file_cache, str(missing_path): missing}, root_identity, time.time(),
+        {**file_cache, str(missing_path): missing}, root_identity, time.time(),
         rebuild_relation_projection=rebuild_relations,
     )
     missing_path.unlink()
     missing_path.parent.rmdir()
     adapter.save_snapshot(
-        config["CACHE_PATH"], file_cache, root_identity, time.time(),
+        file_cache, root_identity, time.time(),
         observed_library_root_ids={"isolated-e2e-root"},
         rebuild_relation_projection=rebuild_relations,
     )

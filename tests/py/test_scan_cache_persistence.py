@@ -2071,7 +2071,6 @@ def test_cover_selection_success_cannot_be_overwritten_by_an_already_started_sca
     def publish_stale_scan():
         try:
             adapter.save_snapshot(
-                Path("unused.json"),
                 {},
                 "generated-root",
                 10.0,
@@ -2251,7 +2250,6 @@ def test_scan_rows_built_before_cover_selection_are_rejected_after_selection_com
     def publish_prebuilt_stale_scan():
         try:
             adapter.save_snapshot(
-                Path("unused.json"),
                 {},
                 "generated-root",
                 11.0,
@@ -2576,7 +2574,7 @@ def test_scan_publication_returns_actual_canonical_cover_for_repaired_files(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
         connect=lambda _url: connection, build_albums=rebuilt_albums,
     )
-    committed = adapter.save_snapshot(Path("unused.json"), {path: entry}, "root", 5.0)
+    committed = adapter.save_snapshot({path: entry}, "root", 5.0)
     assert committed["repaired_cover_entries"] == {path: canonical}
     assert connection.commit_calls == 1
     queries = [sql for sql, _params in connection.executed]
@@ -2593,7 +2591,7 @@ def test_scan_publication_returns_actual_canonical_cover_for_repaired_files(
         raise RuntimeError("snapshot cancelled before commit")
 
     with pytest.raises(RuntimeError, match="snapshot cancelled"):
-        adapter.save_snapshot(Path("unused.json"), {path: entry}, "root", 5.0,
+        adapter.save_snapshot({path: entry}, "root", 5.0,
                               publication_commit_guard=reject_commit)
     assert connection.commit_calls == 1
     assert connection.exit_exc_type is RuntimeError
@@ -2691,7 +2689,7 @@ def test_postgres_scan_cache_adapter_batches_large_track_publication_setwise(mon
         build_albums=lambda _file_cache, _selected_artists: [],
     )
 
-    adapter.save_snapshot(Path("unused.json"), {}, "root-identity", 5.0)
+    adapter.save_snapshot({}, "root-identity", 5.0)
 
     pipelined_sql_markers = (
         "insert into library.local_artists",
@@ -2838,7 +2836,6 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     }
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         file_cache,
         "root-identity",
         1710000010.0,
@@ -3014,7 +3011,6 @@ def test_explicit_scan_publishes_family_links_before_compilation_aware_ready_met
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {},
         "root-identity",
         10.0,
@@ -3403,7 +3399,6 @@ def test_unrebuilt_projection_with_changed_fingerprint_stays_stale_and_preserves
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {},
         "root-identity",
         10.0,
@@ -3484,7 +3479,6 @@ def test_equal_caller_views_do_not_replace_or_certify_unhealthy_existing_project
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {},
         "root-identity",
         10.0,
@@ -3532,7 +3526,6 @@ def test_postgres_scan_cache_adapter_preserves_existing_relation_snapshot_when_o
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {
             "C:/Music/Incoming/problem-file.mp3": {
                 "path": "C:/Music/Incoming/problem-file.mp3",
@@ -3613,7 +3606,6 @@ def test_postgres_snapshot_without_explicit_rebuild_cannot_certify_caller_legacy
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {},
         "root-identity",
         10.0,
@@ -3659,7 +3651,6 @@ def test_explicit_postgres_rebuild_certifies_only_canonical_source_projection(mo
     )
 
     committed = adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {},
         "root-identity",
         10.0,
@@ -3711,7 +3702,6 @@ def test_unrelated_write_preserves_healthy_current_projection_without_invoking_b
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {},
         "root-identity",
         10.0,
@@ -3754,7 +3744,7 @@ def test_changed_source_fingerprint_marks_preserved_projection_stale_without_rew
         build_albums=lambda *_args: [],
     )
 
-    adapter.save_snapshot(Path("unused-library-cache.json"), {}, "root-identity", 10.0)
+    adapter.save_snapshot({}, "root-identity", 10.0)
 
     metadata = next(
         params["scan_cache"]["relation_projection"]
@@ -3803,7 +3793,6 @@ def test_postgres_scan_cache_adapter_splits_featured_track_artists_into_featured
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {
             "C:/Music/Artist One/Album One/01 Song One.flac": {
                 "path": "C:/Music/Artist One/Album One/01 Song One.flac",
@@ -3911,7 +3900,6 @@ def test_postgres_scan_cache_adapter_loads_snapshot_without_file_cache_json(monk
     )
 
     file_cache, last_scan, relation_views, relations_last_built, error = adapter.load_snapshot(
-        Path("must-not-be-read.json"),
         "root-identity",
     )
 
@@ -3989,7 +3977,7 @@ def test_postgres_scan_cache_hydration_overlays_authoritative_album_compilation_
     )
 
     file_cache, _last_scan, _relation_views, _last_built, error = (
-        adapter.load_snapshot(Path("must-not-be-read.json"), "root-identity")
+        adapter.load_snapshot("root-identity")
     )
 
     assert error is None
@@ -4102,7 +4090,6 @@ def test_postgres_scan_cache_metadata_schema_version_survives_inventory_hydratio
     hydrated = hydrate_library_state_from_disk(
         library_state,
         {
-            "CACHE_PATH": Path("must-not-be-read.json"),
             "IMAGE_EXTENSIONS": {".jpg"},
         },
         ensure_relations=False,
@@ -4150,7 +4137,6 @@ def test_postgres_scan_cache_load_uses_authoritative_private_path():
     )
 
     file_cache, *_metadata = adapter.load_snapshot_strict(
-        Path("must-not-be-read.json"),
         "root-identity",
     )
 
@@ -4172,7 +4158,7 @@ def test_postgres_scan_cache_adapter_ignores_mismatched_root_identity(monkeypatc
         connect=lambda _database_url: connection,
     )
 
-    assert adapter.load_snapshot(Path("unused.json"), "root-identity") == ({}, 0.0, {}, 0.0, None)
+    assert adapter.load_snapshot("root-identity") == ({}, 0.0, {}, 0.0, None)
     assert len(connection.executed) == 2
 
 
@@ -4186,7 +4172,7 @@ def test_postgres_scan_cache_adapter_strict_load_propagates_original_database_er
     )
 
     with pytest.raises(RuntimeError) as raised:
-        adapter.load_snapshot_strict(Path("must-not-be-read.json"), "root-identity")
+        adapter.load_snapshot_strict("root-identity")
 
     assert raised.value is database_error
 
@@ -4200,7 +4186,7 @@ def test_postgres_scan_cache_adapter_default_load_preserves_compatibility_error_
         connect=lambda _database_url: (_ for _ in ()).throw(database_error),
     )
 
-    assert adapter.load_snapshot(Path("must-not-be-read.json"), "root-identity") == (
+    assert adapter.load_snapshot("root-identity") == (
         {},
         0.0,
         {},
@@ -4221,7 +4207,7 @@ def test_postgres_scan_cache_adapter_raises_when_bootstrap_context_is_missing(mo
     )
 
     with pytest.raises(RuntimeError, match="bootstrap local owner/library context"):
-        adapter.save_snapshot(Path("unused.json"), {}, "root-identity", 5.0)
+        adapter.save_snapshot({}, "root-identity", 5.0)
 
 
 def test_select_scan_cache_adapter_rejects_file_runtime_selection(monkeypatch):
@@ -4549,7 +4535,6 @@ def test_postgres_scan_publication_persists_album_compilation_state(monkeypatch)
     )
 
     adapter.save_snapshot(
-        Path("unused-library-cache.json"),
         {},
         "root-identity",
         1710000010.0,
@@ -4740,7 +4725,7 @@ def test_postgres_scan_cache_snapshot_seeds_missing_ratings_on_every_publication
         ],
     )
 
-    adapter.save_snapshot(Path("unused.json"), {}, "root-identity", 5.0)
+    adapter.save_snapshot({}, "root-identity", 5.0)
 
     assert seed_calls == [
         (
@@ -4824,7 +4809,6 @@ def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(
     )
 
     adapter.save_snapshot(
-        Path("unused.json"),
         {},
         "root-identity",
         5.0,
@@ -4865,7 +4849,6 @@ def test_postgres_scan_cache_rating_seed_failure_rolls_back_and_propagates(monke
 
     with pytest.raises(RuntimeError) as raised:
         adapter.save_snapshot(
-            Path("unused.json"),
             {},
             "root-identity",
             5.0,

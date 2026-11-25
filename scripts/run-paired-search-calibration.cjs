@@ -141,10 +141,8 @@ function runPairedSearchCalibration(options = {}, dependencies = {}) {
     ...(source === 'synthetic' ? {
       ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library',
       MUSIC_APP_DATA_DIR: '',
-      MUSIC_CACHE_PATH: '',
       MUSIC_COVER_CACHE_PATH: '',
       MUSIC_DIR: '',
-      MUSIC_LIBRARY_ROOTS_PATH: '',
       PLAYWRIGHT_REAL_APP: '',
       PLAYWRIGHT_REAL_APP_PORT: '5011',
       PLAYWRIGHT_REAL_APP_URL: '',

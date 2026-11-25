@@ -377,7 +377,7 @@ def test_background_hydration_contract_publishes_the_inventory_without_probing_f
     class SnapshotAdapter:
         backend = "postgres"
 
-        def load_snapshot_strict(self, _cache_path, _root_identity):
+        def load_snapshot_strict(self, _root_identity):
             return snapshot, 1.0, {}, 0.0, None
 
         load_snapshot = load_snapshot_strict
@@ -398,7 +398,6 @@ def test_background_hydration_contract_publishes_the_inventory_without_probing_f
     monkeypatch.setattr(state_module, "_prewarm_root_browse_payload_for_state", lambda *_args: None)
     config = {
         "MUSIC_DIR": music_dir,
-        "CACHE_PATH": music_dir.parent / "inert-cache.json",
         "IMAGE_EXTENSIONS": {".jpg", ".png"},
         "ALBUM_HAVEN_APP_DATABASE_URL": _DATABASE_URL,
         "PERSISTENCE_BACKENDS": {"library_roots": "postgres"},

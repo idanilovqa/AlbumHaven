@@ -83,8 +83,8 @@ class FakeScanCacheAdapter:
         self.error = error
         self.calls: list[tuple[str, object]] = []
 
-    def load_snapshot(self, cache_path, root_identity):
-        self.calls.append(("load", cache_path, root_identity))
+    def load_snapshot(self, root_identity):
+        self.calls.append(("load", root_identity))
         if self.root_identity is not None and self.root_identity != root_identity:
             return {}, 0.0, {}, 0.0, None
         return (
@@ -95,8 +95,8 @@ class FakeScanCacheAdapter:
             self.error,
         )
 
-    def save_snapshot(self, cache_path, file_cache, root_identity, last_scan, **kwargs):
-        self.calls.append(("save", cache_path, deepcopy(file_cache), root_identity, last_scan, kwargs))
+    def save_snapshot(self, file_cache, root_identity, last_scan, **kwargs):
+        self.calls.append(("save", deepcopy(file_cache), root_identity, last_scan, kwargs))
         self.file_cache = deepcopy(file_cache)
         self.last_scan = last_scan
         self.root_identity = root_identity
@@ -115,9 +115,7 @@ def runtime_config(tmp_path, monkeypatch):
     config.update({
         "DATA_DIR": paths["data_dir"],
         "MUSIC_DIR": paths["music_dir"],
-        "CACHE_PATH": paths["cache_path"],
         "COVER_CACHE_PATH": paths["cover_cache_path"],
-        "LIBRARY_ROOTS_PATH": paths["library_roots_path"],
         "TESTING": True,
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
         "PERSISTENCE_BACKENDS": {
@@ -859,12 +857,12 @@ def test_refresh_library_state_defers_atomic_save_to_relation_refresh(
     class FakeScanCacheAdapter:
         backend = "fake"
 
-        def load_snapshot(self, cache_path, root_identity):
-            adapter_calls.append(("load", cache_path, root_identity))
+        def load_snapshot(self, root_identity):
+            adapter_calls.append(("load", root_identity))
             return {}, 0.0, {}, 0.0, None
 
-        def save_snapshot(self, cache_path, file_cache, root_identity, last_scan, **kwargs):
-            adapter_calls.append(("save", cache_path, dict(file_cache), root_identity, last_scan, kwargs))
+        def save_snapshot(self, file_cache, root_identity, last_scan, **kwargs):
+            adapter_calls.append(("save", dict(file_cache), root_identity, last_scan, kwargs))
 
     library_state.update({
         "file_cache": {},

@@ -195,9 +195,7 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
                 continue
             if file_cache is None:
                 adapter = select_scan_cache_adapter(config)
-                file_cache, _last_scan, _relations, _relations_at, error = adapter.load_snapshot(
-                    config["CACHE_PATH"], root_identity,
-                )
+                file_cache, _last_scan, _relations, _relations_at, error = adapter.load_snapshot(root_identity)
                 if error:
                     raise RuntimeError(f"Could not load Postgres inventory for tag edit recovery: {error}")
             result = _reconcile_claimed_tag_edit_intent(runtime, repository, claimed, file_cache)

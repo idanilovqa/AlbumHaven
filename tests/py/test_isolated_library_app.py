@@ -880,11 +880,9 @@ def _preserve_isolated_environment(monkeypatch):
     environment_keys = {
         "MUSIC_DIR",
         "MUSIC_APP_DATA_DIR",
-        "MUSIC_CACHE_PATH",
         "MUSIC_COVER_CACHE_PATH",
         "MUSIC_BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS",
         "MUSIC_BULK_COVER_JOB_WORKERS",
-        "MUSIC_LIBRARY_ROOTS_PATH",
         "ALBUM_HAVEN_APP_DATABASE_URL",
         "ALBUM_HAVEN_PERSISTENCE_DEFAULT",
         "ALBUM_HAVEN_COVER_PROVIDER_GROUPS",
@@ -934,11 +932,9 @@ def test_isolated_environment_uses_inert_filesystem_paths_and_postgres_selectors
 
     assert library_root == tmp_path / "media"
     assert Path(isolatedLibraryApp.os.environ["MUSIC_APP_DATA_DIR"]) == tmp_path / "app-data"
-    assert Path(isolatedLibraryApp.os.environ["MUSIC_CACHE_PATH"]).name == "inert-library-cache.json"
     assert Path(isolatedLibraryApp.os.environ["MUSIC_COVER_CACHE_PATH"]).name == "inert-cover-cache.json"
     assert isolatedLibraryApp.os.environ["MUSIC_BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS"] == "0"
     assert isolatedLibraryApp.os.environ["MUSIC_BULK_COVER_JOB_WORKERS"] == "4"
-    assert Path(isolatedLibraryApp.os.environ["MUSIC_LIBRARY_ROOTS_PATH"]).name == "inert-library-roots.json"
     assert isolatedLibraryApp.os.environ["ALBUM_HAVEN_APP_DATABASE_URL"] == runtime_url
     assert isolatedLibraryApp.os.environ["ALBUM_HAVEN_COVER_PROVIDER_GROUPS"] == (
         "music_services,manual_urls,discogs,cover_art_archive"
@@ -3154,7 +3150,7 @@ def test_isolated_fixture_postgres_inventory_is_current_and_needs_no_metadata_re
     class PersistedFixtureAdapter:
         backend = PERSISTENCE_BACKEND_POSTGRES
 
-        def load_snapshot(self, _cache_path, _root_identity):
+        def load_snapshot(self, _root_identity):
             return persisted_file_cache, 123.0, {}, 0.0, None
 
     monkeypatch.setattr(
@@ -3179,7 +3175,6 @@ def test_isolated_fixture_postgres_inventory_is_current_and_needs_no_metadata_re
     hydrated = hydrate_library_state_from_disk(
         library_state,
         {
-            "CACHE_PATH": tmp_path / "inert-library-cache.json",
             "IMAGE_EXTENSIONS": {".jpg"},
         },
         ensure_relations=False,
@@ -5910,9 +5905,7 @@ def test_production_runtime_configuration_requires_all_postgres_seams_and_isolat
     config = {
         "MUSIC_DIR": tmp_path / "media",
         "DATA_DIR": tmp_path / "app-data",
-        "CACHE_PATH": tmp_path / "app-data" / "inert-library-cache.json",
         "COVER_CACHE_PATH": tmp_path / "app-data" / "inert-cover-cache.json",
-        "LIBRARY_ROOTS_PATH": tmp_path / "app-data" / "inert-library-roots.json",
         "COVER_PROVIDER_GROUPS": frozenset({"music_services", "manual_urls", "discogs", "cover_art_archive"}),
         "ENABLED_MUSIC_SERVICES": frozenset({"apple"}),
         "LASTFM_API_KEY": isolatedLibraryApp.LASTFM_FAKE_API_KEY,
@@ -5932,7 +5925,7 @@ def test_production_runtime_configuration_rejects_file_persistence(monkeypatch, 
     )
     config = {
         key: tmp_path / key.lower()
-        for key in ("MUSIC_DIR", "DATA_DIR", "CACHE_PATH", "COVER_CACHE_PATH", "LIBRARY_ROOTS_PATH")
+        for key in ("MUSIC_DIR", "DATA_DIR", "COVER_CACHE_PATH")
     }
     config["COVER_PROVIDER_GROUPS"] = frozenset({"music_services", "manual_urls", "discogs", "cover_art_archive"})
     config["ENABLED_MUSIC_SERVICES"] = frozenset({"apple"})
@@ -5948,7 +5941,7 @@ def test_production_runtime_configuration_rejects_non_fixture_music_services(mon
     )
     config = {
         key: tmp_path / key.lower()
-        for key in ("MUSIC_DIR", "DATA_DIR", "CACHE_PATH", "COVER_CACHE_PATH", "LIBRARY_ROOTS_PATH")
+        for key in ("MUSIC_DIR", "DATA_DIR", "COVER_CACHE_PATH")
     }
     config["COVER_PROVIDER_GROUPS"] = frozenset({"music_services", "manual_urls", "discogs", "cover_art_archive"})
     config["ENABLED_MUSIC_SERVICES"] = frozenset({"apple", "deezer"})

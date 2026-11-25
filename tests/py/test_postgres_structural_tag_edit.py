@@ -3185,7 +3185,6 @@ def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_
         match="inventory.*changed|structural.*edit",
     ):
         adapter.save_snapshot(
-            Path("unused.json"),
             {},
             "root-identity",
             1.0,

@@ -21,9 +21,7 @@ test('synthetic-large Playwright config delegates startup only to the validated 
       ALBUM_HAVEN_MEDIA_ROOT: path.join(fixtureRoot, 'media'),
       MUSIC_DIR: '',
       MUSIC_APP_DATA_DIR: '',
-      MUSIC_CACHE_PATH: '',
       MUSIC_COVER_CACHE_PATH: '',
-      MUSIC_LIBRARY_ROOTS_PATH: '',
     },
   });
 
@@ -49,9 +47,7 @@ test('synthetic-large Playwright config uses the exact managed loopback app URL'
       ALBUM_HAVEN_MEDIA_ROOT: path.join(fixtureRoot, 'media'),
       MUSIC_DIR: '',
       MUSIC_APP_DATA_DIR: '',
-      MUSIC_CACHE_PATH: '',
       MUSIC_COVER_CACHE_PATH: '',
-      MUSIC_LIBRARY_ROOTS_PATH: '',
     },
   });
 

@@ -25,7 +25,6 @@ def _explicit_config(tmp_path: Path) -> dict[str, object]:
     data_dir.mkdir()
     music_dir.mkdir()
     return {
-        "CACHE_PATH": data_dir / "library_cache.json",
         "DATA_DIR": data_dir,
         "MUSIC_DIR": music_dir,
     }

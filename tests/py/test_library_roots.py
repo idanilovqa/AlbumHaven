@@ -59,7 +59,6 @@ def test_library_root_settings_uses_postgres_adapter_when_selected(tmp_path, mon
     )
     config = {
         "MUSIC_DIR": tmp_path / "Music",
-        "LIBRARY_ROOTS_PATH": sentinel_path,
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
         "PERSISTENCE_BACKENDS": {"library_roots": "postgres"},
     }
@@ -81,7 +80,6 @@ def test_library_root_settings_uses_postgres_adapter_when_selected(tmp_path, mon
 def test_library_root_settings_raises_when_postgres_adapter_is_unavailable(tmp_path):
     config = {
         "MUSIC_DIR": tmp_path / "Music",
-        "LIBRARY_ROOTS_PATH": tmp_path / "settings" / "library_roots.json",
         "PERSISTENCE_BACKENDS": {"library_roots": "postgres"},
     }
 
@@ -110,7 +108,6 @@ def test_library_root_settings_rejects_non_postgres_selection_without_json_fallb
 
     config = {
         "MUSIC_DIR": tmp_path / "Music",
-        "LIBRARY_ROOTS_PATH": tmp_path / "library_roots.json",
     }
 
     with pytest.raises(ValueError, match="Postgres runtime persistence adapter"):
@@ -137,8 +134,8 @@ def test_runtime_library_root_helpers_use_postgres_settings_without_reading_json
     load_count = 0
 
     class FakePostgresStore:
-        def __init__(self, config):
-            assert config["LIBRARY_ROOTS_PATH"] == sentinel_path
+        def __init__(self, _config):
+            pass
 
         def load_settings(self):
             nonlocal load_count
@@ -161,7 +158,6 @@ def test_runtime_library_root_helpers_use_postgres_settings_without_reading_json
     )
     config = {
         "MUSIC_DIR": tmp_path / "Music",
-        "LIBRARY_ROOTS_PATH": sentinel_path,
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
         "PERSISTENCE_BACKENDS": {"library_roots": "postgres"},
     }
@@ -285,7 +281,6 @@ def test_runtime_library_root_helpers_fail_loudly_when_postgres_selection_is_una
 ):
     config = {
         "MUSIC_DIR": tmp_path / "Music",
-        "LIBRARY_ROOTS_PATH": tmp_path / "must-not-be-read.json",
         "PERSISTENCE_BACKENDS": {"library_roots": "postgres"},
     }
 
@@ -356,20 +351,13 @@ def test_runtime_library_root_helpers_preserve_uninitialized_postgres_shape(tmp_
         library_roots.get_primary_music_root(config)
 
 
-def test_legacy_library_root_json_reading_is_owned_only_by_migration_script():
-    repository_root = Path(__file__).resolve().parents[2]
+def test_library_root_runtime_never_reads_legacy_json_settings():
     runtime_source = (
-        repository_root / "music_app" / "services" / "library_roots.py"
-    ).read_text(encoding="utf-8")
-    migration_source = (
-        repository_root / "scripts" / "migrate_app_data_to_postgres.py"
+        Path(__file__).resolve().parents[2] / "music_app" / "services" / "library_roots.py"
     ).read_text(encoding="utf-8")
 
     assert "library_roots.json" not in runtime_source
     assert "library_roots_settings_path" not in runtime_source
-    assert "def _library_roots_settings_path_for_migration" in migration_source
-    assert 'str(data_dir / "library_roots.json")' in migration_source
-    assert "source_path.read_text" in migration_source
 
 
 def test_library_root_settings_normalizes_move_policy_path_references(tmp_path):

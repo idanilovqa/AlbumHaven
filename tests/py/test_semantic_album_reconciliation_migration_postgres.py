@@ -544,7 +544,6 @@ def test_live_identity_enforcement_reconciles_marker_removal_and_artist_rename(
         )
         with pytest.raises(ScanCachePublicationSuperseded):
             snapshot_adapter.save_snapshot(
-                Path("unused.json"),
                 {},
                 "prepared-before-marker-removal",
                 1.0,
@@ -1648,7 +1647,6 @@ def test_full_snapshot_adopts_existing_unseparated_semantic_album_key(
             )
 
         adapter.save_snapshot(
-            Path("unused-library-cache.json"),
             file_cache,
             "semantic-adoption-root",
             1.0,
@@ -1931,7 +1929,6 @@ def test_full_snapshot_track_number_edit_preserves_unrelated_raw_rating_metadata
         )
         adapter = PostgresScanCacheAdapter(config)
         adapter.save_snapshot(
-            Path("unused-library-cache.json"),
             file_cache,
             "raw-rating-preservation-root",
             1.0,
@@ -1943,7 +1940,6 @@ def test_full_snapshot_track_number_edit_preserves_unrelated_raw_rating_metadata
         }
         changed_file_cache[control_path]["track_number"] = 2
         adapter.save_snapshot(
-            Path("unused-library-cache.json"),
             changed_file_cache,
             "raw-rating-preservation-root",
             2.0,

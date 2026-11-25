@@ -43,9 +43,7 @@ def config(tmp_path, monkeypatch):
     return {
         "DATA_DIR": paths["data_dir"],
         "MUSIC_DIR": paths["music_dir"],
-        "CACHE_PATH": paths["cache_path"],
         "COVER_CACHE_PATH": paths["cover_cache_path"],
-        "LIBRARY_ROOTS_PATH": paths["library_roots_path"],
         "IMAGE_EXTENSIONS": {".jpg", ".jpeg", ".png"},
         "MUSICBRAINZ_USER_AGENT": "AlbumHavenTests/1.0",
         "SUPPORTED_EXTENSIONS": {".mp3", ".flac"},
@@ -2068,8 +2066,8 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
     )
     monkeypatch.setattr(state_module, "library_root_cache_identity", lambda config_arg: f"root-{id(config_arg)}")
 
-    def save_snapshot(config_arg, cache_path, file_cache, root_identity, last_scan, **kwargs):
-        saved.append((config_arg, cache_path, file_cache, root_identity, last_scan, kwargs))
+    def save_snapshot(config_arg, file_cache, root_identity, last_scan, **kwargs):
+        saved.append((config_arg, file_cache, root_identity, last_scan, kwargs))
         return {
             "relation_views": canonical_views,
             "relations_last_built": 456.75,
@@ -2089,7 +2087,6 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
 
     assert saved == [(
         config,
-        config["CACHE_PATH"],
         {"track-1": {"path": "track-1", "album": "Album"}},
         f"root-{id(config)}",
         789.5,
@@ -2889,26 +2886,24 @@ def test_cover_file_cache_snapshot_for_state_uses_provided_state_without_flask_c
     assert snapshot["track-1"] is not file_cache["track-1"]
 
 
-def test_cover_file_cache_snapshot_for_state_falls_back_to_persisted_snapshot(
-    tmp_path, monkeypatch,
-):
+def test_cover_file_cache_snapshot_for_state_falls_back_to_persisted_snapshot(monkeypatch):
     persisted = {"track-1": {"path": "track-1"}}
     load_calls = []
 
     class Adapter:
-        def load_snapshot(self, cache_path, root_identity):
-            load_calls.append((cache_path, root_identity))
+        def load_snapshot(self, root_identity):
+            load_calls.append(root_identity)
             return persisted, 123.0, {}, 0.0, None
 
     monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda config: Adapter())
     monkeypatch.setattr(state_module, "library_root_cache_identity", lambda config: "roots")
-    config = {"CACHE_PATH": tmp_path / "library-cache.json"}
+    config = {}
 
     snapshot = state_module.cover_file_cache_snapshot_for_state({}, config)
 
     assert snapshot == persisted
     assert snapshot is persisted
-    assert load_calls == [(config["CACHE_PATH"], "roots")]
+    assert load_calls == ["roots"]
 
 
 def test_progress_percent_helpers_use_provided_state_without_flask_context():

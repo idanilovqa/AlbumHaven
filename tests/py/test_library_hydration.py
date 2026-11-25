@@ -31,27 +31,26 @@ class FakeSelectedScanCacheAdapter:
         self.relation_views = relation_views or {}
         self.relations_last_built = relations_last_built
         self.error = error
-        self.load_calls: list[tuple[Path, object]] = []
-        self.strict_load_calls: list[tuple[Path, object]] = []
-        self.save_calls: list[tuple[Path, dict[str, dict[str, object]], object, float, dict[str, object]]] = []
+        self.load_calls: list[object] = []
+        self.strict_load_calls: list[object] = []
+        self.save_calls: list[tuple[dict[str, dict[str, object]], object, float, dict[str, object]]] = []
 
-    def load_snapshot(self, cache_path: Path, root_identity: object):
-        self.load_calls.append((cache_path, root_identity))
+    def load_snapshot(self, root_identity: object):
+        self.load_calls.append(root_identity)
         return self.file_cache, self.last_scan, self.relation_views, self.relations_last_built, self.error
 
-    def load_snapshot_strict(self, cache_path: Path, root_identity: object):
-        self.strict_load_calls.append((cache_path, root_identity))
-        return self.load_snapshot(cache_path, root_identity)
+    def load_snapshot_strict(self, root_identity: object):
+        self.strict_load_calls.append(root_identity)
+        return self.load_snapshot(root_identity)
 
     def save_snapshot(
         self,
-        cache_path: Path,
         file_cache: dict[str, dict[str, object]],
         root_identity: object,
         last_scan: float,
         **kwargs,
     ) -> None:
-        self.save_calls.append((cache_path, dict(file_cache), root_identity, last_scan, dict(kwargs)))
+        self.save_calls.append((dict(file_cache), root_identity, last_scan, dict(kwargs)))
 
 
 def test_find_cover_for_track_folder_checks_parent_for_disc_subfolders(tmp_path: Path):
@@ -380,7 +379,7 @@ def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Pat
     library_state = {"albums": []}
     loaded = hydrate_library_state_from_disk(
         library_state,
-        {"CACHE_PATH": tmp_path / "cache.json", "MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}},
+        {"MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}},
         ensure_relations=True,
         ensure_relation_views=lambda state, config: relations.append((state, config)),
         load_exception_overrides=lambda config: {str(track_path): "Non-album rarity"},
@@ -392,12 +391,11 @@ def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Pat
     assert library_state["separate_release_keys"] == {"separate"}
     assert library_state["file_cache"][str(track_path)]["cover_path"] == str(cover_path)
     assert library_state["file_cache"][str(track_path)]["exception_type"] == "Non-album rarity"
-    assert relations == [(library_state, {"CACHE_PATH": tmp_path / "cache.json", "MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}})]
+    assert relations == [(library_state, {"MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}})]
     assert prewarm_calls == []
     assert scheduled == []
     assert len(adapter.save_calls) == 1
-    saved_cache_path, saved_file_cache, saved_root_identity, saved_last_scan, saved_kwargs = adapter.save_calls[0]
-    assert saved_cache_path == tmp_path / "cache.json"
+    saved_file_cache, saved_root_identity, saved_last_scan, saved_kwargs = adapter.save_calls[0]
     assert saved_root_identity == "root-identity"
     assert saved_last_scan == 12.5
     assert saved_kwargs == {"relation_views": {}, "relations_last_built": 0.0, "rebuild_relation_projection": True}
@@ -413,10 +411,10 @@ def test_hydrate_library_state_from_disk_propagates_selected_postgres_strict_loa
     class FailingPostgresAdapter:
         backend = "postgres"
 
-        def load_snapshot(self, cache_path, root_identity):
+        def load_snapshot(self, root_identity):
             raise AssertionError("selected Postgres hydration must not use compatibility loading")
 
-        def load_snapshot_strict(self, cache_path, root_identity):
+        def load_snapshot_strict(self, root_identity):
             raise database_error
 
     monkeypatch.setattr(
@@ -431,7 +429,7 @@ def test_hydrate_library_state_from_disk_propagates_selected_postgres_strict_loa
     with pytest.raises(RuntimeError) as raised:
         hydrate_library_state_from_disk(
             {"albums": []},
-            {"CACHE_PATH": tmp_path / "must-not-be-read.json"},
+            {},
         )
 
     assert raised.value is database_error
@@ -460,7 +458,7 @@ def test_hydrate_library_state_from_disk_recognizes_completed_empty_postgres_sna
 
     hydrated = hydrate_library_state_from_disk(
         library_state,
-        {"CACHE_PATH": tmp_path / "unused.json"},
+        {},
         ensure_relations=False,
         load_exception_overrides=lambda _config: {},
         scan_cache_adapter=adapter,
@@ -492,7 +490,7 @@ def test_hydrate_library_state_from_disk_treats_missing_postgres_snapshot_as_unh
 
     hydrated = hydrate_library_state_from_disk(
         library_state,
-        {"CACHE_PATH": tmp_path / "unused.json"},
+        {},
         ensure_relations=False,
         load_exception_overrides=lambda _config: {},
         scan_cache_adapter=adapter,
@@ -501,6 +499,34 @@ def test_hydrate_library_state_from_disk_treats_missing_postgres_snapshot_as_unh
 
     assert hydrated is False
     assert library_state["last_scan"] == 0.0
+
+
+def test_hydrate_library_state_from_disk_reports_postgres_scan_cache_load_error(monkeypatch):
+    adapter = FakeSelectedScanCacheAdapter({}, 0.0, error="Could not read Postgres scan cache: down")
+    monkeypatch.setattr(
+        "music_app.services.library_hydration.library_root_cache_identity",
+        lambda _config: "root-identity",
+    )
+    failures = []
+    library_state = {"albums": [], "file_cache": {}, "last_scan": 0.0, "last_error": None}
+
+    hydrated = hydrate_library_state_from_disk(
+        library_state,
+        {},
+        ensure_relations=False,
+        load_exception_overrides=lambda _config: {},
+        scan_cache_adapter=adapter,
+        record_file_error=lambda action, **fields: failures.append({"action": action, **fields}),
+    )
+
+    assert hydrated is False
+    assert library_state["last_error"] == "Could not read Postgres scan cache: down"
+    assert failures == [{
+        "action": "Library scan cache load failed",
+        "path": "postgres scan cache",
+        "error": "Could not read Postgres scan cache: down",
+        "error_type": "RuntimeError",
+    }]
 
 
 def test_hydrate_library_state_from_disk_skips_file_prewarm_when_library_browse_is_postgres(tmp_path: Path, monkeypatch):
@@ -569,7 +595,6 @@ def test_hydrate_library_state_from_disk_skips_file_prewarm_when_library_browse_
     loaded = hydrate_library_state_from_disk(
         library_state,
         {
-            "CACHE_PATH": tmp_path / "cache.json",
             "MUSIC_DIR": tmp_path,
             "IMAGE_EXTENSIONS": {".jpg"},
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
@@ -642,7 +667,7 @@ def test_hydrate_library_state_from_disk_skips_relation_rebuild_when_relations_a
     }
     loaded = hydrate_library_state_from_disk(
         library_state,
-        {"CACHE_PATH": tmp_path / "cache.json", "MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}},
+        {"MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}},
         ensure_relations=True,
         ensure_relation_views=lambda state, config: relation_calls.append(True),
         load_exception_overrides=lambda config: {},
@@ -716,7 +741,7 @@ def test_hydrate_library_state_from_disk_reuses_persisted_relation_views(tmp_pat
     library_state = {"albums": [], "relation_views": {}}
     loaded = hydrate_library_state_from_disk(
         library_state,
-        {"CACHE_PATH": tmp_path / "cache.json", "MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}},
+        {"MUSIC_DIR": tmp_path, "IMAGE_EXTENSIONS": {".jpg"}},
         ensure_relations=True,
         ensure_relation_views=lambda state, config: relation_calls.append(True),
         load_exception_overrides=lambda config: {},
@@ -779,9 +804,7 @@ def test_hydrate_library_state_from_disk_does_not_sync_projection_after_relation
         relations_last_built=0.0,
     )
     config = {
-        "CACHE_PATH": tmp_path / "cache.json",
         "IMAGE_EXTENSIONS": {".jpg"},
-        "LIBRARY_ROOTS_PATH": tmp_path / "library_roots.json",
         "MUSIC_DIR": tmp_path,
     }
     monkeypatch.setattr(
@@ -878,9 +901,7 @@ def test_hydrate_library_state_from_disk_does_not_seed_artist_family_projection_
         relations_last_built=0.0,
     )
     config = {
-        "CACHE_PATH": tmp_path / "cache.json",
         "IMAGE_EXTENSIONS": {".jpg"},
-        "LIBRARY_ROOTS_PATH": tmp_path / "library_roots.json",
         "MUSIC_DIR": tmp_path,
     }
     monkeypatch.setattr(
@@ -927,8 +948,6 @@ def test_hydrate_library_state_uses_selected_postgres_scan_cache_adapter(tmp_pat
     track_path = tmp_path / "Artist" / "Album" / "song.mp3"
     track_path.parent.mkdir(parents=True)
     track_path.write_bytes(b"track")
-    cache_path = tmp_path / "library_cache.json"
-
     selected_file_cache = {
         str(track_path): {
             "path": str(track_path),
@@ -967,8 +986,8 @@ def test_hydrate_library_state_uses_selected_postgres_scan_cache_adapter(tmp_pat
         def __init__(self):
             self.load_calls = []
 
-        def load_snapshot(self, cache_path_arg, root_identity):
-            self.load_calls.append((cache_path_arg, root_identity))
+        def load_snapshot(self, root_identity):
+            self.load_calls.append(root_identity)
             return (
                 selected_file_cache,
                 123.0,
@@ -982,9 +1001,7 @@ def test_hydrate_library_state_uses_selected_postgres_scan_cache_adapter(tmp_pat
 
     adapter = FakePostgresScanCacheAdapter()
     config = {
-        "CACHE_PATH": cache_path,
         "IMAGE_EXTENSIONS": {".jpg"},
-        "LIBRARY_ROOTS_PATH": tmp_path / "library_roots.json",
         "MUSIC_DIR": tmp_path,
         "PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES},
     }
@@ -1024,7 +1041,7 @@ def test_hydrate_library_state_uses_selected_postgres_scan_cache_adapter(tmp_pat
 
     assert hydrated is True
     assert hydrated_again is True
-    assert adapter.load_calls == [(cache_path, "root-identity")]
+    assert adapter.load_calls == ["root-identity"]
     assert library_state["file_cache"] == selected_file_cache
     assert library_state["last_scan"] == 123.0
     assert library_state["relation_views"]["artists"] == ["Artist"]
@@ -1070,7 +1087,6 @@ def test_postgres_hydration_marks_incomplete_file_metadata_for_automatic_repair_
     adapter = FakeSelectedScanCacheAdapter({str(track_path): file_entry}, 123.0)
     adapter.backend = PERSISTENCE_BACKEND_POSTGRES
     config = {
-        "CACHE_PATH": tmp_path / "unused-cache.json",
         "IMAGE_EXTENSIONS": {".jpg"},
         "MUSIC_DIR": tmp_path,
     }
@@ -1128,7 +1144,6 @@ def test_postgres_hydration_exposes_album_owned_cover_selection_origin(
     adapter = FakeSelectedScanCacheAdapter({str(track_path): file_entry}, 123.0)
     adapter.backend = PERSISTENCE_BACKEND_POSTGRES
     config = {
-        "CACHE_PATH": tmp_path / "unused-cache.json",
         "IMAGE_EXTENSIONS": {".jpg"},
         "MUSIC_DIR": tmp_path,
     }
@@ -1174,7 +1189,7 @@ def test_postgres_sanitization_republishes_relations_or_marks_them_unready(
             if kwargs.get("rebuild_relation_projection"):
                 return {"relation_views": current_views, "relations_last_built": 789.0}
     adapter = Adapter(original, 123.0, {"artists": ["Old"]}, 456.0)
-    config = {"CACHE_PATH": tmp_path / "cache.json", "IMAGE_EXTENSIONS": {".jpg"}}
+    config = {"IMAGE_EXTENSIONS": {".jpg"}}
     monkeypatch.setattr(library_hydration, "library_root_cache_identity", lambda _cfg: "root")
     monkeypatch.setattr(library_hydration, "get_library_roots", lambda _cfg: [])
     monkeypatch.setattr(library_hydration, "sanitize_hydrated_file_cache", lambda *_args, **_kwargs: (sanitized, {"track-1": sanitized["track-1"]}))
@@ -1185,7 +1200,7 @@ def test_postgres_sanitization_republishes_relations_or_marks_them_unready(
     state = {"albums": [], "relation_projection_ready": True}
     assert hydrate_library_state_from_disk(state, config, scan_cache_adapter=adapter, ensure_relations=ensure_relations)
     assert len(adapter.save_calls) == 1
-    assert bool(adapter.save_calls[0][4].get("rebuild_relation_projection")) is (ensure_relations and repair != "cover")
+    assert bool(adapter.save_calls[0][3].get("rebuild_relation_projection")) is (ensure_relations and repair != "cover")
     assert state["relation_projection_ready"] is (ensure_relations or repair == "cover")
     if ensure_relations and repair != "cover":
         assert state["relation_views"] == current_views

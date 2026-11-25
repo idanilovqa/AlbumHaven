@@ -312,7 +312,7 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
                     "library_root_category": "main_library" if root == 0 else "hoard", "exception_type": exception}
 
         def seed(*entries):
-            adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
+            adapter.save_snapshot({item["path"]: item for item in entries},
                                   "watcher-repair", 1.0, observed_library_root_ids={root["id"] for root in roots})
 
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
@@ -2077,7 +2077,6 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
         }
         adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
         adapter.save_snapshot(
-            Path("unused-structural-rename.json"),
             {
                 **previous,
                 str(stale_path): {
@@ -2090,7 +2089,6 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             observed_library_root_ids={"structural-root"},
         )
         adapter.save_snapshot(
-            Path("unused-structural-rename.json"),
             previous,
             "structural-root-identity",
             1.1,
@@ -2311,7 +2309,6 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
         current_cover_revision = adapter.load_cover_mutation_revision()
         with pytest.raises(ScanCachePublicationSuperseded, match="Inventory changed"):
             adapter.save_snapshot(
-                Path("unused-structural-rename.json"),
                 previous,
                 "structural-root-identity",
                 2.0,
@@ -2412,7 +2409,6 @@ def test_live_partial_year_split_preserves_source_album_and_selected_file_year(
             connect=isolatedPostgres._connect,
         )
         adapter.save_snapshot(
-            Path("unused-partial-year-split.json"),
             previous,
             "partial-year-split-root",
             1.0,
@@ -2641,7 +2637,6 @@ def test_live_year_edit_preserves_owner_explicit_separate_release_memberships(
                 {"release_key": separate_release_key},
             )
         adapter.save_snapshot(
-            Path("unused-explicit-separate.json"),
             previous,
             "explicit-separate-root",
             1.0,
@@ -2843,7 +2838,6 @@ def test_live_year_split_survives_rebuild_from_stored_postgres_file_entries(
             connect=isolatedPostgres._connect,
         )
         adapter.save_snapshot(
-            Path("unused-year-rebuild.json"),
             previous,
             root_identity,
             1.0,
@@ -2864,7 +2858,6 @@ def test_live_year_split_survives_rebuild_from_stored_postgres_file_entries(
         )
 
         stored_file_entries, *_snapshot_metadata = adapter.load_snapshot_strict(
-            Path("unused-year-rebuild.json"),
             root_identity,
         )
         stored_separate_release_keys = RuleStatePostgresAdapter(
@@ -2993,7 +2986,6 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
         }
         adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
         adapter.save_snapshot(
-            Path("unused-partial-album-split.json"),
             previous,
             "partial-album-split-root",
             1.0,
@@ -3463,7 +3455,6 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
             connect=isolatedPostgres._connect,
         )
         adapter.save_snapshot(
-            Path("unused-mixed-year-restore.json"),
             current_entries,
             "mixed-year-restore-root-identity",
             1.0,
@@ -4798,7 +4789,7 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
             "exception_type": None,
         }
         adapter = PostgresScanCacheAdapter({"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url})
-        adapter.save_snapshot(Path("unused.json"), {track_path: file_entry}, "root-linkage-live", 1710000001.0)
+        adapter.save_snapshot({track_path: file_entry}, "root-linkage-live", 1710000001.0)
 
         with isolatedPostgres._connect(setup_url) as connection:
             persisted = connection.execute(
@@ -4812,7 +4803,7 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
             )
 
         loaded, _last_scan, _relations, _built_at, error = adapter.load_snapshot(
-            Path("unused.json"), "root-linkage-live"
+            "root-linkage-live"
         )
         assert error is None
         assert loaded == {}
@@ -4821,7 +4812,6 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
         unresolved_entry = {**file_entry, "path": unresolved_path, "library_root_id": None}
         with pytest.raises(psycopg.errors.CheckViolation) as exc_info:
             adapter.save_snapshot(
-                Path("unused.json"),
                 {unresolved_path: unresolved_entry},
                 "root-linkage-unresolved",
                 1710000002.0,
@@ -5058,7 +5048,6 @@ def test_live_startup_relation_projection_collapses_inventory_whitespace_and_sta
             config,
             connect=isolatedPostgres._connect,
         ).save_snapshot(
-            Path("unused-live-scan-cache.json"),
             file_cache,
             "startup-relation-normalization",
             1.0,
@@ -5229,7 +5218,6 @@ def test_live_startup_relation_projection_accepts_malformed_legacy_stale_metadat
             config,
             connect=isolatedPostgres._connect,
         ).save_snapshot(
-            Path("unused-malformed-stale-scan-cache.json"),
             {
                 malformed_path: file_entry(malformed_path, "Malformed Stale Artist"),
                 active_false_path: file_entry(active_false_path, "Active False Artist"),
@@ -5384,7 +5372,6 @@ def test_live_deletion_only_targeted_mutation_preserves_surviving_album_projecti
         surviving_path = music_dir / "Owner" / "Surviving Album" / "02 Survives.flac"
         adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
         adapter.save_snapshot(
-            Path("unused-deletion-only.json"),
             {
                 str(deleted_path): file_entry(
                     deleted_path,
@@ -5637,7 +5624,6 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
         )
         adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
         adapter.save_snapshot(
-            Path("unused-multi-disc.json"),
             {
                 str(changed): file_entry(changed),
                 str(untouched_guest): file_entry(untouched_guest),
@@ -5793,7 +5779,6 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
         }
         adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
         adapter.save_snapshot(
-            Path("unused-scan-membership.json"),
             first_snapshot,
             "scan-membership-root-identity",
             1.0,
@@ -5860,7 +5845,6 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             )
         }
         adapter.save_snapshot(
-            Path("unused-scan-membership.json"),
             second_snapshot,
             "scan-membership-root-identity",
             2.0,
@@ -6180,7 +6164,6 @@ def test_live_missing_album_removal_rechecks_inventory_after_waiting_for_publish
             "new_arrivals_roots": [],
         })
         PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect).save_snapshot(
-            Path("unused-removal-snapshot.json"),
             {str(old_path): {
                 "path": str(old_path), "mtime": 1.0, "size": 100,
                 "album": "Republished Album", "album_artist": "Owner",

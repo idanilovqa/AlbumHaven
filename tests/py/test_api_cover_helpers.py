@@ -70,7 +70,7 @@ def test_apply_cover_path_wrapper_forwards_linked_remote_cover_fields(monkeypatc
         remote_cover_album_url="https://open.spotify.com/album/fixture",
         remote_cover_width=1400,
         remote_cover_height=1400,
-        config={"CACHE_PATH": "unused"},
+        config={"TESTING": True},
         logger=logger,
         library_state=library_state,
     )
@@ -86,7 +86,7 @@ def test_apply_cover_path_wrapper_forwards_linked_remote_cover_fields(monkeypatc
         "remote_cover_album_url": "https://open.spotify.com/album/fixture",
         "remote_cover_width": 1400,
         "remote_cover_height": 1400,
-        "config": {"CACHE_PATH": "unused"},
+        "config": {"TESTING": True},
         "logger": logger,
         "library_state": library_state,
         "cover_revision": None,
@@ -131,7 +131,7 @@ def test_cover_selection_does_not_build_global_problematic_files_payload(
         api_cover_helpers.apply_cover_selection_for_tracks(
             {track_path},
             remote_cover_url="https://images.example/cover.jpg",
-            config={"CACHE_PATH": tmp_path / "cache.json"},
+            config={"TESTING": True},
             logger=object(),
             library_state=library_state,
             schedule_cache_update=False,

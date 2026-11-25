@@ -95,7 +95,7 @@ def run_startup_recovery(
             raise AssertionError("startup recovery unexpectedly failed")
 
     class SnapshotAdapter:
-        def load_snapshot(self, _cache_path, _root_identity):
+        def load_snapshot(self, _root_identity):
             return file_cache, None, {}, None, None
 
     monkeypatch.setattr(
@@ -144,7 +144,6 @@ def run_startup_recovery(
 
     runtime = SimpleNamespace(
         config={
-            "CACHE_PATH": tmp_path / "inert-cache.json",
             "MUSIC_DIR": tmp_path,
         },
         logger=SimpleNamespace(info=lambda *_args: None),
@@ -552,7 +551,7 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
             failed.append((intent_id, str(error)))
 
     class SnapshotAdapter:
-        def load_snapshot(self, _cache_path, _root_identity):
+        def load_snapshot(self, _root_identity):
             return {}, None, {}, None, None
 
     def reject_outside_path(raw_path, _root_paths, **_kwargs):
@@ -600,7 +599,6 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
 
     runtime = SimpleNamespace(
         config={
-            "CACHE_PATH": tmp_path / "inert-cache.json",
             "MUSIC_DIR": configured_root,
         },
         logger=SimpleNamespace(info=lambda *_args: None),
@@ -649,7 +647,7 @@ def test_startup_recovery_claims_one_intent_at_a_time_before_loading_inventory(m
     monkeypatch.setattr(library_roots, "library_root_cache_identity", lambda _config: "root")
     monkeypatch.setattr(scan_cache_persistence, "select_scan_cache_adapter", lambda _config: Adapter())
     monkeypatch.setattr(recovery, "_reconcile_claimed_tag_edit_intent", reconcile, raising=False)
-    runtime = SimpleNamespace(config={"CACHE_PATH": tmp_path / "unused"}, logger=SimpleNamespace(info=lambda *_args: None))
+    runtime = SimpleNamespace(config={}, logger=SimpleNamespace(info=lambda *_args: None))
     summary = recovery.reconcile_unfinished_tag_edit_intents_on_startup(runtime)
     if busy:
         assert summary["completed"] == 0

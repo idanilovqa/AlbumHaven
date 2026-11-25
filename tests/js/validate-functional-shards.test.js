@@ -311,9 +311,7 @@ validatorTest(name, () => {
         ALBUM_HAVEN_MEDIA_ROOT: path.join(fixtureRoot, 'media'),
         MUSIC_DIR: 'C:\\Users\\owner\\Music',
         MUSIC_APP_DATA_DIR: 'C:\\Users\\owner\\AppData',
-        MUSIC_CACHE_PATH: 'C:\\Users\\owner\\cache.json',
         MUSIC_COVER_CACHE_PATH: 'C:\\Users\\owner\\covers.json',
-        MUSIC_LIBRARY_ROOTS_PATH: 'C:\\Users\\owner\\roots.json',
         PLAYWRIGHT_REAL_APP_URL: 'https://owner-library.example.test',
         DATABASE_MIGRATOR_URL:
           'postgresql://album_haven_migrator_f_123@localhost/album_haven_ci_f_123',
@@ -420,9 +418,7 @@ validatorTest(name, () => {
       for (const key of [
         'MUSIC_DIR',
         'MUSIC_APP_DATA_DIR',
-        'MUSIC_CACHE_PATH',
         'MUSIC_COVER_CACHE_PATH',
-        'MUSIC_LIBRARY_ROOTS_PATH',
         'PLAYWRIGHT_REAL_APP_URL',
       ]) {
         assert.equal(call.options.env[key], '', `${key} must not reach the managed fixture child`);
@@ -483,9 +479,7 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
         ALBUM_HAVEN_MEDIA_ROOT: path.join(fixtureRoot, 'media'),
         MUSIC_DIR: 'C:\\Users\\owner\\Music',
         MUSIC_APP_DATA_DIR: 'C:\\Users\\owner\\AppData',
-        MUSIC_CACHE_PATH: 'C:\\Users\\owner\\cache.json',
         MUSIC_COVER_CACHE_PATH: 'C:\\Users\\owner\\covers.json',
-        MUSIC_LIBRARY_ROOTS_PATH: 'C:\\Users\\owner\\roots.json',
         PLAYWRIGHT_REAL_APP_URL: 'https://owner-library.example.test',
         DATABASE_MIGRATOR_URL:
           'postgresql://album_haven_migrator_f_123@localhost/album_haven_ci_f_123',

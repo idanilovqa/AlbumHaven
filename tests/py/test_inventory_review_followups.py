@@ -28,7 +28,7 @@ def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inven
     assert len(initial_albums) == 1
     initial_album_key = initial_albums[0].key
     fixture.adapter.save_snapshot(
-        Path("unused-watcher-identity.json"), previous, "watcher-identity", 1.0,
+        previous, "watcher-identity", 1.0,
         separate_release_keys=separate_keys, observed_library_root_ids={"repair-main"},
     )
     with isolatedPostgres._connect(fixture.setup_url) as connection:

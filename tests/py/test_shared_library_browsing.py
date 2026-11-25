@@ -73,7 +73,7 @@ def test_shared_hydration_strictly_reads_without_sanitizing_saving_or_prewarming
     monkeypatch.setattr(hydration, "sanitize_hydrated_file_cache", lambda *_args, **_kwargs: pytest.fail("Must not sanitize"))
     state = {}
     assert hydration.hydrate_library_state_from_disk(
-        state, {"SHARED_LIBRARY_BROWSE_ONLY": True, "CACHE_PATH": "fixture"},
+        state, {"SHARED_LIBRARY_BROWSE_ONLY": True},
         scan_cache_adapter=adapter, validate_cache=True,
         ensure_relation_views=lambda *_args: pytest.fail("Must not rebuild"),
         queue_problematic_albums_prewarm=lambda: pytest.fail("Must not prewarm"),

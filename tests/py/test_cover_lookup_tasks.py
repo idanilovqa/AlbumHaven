@@ -59,9 +59,7 @@ def config(tmp_path, monkeypatch):
     return {
         "DATA_DIR": paths["data_dir"],
         "MUSIC_DIR": paths["music_dir"],
-        "CACHE_PATH": paths["cache_path"],
         "COVER_CACHE_PATH": paths["cover_cache_path"],
-        "LIBRARY_ROOTS_PATH": paths["library_roots_path"],
         "TESTING": True,
         "PERSISTENCE_BACKENDS": {"cover_lookup_tasks": "postgres"},
     }

@@ -68,9 +68,7 @@ _INCREMENTAL_CACHE_MAX_AGE_SECONDS = 3600
 _RUNTIME_PATH_KEYS = (
     "MUSIC_DIR",
     "DATA_DIR",
-    "CACHE_PATH",
     "COVER_CACHE_PATH",
-    "LIBRARY_ROOTS_PATH",
 )
 
 
@@ -584,9 +582,7 @@ def configure_environment(scenario: str = "cold") -> Path:
 
     os.environ["MUSIC_DIR"] = str(music_dir)
     os.environ["MUSIC_APP_DATA_DIR"] = str(data_dir)
-    os.environ["MUSIC_CACHE_PATH"] = str(data_dir / "library_cache.json")
     os.environ["MUSIC_COVER_CACHE_PATH"] = str(data_dir / "cover_search_cache.json")
-    os.environ["MUSIC_LIBRARY_ROOTS_PATH"] = str(data_dir / "library_roots.json")
     os.environ["MUSIC_CACHE_MAX_AGE_SECONDS"] = str(scan_cache_max_age_seconds(scenario))
     os.environ["MUSICBRAINZ_ENABLED"] = "0"
     os.environ["SPOTIFY_CLIENT_ID"] = ""
@@ -764,7 +760,6 @@ def _seed_baseline_scan_snapshot(
         root_definitions=root_definitions,
     )
     committed_relation_state = PostgresScanCacheAdapter(runtime_config).save_snapshot(
-        Path(str(runtime_config["CACHE_PATH"])),
         file_cache,
         library_root_cache_identity(runtime_config),
         last_scan_marker,

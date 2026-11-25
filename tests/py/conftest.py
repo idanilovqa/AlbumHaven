@@ -94,9 +94,7 @@ def _activate_pytest_app_paths(base_temp: Path) -> Path:
     app_paths = {
         "MUSIC_DIR": music_dir,
         "MUSIC_APP_DATA_DIR": data_dir,
-        "MUSIC_CACHE_PATH": data_dir / "library_cache.json",
         "MUSIC_COVER_CACHE_PATH": data_dir / "cover_search_cache.json",
-        "MUSIC_LIBRARY_ROOTS_PATH": data_dir / "library_roots.json",
     }
     for key, path in app_paths.items():
         os.environ[key] = str(path.resolve())

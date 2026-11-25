@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services import cache as cache_module
-from music_app.services.cache import load_cache_snapshot_from_disk
 
 
 def _cache_entry(path: Path) -> dict[str, object]:
@@ -60,29 +58,6 @@ def test_file_entry_round_trip_preserves_structural_cover_inheritance(tmp_path):
     )
 
 
-def _write_migration_cache(
-    cache_path: Path,
-    *,
-    root_identity: str,
-    entries: dict[str, dict[str, object]],
-) -> None:
-    cache_path.write_text(
-        json.dumps(
-            {
-                "library_root_identity": root_identity,
-                "last_scan": 123.0,
-                "files": {
-                    path: cache_module.serialize_file_entry(entry)
-                    for path, entry in entries.items()
-                },
-                "relation_views": {"artists": ["Artist"]},
-                "relations_last_built": 456.0,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
 def test_cache_persistence_seams_source_stays_flask_free():
     source = Path(__file__).read_text(encoding="utf-8")
     forbidden = [
@@ -96,64 +71,12 @@ def test_cache_persistence_seams_source_stays_flask_free():
     assert all(pattern not in source for pattern in forbidden)
 
 
-def test_migration_cache_snapshot_reader_preserves_malformed_cache_error(tmp_path):
-    cache_path = tmp_path / "library_cache.json"
-    cache_path.write_text("{not-json", encoding="utf-8")
-
-    file_cache, last_scan, relation_views, relations_last_built, error = (
-        load_cache_snapshot_from_disk(cache_path, "root-1")
-    )
-
-    assert file_cache == {}
-    assert last_scan == 0.0
-    assert relation_views == {}
-    assert relations_last_built == 0.0
-    assert error is not None
-    assert "Could not read cache file" in error
-
-
-def test_migration_cache_snapshot_reader_merges_update_file(tmp_path):
-    cache_path = tmp_path / "library_cache.json"
-    first_track = tmp_path / "first.mp3"
-    updated_track = tmp_path / "updated.mp3"
-    _write_migration_cache(
-        cache_path,
-        root_identity="root-1",
-        entries={str(first_track): _cache_entry(first_track)},
-    )
-    cache_path.with_name("library_cache.updates.json").write_text(
-        json.dumps(
-            {
-                "files": {
-                    str(updated_track): cache_module.serialize_file_entry(
-                        _cache_entry(updated_track)
-                    )
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    file_cache, last_scan, relation_views, relations_last_built, error = (
-        load_cache_snapshot_from_disk(cache_path, "root-1")
-    )
-
-    assert error is None
-    assert last_scan == 123.0
-    assert set(file_cache) == {str(first_track), str(updated_track)}
-    assert relation_views["artists"] == ["Artist"]
-    assert relations_last_built == 456.0
-
-
-def test_disk_cache_readers_are_migration_owned_and_runtime_file_writers_stay_removed():
+def test_runtime_cache_file_readers_and_writers_stay_removed():
     cache_source = Path("music_app/services/cache.py").read_text(encoding="utf-8")
-    migration_source = Path("scripts/migrate_app_data_to_postgres.py").read_text(
-        encoding="utf-8"
-    )
 
-    assert "def load_cache_snapshot_from_disk(" in cache_source
+    assert "def load_cache_snapshot_from_disk(" not in cache_source
     assert "def load_cache_from_disk(" not in cache_source
-    assert "load_cache_snapshot_from_disk" in migration_source
+    assert "json_files" not in cache_source
     assert "save_json_file" not in cache_source
     assert "def save_cache_to_disk(" not in cache_source
     assert "def save_cache_updates_to_disk(" not in cache_source
@@ -162,6 +85,7 @@ def test_disk_cache_readers_are_migration_owned_and_runtime_file_writers_stay_re
     assert "class FileScanCacheAdapter" not in Path(
         "music_app/services/scan_cache_persistence.py"
     ).read_text(encoding="utf-8")
+    assert not Path("music_app/services/json_files.py").exists()
     assert not Path("music_app/services/musicbrainz.py").exists()
 
 
@@ -169,7 +93,6 @@ def test_runtime_cache_save_forwards_complete_snapshot_to_selected_postgres_adap
     tmp_path,
     monkeypatch,
 ):
-    cache_path = tmp_path / "library_cache.json"
     track_path = tmp_path / "track.mp3"
     config = {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}}
     saved_snapshots: list[dict[str, object]] = []
@@ -179,7 +102,6 @@ def test_runtime_cache_save_forwards_complete_snapshot_to_selected_postgres_adap
 
         def save_snapshot(
             self,
-            received_cache_path,
             file_cache,
             received_root_identity,
             last_scan,
@@ -190,7 +112,6 @@ def test_runtime_cache_save_forwards_complete_snapshot_to_selected_postgres_adap
         ):
             saved_snapshots.append(
                 {
-                    "cache_path": received_cache_path,
                     "file_cache": dict(file_cache),
                     "root_identity": received_root_identity,
                     "last_scan": last_scan,
@@ -212,7 +133,6 @@ def test_runtime_cache_save_forwards_complete_snapshot_to_selected_postgres_adap
 
     cache_module.save_cache_to_disk_for_config(
         config,
-        cache_path,
         {str(track_path): _cache_entry(track_path)},
         "root-1",
         123.0,
@@ -223,7 +143,6 @@ def test_runtime_cache_save_forwards_complete_snapshot_to_selected_postgres_adap
 
     assert saved_snapshots == [
         {
-            "cache_path": cache_path,
             "file_cache": {str(track_path): _cache_entry(track_path)},
             "root_identity": "root-1",
             "last_scan": 123.0,
@@ -232,13 +151,9 @@ def test_runtime_cache_save_forwards_complete_snapshot_to_selected_postgres_adap
             "separate_release_keys": {"artist::album"},
         }
     ]
-    assert not cache_path.exists()
 
 
-def test_runtime_cache_save_propagates_postgres_adapter_selection_failure(
-    tmp_path,
-    monkeypatch,
-):
+def test_runtime_cache_save_propagates_postgres_adapter_selection_failure(monkeypatch):
     selection_error = ValueError(
         "Postgres runtime persistence adapter is unavailable for scan_cache."
     )
@@ -251,14 +166,12 @@ def test_runtime_cache_save_propagates_postgres_adapter_selection_failure(
     with pytest.raises(ValueError) as raised:
         cache_module.save_cache_to_disk_for_config(
             {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-            tmp_path / "must-not-exist.json",
             {},
             "root-1",
             123.0,
         )
 
     assert raised.value is selection_error
-    assert not (tmp_path / "must-not-exist.json").exists()
 
 
 class _TargetedInventoryAdapter:
@@ -953,10 +866,7 @@ def test_runtime_cover_selection_uses_targeted_postgres_mutation_without_republi
     ]
 
 
-def test_runtime_cache_save_forwards_the_publication_commit_guard(
-    tmp_path,
-    monkeypatch,
-):
+def test_runtime_cache_save_forwards_the_publication_commit_guard(monkeypatch):
     forwarded_guards: list[object] = []
 
     def guard(commit_action):
@@ -979,7 +889,6 @@ def test_runtime_cache_save_forwards_the_publication_commit_guard(
 
     cache_module.save_cache_to_disk_for_config(
         {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-        tmp_path / "must-not-exist.json",
         {},
         "root-1",
         123.0,

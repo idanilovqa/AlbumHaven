@@ -236,13 +236,11 @@ def seed_inventory(admin_url: str, inventory: dict) -> None:
     from music_app.services.library_roots import library_root_cache_identity, save_library_root_settings
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     config = dict(ALBUM_HAVEN_APP_DATABASE_URL=admin_url, MUSIC_DIR=DEMO_ROOT/'main',
-        CACHE_PATH=DEMO_ROOT/'app-data'/'inert-cache.json',
-        LIBRARY_ROOTS_PATH=DEMO_ROOT/'app-data'/'inert-roots.json',
         PERSISTENCE_BACKENDS={'library_roots':'postgres', 'scan_cache':'postgres'})
     settings = {key: [dict(id='capabilities-'+directory, path=str(DEMO_ROOT/directory), layout_mode='artist')]
         for key,directory in [('main_library_roots','main'),('hoarding_library_roots','hoard'),('new_arrivals_roots','new')]}
     save_library_root_settings(config, settings)
-    PostgresScanCacheAdapter(config).save_snapshot(config['CACHE_PATH'], inventory, library_root_cache_identity(config), time.time())
+    PostgresScanCacheAdapter(config).save_snapshot(inventory, library_root_cache_identity(config), time.time())
 
 
 def prepare() -> None:

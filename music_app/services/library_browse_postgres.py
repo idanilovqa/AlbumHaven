@@ -228,12 +228,12 @@ def invalidate_postgres_utility_projection_cache(
 
 
 _UTILITY_PROJECTION_KINDS = (
-    "rules", "duplicate-identities", "duplicate-absence",
+    "rules", "duplicate-absence",
     "non-album-candidates", "relation-alias-maps", "loose-tracks",
 )
 
 
-_DUPLICATE_PROJECTION_KINDS = ("duplicate-absence", "duplicate-identities")
+_DUPLICATE_PROJECTION_KINDS = ("duplicate-absence",)
 
 
 def refresh_postgres_utility_projections_after_edit(
@@ -347,22 +347,10 @@ def retain_duplicate_projections_after_tag_save(
     }
     paths = sorted({str(path) for path in track_paths if str(path or "").strip()})
     absence_entry = cached.get("duplicate-absence")
-    index_entry = cached.get("duplicate-identities")
-    refreshed_index_rows = None
     with repository._connect_to_database() as connection:
         fingerprint = _duplicate_inventory_fingerprint(connection)
-        edited_album_ids, edited_keys, current_identities = _edited_duplicate_scope(connection, paths)
+        _edited_album_ids, edited_keys, current_identities = _edited_duplicate_scope(connection, paths)
         affected_identities |= current_identities
-        stale_album_ids = set(edited_album_ids)
-        if index_entry and fingerprint and _fingerprint_at_most_one_save_behind(index_entry, fingerprint):
-            stale_album_ids |= {
-                album_id for album_id, _key, identity in index_entry["index"]
-                if identity and tuple(identity) in affected_identities
-            }
-            refreshed_index_rows = connection.execute(
-                _duplicate_identity_index_rows_sql(scoped_to_album_ids=True),
-                {"album_ids": sorted(stale_album_ids)},
-            ).fetchall() if stale_album_ids else []
     replacements: dict[str, dict[str, object] | None] = {}
     if absence_entry:
         replacements["duplicate-absence"] = (
@@ -373,15 +361,6 @@ def retain_duplicate_projections_after_tag_save(
                 and not any(tuple(identity) in affected_identities for identity in entry["_identities"])
             }}
             if fingerprint and _fingerprint_at_most_one_save_behind(absence_entry, fingerprint)
-            else None
-        )
-    if index_entry:
-        replacements["duplicate-identities"] = (
-            {**fingerprint, "index": [
-                *(item for item in index_entry["index"] if item[0] not in stale_album_ids),
-                *_duplicate_candidate_index_from_rows(refreshed_index_rows),
-            ]}
-            if refreshed_index_rows is not None
             else None
         )
     with _UTILITY_PROJECTION_CACHE_LOCK:
@@ -4877,9 +4856,6 @@ class PostgresLibraryBrowseRepository:
                 from music_app.services import loose_track_store
 
                 loose_track_store.prepare(self._inventory_repository, self._owned_connection_context)
-            elif kind == "duplicate-identities":
-                with self._search_connection_context() as connection:
-                    _load_duplicate_candidate_album_ids(connection, [], repository=self)
         finally:
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 _UTILITY_PROJECTION_PREWARM_INFLIGHT.discard(cache_key)
@@ -5938,43 +5914,10 @@ def _load_duplicate_candidate_album_ids(
     # Compare only compact tag identities before loading full file metadata. The
     # keyed read returns a superset of Python's NFC/casefold rule on every server
     # (see its PostgreSQL 17 arm); callers verify each candidate exactly.
-    if album_keys:
-        _require_duplicate_identity_helpers(connection, repository._database_url)
-        return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
-    kind = "duplicate-identities"
-    fingerprint = _duplicate_inventory_fingerprint(connection)
-    cached = repository._get_cached_utility_projection(kind, copy_payload=False)
-    if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
-        candidate_ids = _duplicate_candidate_ids_from_index(cached["index"], album_keys)
-        return candidate_ids
-    cache_key = repository._utility_projection_cache_key(kind)
-    with _UTILITY_PROJECTION_CACHE_LOCK:
-        generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
-    rows = connection.execute(_duplicate_identity_index_rows_sql(), {}).fetchall()
-    index = _duplicate_candidate_index_from_rows(rows)
-    if fingerprint:
-        _cache_compact_inventory_payload(connection, repository, kind, fingerprint, {"index": index}, generation)
-    candidate_ids = _duplicate_candidate_ids_from_index(index, album_keys)
-    return candidate_ids
-
-
-def _duplicate_identity_index_rows_sql(*, scoped_to_album_ids: bool = False) -> str:
-    album_filter = "and albums.id = any(%(album_ids)s::bigint[])" if scoped_to_album_ids else ""
-    return f"""
-        select distinct albums.id as album_id, albums.album_key,
-          files.scan_file_album as album, files.scan_file_album_artist as album_artist,
-          files.scan_file_year as year
-        from app.bootstrap_owners owners
-        join library.libraries libraries on libraries.owner_account_id = owners.account_id
-          and libraries.name = 'Local Library' and libraries.library_kind = 'local'
-        join library.local_albums albums on albums.library_id = libraries.id
-        left join library.local_tracks tracks on tracks.album_id = albums.id
-          and tracks.library_id = albums.library_id
-        left join library.local_track_files files on files.track_id = tracks.id
-          and files.scan_cache_stale is false
-          and files.scan_file_entry_is_object is true
-        where owners.owner_key = 'local-bootstrap-owner' {album_filter}
-    """
+    if not album_keys:
+        return []
+    _require_duplicate_identity_helpers(connection, repository._database_url)
+    return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
 
 
 def _duplicate_identities_by_album_key(rows: Iterable[object]) -> dict[str, list[list[object]]]:
@@ -6039,7 +5982,20 @@ def _load_duplicate_candidate_album_ids_for_keys(
     })
 
 
+# The characters Python's casefold() and lower() fold differently, plus capital sigma (lower() makes it
+# final ς at a word's end, casefold() always σ), as a regex class. Text without them folds alike; the
+# PostgreSQL 17 duplicate arm reads only text holding one. A test keeps it equal to Python's own tables.
+_CASEFOLD_SENSITIVE_CLASS = "[" + (
+    "\u00b5\u00df\u0149\u017f\u01f0\u0345\u0390\u03a3\u03b0\u03c2\u03d0-\u03d1\u03d5-\u03d6"
+    "\u03f0-\u03f1\u03f5\u0587\u13a0-\u13f5\u13f8-\u13fd\u1c80-\u1c88\u1e96-\u1e9b\u1e9e\u1f50\u1f52"
+    "\u1f54\u1f56\u1f80-\u1faf\u1fb2-\u1fb4\u1fb6-\u1fb7\u1fbc\u1fbe\u1fc2-\u1fc4\u1fc6-\u1fc7\u1fcc"
+    "\u1fd2-\u1fd3\u1fd6-\u1fd7\u1fe2-\u1fe4\u1fe6-\u1fe7\u1ff2-\u1ff4\u1ff6-\u1ff7\u1ffc"
+    "\uab70-\uabbf\ufb00-\ufb06\ufb13-\ufb17"
+) + "]"
+
+
 def _duplicate_candidate_album_ids_for_keys_sql() -> str:
+    casefold_sensitive = _CASEFOLD_SENSITIVE_CLASS
     physical_container = _physical_album_container_sql("files.private_path")
     return f"""
         with target_library as materialized (
@@ -6058,14 +6014,21 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             on albums.library_id = target_library.library_id
           where albums.album_key = any(%(album_keys)s::text[])
         ), requested_identities as materialized (
-          select distinct
+          select
             requested_albums.library_id,
             library.duplicate_identity_text(files.scan_file_album_artist)
               as album_artist_identity,
             library.duplicate_identity_text(files.scan_file_album)
               as album_identity,
             library.duplicate_identity_year(files.scan_file_year)
-              as album_year
+              as album_year,
+            -- PostgreSQL 17 arm only: whether this identity's text holds a
+            -- character casefold() and lower() treat differently.
+            bool_or(
+              current_setting('server_version_num')::integer < 180000
+              and (files.scan_file_album_artist ~ '{casefold_sensitive}'
+                   or files.scan_file_album ~ '{casefold_sensitive}')
+            ) as pg17_casefold_sensitive
           from requested_albums
           join library.local_tracks tracks
             on tracks.library_id = requested_albums.library_id
@@ -6078,6 +6041,22 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             and library.duplicate_identity_text(files.scan_file_album) <> ''
             and library.duplicate_identity_year(files.scan_file_year)
               between 1000 and 9999
+          group by 1, 2, 3, 4
+        ), pg17_casefold_files as materialized (
+          -- PostgreSQL 17 only (one-time filter on 18): the casefold-sensitive
+          -- files, found by a regex over their text before any per-row year
+          -- function runs, read once per statement.
+          select
+            files.track_id,
+            files.library_root_id,
+            {physical_container} as folder,
+            library.duplicate_identity_year(files.scan_file_year) as album_year
+          from library.local_track_files files
+          where current_setting('server_version_num')::integer < 180000
+            and files.scan_cache_stale is false
+            and files.scan_file_entry_is_object is true
+            and (files.scan_file_album ~ '{casefold_sensitive}'
+                 or files.scan_file_album_artist ~ '{casefold_sensitive}')
         ), identity_files as (
           select
             requested_identities.library_id,
@@ -6100,13 +6079,16 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
            and files.scan_file_entry_is_object is true
           union all
           -- CI-only path for PostgreSQL 17; delete this arm when CI runs
-          -- PostgreSQL 18 (P9-CI-024). Below 18 duplicate_identity_text folds
-          -- with lower(), not casefold(), so non-ASCII identities (ß/ss, ς/σ,
-          -- ligatures) can differ from Python's rule. Within the requested
-          -- year, every file is a candidate when the requested identity is
-          -- non-ASCII, else every file with non-ASCII album or album-artist
-          -- text. A superset: callers accept no candidate without Python's
-          -- exact identity check. pg17_superset counts these rows apart.
+          -- PostgreSQL 18 (P9-CI-024), with the next one, pg17_casefold_files
+          -- and pg17_casefold_sensitive. Below 18
+          -- duplicate_identity_text folds with lower(), not casefold(), so
+          -- identities holding a character the two treat differently (ß/ss,
+          -- final ς/σ, ligatures: the class below) can differ from Python's
+          -- rule; any other text folds alike. Within the requested year, every
+          -- file is a candidate when the requested identity holds such a
+          -- character, else every file whose album or album-artist text does.
+          -- A superset: callers accept no candidate without Python's exact
+          -- identity check. pg17_superset counts these rows apart.
           select
             requested_identities.library_id,
             requested_identities.album_artist_identity,
@@ -6117,22 +6099,31 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             {physical_container} as folder,
             true as pg17_superset
           from requested_identities
-          join library.local_track_files files
-            on library.duplicate_identity_year(files.scan_file_year)
-                 = requested_identities.album_year
-           and files.scan_cache_stale is false
-           and files.scan_file_entry_is_object is true
-          where current_setting('server_version_num')::integer < 180000
-            and (
-              octet_length(requested_identities.album_artist_identity)
-                <> length(requested_identities.album_artist_identity)
-              or octet_length(requested_identities.album_identity)
-                <> length(requested_identities.album_identity)
-              or octet_length(files.scan_file_album_artist)
-                <> length(files.scan_file_album_artist)
-              or octet_length(files.scan_file_album)
-                <> length(files.scan_file_album)
-            )
+          cross join lateral (
+            -- Only for a casefold-sensitive requested identity (a one-time
+            -- filter: no scan otherwise).
+            select files.track_id, files.library_root_id, files.private_path
+            from library.local_track_files files
+            where requested_identities.pg17_casefold_sensitive
+              and library.duplicate_identity_year(files.scan_file_year)
+                    = requested_identities.album_year
+              and files.scan_cache_stale is false
+              and files.scan_file_entry_is_object is true
+            offset 0
+          ) files
+          union all
+          select
+            requested_identities.library_id,
+            requested_identities.album_artist_identity,
+            requested_identities.album_identity,
+            requested_identities.album_year,
+            files.track_id,
+            files.library_root_id,
+            files.folder,
+            true as pg17_superset
+          from requested_identities
+          join pg17_casefold_files files
+            on files.album_year = requested_identities.album_year
         ), candidate_containers as materialized (
           select distinct
             identity_files.album_artist_identity,
@@ -6165,19 +6156,26 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
             album_artist_identity, album_identity, album_year
           )
           union
+          -- Stray-copy links in both directions, each a keyed lookup (primary key; 0269's owner index).
           select linked.id, false
           from requested_albums
-          join library.local_albums linked
-            on linked.library_id=requested_albums.library_id
-           and linked.id::text=requested_albums.metadata
-                #>> '{{stray_duplicate_of,album_id}}'
+          join lateral (
+            select linked.id from library.local_albums linked
+            where linked.library_id = requested_albums.library_id
+              and linked.id = case
+                when requested_albums.metadata #>> '{{stray_duplicate_of,album_id}}' ~ '^[0-9]{{1,18}}$'
+                then (requested_albums.metadata #>> '{{stray_duplicate_of,album_id}}')::bigint end
+            offset 0
+          ) linked on true
           union
           select stray.id, false
           from requested_albums
-          join library.local_albums stray
-            on stray.library_id=requested_albums.library_id
-           and stray.metadata #>> '{{stray_duplicate_of,album_id}}'
-                = requested_albums.album_id::text
+          join lateral (
+            select stray.id from library.local_albums stray
+            where stray.library_id = requested_albums.library_id
+              and stray.metadata #>> '{{stray_duplicate_of,album_id}}' = requested_albums.album_id::text
+            offset 0
+          ) stray on true
         )
         select album_id, bool_and(pg17_superset) as pg17_superset
         from candidate_album_ids
@@ -6200,38 +6198,6 @@ def _cache_compact_inventory_payload(
                 and (not current or current["observed_at"] <= fingerprint["observed_at"])
             ):
                 _UTILITY_PROJECTION_CACHE[cache_key] = {**fingerprint, **payload}
-
-
-def _duplicate_candidate_index_from_rows(rows: Iterable[object]) -> list[tuple[int, str, object]]:
-    from music_app.services.library import _duplicate_album_identity_values
-
-    index = []
-    for row in rows:
-        payload = _row_mapping(row)
-        album_id = _coerce_int(payload.get("album_id"))
-        if album_id <= 0:
-            continue
-        identity = _duplicate_album_identity_values(
-            payload.get("album_artist"),
-            payload.get("album"),
-            payload.get("year"),
-        )
-        index.append((album_id, str(payload.get("album_key") or ""), identity))
-    return index
-
-
-def _duplicate_candidate_ids_from_index(index: list[tuple[int, str, object]], album_keys: list[str]) -> list[int]:
-    requested_keys = set(album_keys)
-    requested_ids = set()
-    requested_identities = set()
-    for album_id, album_key, identity in index:
-        if album_key in requested_keys:
-            requested_ids.add(album_id)
-            if identity is not None:
-                requested_identities.add(identity)
-    return sorted(requested_ids | {
-        album_id for album_id, _key, identity in index if identity in requested_identities
-    })
 
 
 def _duplicate_sources_from_rows(
@@ -13132,23 +13098,30 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             limit 1
         ),
         candidate_containers as materialized (
+            -- Each step is a keyed lookup from the candidate ids (offset 0 keeps it one), so the read
+            -- follows the candidates at any library size.
             select distinct
                 albums.id as candidate_album_id,
                 {seed_container} as folder
-            from library.local_albums albums
+            from unnest(%(album_ids)s::bigint[]) as wanted(album_id)
+            join lateral (
+                select albums.id, albums.library_id from library.local_albums albums
+                where albums.id = wanted.album_id offset 0
+            ) albums on true
             join bootstrap_context
               on bootstrap_context.library_id = albums.library_id
-            join library.local_tracks seed_tracks
-              on seed_tracks.album_id = albums.id
-             and seed_tracks.library_id = albums.library_id
-            join library.local_track_files seed_files
-              on seed_files.track_id = seed_tracks.id
+            join lateral (
+                select seed_tracks.id from library.local_tracks seed_tracks
+                where seed_tracks.album_id = albums.id and seed_tracks.library_id = albums.library_id offset 0
+            ) seed_tracks on true
+            join lateral (
+                select seed_files.private_path, seed_files.library_root_id from library.local_track_files seed_files
+                where seed_files.track_id = seed_tracks.id and seed_files.scan_cache_stale is false offset 0
+            ) seed_files on true
             join library.library_roots seed_roots
               on seed_roots.id = seed_files.library_root_id
              and seed_roots.library_id = albums.library_id
              and seed_roots.is_active is true
-            where albums.id = any(%(album_ids)s::bigint[])
-              and seed_files.scan_cache_stale is false
         ),
         candidate_prefixes as (
             select
@@ -13206,19 +13179,24 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             files.metadata ->> 'library_root_category' as file_library_root_category,
             files.metadata #> '{{scan_cache,file_entry}}' as file_entry
         from scoped_files files
-        join library.local_tracks tracks
-          on tracks.id = files.track_id
+        -- Keyed reads of the candidates' own rows (offset 0 keeps each a per-row lookup): a hash join
+        -- would read every track and artist of the library (6.5, 11-24).
+        join lateral (
+            select tracks.* from library.local_tracks tracks where tracks.id = files.track_id offset 0
+        ) tracks on true
         join bootstrap_context
           on bootstrap_context.library_id = tracks.library_id
-        join library.local_albums albums
-          on albums.id = tracks.album_id
-         and albums.library_id = tracks.library_id
+        join lateral (
+            select albums.* from library.local_albums albums
+            where albums.id = tracks.album_id and albums.library_id = tracks.library_id offset 0
+        ) albums on true
         join library.library_roots roots
           on roots.id = files.library_root_id
          and roots.library_id = tracks.library_id
          and roots.is_active is true
-        left join library.local_artists artists
-          on artists.id = albums.artist_id;
+        left join lateral (
+            select artists.name from library.local_artists artists where artists.id = albums.artist_id offset 0
+        ) artists on true;
     """
 
 def _problematic_files_sql(

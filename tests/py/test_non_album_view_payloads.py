@@ -671,13 +671,18 @@ def test_album_container_lookup_work_does_not_grow_with_library_size(monkeypatch
     assert lookup_calls == {10: 10, 10_000: 10}, "one container per edited path per lookup, at any library size"
 
 
-def test_a_stale_stored_mixed_label_is_not_a_loose_track_or_a_loose_album_group():
-    """The obsolete stored mixed-folder label (owner, fix A, 2026-11-25) puts no tagged album file in Loose Tracks."""
+def test_an_albumless_file_whose_only_label_is_the_stale_mixed_one_stays_a_loose_track_without_that_reason():
+    """A file never vanishes (6, 2026-11-25): the payloads get only files without an album, and one whose only stored
+    label is the obsolete mixed-folder one stays listed, as "Unmarked", never with that reason."""
     from music_app.services.non_album_view_payloads import build_non_album_album_groups, build_non_album_track_list
 
     entry = {"path": "/library/Artist/Album/01.mp3", "album": "Album", "album_artist": "Artist", "artist": "Artist",
              "title": "Song", "track_number": 1,
              "local_album_membership_problem": "Mixed album metadata in one folder"}
 
-    assert build_non_album_track_list([entry], configured_root_paths=()) == []
-    assert build_non_album_album_groups([entry]) == []
+    tracks = build_non_album_track_list([entry], configured_root_paths=())
+    assert [track["path"] for track in tracks] == [entry["path"]]
+    assert tracks[0]["reason_label"] == "Unmarked"
+    assert "Mixed album metadata in one folder" not in repr(tracks)
+    groups = build_non_album_album_groups([entry])
+    assert len(groups) == 1 and "Mixed album metadata in one folder" not in repr(groups)

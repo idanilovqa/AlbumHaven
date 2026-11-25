@@ -665,6 +665,11 @@ def create_asgi_app():
         runtime.relation_reconciliation = RelationReconciliationOwner(
             runtime.config,
             reconciled=lambda: ensure_runtime_relation_projection_ready(runtime),
+            # A replay that keeps failing shows in /status (relation_projection.rebuild_reason, last_error).
+            failed=lambda message: runtime.library_state.update({
+                "relation_projection_rebuild_reason": "reconciliation_retrying",
+                "last_error": message,
+            }),
             logger=runtime.logger,
         )
         _app.state.library_warmup_thread = _start_library_warmup(

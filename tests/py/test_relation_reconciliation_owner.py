@@ -31,13 +31,16 @@ def _owner(outcomes, reconciled, waits):
 
 
 def test_a_failed_replay_retries_with_backoff_then_readiness_runs_again():
-    reconciled, waits = [], []
+    reconciled, waits, reported = [], [], []
     owner = _owner([RuntimeError("busy"), RuntimeError("busy"), RuntimeError("busy"), {"compatibility_prepared": True}],
                    reconciled, waits)
+    owner._failed = reported.append
 
     owner._run()
 
     assert waits == [30.0, 60.0, 60.0]
+    # Each failure shows outside the log (the app puts it in /status) with its retry time.
+    assert len(reported) == 3 and "attempt 3 failed" in reported[-1] and "retrying in 60 s" in reported[-1]
     assert reconciled == [True], "readiness runs again once the journal is replayed"
 
 

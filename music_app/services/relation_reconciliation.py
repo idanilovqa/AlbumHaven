@@ -35,12 +35,14 @@ class RelationReconciliationOwner:
         config: Mapping[str, object],
         *,
         reconciled: Callable[[], None],
+        failed: Callable[[str], None] | None = None,
         prepare: Callable[..., object] | None = None,
         logger: logging.Logger | None = None,
         backoff: Sequence[float] = RETRY_BACKOFF_SECONDS,
     ) -> None:
         self._config = config
         self._reconciled = reconciled
+        self._failed = failed
         self._prepare = prepare
         self._logger = logger or _LOGGER
         self._backoff = tuple(backoff) or (30.0,)
@@ -95,10 +97,13 @@ class RelationReconciliationOwner:
             except RelationInitializationRequired as parked:
                 self._logger.warning("Relation reconciliation needs the explicit initialization: %s", parked)
                 return
-            except Exception:
+            except Exception as error:
                 wait = self._backoff[min(attempt, len(self._backoff) - 1)]
                 attempt += 1
                 self._logger.exception("Relation reconciliation failed; retrying in %.0f s.", wait)
+                if self._failed is not None:
+                    self._failed(f"Library relationships are still being reconciled (attempt {attempt} failed: "
+                                 f"{type(error).__name__}); retrying in {wait:.0f} s.")
                 if self._stop.wait(wait):
                     return
                 continue

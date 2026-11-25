@@ -2069,6 +2069,7 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  if (typeof syncLooseTracksPartialNote === 'function') syncLooseTracksPartialNote();
   const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
   const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
   state.loopCreateAllowed = loopCreateAllowed;
@@ -16328,6 +16329,22 @@ function buildLooseTracksPartialNoteHtml() {
     + 'Still indexing loose tracks, so more may appear.</div>';
 }
 
+// A running library scan may add loose tracks too, so the same note shows under any listed Loose Tracks.
+function looseTracksScanRunning() {
+  return Boolean(state.status?.scan_in_progress);
+}
+
+// Each status update keeps the note in step with the scan without re-reading or re-rendering the list.
+function syncLooseTracksPartialNote() {
+  const table = getNonAlbumModalElements().table;
+  if (!table?.querySelector('.album-track-table:not([aria-busy])')) return;
+  const note = table.querySelector('[data-loose-tracks-partial-note]');
+  const wanted = looseTracksScanRunning()
+    || (state.ui?.nonAlbumLibraryWide === true && hasPartialLibraryNonAlbumTracks());
+  if (wanted && !note) table.insertAdjacentHTML('beforeend', buildLooseTracksPartialNoteHtml());
+  else if (!wanted) note?.remove();
+}
+
 // The bounded wait ran out with no stored row (owner-approved wording, 2026-11-22).
 const LOOSE_TRACKS_STILL_PREPARING = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
 
@@ -16927,7 +16944,7 @@ function openNonAlbumModal(options = {}) {
     : hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
-      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial ? buildLooseTracksPartialNoteHtml() : ''}`
+      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial || looseTracksScanRunning() ? buildLooseTracksPartialNoteHtml() : ''}`
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;

@@ -683,9 +683,8 @@ def test_live_selected_artist_reads_only_its_own_loose_track_rows_by_scope_key(w
     counts = OperationCounts()
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     with isolatedPostgres._connect(fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
-        scope = browse._non_album_artist_scope([artist], {}, {})
-        rows = repository._stored_loose_candidates_in_scope(CountingConnection(connection, counts), scope)
-        keys = ["a:" + key for key in scope[0]] + ["p:" + part for part in scope[1]]
+        rows = repository._stored_loose_candidates_in_scope(CountingConnection(connection, counts), [artist], {}, {})
+        keys = sorted(browse._non_album_scope_query_keys(*browse._non_album_artist_scope([artist], {}, {})))
         plan = " ".join(str(next(iter(dict(row).values()))) for row in connection.execute(
             "explain select track_id from library.non_album_track_rows where scope_keys && %s::text[]", (keys,),
         ).fetchall())
@@ -694,6 +693,58 @@ def test_live_selected_artist_reads_only_its_own_loose_track_rows_by_scope_key(w
     assert counts.returned_rows <= len(loose_entries) + 2, f"the read returned {counts.returned_rows} rows at {stored} stored"
     if stored > 5_000:
         assert "non_album_track_rows_scope_keys" in plan, plan
+
+
+def test_live_selected_artist_keyed_store_read_matches_the_loader_track_for_track(watcher_repair_inventory, monkeypatch):
+    """FTC-GALLERY-STARTUP-005Q (0300): for each selected artist, the keyed Loose Tracks store read and the
+    loader return the same loose tracks: own tracks, a featured credit, a compilation (album artist
+    "Various Artists"), an alias of a family artist and a folder-only match."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    fixture = watcher_repair_inventory
+
+    def loose(relative, artist, album_artist):
+        return {**fixture.entry(relative, artist=artist, album="", exception="Non-album rarity"),
+                "album_artist": album_artist}
+
+    entries = [
+        loose("Broadcast/Loose/01 own.flac", "Broadcast", "Broadcast"),
+        loose("Misc/02 feature.flac", "Broadcast feat. Guest", "Broadcast feat. Guest"),
+        loose("Compilations/VA Loose/03 compilation.flac", "Broadcast", "Various Artists"),
+        loose("Former/04 alias.flac", "Former Name", "Former Name"),
+        loose("Broadcast/Session/05 folder only.flac", "Unknown Performer", "Unknown Performer"),
+        loose("Stereolab/06 other.flac", "Stereolab", "Stereolab"),
+        loose("Various/07 various.flac", "Laetitia Sadier", "Various Artists"),
+    ]
+    fixture.seed(fixture.entry("Owner/Album/01.flac"), *entries)
+    _prepare_store(fixture)
+    alias_to_canonical = {"Former Name": "Broadcast"}
+    canonical_to_aliases = {"Broadcast": ["Former Name"]}
+    families = {
+        "Broadcast": ["Broadcast", "Broadcast feat. Guest"],
+        "Former Name": ["Former Name"],
+        "Stereolab": ["Stereolab", "Laetitia Sadier"],
+        "Various Artists": ["Various Artists"],
+        "Unknown Performer": ["Unknown Performer"],
+    }
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+
+    def tracks(selected, *, keyed):
+        monkeypatch.setattr(loose_track_store, "is_ready", (lambda state: bool(state)) if keyed else (lambda state: False))
+        family = browse._expanded_artist_name_list(families[selected], alias_to_canonical, canonical_to_aliases)
+        with isolatedPostgres._connect(fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+            found = repository._load_non_album_entries(
+                view_state={}, alias_to_canonical=alias_to_canonical, canonical_to_aliases=canonical_to_aliases,
+                visible_artist_names=family, query="", connection=connection,
+            )
+        return sorted(Path(str(entry.get("path") or "")).name for entry in found)
+
+    for selected in families:
+        assert tracks(selected, keyed=True) == tracks(selected, keyed=False), selected
+    # The matcher scopes a loose track by its album artist first, so the compilation belongs to
+    # "Various Artists"; the featured credit, the alias and the folder-only track belong to Broadcast.
+    assert tracks("Broadcast", keyed=True) == ["01 own.flac", "02 feature.flac", "04 alias.flac", "05 folder only.flac"]
+    assert tracks("Various Artists", keyed=True) == ["03 compilation.flac", "07 various.flac"]
 
 
 def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size(watcher_repair_inventory, monkeypatch):

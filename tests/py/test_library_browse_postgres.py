@@ -14312,7 +14312,7 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
     browse.invalidate_postgres_utility_projection_cache()
 
 
-@pytest.mark.parametrize("case", ["current", "marks waiting", "no store yet"])
+@pytest.mark.parametrize("case", ["current", "marks waiting", "no store yet", "still building"])
 def test_selected_artist_non_album_read_uses_the_loose_track_store_by_artist_key(monkeypatch, case):
     import music_app.services.library_browse_postgres as browse
     from music_app.services import loose_track_store
@@ -14336,7 +14336,8 @@ def test_selected_artist_non_album_read_uses_the_loose_track_store_by_artist_key
         lambda **kwargs: loader_calls.append(kwargs) or [{"track_id": 8}],
     )
     monkeypatch.setattr(loose_track_store, "load_state", lambda _connection: None if case == "no store yet" else {
-        "status": "ready", "builder_version": loose_track_store.BUILDER_VERSION,
+        "status": "building" if case == "still building" else "ready",
+        "builder_version": loose_track_store.BUILDER_VERSION,
     })
     monkeypatch.setattr(loose_track_store, "waiting_marks", lambda _connection, **_kwargs: int(case == "marks waiting"))
     monkeypatch.setattr(loose_track_store, "read_candidates", lambda *_args, **_kwargs: pytest.fail("whole-store read"))
@@ -14350,8 +14351,9 @@ def test_selected_artist_non_album_read_uses_the_loose_track_store_by_artist_key
         visible_artist_names=["Broadcast"], query="", connection=_NoLooseRulesConnection(),
     )
 
-    if case == "no store yet":
-        # Before any store build has started, the loader still answers.
+    if case in {"no store yet", "still building"}:
+        # Until the store is ready at its builder version (a build or backfill has not keyed every track),
+        # the loader answers: a partial list is never shown as complete.
         assert entries == [{"track_id": 8}] and keyed_reads == []
         assert [call["artist_names"] for call in loader_calls] == [["Broadcast"]]
         return
@@ -14359,7 +14361,7 @@ def test_selected_artist_non_album_read_uses_the_loose_track_store_by_artist_key
     # and the loader's whole-library path scan never runs.
     assert entries == stored and loader_calls == []
     assert keyed_reads == [(
-        sorted(["a:" + local_inventory_identity_key("Broadcast"), "p:broadcast"]),
+        ["a:" + local_inventory_identity_key("Broadcast"), "p:broadcast"],
         {"limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT},
     )]
     assert drains == (["loose-tracks"] if case == "marks waiting" else [])

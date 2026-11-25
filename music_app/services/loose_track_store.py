@@ -19,8 +19,8 @@ import threading
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-# 2: rows keep their artist scope keys (0300), so a selected artist reads only its own rows.
-BUILDER_VERSION = 2
+# 3: rows keep every artist scope key the matcher tests (0300), so a selected artist reads only its own rows.
+BUILDER_VERSION = 3
 # A read drains inline only while this few tracks wait; more wait for the background drain.
 INLINE_DRAIN_LIMIT = 50
 DRAIN_BATCH = 500
@@ -102,22 +102,21 @@ def _load_candidates(inventory: Any, connection: Any, track_ids: Iterable[int] |
 
 
 def scope_keys(candidates: Iterable[Mapping[str, object]]) -> list[str]:
-    """The keys the selected-artist scope matches a track on: 'a:' + each file's artist identity key and
-    'p:' + each folder name of its path, built exactly as the read's matcher builds them."""
-    from pathlib import Path
+    """Every key the artist scope can match a track's files on (non_album_scope_keys, the matcher's own):
+    each file's artist and album artist, and each folder of its path. Alias-derived names are not stored;
+    the read expands the selected family through the aliases instead."""
+    from music_app.services.library_browse_postgres import (
+        _non_album_entry_from_inventory_candidate,
+        non_album_scope_keys,
+    )
 
-    from music_app.services.library_browse_postgres import _non_album_entry_from_inventory_candidate
-    from music_app.services.library_inventory_postgres import local_inventory_identity_key
-    from music_app.services.view_search import normalize_search_text
-
-    keys = set()
+    keys: set[str] = set()
     for candidate in candidates:
         entry = _non_album_entry_from_inventory_candidate(candidate)
-        artist_key = local_inventory_identity_key(str(entry.get("album_artist") or entry.get("artist") or "").strip())
-        if artist_key:
-            keys.add("a:" + artist_key)
-        path = str(candidate.get("relative_path") or candidate.get("private_path") or "")
-        keys.update("p:" + part for part in (normalize_search_text(name) for name in Path(path).parts[:-1]) if part)
+        keys |= non_album_scope_keys(
+            (entry.get("artist"), entry.get("album_artist")),
+            candidate.get("relative_path") or candidate.get("private_path"),
+        )
     return sorted(keys)
 
 

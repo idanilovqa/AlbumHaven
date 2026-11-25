@@ -929,26 +929,35 @@ class PostgresLibraryBrowseRepository:
 
 
     def _stored_loose_candidates_in_scope(
-        self, connection: Any, scope: tuple[set[str], set[str]],
+        self,
+        connection: Any,
+        visible_artist_names: Iterable[object],
+        alias_to_canonical: Mapping[str, object],
+        canonical_to_aliases: Mapping[str, object],
     ) -> list[dict[str, object]] | None:
-        """The artist's own Loose Tracks store rows (case 64), read by their scope keys (0300); None only while
-        no store build has started, when the loader still answers.
+        """The artist's own Loose Tracks store rows (case 64), read by their scope keys (0300), or None while
+        the store is not ready at its current builder version: a build or backfill has not stored every
+        track's keys yet, so the loader answers rather than show a partial list as complete.
 
-        Read on the caller's connection, which may hold a snapshot, so nothing is drained or committed here.
-        Rows of marked tracks are served as stored while the background drain catches up, as the Loose Tracks
-        page serves them, and during a build the rows built so far are served.
+        The query keys are the matcher's keys of the family, expanded through the aliases, so a track whose
+        own name is an alias of a family artist is found as the matcher finds it by its canonical name.
+        Read on the caller's connection, which may hold a snapshot, so nothing is drained or committed here:
+        rows of marked tracks are served as stored while the background drain catches up.
         """
         from music_app.services import loose_track_store
 
-        if loose_track_store.load_state(connection) is None:
+        if not loose_track_store.is_ready(loose_track_store.load_state(connection)):
             return None
         if loose_track_store.waiting_marks(connection, at_most=1) and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
             self.queue_utility_projection_prewarm("loose-tracks")  # the background drain, never a build
-        artist_keys, path_parts = scope
+        names = list(visible_artist_names)
+        artist_keys, path_parts = _non_album_artist_scope(names, alias_to_canonical, canonical_to_aliases)
+        artist_keys |= {
+            local_inventory_identity_key(name)
+            for name in _expanded_artist_name_list(names, alias_to_canonical or {}, canonical_to_aliases or {})
+        }
         return loose_track_store.read_scoped_candidates(
-            connection,
-            [*("a:" + key for key in artist_keys if key), *("p:" + part for part in path_parts if part)],
-            limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+            connection, _non_album_scope_query_keys(artist_keys, path_parts), limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
         )
 
     def _load_non_album_entries(
@@ -986,7 +995,7 @@ class PostgresLibraryBrowseRepository:
         # artist filter matches every track file's path, a whole-library scan on each request.
         stored = (
             self._stored_loose_candidates_in_scope(
-                connection, _non_album_artist_scope(scoped_artist_names, alias_to_canonical, canonical_to_aliases),
+                connection, scoped_artist_names, alias_to_canonical, canonical_to_aliases,
             )
             if scope_inventory_query and connection is not None
             else None
@@ -5053,22 +5062,37 @@ def _non_album_artist_scope(
     return visible_artist_keys, visible_path_parts
 
 
+def non_album_scope_keys(artist_names: Iterable[object], path: object) -> set[str]:
+    """Every key the artist scope matches a loose track on: 'a:' + each tested name's identity key and
+    'p:' + each folder of its path (normalized as search text). The matcher and the Loose Tracks store's
+    stored keys (0300) both come from here."""
+    from music_app.services.view_search import normalize_search_text
+
+    keys = {"a:" + key for key in (local_inventory_identity_key(name) for name in artist_names) if key}
+    keys.update(
+        "p:" + part
+        for part in (normalize_search_text(name) for name in Path(str(path or "")).parts[:-1])
+        if part
+    )
+    return keys
+
+
+def _non_album_scope_query_keys(visible_artist_keys: Iterable[str], visible_path_parts: Iterable[str]) -> set[str]:
+    return {"a:" + key for key in visible_artist_keys if key} | {"p:" + part for part in visible_path_parts if part}
+
+
 def _non_album_entry_is_in_artist_scope(
     artist_names: Iterable[object],
     path: object,
     visible_artist_keys: set[str],
     visible_path_parts: set[str],
 ) -> bool:
-    from music_app.services.view_search import normalize_search_text
-
     if not visible_artist_keys:
         return True
-    artist_keys = {local_inventory_identity_key(artist) for artist in artist_names} - {""}
-    path_parts = {
-        normalize_search_text(part)
-        for part in Path(str(path or "")).parts[:-1]
-    } - {""}
-    return bool(artist_keys & visible_artist_keys or path_parts & visible_path_parts)
+    return bool(
+        non_album_scope_keys(artist_names, path)
+        & _non_album_scope_query_keys(visible_artist_keys, visible_path_parts)
+    )
 
 
 def _filter_non_album_snapshot_tracks(

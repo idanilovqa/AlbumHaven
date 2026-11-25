@@ -221,6 +221,18 @@ class PlaybackHandoverHub:
         self._telling.add(telling)
         telling.add_done_callback(self._telling.discard)
 
+    def tell_others(self, account_id: int, client_id: str, event: dict) -> None:
+        """Every other socket of [account_id] hears [event], such as a claim changing hands, so a paused
+        device shows the other one playing at once instead of at its next read. Nobody waits for it."""
+        mine = str(client_id or "").lower()
+        for (account, other), sockets in list(self._sockets.items()):
+            if account != account_id or other.lower() == mine:
+                continue
+            for send in list(sockets):
+                telling = asyncio.create_task(self._tell(send, event))
+                self._telling.add(telling)
+                telling.add_done_callback(self._telling.discard)
+
     async def _tell(self, send: Send, event: dict) -> None:
         try:
             await asyncio.wait_for(send(event), timeout=1)

@@ -6910,6 +6910,19 @@ test('padding after the last mapped sample never delays end of stream', async ()
 });
 
 // Confirmed handover: Play here elsewhere asks the playing tab over this socket.
+test('another client taking playback is read at once, not at the next heartbeat', async (t) => {
+  let reads = 0;
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  harness.context.handlePlaybackOwnershipEvent = async () => { reads += 1; };
+  await harness.api.start(makeTrack(), { startSeconds: 0 });
+
+  harness.sockets[0].receive({ type: 'playback-claimed' });
+  await harness.settle();
+
+  assert.equal(reads, 1);
+  assert.equal(harness.engine.diagnostics.staleMessages || 0, 0, 'no stream message is taken for it');
+});
+
 test('the socket names its client, hands a handover to the player and answers only while it is open', async () => {
   const asked = [];
   const settled = [];

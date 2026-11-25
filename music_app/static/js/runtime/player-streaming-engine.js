@@ -1523,6 +1523,11 @@ function handleStreamingControl(message) {
     if (typeof settlePlaybackHandover === 'function') void settlePlaybackHandover();
     return;
   }
+  // Another client of this account took playback: what plays is read now, not at the next heartbeat.
+  if (message.type === 'playback-claimed') {
+    if (typeof handlePlaybackOwnershipEvent === 'function') void handlePlaybackOwnershipEvent();
+    return;
+  }
   if (message.type === 'handover-yield') {
     if (typeof yieldPausedPlaybackClaim === 'function') {
       void Promise.resolve(yieldPausedPlaybackClaim(message.requestId)).catch((error) => {

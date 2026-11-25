@@ -203,12 +203,22 @@ async def acquire_playback(request: Request):
             if refused.status_code != 409 or refused.headers or renews or payload.get("handoff") is not None:
                 raise
             result = await _start_over_quiet_holder(request, claims, payload.get("clientId"), acquire, refused)
+        if not renews:
+            _tell_others_claimed(request, payload.get("clientId"))
         scrobbling = {}
         if renews:
             claimed_at = time.perf_counter()
             scrobbling = await _scrobbling_status(request)
             timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)
     return JSONResponse({**result, **reference, **scrobbling}, headers={"Cache-Control": "no-store"})
+
+
+def _tell_others_claimed(request, client_id):
+    """The account's other connected clients hear at once that a client took playback."""
+    account_id = getattr(request.state.current_actor, "account_id", None)
+    if account_id is not None:
+        request.app.state.playback_pcm_registry.handover.tell_others(
+            account_id, client_id, {"type": "playback-claimed"})
 
 
 async def _start_over_quiet_holder(request, claims, client_id, acquire, refused):
@@ -298,6 +308,7 @@ async def _confirmed_takeover(request, payload):
         finally:
             await hub.settled(*holder, taken=taken)
         timing["confirmed"] = result["confirmed"]
+        _tell_others_claimed(request, client_id)
         # A client of this same account and library: the one tab the taker may silence in its own browser.
         result = {**result, "previousClientId": observed["client_id"]}
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

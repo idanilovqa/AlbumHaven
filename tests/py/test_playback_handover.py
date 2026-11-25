@@ -423,3 +423,20 @@ def test_the_yield_messages_are_the_contract_the_web_and_the_phone_share():
         assert set(holder.sent[-1]) == set(contract["done"])
 
     asyncio.run(scenario())
+
+
+def test_a_claim_taken_is_told_to_every_other_socket_of_the_account_and_no_one_else():
+    async def scenario():
+        hub, taker, paused, stranger = PlaybackHandoverHub(), Socket(), Socket(), Socket()
+        hub.register(ACCOUNT, "6b1f2e0a-9c4d-4e53-8a77-2f0d9e8c1b22", taker.send)
+        hub.register(ACCOUNT, HOLDER, paused.send)
+        hub.register(ACCOUNT + 1, HOLDER, stranger.send)
+
+        hub.tell_others(ACCOUNT, "6B1F2E0A-9C4D-4E53-8A77-2F0D9E8C1B22", {"type": "playback-claimed"})
+        await asyncio.sleep(0.05)
+
+        assert paused.sent == [{"type": "playback-claimed"}]
+        assert taker.sent == [], "the client that took it is not told"
+        assert stranger.sent == [], "another account hears nothing"
+
+    asyncio.run(scenario())

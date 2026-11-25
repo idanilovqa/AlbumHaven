@@ -18589,6 +18589,40 @@ def test_exact_artist_search_sidebar_keeps_direct_artist_album_and_track_matches
     assert payload["selected_artist"] == "Broadcast"
 
 
+@pytest.mark.parametrize("own_track", [False, True])
+def test_reloaded_exact_artist_search_builds_the_typed_search_tree(
+    monkeypatch, missing_album_browse_repository, own_track,
+):
+    # A reload opens the selected artist with its query: its tree must be the typed search's.
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Active")
+    # Only a file name on another band's album names the searched band, and that track is
+    # credited to another artist (an accented spelling of the band) unless it is the band's own.
+    other = _browse_album_row(artist="Other Band", album_id=2, album_key="other", title="Open Orbit")
+    other["search_matched_track_artist_ids"] = [other["artist_id"] if own_track else 99]
+    other["search_album_title_match"] = False
+    for loader in ("_load_selected_artist_rows", "_load_selected_artist_preview_rows"):
+        monkeypatch.setattr(repository, loader, lambda *_args, **_kwargs: [active])
+    monkeypatch.setattr(
+        repository, "_load_search_rows", lambda *_args, **_kwargs: _partitioned_search_rows([active, other]),
+    )
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {"Broadcast": "Broadcast", "Other Band": "Other Band"},
+        "canonical_to_aliases": {"Broadcast": ["Broadcast"], "Other Band": ["Other Band"]},
+        "projection_stale_reason": "",
+    })
+    params = {"q": "Broadcast", "category": ["main_library"]}
+
+    typed = repository.build_search_payload(query_params=params)
+    reloaded = repository.build_selected_artist_payload(query_params={**params, "artist": "Broadcast"})
+
+    expected = ["Broadcast", "Other Band"] if own_track else ["Broadcast"]
+    assert [row["artist"] for row in typed["artists_sidebar"]] == expected
+    assert reloaded["artists_sidebar"] == typed["artists_sidebar"]
+    assert reloaded["artist_count"] == typed["artist_count"] == len(expected)
+    assert reloaded["show_all_artists_sidebar_link"] is typed["show_all_artists_sidebar_link"]
+
+
 @pytest.mark.parametrize("query, matched_ids, title_match, expected_extra", [
     ("Ария", [2], False, True),
     ("Ария", [], True, True),

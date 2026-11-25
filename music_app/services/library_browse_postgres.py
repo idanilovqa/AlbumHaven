@@ -2001,27 +2001,49 @@ class PostgresLibraryBrowseRepository:
             else []
         )
         search_sidebar_artist_groups: list[dict[str, object]] = []
+        # A selected artist opened with its query (a reload or a shared link) builds the tree the
+        # typed search built: an exact-artist query keeps only the same artists (FTC-SEARCH-NAV-003).
+        exact_search_tree: tuple[str, list[object]] | None = None
         if query and not omit_sidebar:
-            search_sidebar_artist_groups = (
-                list(_search_sidebar_artist_groups)
-                if _search_sidebar_artist_groups is not None
-                else _search_artist_groups(
-                    _canonicalize_artist_rows(
-                        loaded_search_rows
-                        if loaded_search_rows is not None
-                        else self._load_search_rows(
-                            query,
-                            view_state,
-                            alias_to_canonical=alias_to_canonical,
-                            canonical_to_aliases=canonical_to_aliases,
-                            include_missing=True,
-                            connection=_connection,
-                        ),
-                        alias_to_canonical,
-                    ),
+            if _search_sidebar_artist_groups is not None:
+                search_sidebar_artist_groups = list(_search_sidebar_artist_groups)
+            else:
+                if loaded_search_rows is None:
+                    loaded_search_rows = self._load_search_rows(
+                        query,
+                        view_state,
+                        alias_to_canonical=alias_to_canonical,
+                        canonical_to_aliases=canonical_to_aliases,
+                        include_missing=True,
+                        connection=_connection,
+                    )
+                canonical_query_rows = _canonicalize_artist_rows(loaded_search_rows, alias_to_canonical)
+                query_missing_album_rows = list(getattr(loaded_search_rows, "missing_album_rows", []))
+                search_sidebar_artist_groups = _search_tree_artist_groups(
+                    canonical_query_rows,
+                    query_missing_album_rows,
                     query=query,
+                    view_state=view_state,
+                    alias_to_canonical=alias_to_canonical,
+                    canonical_to_aliases=canonical_to_aliases,
                 )
-            )
+                exact_artist_match = self._exact_search_artist_match(
+                    query,
+                    relation_alias_maps,
+                    view_state,
+                    connection=_connection,
+                )
+                if exact_artist_match and (
+                    not _multi_values(query_params or {}, "category")
+                    or _search_rows_include_artist(canonical_query_rows, exact_artist_match)
+                ):
+                    exact_search_tree = (
+                        exact_artist_match,
+                        [
+                            *canonical_query_rows,
+                            *_canonicalize_artist_rows(query_missing_album_rows, alias_to_canonical),
+                        ],
+                    )
         if selected_subphase_ms is not None:
             duplicate_overlay_started_at = perf_counter()
         self._attach_duplicate_sources(
@@ -2151,9 +2173,20 @@ class PostgresLibraryBrowseRepository:
                 sidebar_family_artist_groups,
                 family_display_mode=_selected_artist_family_display_mode(query_params),
             )
-            sidebar_groups = _merge_artist_groups_for_sidebar(
-                rendered_selected_family_groups,
-                search_sidebar_artist_groups,
+            sidebar_groups = (
+                _exact_search_tree_groups(
+                    exact_search_tree[0],
+                    rendered_selected_family_groups,
+                    search_sidebar_artist_groups,
+                    exact_search_tree[1],
+                    query=query,
+                    canonical_to_aliases=canonical_to_aliases,
+                )
+                if exact_search_tree is not None
+                else _merge_artist_groups_for_sidebar(
+                    rendered_selected_family_groups,
+                    search_sidebar_artist_groups,
+                )
             )
             payload["artists_sidebar"] = _artists_sidebar_from_groups(sidebar_groups, alphabetical=True)
             payload["artist_count"] = len(sidebar_groups)
@@ -2537,28 +2570,20 @@ class PostgresLibraryBrowseRepository:
         if query and not requested_all_artists:
             exact_match_started_at = perf_counter()
             exact_match_search_rows_ms = 0.0
-            projected_artist_match = ""
-            projection_is_authoritative = projection_stale_reason == ""
-            if projection_is_authoritative:
-                projected_artist_match = _exact_projected_artist_match(
-                    query,
-                    alias_to_canonical,
-                    canonical_to_aliases,
-                    identity_to_canonical=relation_alias_maps.get(
-                        "identity_to_canonical"
-                    ),
+            exact_artist_match = self._exact_search_artist_match(
+                query,
+                relation_alias_maps,
+                view_state,
+                connection=connection,
+            )
+            if (
+                not exact_artist_match
+                and projection_stale_reason
+                and not rebuilding_complete_projection
+            ):
+                raise SearchProjectionPending(
+                    "Artist relationships are being prepared."
                 )
-                exact_artist_match = projected_artist_match
-            else:
-                exact_artist_match = self._load_exact_artist_match(
-                    query,
-                    view_state,
-                    connection=connection,
-                )
-                if not exact_artist_match and not rebuilding_complete_projection:
-                    raise SearchProjectionPending(
-                        "Artist relationships are being prepared."
-                    )
             if exact_artist_match and _multi_values(params, "category"):
                 search_rows_started_at = perf_counter()
                 search_rows = self._load_search_rows(
@@ -2580,18 +2605,7 @@ class PostgresLibraryBrowseRepository:
                     search_rows,
                     alias_to_canonical,
                 )
-                exact_artist_keys = {
-                    local_inventory_identity_key(artist)
-                    for artist in [exact_artist_match]
-                    if local_inventory_identity_key(artist)
-                }
-                if not any(
-                    local_inventory_identity_key(
-                        str(_row_mapping(row).get("artist_name") or "")
-                    )
-                    in exact_artist_keys
-                    for row in canonical_search_rows
-                ):
+                if not _search_rows_include_artist(canonical_search_rows, exact_artist_match):
                     exact_artist_match = ""
             phase_ms["aliases"] += max(
                 0.0,
@@ -2646,20 +2660,13 @@ class PostgresLibraryBrowseRepository:
                 search_missing_album_rows = list(
                     getattr(search_rows, "missing_album_rows", [])
                 )
-                sidebar_artist_groups = _search_artist_groups(
+                sidebar_artist_groups = _search_tree_artist_groups(
                     canonical_search_rows,
+                    search_missing_album_rows,
                     query=query,
-                )
-                _merge_missing_albums_into_artist_groups(
-                    sidebar_artist_groups,
-                    _missing_album_projection_payloads(
-                        search_missing_album_rows,
-                        view_state=view_state,
-                        query=query,
-                        alias_to_canonical=alias_to_canonical,
-                        canonical_to_aliases=canonical_to_aliases,
-                    ),
+                    view_state=view_state,
                     alias_to_canonical=alias_to_canonical,
+                    canonical_to_aliases=canonical_to_aliases,
                 )
                 exact_artist_key = local_inventory_identity_key(exact_artist_match)
                 selected_artist_preview_rows = [
@@ -2708,38 +2715,16 @@ class PostgresLibraryBrowseRepository:
             )
             payload["artist_groups"] = rendered_artist_groups
             if not omit_sidebar:
-                direct_content_artists = set()
-                for row in [*canonical_search_rows, *_canonicalize_artist_rows(search_missing_album_rows or [], alias_to_canonical)]:
-                    evidence = _row_mapping(row)
-                    source_artist_id = _coerce_int(evidence.get("source_artist_id"))
-                    matched_ids = evidence.get("search_matched_track_artist_ids") or []
-                    if (
-                        source_artist_id > 0 and source_artist_id in matched_ids
-                        or evidence.get("search_album_title_match") is True
-                        and _album_artist_relationship([evidence]) == "owned"
-                    ):
-                        direct_content_artists.add(_artist_display_dedupe_key(evidence.get("artist_name")))
-                matching_sidebar_artists = [
-                    str(group.get("artist") or "").strip()
-                    for group in sidebar_artist_groups
-                    if _artist_display_dedupe_key(group.get("artist")) in direct_content_artists
-                    or _artist_name_matches_search_query(
-                        query,
-                        str(group.get("artist") or "").strip(),
-                        canonical_to_aliases.get(
-                            str(group.get("artist") or "").strip(),
-                            [],
-                        ),
-                    )
-                ]
-                sidebar_groups = _merge_artist_groups_for_sidebar(
+                sidebar_groups = _exact_search_tree_groups(
+                    exact_artist_match,
                     rendered_artist_groups,
                     sidebar_artist_groups,
-                    artists=[
-                        exact_artist_match,
-                        *(group.get("artist") for group in rendered_artist_groups),
-                        *matching_sidebar_artists,
+                    [
+                        *canonical_search_rows,
+                        *_canonicalize_artist_rows(search_missing_album_rows or [], alias_to_canonical),
                     ],
+                    query=query,
+                    canonical_to_aliases=canonical_to_aliases,
                 )
                 # The auto-selected best match leads the gallery; the tree stays alphabetical.
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
@@ -4249,6 +4234,25 @@ class PostgresLibraryBrowseRepository:
         row = cursor.fetchone() if hasattr(cursor, "fetchone") else None
         return _row_mapping(row).get("projection_authoritative") is True
 
+
+    def _exact_search_artist_match(
+        self,
+        query: str,
+        relation_alias_maps: Mapping[str, object],
+        view_state: Mapping[str, object],
+        *,
+        connection: Any,
+    ) -> str:
+        """The artist a query names exactly: from the relation projection when it is current,
+        otherwise from the inventory."""
+        if not relation_alias_maps.get("projection_stale_reason"):
+            return _exact_projected_artist_match(
+                query,
+                relation_alias_maps.get("alias_to_canonical") or {},
+                relation_alias_maps.get("canonical_to_aliases") or {},
+                identity_to_canonical=relation_alias_maps.get("identity_to_canonical"),
+            )
+        return self._load_exact_artist_match(query, view_state, connection=connection)
 
     def _load_exact_artist_match(
         self,
@@ -10167,6 +10171,82 @@ def _merge_artist_groups_for_sidebar(
         seen_keys.add(artist_key)
         merged.append(group)
     return merged
+
+
+def _search_rows_include_artist(rows: Iterable[object], artist: str) -> bool:
+    artist_key = local_inventory_identity_key(artist)
+    return bool(artist_key) and any(
+        local_inventory_identity_key(str(_row_mapping(row).get("artist_name") or "")) == artist_key
+        for row in rows
+    )
+
+
+def _search_tree_artist_groups(
+    canonical_rows: list[object],
+    missing_album_rows: list[object],
+    *,
+    query: str,
+    view_state: Mapping[str, object],
+    alias_to_canonical: Mapping[str, str],
+    canonical_to_aliases: Mapping[str, list[str]],
+) -> list[dict[str, object]]:
+    groups = _search_artist_groups(canonical_rows, query=query)
+    _merge_missing_albums_into_artist_groups(
+        groups,
+        _missing_album_projection_payloads(
+            missing_album_rows,
+            view_state=view_state,
+            query=query,
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
+        ),
+        alias_to_canonical=alias_to_canonical,
+    )
+    return groups
+
+
+def _exact_search_tree_groups(
+    exact_artist_match: str,
+    selected_groups: list[dict[str, object]],
+    search_groups: list[dict[str, object]],
+    evidence_rows: Iterable[object],
+    *,
+    query: str,
+    canonical_to_aliases: Mapping[str, list[str]],
+) -> list[dict[str, object]]:
+    """The tree of a query that names an artist exactly: that artist, the groups the selection
+    renders, and each other artist whose name matches the query or whose own content does (a
+    track its album credits to the album's artist, or its own album's title). Another artist's
+    credit on an album never adds that album."""
+    direct_content_artists = set()
+    for row in evidence_rows:
+        evidence = _row_mapping(row)
+        source_artist_id = _coerce_int(evidence.get("source_artist_id"))
+        if (
+            source_artist_id > 0 and source_artist_id in (evidence.get("search_matched_track_artist_ids") or [])
+            or evidence.get("search_album_title_match") is True
+            and _album_artist_relationship([evidence]) == "owned"
+        ):
+            direct_content_artists.add(_artist_display_dedupe_key(evidence.get("artist_name")))
+    matching_artists = [
+        str(group.get("artist") or "").strip()
+        for group in search_groups
+        if _artist_display_dedupe_key(group.get("artist")) in direct_content_artists
+        or _artist_name_matches_search_query(
+            query,
+            str(group.get("artist") or "").strip(),
+            canonical_to_aliases.get(str(group.get("artist") or "").strip(), []),
+        )
+    ]
+    return _merge_artist_groups_for_sidebar(
+        selected_groups,
+        search_groups,
+        artists=[
+            exact_artist_match,
+            *(group.get("artist") for group in selected_groups),
+            *matching_artists,
+        ],
+    )
 
 
 def _directory_path(value: object) -> str:

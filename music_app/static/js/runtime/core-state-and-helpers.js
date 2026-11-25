@@ -576,7 +576,9 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.scanPageReturnContext
+  // A scan page or library-wide Loose Tracks is the page: no tree row is the current selection.
+  const selectionSuppressed = Boolean(state.ui.scanPageReturnContext || state.ui.looseTracksNavigationActive);
+  const effectiveView = selectionSuppressed
     ? {
       ...v,
       selected_artist: '',
@@ -593,7 +595,7 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.scanPageReturnContext
+    !selectionSuppressed
     && effectiveSurface === 'albums'
     && (
       effectiveView.all_artists_active

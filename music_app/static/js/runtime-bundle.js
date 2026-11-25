@@ -6885,7 +6885,9 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.scanPageReturnContext
+  // A scan page or library-wide Loose Tracks is the page: no tree row is the current selection.
+  const selectionSuppressed = Boolean(state.ui.scanPageReturnContext || state.ui.looseTracksNavigationActive);
+  const effectiveView = selectionSuppressed
     ? {
       ...v,
       selected_artist: '',
@@ -6902,7 +6904,7 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.scanPageReturnContext
+    !selectionSuppressed
     && effectiveSurface === 'albums'
     && (
       effectiveView.all_artists_active
@@ -16690,6 +16692,10 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
   if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
+  // While library-wide Loose Tracks is the page, no artist (or All artists) is the tree's selection.
+  if (Boolean(state.ui.looseTracksNavigationActive) === libraryWideOpen) return;
+  state.ui.looseTracksNavigationActive = libraryWideOpen;
+  if (typeof renderSidebar === 'function') renderSidebar();
 }
 
 function syncCompactLibraryNavigation(looseTracks) {

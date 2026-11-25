@@ -43137,6 +43137,9 @@ const saveFoldDecisions = (() => {
   let asked = null;
   let saves = readSaves();
   let showing = false;
+  // Finished saves whose fold the library may not show yet: its view right after the commit can still
+  // list the copy as its own card. Kept in this page only, until a view holds the fold itself.
+  let settling = [];
 
   function readSaves() {
     try {
@@ -43237,6 +43240,16 @@ const saveFoldDecisions = (() => {
     return changed || appearing.length > 0;
   }
 
+  function listsFoldedCopy(decision) {
+    const folds = decision.albums.filter((album) => album.folds_into);
+    return ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].some((field) => (
+      (Array.isArray(state.view[field]) ? state.view[field] : []).some((group) => (group.albums || []).some((card) => (
+        folds.some((album) => !isAlbum(card, album.folds_into_key, album.folds_into)
+          && isAlbum(card, album.album_key, album.track_paths))
+      )))
+    ));
+  }
+
   // A view read while the save is being written still holds the album as it was. After a partial move
   // the source keeps its name, so only an edited track still in it means the view holds it as it was.
   function showEdit(save) {
@@ -43261,14 +43274,24 @@ const saveFoldDecisions = (() => {
   function show() {
     // Another page's save is over once the library moves past it; that page may have closed before saying so.
     saves = saves.filter((save) => save.own || !save.revision || knownRevision() <= save.revision);
-    if (showing || !saves.length) return false;
+    settling = settling.filter((save) => Date.now() - save.at < SAVE_FOLD_PENDING_MS);
+    if (showing || (!saves.length && !settling.length)) return false;
     showing = true;
     try {
-      return saves.reduce((changed, save) => {
+      const changedSaves = saves.reduce((changed, save) => {
         const edited = showEdit(save);
         const folded = save.decision ? showFolds(save.decision) : false;
         return changed || edited || folded;
       }, false);
+      let changedSettled = false;
+      settling = settling.filter((save) => {
+        // A view this page did not patch that already leaves the copy out holds the fold itself.
+        if (state.view !== save.patchedView && !listsFoldedCopy(save.decision)) return false;
+        changedSettled = showFolds(save.decision) || changedSettled;
+        save.patchedView = state.view;
+        return true;
+      });
+      return changedSaves || changedSettled;
     } finally {
       showing = false;
     }
@@ -43297,6 +43320,7 @@ const saveFoldDecisions = (() => {
           if (!saves.includes(save)) return;
           saves = saves.filter((item) => item !== save);
           storeSaves();
+          if (!failed && save.decision) settling.push(save);
         },
         // The save's own answer lists a folded copy as an album: its card must not come back.
         keep() {

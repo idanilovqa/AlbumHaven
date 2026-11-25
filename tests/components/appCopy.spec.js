@@ -1,7 +1,9 @@
 // The Android app's copy of the last view in a real browser: the shipped service worker and page
 // client on a real origin, with a small server standing in for Album Haven and a fake shell port.
 // IAR-001 (a start from the copy), IAR-005 (offline read-only and recovery without a reload),
-// IAR-006 (signed out deletes the copy) and IAR-007 (the seven-day limit).
+// IAR-006 (signed out deletes the copy) and IAR-007 (the seven-day limit); in an ordinary browser,
+// IAR-W01 (the server first), IAR-W11 (a slow server is waited for; a stale worker is replaced) and
+// IAR-W12 (the first visit is kept before the page has finished loading).
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -10,12 +12,25 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 const client = fs.readFileSync(path.join(root, 'music_app/static/js/app-copy.js'));
 const worker = fs.readFileSync(path.join(root, 'music_app/static/js/app-copy-worker.js'));
+// A worker from an earlier build that answers every navigation itself.
+const STALE_WORKER = Buffer.from(`self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (event) => {
+  if (event.request.mode !== 'navigate') return;
+  event.respondWith(new Response('<!doctype html><h1 data-render>Stale</h1>', { headers: { 'Content-Type': 'text/html' } }));
+});`);
 
 function startServer() {
-  const server = { renders: 0, signedIn: true, account: 'acct-a' };
-  server.http = http.createServer((request, response) => {
+  // [androidShell]: the page runs inside the Android app (capability-ui.js reports its bridge).
+  // [holdLoad]: the page has an image that never arrives, so its `load` never fires (a busy device).
+  const server = {
+    renders: 0, signedIn: true, account: 'acct-a', delayMs: 0, androidShell: true, workerBody: worker, workerServed: [],
+    holdLoad: false,
+  };
+  server.http = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname === '/') {
+      if (server.delayMs) await new Promise(resolve => setTimeout(resolve, server.delayMs));
       if (!server.signedIn) {
         response.writeHead(303, { Location: '/login', 'Cache-Control': 'no-store' });
         response.end();
@@ -30,8 +45,10 @@ function startServer() {
           ? { 'Cache-Control': 'private, no-store', 'X-Album-Haven-App-Copy': server.account, 'X-Album-Haven-Asset-Version': 't1' }
           : { 'Cache-Control': 'no-store, max-age=0' }),
       });
-      response.end(`<!doctype html><html><head>${marker}<script src="/static/js/app-copy.js?v=t1"></script></head>
-        <body><h1 data-render>Render ${server.renders}</h1>
+      const shell = server.androidShell
+        ? '<script>window.AlbumHavenCapabilities = { isAndroidShell: () => true, setReadOnly() {} };</script>' : '';
+      response.end(`<!doctype html><html><head>${marker}${shell}<script src="/static/js/app-copy.js?v=t1" defer></script></head>
+        <body><h1 data-render>Render ${server.renders}</h1>${server.holdLoad ? '<img src="/held.png" alt="">' : ''}
         <section id="app-copy-offline-notice" class="on-page-alert" role="status" hidden>Offline</section></body></html>`);
       return;
     }
@@ -41,15 +58,19 @@ function startServer() {
       return;
     }
     if (url.pathname === '/app-copy-worker.js') {
+      server.workerServed.push(server.workerBody);
       response.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' });
-      response.end(worker);
+      response.end(server.workerBody);
       return;
     }
     if (url.pathname === '/app-copy/account') {
+      if (server.delayMs) await new Promise(resolve => setTimeout(resolve, server.delayMs));
       response.writeHead(server.signedIn ? 200 : 401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       response.end(JSON.stringify(server.signedIn ? { account: server.account } : { detail: 'Authentication required.' }));
       return;
     }
+    // Never answered: the connection closes with the server.
+    if (url.pathname === '/held.png') return;
     if (url.pathname === '/login') {
       response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
       response.end('<!doctype html><title>Sign in</title><form aria-label="Album Haven sign in"><label>Username <input></label></form>');
@@ -79,7 +100,7 @@ async function adoptShell(page) {
 }
 
 async function copyCount(page) {
-  return page.evaluate(async () => (await caches.keys()).filter(name => name.startsWith('album-haven-app-copy-v1.1:')).length);
+  return page.evaluate(async () => (await caches.keys()).filter(name => name.startsWith('album-haven-app-copy-v2.1:')).length);
 }
 
 test.describe('app copy service worker', () => {
@@ -96,7 +117,7 @@ test.describe('app copy service worker', () => {
     // The first page under the worker is fetched as a copy request and kept.
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 2');
-    expect(await copyCount(page)).toBe(1);
+    await expect.poll(() => copyCount(page)).toBe(1);
 
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 2');
@@ -109,6 +130,7 @@ test.describe('app copy service worker', () => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     await context.setOffline(true);
 
     await page.reload();
@@ -129,6 +151,7 @@ test.describe('app copy service worker', () => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     server.signedIn = false;
 
     await page.reload();
@@ -141,21 +164,23 @@ test.describe('app copy service worker', () => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     server.account = 'acct-b';
 
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 3');
     await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('data-account', 'acct-b');
-    expect(await page.evaluate(async () => caches.keys())).toEqual(['album-haven-app-copy-v1.1:acct-b']);
+    await expect.poll(() => page.evaluate(async () => caches.keys())).toEqual(['album-haven-app-copy-v2.1:acct-b']);
   });
 
   test('IAR-007: a copy older than seven days is not shown', async ({ page }) => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     // allow-read-only-measurement-evaluate: ages the kept copy's record by eight days.
     await page.evaluate(async () => {
-      const cache = await caches.open('album-haven-app-copy-v1.1:acct-a');
+      const cache = await caches.open('album-haven-app-copy-v2.1:acct-a');
       const metaUrl = new URL('/__app-copy__/meta', location.origin).href;
       const meta = await (await cache.match(metaUrl)).json();
       for (const kept of Object.values(meta.pages)) kept.savedAt -= 8 * 24 * 60 * 60 * 1000;
@@ -164,6 +189,78 @@ test.describe('app copy service worker', () => {
 
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 3');
+    await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'network');
+  });
+
+  test("IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs", async ({ page }) => {
+    // No Android shell: the page registers the browser worker once it has loaded.
+    server.androidShell = false;
+    await page.goto(`${server.origin}/`);
+    await expect.poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistration('/'))?.active?.scriptURL || ''))
+      .toMatch(/\/app-copy-worker\.js\?mode=web$/);
+    // The first visit is kept once the worker runs (one more server render), without a reload or
+    // leaving the tab.
+    await expect.poll(() => copyCount(page)).toBe(1);
+    expect(server.renders).toBe(2);
+
+    // A quick server still answers every start.
+    await page.reload();
+    await expect(renderHeading(page)).toHaveText('Render 3');
+    await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'network');
+
+  });
+
+  // On a busy device `load` can come late, and the network can go before the copy is kept.
+  test('IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it', async ({ page, context }) => {
+    server.androidShell = false;
+    server.holdLoad = true;
+    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await expect.poll(() => copyCount(page)).toBe(1);
+    expect(await page.evaluate(() => document.readyState)).not.toBe('complete');
+
+    await context.setOffline(true);
+    const tab = await context.newPage();
+    await tab.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await expect(renderHeading(tab)).toHaveText('Render 2');
+    await expect(tab.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'cache');
+    await expect(tab.locator('#app-copy-offline-notice')).toBeVisible();
+  });
+
+  test('IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in', async ({ page }) => {
+    server.androidShell = false;
+    await page.goto(`${server.origin}/`);
+    await expect.poll(() => copyCount(page)).toBe(1);
+
+    server.delayMs = 2500;
+    const started = Date.now();
+    await page.reload();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2500);
+    await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'network');
+    await expect(renderHeading(page)).toHaveText('Render 3');
+    await expect(page.locator('#app-copy-offline-notice')).toBeHidden();
+  });
+
+  test('IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one', async ({ page }) => {
+    server.androidShell = false;
+    server.workerBody = STALE_WORKER;
+    await page.goto(`${server.origin}/`);
+    await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+    await page.reload();
+    await expect(renderHeading(page)).toHaveText('Stale');
+
+    // The server is rebuilt. The stale worker still answers this load (its page has no script to
+    // register anything), and the browser's own update check replaces it.
+    server.workerBody = worker;
+    await page.reload();
+    await expect(renderHeading(page)).toHaveText('Stale');
+    await expect.poll(() => page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration('/');
+      return Boolean(registration?.active && !registration.installing && !registration.waiting);
+    })).toBe(true);
+    await expect.poll(() => server.workerServed.at(-1)).toBe(worker);
+
+    await page.reload();
+    await expect(renderHeading(page)).toHaveText(/^Render \d+$/);
     await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'network');
   });
 });

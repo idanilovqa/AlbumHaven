@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from music_app.services.app_copy import app_copy_enabled
 from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
 from music_app.services.auth_login_postgres import LoginOutcome, PostgresLoginAuthService
 from music_app.services.auth_password_reset_request_postgres import (
@@ -102,6 +103,7 @@ def _render_login(
             "failed": failed,
             "expired": expired,
             "return_to": return_to,
+            "app_copy_enabled": app_copy_enabled(),
         },
     )
 

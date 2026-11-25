@@ -1445,6 +1445,13 @@ function findRememberedRuntimeAlbumCoverAuthority(album) {
 }
 
 function applyViewPayload(payload, options = {}) {
+  // Any applied view replaces one the server could not be reached for (applyUnreachableView),
+  // and the end of a gallery that could not load more (setGalleryEndOffline).
+  if (state.ui?.galleryUnreachable) {
+    state.ui.galleryUnreachable = null;
+    if (typeof document !== 'undefined') document.body?.toggleAttribute?.('data-gallery-view-unreachable', false);
+  }
+  if (typeof setGalleryEndOffline === 'function') setGalleryEndOffline('');
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }

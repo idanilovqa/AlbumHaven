@@ -13,14 +13,17 @@ function buildMissingAlbumMarkHtml() {
 
 function buildAlbumArtboxHtml(config = {}) {
   const requestedState = String(config.state || '').trim().toLowerCase();
-  const state = ['ready', 'loading', 'empty', 'missing'].includes(requestedState)
+  const state = ['ready', 'loading', 'empty', 'missing', 'offline'].includes(requestedState)
     ? requestedState
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
   const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
-  const content = state === 'missing' || state === 'empty'
+  // offline: the OfflineNotice cloud, for art the server could not be reached for.
+  const content = state === 'offline'
+    ? `<span class="album-artbox__offline-mark">${buildOfflineCloudHtml()}</span>`
+    : state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || (state === 'loading'
       ? '<span class="album-artbox__placeholder" role="status">Loading cover art...</span>'

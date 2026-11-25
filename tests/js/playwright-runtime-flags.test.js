@@ -13,6 +13,7 @@ test('resolveBrowserProjectUse uses the verified Chrome executable without chang
     }),
     {
       browserName: 'chromium',
+      serviceWorkers: 'block',
       launchOptions: {
         executablePath: 'C:\\runner-tools\\chrome-win64\\chrome.exe',
       },
@@ -20,8 +21,15 @@ test('resolveBrowserProjectUse uses the verified Chrome executable without chang
   );
   assert.deepEqual(
     resolveBrowserProjectUse('chrome', {}),
-    { browserName: 'chromium', channel: 'chrome' },
+    { browserName: 'chromium', serviceWorkers: 'block', channel: 'chrome' },
   );
+});
+
+test('resolveBrowserProjectUse blocks the device-copy worker unless a spec allows it', () => {
+  for (const browser of ['chromium', 'chrome', 'edge']) {
+    assert.equal(resolveBrowserProjectUse(browser, {}).serviceWorkers, 'block', browser);
+  }
+  assert.equal(resolveBrowserProjectUse('chromium', { PLAYWRIGHT_SERVICE_WORKERS: 'allow' }).serviceWorkers, 'allow');
 });
 
 test('resolveRuntimeFlags parses run-timeout-ms and removes it from Playwright passthrough args', () => {

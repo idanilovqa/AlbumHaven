@@ -7773,6 +7773,326 @@ test('BI cover completion refresh retry requests the current view once at produc
   measureCompletionRefreshRetry('Cover')
 ));
 
+// ---- Server unreachable (server down while the device is online, or the device offline) ----
+
+function unreachableGallery() {
+  const fixture = createContext();
+  useRealViewUrls(fixture.context);
+  fixture.context.state.view = {
+    ...fixture.context.state.view, selected_artist: '3 Crows', query: '',
+    artist_groups: [{ artist: '3 Crows', albums: [{ key: 'crows::one' }] }],
+  };
+  return fixture;
+}
+
+for (const [cause, fail] of [
+  ['no answer at all', request => request.rejectWith(new TypeError('Failed to fetch'))],
+  ['a gateway answering for it (530)', request => request.resolveWith({ status: 530, ok: false })],
+]) {
+  test(`IAR-W10: an artist opened while the server cannot be reached is named and says why it is empty (${cause})`, async () => {
+    const { context, pendingRequests, calls } = unreachableGallery();
+
+    const navigation = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+    fail(pendingRequests[0]);
+
+    assert.equal(await navigation, false);
+    assert.equal(context.state.view.selected_artist, 'Chris Buck', 'the bar names the artist asked for');
+    assert.equal(context.state.view.artist_groups.length, 0, 'the previous artist is never left on screen');
+    assert.equal(context.state.ui.galleryUnreachable, "Can't load Chris Buck, check your network or try again later");
+    assert.equal(calls.pushBrowserViewState.at(-1).selected_artist, 'Chris Buck');
+    assert.deepEqual(calls.showToast, []);
+  });
+}
+
+test('IAR-W10: a background refresh that cannot reach the server leaves the view as it is', async () => {
+  const { context, pendingRequests } = unreachableGallery();
+  const before = context.state.view;
+
+  const refresh = context.fetchAndRender('/view-data?artist=3+Crows', false, { preserveScroll: true });
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+
+  await assert.rejects(refresh, { serverUnreachable: true });
+  assert.equal(context.state.view, before);
+  assert.equal(context.state.ui.galleryUnreachable ?? null, null);
+});
+
+// The flag belongs to the view on screen: an artist selected from loaded albums, or a server
+// answer, replaces the unreachable view rather than staying covered by its alert.
+test('IAR-W10: any view applied replaces one the server could not be reached for', async () => {
+  const { context, pendingRequests } = createArtistFamilyOwnershipContext();
+  useRealViewUrls(context);
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+  assert.equal(context.state.ui.galleryUnreachable, "Can't load Chris Buck, check your network or try again later");
+
+  context.applyViewPayload({ ...context.state.view, selected_artist: 'Mono', artist_groups: [{ artist: 'Mono', albums: [{ key: 'mono::one' }] }] });
+
+  assert.equal(context.state.ui.galleryUnreachable, null);
+});
+
+// FTC-COVERS-019P: a `body:has(...)` rule hid the kept-library line above the unreachable view and
+// made Chrome re-check style on every change anywhere in the page (Cover Lookup's save went over
+// its 200 ms task budget). <body> is marked instead, written only when the view starts or ends.
+test('the unreachable view marks <body> while it shows, and the stylesheet never uses body:has()', async () => {
+  const { context, pendingRequests } = createArtistFamilyOwnershipContext();
+  useRealViewUrls(context);
+  const marks = [];
+  context.document.body = {
+    toggleAttribute(name, on) {
+      marks.push([name, on]);
+    },
+  };
+  const navigation = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await navigation;
+  context.applyViewPayload({ ...context.state.view, selected_artist: 'Mono', artist_groups: [{ artist: 'Mono', albums: [{ key: 'mono::one' }] }] });
+  context.applyViewPayload({ ...context.state.view });
+
+  assert.deepEqual(marks, [['data-gallery-view-unreachable', true], ['data-gallery-view-unreachable', false]]);
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'gallery-main.css'), 'utf8');
+  assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /body:has\(/);
+  assert.match(css, /body\[data-gallery-view-unreachable\] #app-copy-offline-notice \{ display: none; \}/);
+});
+
+test('IAR-W10: the app\'s own "not ready yet" (503) is never taken for an unreachable server', async () => {
+  const { context, pendingRequests } = createContext();
+  const request = context.fetchRetryingPendingProjection('/view-data', {});
+  pendingRequests[0].resolveWith({ status: 503, ok: false, error: 'unavailable' });
+  const response = await request;
+  assert.equal(response.status, 503);
+});
+
+// v003: the end of the kept gallery says why nothing more loads, and stays
+// until more albums do; the short-lived error toast is gone for this case.
+test('IAR-W10: more albums that cannot load end the gallery with the offline line until some do', async () => {
+  let online = false;
+  const gallery = capturedGallery(async () => {
+    if (!online) throw new TypeError('Failed to fetch');
+    return jsonResponse(rootPage);
+  });
+  const text = { textContent: '' };
+  const endNotice = { hidden: true, querySelector: selector => (selector === '.offline-notice__text' ? text : null) };
+  const getElementById = gallery.context.document.getElementById;
+  gallery.context.document.getElementById = id => (id === 'gallery-end-offline' ? endNotice : getElementById(id));
+  gallery.context.state.view = retainedRootView(3);
+
+  assert.equal(await gallery.context.loadNextRootGalleryPage(), false);
+
+  assert.equal(endNotice.hidden, false);
+  assert.equal(text.textContent, "Offline. Can't load more albums, check your network or try again later");
+  assert.deepEqual(gallery.calls.showToast, []);
+
+  online = true;
+  await gallery.context.loadNextRootGalleryPage();
+  assert.equal(endNotice.hidden, true, 'albums that load take the line away');
+});
+
+// ---- Recovery (after the network returns, Offline does not stay for minutes) ----
+
+// [fixture] with timers that run only when the test says, and a window that records listeners.
+function recoveringGallery() {
+  const fixture = unreachableGallery();
+  const { context } = fixture;
+  const timers = [];
+  const windowListeners = new Map();
+  context.setTimeout = (callback, delay) => { timers.push({ callback, delay }); return timers.length; };
+  context.clearTimeout = () => {};
+  context.window.addEventListener = (name, listener) => windowListeners.set(name, listener);
+  context.window.location.pathname = '/';
+  context.window.location.search = '?artist=Chris+Buck';
+  const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await flushMicrotasks(); };
+  const probeAt = delay => timers.filter(timer => timer.delay === delay).at(-1);
+  return { ...fixture, timers, windowListeners, settle, probeAt };
+}
+
+test('IAR-W15: an artist that could not load loads by itself once the server answers again', async () => {
+  const { context, pendingRequests, calls, settle, probeAt } = recoveringGallery();
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+
+  probeAt(2500).callback();
+  await settle();
+  assert.equal(pendingRequests[1].url, '/health');
+  assert.equal(pendingRequests[1].options.cache, 'no-store');
+  pendingRequests[1].resolveWith({ status: 502, ok: false });
+  await settle();
+  assert.equal(pendingRequests.length, 2, 'a gateway answer is not the server: no reload yet');
+
+  probeAt(2500).callback();
+  await settle();
+  pendingRequests[2].resolveWith({ healthy: true });
+  await settle();
+
+  const reload = pendingRequests[3];
+  assert.match(reload.url, /^\/view-data\?.*artist=Chris\+Buck/);
+  reload.resolveWith({ selected_artist: 'Chris Buck', artist_groups: [{ artist: 'Chris Buck', albums: [{ key: 'buck::one' }] }] });
+  await settle();
+  assert.equal(calls.applyViewPayload.at(-1).artist_groups.length, 1);
+});
+
+test('IAR-W15: the browser coming back online probes at once instead of waiting', async () => {
+  const { context, pendingRequests, windowListeners, settle } = recoveringGallery();
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+
+  windowListeners.get('online')();
+  await settle();
+
+  assert.equal(pendingRequests[1].url, '/health');
+});
+
+test('IAR-W15: a probe that gets no answer is given up after 4 s, so a held request never stalls recovery', async () => {
+  const { context, pendingRequests, settle, timers } = recoveringGallery();
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+
+  timers.filter(timer => timer.delay === 2500).at(-1).callback();
+  await settle();
+  const giveUp = timers.filter(timer => timer.delay === 4000).at(-1);
+  assert.ok(giveUp, 'the probe has a 4 s limit');
+  giveUp.callback();
+  await settle();
+
+  assert.ok(timers.filter(timer => timer.delay === 2500).length >= 2, 'the next probe is scheduled');
+});
+
+test('IAR-W15: the end of a gallery that could not load more continues by itself once the server answers', async () => {
+  let online = false;
+  const gallery = capturedGallery(async (url) => {
+    if (new URL(url, 'http://localhost').pathname === '/health') return online ? jsonResponse({ status: 'ok' }) : Promise.reject(new TypeError('Failed to fetch'));
+    if (!online) throw new TypeError('Failed to fetch');
+    return jsonResponse(rootPage);
+  });
+  const text = { textContent: '' };
+  const endNotice = { hidden: true, querySelector: selector => (selector === '.offline-notice__text' ? text : null) };
+  const getElementById = gallery.context.document.getElementById;
+  gallery.context.document.getElementById = id => (id === 'gallery-end-offline' ? endNotice : getElementById(id));
+  gallery.context.state.view = retainedRootView(3);
+  assert.equal(await gallery.context.loadNextRootGalleryPage(), false);
+  assert.equal(endNotice.hidden, false);
+
+  online = true;
+  const probe = gallery.timers.at(-1);
+  probe();
+  await settleRequests();
+
+  assert.equal(endNotice.hidden, true, 'the line goes');
+  const pages = gallery.capture.urls().filter(url => new URL(url, 'http://localhost').searchParams.get('gallery_cursor'));
+  assert.equal(pages.length, 2, 'the next page is asked for again without a scroll');
+});
+
+// Request-capture contracts for recovery (tests/ci/bounded-interactions.json).
+function unreachableCapturedGallery() {
+  let up = false;
+  const gallery = capturedGallery(async (url) => {
+    if (!up) throw new TypeError('Failed to fetch');
+    return new URL(url, 'http://localhost').pathname === '/health' ? jsonResponse({ status: 'ok' }) : jsonResponse({ artist_groups: [], payload_tier: 'full' });
+  });
+  gallery.context.window.location.search = '?artist=Chris+Buck';
+  return { ...gallery, bringUp: () => { up = true; }, cutOff: () => { up = false; } };
+}
+
+test('request capture: once the server answers again, a view that could not load reloads once, however many failed', async () => {
+  const id = 'js:runtime/gallery-refresh-and-status.js#resumeGalleryAfterServerReachable';
+  const failNavigation = gallery => gallery.context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  await measureInteractionContract(id, {
+    async setup(failedNavigations) {
+      const gallery = unreachableCapturedGallery();
+      for (let index = 0; index < failedNavigations; index += 1) await failNavigation(gallery);
+      return gallery;
+    },
+    // Each pass is one recovery; a later pass is cut off again first.
+    async act(gallery, pass) {
+      if (pass > 1) {
+        gallery.cutOff();
+        await failNavigation(gallery);
+      }
+      assert.ok(gallery.context.state.ui.galleryUnreachable);
+      gallery.bringUp();
+      const before = gallery.capture.urls().length;
+      const metrics = await gallery.capture.counter.measure(async () => {
+        gallery.timers.at(-1)();
+        await settleRequests();
+      });
+      const urls = gallery.capture.urls().slice(before);
+      assert.deepEqual(urls.map(url => new URL(url, 'http://localhost').pathname), ['/health', '/view-data']);
+      return { requests: urls.slice(1), metrics: { ...metrics, requests: metrics.requests - 1 /* the /health probe */ } };
+    },
+  });
+});
+
+test('request capture: while the server is unreachable, one /health probe per tick, however many requests failed', async () => {
+  const id = 'js:runtime/pending-projection-fetch.js#serverReachability';
+  const failRequest = gallery => gallery.context.fetchRetryingPendingProjection('/view-data', {}).catch(() => {});
+  await measureInteractionContract(id, {
+    async setup(failedRequests) {
+      const gallery = unreachableCapturedGallery();
+      const session = { gallery, surfacesTold: 0 };
+      gallery.context.onServerReachableAgain(() => { session.surfacesTold += 1; });
+      for (let index = 0; index < failedRequests; index += 1) await failRequest(gallery);
+      return session;
+    },
+    // Each pass is one failed probe and one answered probe; a later pass is cut off again first.
+    async act(session, pass) {
+      const { gallery } = session;
+      if (pass > 1) {
+        gallery.cutOff();
+        await failRequest(gallery);
+      }
+      const told = session.surfacesTold;
+      const timersBefore = gallery.timers.length;
+      const before = gallery.capture.urls().length;
+      const metrics = await gallery.capture.counter.measure(async () => {
+        gallery.timers.at(-1)();
+        await settleRequests();
+        gallery.bringUp();
+        gallery.timers.at(-1)();
+        await settleRequests();
+        gallery.capture.counter.count('timers', gallery.timers.length - timersBefore);
+        gallery.capture.counter.count('outputEmissions', session.surfacesTold - told);
+      });
+      const urls = gallery.capture.urls().slice(before);
+      assert.deepEqual(urls, ['/health', '/health']);
+      assert.equal(session.surfacesTold - told, 1, 'each surface is told once');
+      return { requests: urls, metrics };
+    },
+  });
+});
+
+// The offline-data follow-up's worker answers some requests from the device copy, marked
+// `X-Album-Haven-App-Copy: cache`: the server was not reached, and those views refresh on recovery.
+const deviceCopyAnswer = body => ({
+  ok: true, status: 200,
+  headers: { get: name => (name === 'X-Album-Haven-App-Copy' ? 'cache' : null) },
+  json: async () => body, clone() { return deviceCopyAnswer(body); },
+});
+
+test('IAR-W15: an answer from the device copy is shown but starts probing, and never counts as the server answering', async () => {
+  const { context } = createContext();
+  context.fetch = async () => deviceCopyAnswer({ artist_groups: [] });
+  const response = await context.fetchRetryingPendingProjection('/view-data?artist=Kept', {});
+
+  assert.equal(response.status, 200, 'the kept data is returned as usual');
+  assert.equal(context.isServerUnreachable(), true);
+});
+
+test('IAR-W15: a view shown from the device copy is brought up to date in place once the server answers', async () => {
+  const { context } = createContext();
+  let refreshed = 0;
+  context.refreshCurrentViewAfterBackgroundCompletion = async () => { refreshed += 1; return true; };
+  context.fetch = async () => deviceCopyAnswer({ artist_groups: [] });
+  await context.fetchRetryingPendingProjection('/view-data?artist=Kept', {});
+
+  context.noteServerReachable();
+  await flushMicrotasks();
+
+  assert.equal(refreshed, 1);
+});
+
 test('a refreshed root window anchors on the section of the card on screen, not the first group holding its album', () => {
   // FTC-TAGS-011/012: the card at the top of the screen was a jointly credited album, also listed
   // under an artist far above; anchoring there ended the window before the artist on screen.

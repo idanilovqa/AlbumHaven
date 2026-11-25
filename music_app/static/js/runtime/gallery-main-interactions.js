@@ -852,6 +852,15 @@ function renderGalleryMainContext(bar, context) {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  // A view the server could not be reached for has no counts to give, only its name.
+  if (state.ui?.galleryUnreachable) {
+    summary.hidden = true;
+    summary.textContent = '';
+    if (inlineTotal) {
+      inlineTotal.hidden = true;
+      inlineTotal.textContent = '';
+    }
+  }
   positionGalleryFamilyPanel(bar);
 }
 

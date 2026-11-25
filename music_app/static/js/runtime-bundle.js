@@ -7358,10 +7358,17 @@ function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {
 
 // BEGIN js/runtime/trigger-anchor.js
 
-function getTriggerAnchorGeometry(anchor, surface) {
+// `borders` holds the trigger's and panel's left/right border widths.
+function getTriggerAnchorGeometry(anchor, surface, borders = {}) {
   const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
   const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
   const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
+  // The panel's side line continues the trigger's outline, drawn 2px outside the
+  // trigger's padding box. It starts at that outer edge (in the panel's padding-box
+  // coordinates) and covers the panel's own border, so neither border widths nor a
+  // rounded panel position can step the join.
+  const sideLeft = anchor.left + (borders.anchorLeft || 0) - 2 - (surface.left + (borders.surfaceLeft || 0));
+  const sideRight = surface.right - (borders.surfaceRight || 0) - (anchor.right - (borders.anchorRight || 0) + 2);
   return {
     edge,
     side: alignedLeft && alignedRight ? 'none'
@@ -7370,6 +7377,10 @@ function getTriggerAnchorGeometry(anchor, surface) {
     right: Math.max(0, surface.right - anchor.right),
     width: anchor.width,
     gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
+    'side-left': sideLeft,
+    'side-left-width': Math.max(2, -sideLeft),
+    'side-right': sideRight,
+    'side-right-width': Math.max(2, -sideRight),
   };
 }
 
@@ -7425,7 +7436,10 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
-  const visualAnchor = anchor;
+  // A text field cannot draw the joined outline (no pseudo-elements); the shared
+  // dropdown component's control draws it around the field instead.
+  const visualAnchor = anchor.matches?.('input, select, textarea')
+    ? anchor.closest?.('.ui-dropdown-control') || anchor : anchor;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
@@ -7454,7 +7468,12 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
-  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds);
+  const anchorStyle = globalThis.getComputedStyle?.(visualAnchor);
+  const borderWidth = (style, side) => Number.parseFloat(style?.[`border${side}Width`]) || 0;
+  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds, {
+    anchorLeft: borderWidth(anchorStyle, 'Left'), anchorRight: borderWidth(anchorStyle, 'Right'),
+    surfaceLeft: borderWidth(surfaceStyle, 'Left'), surfaceRight: borderWidth(surfaceStyle, 'Right'),
+  });
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'
@@ -7475,8 +7494,12 @@ function syncTriggerAnchor(surface, anchor) {
  if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
   if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
-  for (const name of ['left', 'right', 'width', 'gap']) {
-    surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
+  // Scroll and resize resynchronize often; only changed geometry is written.
+  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-left-width', 'side-right', 'side-right-width']) {
+    const value = `${geometry[name]}px`;
+    if (surface.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
+      surface.style.setProperty(`--trigger-anchor-${name}`, value);
+    }
   }
   visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
   if (previous?.anchor === anchor) return;
@@ -7821,16 +7844,21 @@ function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
   surface.style.setProperty?.('--artist-info-body-max-height', `${Math.max(0, Math.floor(available))}px`);
 }
 
+// The artist info panel ends above a visible player.
+function getGalleryArtistInfoViewportBottom() {
+  const player = document.querySelector('[data-shell-slot="bottom_player"]');
+  const playerBounds = player?.getBoundingClientRect?.();
+  return player && !player.hidden && Number(playerBounds?.height || 0) > 0
+    ? Math.min(window.innerHeight, Number(playerBounds.top))
+    : window.innerHeight;
+}
+
 function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!surface?.matches?.('.artist-info-overlay')
       || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
   const scroll = document.getElementById('albums-scroll');
   if (!scroll) return 0;
-  const player = document.querySelector('[data-shell-slot="bottom_player"]');
-  const playerBounds = player?.getBoundingClientRect?.();
-  const viewportBottom = player && !player.hidden && Number(playerBounds?.height || 0) > 0
-    ? Math.min(window.innerHeight, Number(playerBounds.top))
-    : window.innerHeight;
+  const viewportBottom = getGalleryArtistInfoViewportBottom();
   surface.style?.removeProperty?.('--artist-info-panel-max-height');
   surface.style?.removeProperty?.('--artist-info-body-max-height');
   const requiredOffset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
@@ -7855,6 +7883,9 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   if (revealSpace) scroll.style?.setProperty?.('--artist-info-reveal-space', `${Math.ceil(revealSpace)}px`);
   else scroll.style?.removeProperty?.('--artist-info-reveal-space');
   scroll.scrollTop += offset;
+  // The scroll event this reveal causes is not the user moving the gallery: it keeps the open-time fit.
+  const opening = galleryMainSurfaceController?.current?.();
+  if (opening?.surface === surface) opening.revealScrollTop = scroll.scrollTop;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
   requestAnimationFrame(() => {
     const active = galleryMainSurfaceController?.current?.();
@@ -9164,9 +9195,19 @@ function initGalleryMain() {
         }
         if (String(settled.anchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(settled.anchor, scroll)) {
-          settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
-          settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          // A panel following its divider "i" may pass behind the player, except on the reveal's
+          // own scroll. The header "i" does not move, so a panel it owns keeps fitting above the player.
+          const followsGallery = !settled.anchor.closest?.('[data-gallery-bar-instance="gallery"]');
+          if (!followsGallery || settled.revealScrollTop !== scroll.scrollTop) {
+            settled.revealScrollTop = null;
+            settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
+            settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          }
           positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+          const viewportBottom = getGalleryArtistInfoViewportBottom();
+          if (!followsGallery && Number(settled.surface.getBoundingClientRect?.().bottom || 0) > viewportBottom) {
+            constrainGalleryArtistInfoSurface(settled.surface, settled.anchor, viewportBottom);
+          }
         } else {
           closeGalleryMainSurface(false);
         }
@@ -32008,7 +32049,7 @@ function renderUtilityLogHistory() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'History';
   const value = getUtilityLogHistoryController().getState();
   if (els.search) { els.search.disabled = false; els.search.readOnly = true; els.search.value = value.temporaryRowId ? value.periodLabel || '' : ''; els.search.placeholder = 'Choose a log period'; }
-  if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
+  if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.classList.remove('is-active'); els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   const scroll = els.list.scrollTop;
   reconcileUtilityLogHistoryTree(els, value);

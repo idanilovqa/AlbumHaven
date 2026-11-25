@@ -1,7 +1,14 @@
-function getTriggerAnchorGeometry(anchor, surface) {
+// `borders` holds the trigger's and panel's left/right border widths.
+function getTriggerAnchorGeometry(anchor, surface, borders = {}) {
   const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
   const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
   const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
+  // The panel's side line continues the trigger's outline, drawn 2px outside the
+  // trigger's padding box. It starts at that outer edge (in the panel's padding-box
+  // coordinates) and covers the panel's own border, so neither border widths nor a
+  // rounded panel position can step the join.
+  const sideLeft = anchor.left + (borders.anchorLeft || 0) - 2 - (surface.left + (borders.surfaceLeft || 0));
+  const sideRight = surface.right - (borders.surfaceRight || 0) - (anchor.right - (borders.anchorRight || 0) + 2);
   return {
     edge,
     side: alignedLeft && alignedRight ? 'none'
@@ -10,6 +17,10 @@ function getTriggerAnchorGeometry(anchor, surface) {
     right: Math.max(0, surface.right - anchor.right),
     width: anchor.width,
     gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
+    'side-left': sideLeft,
+    'side-left-width': Math.max(2, -sideLeft),
+    'side-right': sideRight,
+    'side-right-width': Math.max(2, -sideRight),
   };
 }
 
@@ -65,7 +76,10 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
-  const visualAnchor = anchor;
+  // A text field cannot draw the joined outline (no pseudo-elements); the shared
+  // dropdown component's control draws it around the field instead.
+  const visualAnchor = anchor.matches?.('input, select, textarea')
+    ? anchor.closest?.('.ui-dropdown-control') || anchor : anchor;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
@@ -94,7 +108,12 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
-  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds);
+  const anchorStyle = globalThis.getComputedStyle?.(visualAnchor);
+  const borderWidth = (style, side) => Number.parseFloat(style?.[`border${side}Width`]) || 0;
+  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds, {
+    anchorLeft: borderWidth(anchorStyle, 'Left'), anchorRight: borderWidth(anchorStyle, 'Right'),
+    surfaceLeft: borderWidth(surfaceStyle, 'Left'), surfaceRight: borderWidth(surfaceStyle, 'Right'),
+  });
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'
@@ -115,8 +134,12 @@ function syncTriggerAnchor(surface, anchor) {
  if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
   if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
-  for (const name of ['left', 'right', 'width', 'gap']) {
-    surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
+  // Scroll and resize resynchronize often; only changed geometry is written.
+  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-left-width', 'side-right', 'side-right-width']) {
+    const value = `${geometry[name]}px`;
+    if (surface.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
+      surface.style.setProperty(`--trigger-anchor-${name}`, value);
+    }
   }
   visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
   if (previous?.anchor === anchor) return;

@@ -348,18 +348,18 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   const geometry = await page.evaluate(() => {
     const field = document.querySelector('.search-field').getBoundingClientRect();
     const menu = document.querySelector('.utility-problem-filter-menu').getBoundingClientRect();
-    const sidebar = document.querySelector('.utility-sidebar').getBoundingClientRect();
+    const button = document.querySelector('.utility-problem-filter-button').getBoundingClientRect();
     return {
       fieldLeft: field.left,
-      fieldRight: field.right,
+      buttonRight: button.right,
       menuLeft: menu.left,
       menuRight: menu.right,
-      sidebarRight: sidebar.right,
     };
   });
   expect(geometry.menuLeft).toBeCloseTo(geometry.fieldLeft, 0);
-  expect(geometry.menuRight).toBeCloseTo(geometry.fieldRight, 0);
-  await expect(page.locator('.utility-problem-filter-menu')).toHaveAttribute('data-trigger-anchor-side', 'none');
+  // The menu's right side continues the filter button's outline (owner, BUGFIX-11).
+  expect(Math.abs(geometry.menuRight - geometry.buttonRight)).toBeLessThanOrEqual(0.5);
+  await expect(page.locator('.utility-problem-filter-menu')).toHaveAttribute('data-trigger-anchor-side', 'right');
   await expect(page.locator('.search-field-control')).not.toHaveClass(/trigger-anchor-open/);
   await expect(page.locator('.utility-problem-filter-button')).toHaveClass(/trigger-anchor-open/);
   await expect(page.locator('.utility-problem-filter-button')).toHaveCSS('border-bottom-right-radius', '0px');
@@ -386,7 +386,7 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   });
   expect(edgeColors.connectorRight).toBe(edgeColors.connectorLeft);
   expect(edgeColors.connectorRightColor).toBe(edgeColors.connectorLeftColor);
-  expect(edgeColors.edgeOverlay).toBe('none');
+  expect(edgeColors.edgeOverlay).toBe('block');
   expect(edgeColors.topEdgeOverlay).toBe('block');
   expect(edgeColors.buttonSurface).toBe(edgeColors.menuSurface);
   expect(edgeColors.buttonBottomBorder).toBe('0px');

@@ -197,7 +197,9 @@
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  right: 0;
+  /* The right side continues the filter button's outline: the button sits
+     inside the field's 1px border and the action's 2px padding. */
+  right: 3px;
   z-index: 40;
   width: auto;
   --trigger-anchor-scroll-max-height: 320px;

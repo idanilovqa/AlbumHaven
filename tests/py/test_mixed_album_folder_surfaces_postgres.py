@@ -140,8 +140,8 @@ def test_an_albumless_file_whose_only_label_is_the_stale_mixed_one_stays_in_loos
 
     fixture = watcher_repair_inventory
     home = [_entry(fixture, "Home", "Xi", 1, total=2), _entry(fixture, "Home", "Xi", 2, total=2)]
-    # A proven copy of Xi 1 in another folder: the scan gives it no album.
-    copy = _entry(fixture, "Elsewhere", "Xi", 1, total=2)
+    # A song without an album tag: the scan gives it no album.
+    copy = {**_entry(fixture, "Loose", "Untagged", 9), "album": ""}
     fixture.seed(*home, copy)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         albumless = connection.execute(

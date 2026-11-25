@@ -77,6 +77,13 @@ def library_app(tmp_path, monkeypatch):
     refusal = pytest.MonkeyPatch()
     refusal.setattr(psycopg, "connect", refuse_connection)
     refusal.setattr(psycopg.Connection, "connect", classmethod(lambda cls, *args, **kwargs: refuse_connection()))
+    # A refresh or rule write here queues an ignored-repair drain against this unreachable database. Run in the
+    # background, it fails and retries every minute for the rest of the session, and its work was counted
+    # against later contracts (news_center, 11-25). These contracts record the request instead.
+    from music_app.services import ignored_repair_intents
+
+    app.state.queued_ignored_repair_drains = []
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", app.state.queued_ignored_repair_drains.append)
     monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", _RootSettingsStore)
     # The in-memory inventory below is the published library: no hydration runs.
     monkeypatch.setattr(api_read_asgi_routes, "request_library_hydration_for_state", lambda *_args, **_kwargs: True)
@@ -1059,11 +1066,13 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_add_remote"))
 
 
-@pytest.mark.parametrize("route", ["additional-artwork", "additional-artwork/remove"])
-def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size(
-    library_app, tmp_path, monkeypatch, route,
+def test_cover_lookup_additional_artwork_remove_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch,
 ):
-    """The second artbox's choose and remove routes read and check only the selected album."""
+    """The second artbox's remove route reads and checks only the selected album. (Its choose route has its own
+    contract below; this one shared that test's name, so the later definition hid it and the remove entry was
+    never measured.)"""
+    route = "additional-artwork/remove"
     from music_app.routes import api_wave_d_asgi_routes
     from music_app.services import album_additional_artworks_postgres, covers, library_browse_postgres
 
@@ -1100,10 +1109,7 @@ def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_
     monkeypatch.setattr(api_wave_d_asgi_routes, "AlbumCoverCandidateSnapshotRepository", AlbumIdentity)
     monkeypatch.setattr(library_browse_postgres, "PostgresLibraryBrowseRepository", SelectedAlbumDetail)
     monkeypatch.setattr(album_additional_artworks_postgres, "AlbumAdditionalArtworkRepository", Artworks)
-    interaction = (
-        "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork"
-        + ("_remove" if route.endswith("remove") else "")
-    )
+    interaction = "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove"
 
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"{route[-6:]}-{album_count}", album_count)
@@ -1116,7 +1122,7 @@ def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_
             status, _headers, body = run_asgi_request(library_app, "POST", f"/utilities/cover-lookup/{route}", json_body=payload)
             assert status == 200, body
             assert decode_json(body)["album_id"] == 7
-            assert [kind for kind, _values in saved] == ["remove" if route.endswith("remove") else "save"]
+            assert [kind for kind, _values in saved] == ["remove"]
 
         request()
         counts.__init__()

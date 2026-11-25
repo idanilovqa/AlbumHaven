@@ -11362,8 +11362,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
-      "testIdentity": "test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_remove_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_additional_artwork_remove_route_contract_reads_only_the_selected_album_at_production_library_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {

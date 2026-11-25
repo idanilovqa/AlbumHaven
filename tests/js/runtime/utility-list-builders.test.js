@@ -9039,3 +9039,25 @@ test('a rule whose album or file is gone says it applies to nothing, beside its 
   assert.equal((html.match(/data-small-alert=/g) || []).length, 1, 'only the gone rule says so');
   assert.equal((html.match(/data-revert-problem-ignore=/g) || []).length, 2, 'each rule keeps its Revert rule button');
 });
+
+test('a merge completed from a hydrated destination declares every merged track as its membership (FTC-TAGS-020)', () => {
+  // Restore 5: the optimistic destination carried only the moved track's path; merged with the hydrated
+  // source it listed 13 tracks but kept that one path, so Album Details trimmed it to one row.
+  const context = loadHelpers();
+  const path = (number) => `D:/Music/DDT/Studio/${String(number).padStart(2, '0')}.mp3`;
+  const hydrated = {
+    key: 'source', name: 'Studio', album_artist: 'DDT', year: 1999, preview_only: false,
+    tracks: Array.from({ length: 12 }, (_, index) => ({ path: path(index + 5) })),
+    track_paths: Array.from({ length: 12 }, (_, index) => path(index + 5)),
+  };
+  const candidate = {
+    key: 'source', name: 'Studio', album_artist: 'DDT', year: 1999, preview_only: true,
+    tracks: [{ path: path(4) }], track_paths: [path(4)], track_count_preview: 13,
+  };
+  const { track_paths: _paths, ...hydratedWithoutMembership } = hydrated;
+  for (const visible of [hydrated, hydratedWithoutMembership]) {
+    const merged = context.mergeVisibleAlbumWithOptimisticCandidate(visible, candidate);
+    assert.equal(merged.tracks.length, 13);
+    assert.deepEqual(new Set(merged.track_paths), new Set(merged.tracks.map((track) => track.path)));
+  }
+});

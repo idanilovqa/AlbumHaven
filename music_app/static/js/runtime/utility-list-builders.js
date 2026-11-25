@@ -1135,11 +1135,16 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     mergedAlbum.total_duration_seconds = totalDurationSeconds;
     mergedAlbum.total_duration_display = formatCanonicalAlbumDuration(totalDurationSeconds);
   }
-  if (visibleAlbum?.preview_only !== true
-      && tracks.length
-      && (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
-        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview'))) {
-    mergedAlbum.track_count_preview = tracks.length;
+  if (visibleAlbum?.preview_only !== true && tracks.length) {
+    if (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
+        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview')) {
+      mergedAlbum.track_count_preview = tracks.length;
+    }
+    // A complete merge is its tracks: a membership copied from either side (the moved tracks only, or
+    // the destination before the merge) made Album Details trim the merged album back to it.
+    if (Array.isArray(mergedAlbum.track_paths)) {
+      mergedAlbum.track_paths = tracks.map((track) => String(track?.path || '')).filter(Boolean);
+    }
   }
   return mergedAlbum;
 }

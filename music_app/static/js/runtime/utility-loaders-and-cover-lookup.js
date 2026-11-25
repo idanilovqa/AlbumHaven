@@ -140,10 +140,22 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
-        // A track-opened album stays listed until the complete list can confirm it.
+        // A track-opened album stays listed until the complete list can confirm it, unless it no longer
+        // lists that track: a list read during a merge still held the merged-away album (FTC-TAGS-020).
+        const focusedTrackPath = String(state.utility.focusedTrackPath || '');
+        const listsFocusedTrack = (album) => {
+          const paths = [
+            ...(Array.isArray(album?.track_paths) ? album.track_paths : []),
+            ...(Array.isArray(album?.tracks) ? album.tracks.map((track) => track?.path) : []),
+          ].map((path) => String(path || '')).filter(Boolean);
+          // Only a loaded membership can show the track has left; a summary row without one keeps its pin.
+          if (!focusedTrackPath || (!paths.length && album?.detail_loaded !== true)) return true;
+          return paths.includes(focusedTrackPath);
+        };
         const pinnedKey = String(
           state.utility.pinnedProblematicKey
-          || (data.complete === false && selectedAlbum && !state.utility.problematicMutation ? selectedKey : ''),
+          || (data.complete === false && selectedAlbum && !state.utility.problematicMutation
+            && listsFocusedTrack(selectedAlbum) ? selectedKey : ''),
         );
         const pinnedAlbum = pinnedKey && data.complete === false
           && !summaryItems.some((item) => item.key === pinnedKey)

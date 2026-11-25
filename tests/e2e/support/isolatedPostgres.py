@@ -1044,9 +1044,48 @@ def assert_runtime_grants(runtime_database_url: str) -> None:
         )
 
 
+def _migration_set_seal() -> str:
+    """Names and checksums of every source migration, so the seal goes stale when one changes."""
+    digest = hashlib.sha256()
+    for path in sorted((ROOT / "migrations" / "postgres").glob("*.sql")):
+        digest.update(f"{path.name}:{hashlib.sha256(path.read_bytes()).hexdigest()}\n".encode("utf-8"))
+    return "isolated-postgres-migrations:" + digest.hexdigest()
+
+
+def _drop_schemas_unless_sealed(setup_database_url: str, seal: str) -> None:
+    """Tests that drop the application schemas and re-run migrations outside the ledger leave
+    objects the ledger does not list, and replaying the ledger over them fails (DuplicateColumn
+    on 0070). Only prepare_isolated_database seals the ops schema and a schema drop removes the
+    seal, so a missing or stale seal means the schemas are rebuilt from nothing."""
+    from psycopg import sql
+
+    with _connect(setup_database_url) as connection:
+        _assert_connected_role(connection, SETUP_ROLE)
+        row = connection.execute(
+            "select obj_description(to_regnamespace('ops'), 'pg_namespace') as seal"
+        ).fetchone()
+        if row["seal"] != seal:
+            connection.execute(
+                sql.SQL("drop schema if exists {} cascade").format(
+                    sql.SQL(", ").join(sql.Identifier(schema) for schema in _APPLICATION_SCHEMAS)
+                )
+            )
+
+
+def _seal_schemas(setup_database_url: str, seal: str) -> None:
+    from psycopg import sql
+
+    with _connect(setup_database_url) as connection:
+        _assert_connected_role(connection, SETUP_ROLE)
+        connection.execute(sql.SQL("comment on schema ops is {}").format(sql.Literal(seal)))
+
+
 def prepare_isolated_database(setup_database_url: str, runtime_database_url: str) -> None:
+    seal = _migration_set_seal()
+    _drop_schemas_unless_sealed(setup_database_url, seal)
     reset_application_tables(setup_database_url)
     apply_all_migrations(setup_database_url)
+    _seal_schemas(setup_database_url, seal)
     grant_runtime_role_privileges(setup_database_url, runtime_database_url)
     seed_bootstrap_owner_and_library(setup_database_url)
     assert_runtime_connection(runtime_database_url)

@@ -989,6 +989,17 @@ def test_isolated_environment_keeps_seeded_cover_misses_active_for_unrelated_sca
 
 def test_database_preparation_resets_before_migrations_and_preserves_migration_seed_state(monkeypatch):
     calls: list[str] = []
+    monkeypatch.setattr(isolatedPostgres, "_migration_set_seal", lambda: "seal")
+    monkeypatch.setattr(
+        isolatedPostgres,
+        "_drop_schemas_unless_sealed",
+        lambda _url, seal: calls.append(f"drop schemas without {seal}"),
+    )
+    monkeypatch.setattr(
+        isolatedPostgres,
+        "_seal_schemas",
+        lambda _url, seal: calls.append(f"write {seal}"),
+    )
     monkeypatch.setattr(
         isolatedPostgres,
         "reset_application_tables",
@@ -1023,8 +1034,10 @@ def test_database_preparation_resets_before_migrations_and_preserves_migration_s
     isolatedPostgres.prepare_isolated_database("setup", "runtime")
 
     assert calls == [
+        "drop schemas without seal",
         "reset stale rows",
         "migrate including 0017 seed",
+        "write seal",
         "restore runtime grants",
         "seed launcher fixtures",
         "validate runtime role",

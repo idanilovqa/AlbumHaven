@@ -10298,6 +10298,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/problemFilterMenuScroll.spec.js",
+    "case": "desktop › ticking and unticking a filter low in the scrolled menu keeps the menu open where it was",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "desktop: ticking and unticking a filter low in the scrolled menu keeps the menu open where it was"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/problemFilterMenuScroll.spec.js",
+    "case": "phone › ticking and unticking a filter low in the scrolled menu keeps the menu open where it was",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "phone: ticking and unticking a filter low in the scrolled menu keeps the menu open where it was"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/problemExclusionRuleOrder.spec.js",
     "case": "a queued and then saved Ignore shows each rule at its reload position",
     "profile": null,

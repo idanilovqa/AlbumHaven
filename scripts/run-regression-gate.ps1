@@ -42,7 +42,7 @@ $gates = @{
             'tests/js/runtime/utility-problematic-focused-track-render.test.js',
             'tests/js/runtime/problem-exclusion-mutations.test.js', 'tests/js/problematic-payload-evidence.test.js',
             'tests/js/performance-change-impact.test.js', 'tests/js/e2e-performance-helper-guards.test.js')
-        Components = @('problematicFilesVirtualFocus.spec.js')
+        Components = @('problematicFilesVirtualFocus.spec.js', 'problemFilterMenuScroll.spec.js')
         FunctionalArea = 'problematic-files'
         Performance = @{ Profile = 'utility-problematic-files'; Targets = 'utility-problematic-files,problematic-files-focused' }
     }

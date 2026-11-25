@@ -26,7 +26,7 @@ single-flight invalidation, and indexed physical-folder reads. Keep real SQL EXP
 
 ```powershell
 node --test --test-concurrency=1 tests/js/runtime/utility-problematic-load-diagnostics.test.js tests/js/runtime/problematic-files-virtual-list.test.js tests/js/runtime/utility-problematic-focused-track-render.test.js tests/js/runtime/problem-exclusion-mutations.test.js tests/js/runtime/utility-rules-search.test.js tests/js/problematic-payload-evidence.test.js tests/js/performance-change-impact.test.js tests/js/e2e-performance-helper-guards.test.js
-npx playwright test problematicFilesVirtualFocus.spec.js --config=playwright.component.config.js --workers=1
+npx playwright test problematicFilesVirtualFocus.spec.js problemFilterMenuScroll.spec.js --config=playwright.component.config.js --workers=1
 ```
 
 Require bounded first-page painting, paging as the list scrolls (never the

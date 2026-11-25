@@ -7888,6 +7888,20 @@ test('a request unanswered for 4 s with no answer to the health check either fai
   assert.equal(context.isServerUnreachable(), true);
 });
 
+test('once the server is known unreachable, data requests tell the device copy so', async () => {
+  const { context } = createContext();
+  context.Headers = Headers;
+  const sent = [];
+  context.fetch = async (url, init = {}) => {
+    sent.push(new Headers(init.headers).get('X-Album-Haven-Unreachable'));
+    return { status: 200, ok: true, headers: { get: () => null }, json: async () => ({}) };
+  };
+  await context.fetchRetryingPendingProjection('/view-data', { headers: { Accept: 'application/json' } });
+  context.noteServerUnreachable();
+  await context.fetchRetryingPendingProjection('/view-data', { headers: { Accept: 'application/json' } });
+  assert.deepEqual(sent, [null, '1']);
+});
+
 test('a slow request is waited on while the server answers its health check', async () => {
   const { context, due, urls } = hangingRequestContext({ healthAnswers: true });
   let settled = false;

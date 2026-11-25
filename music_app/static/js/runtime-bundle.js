@@ -2264,6 +2264,16 @@ async function fetchGivingUpWhenUnreachable(url, init) {
   }
 }
 
+// Once the server is known unreachable, a request says so to the device copy's worker, which then
+// answers kept data at once instead of first waiting to tell a busy server from a cut network
+// (app-copy-worker.js): a kept gallery scrolls page by page without seconds per page.
+function withKnownUnreachable(init) {
+  if (!serverReachability.unreachable || typeof Headers !== 'function') return init;
+  const headers = new Headers(init?.headers);
+  headers.set('X-Album-Haven-Unreachable', '1');
+  return { ...init, headers };
+}
+
 // While the server publishes the library, projection-backed requests answer 503
 // with a pending code. The same request repeats once per second for up to 60 s;
 // aborting init.signal cancels the wait without another request. No answer at all,
@@ -2274,7 +2284,7 @@ async function fetchRetryingPendingProjection(url, init) {
   while (true) {
     let response;
     try {
-      response = await fetchGivingUpWhenUnreachable(url, init);
+      response = await fetchGivingUpWhenUnreachable(url, withKnownUnreachable(init));
     } catch (error) {
       // fetch rejects with a TypeError when no answer arrives; an abort is the caller's own.
       if (error?.name === 'TypeError') {

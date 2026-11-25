@@ -2029,6 +2029,37 @@ test('IAR-W25: once a check found the server unreachable, kept data answers with
   assert.deepEqual(artistsOf(await json(slow)), ['slow']);
 });
 
+// Behind a hung network the check only times out, so the worker never learns the server is gone
+// and each kept gallery page waited the full delay: scrolling a long kept gallery took seconds per
+// page. The page, which already knows, says so, and kept data answers at once.
+test('kept data answers at once when the page says the server is unreachable; without it the wait stays', async () => {
+  const url = '/view-data?surface=albums&gallery_cursor=c2';
+  let hung = false;
+  const { handle } = setup({
+    mode: 'web',
+    dataCheckMs: 400,
+    respond: (request) => {
+      if (!hung) return dataAnswer({ ok: true, artist_groups: [{ artist: 'kept', albums: [] }] });
+      return new Promise((_resolve, reject) => {
+        request.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    },
+  });
+  await handle(resource(url));
+  hung = true;
+  const timed = async (headers) => {
+    const started = Date.now();
+    const response = await handle(new Request(`${ORIGIN}${url}`, { headers }));
+    return { ms: Date.now() - started, response };
+  };
+  const told = await timed({ 'X-Album-Haven-Unreachable': '1' });
+  assert.ok(told.ms < 200, `the page knows: kept data at once (${told.ms} ms)`);
+  assert.equal(told.response.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(told.response)), ['kept']);
+  const untold = await timed({});
+  assert.ok(untold.ms >= 400, `without the page's word the worker waits as before (${untold.ms} ms)`);
+});
+
 // Online, a busy server let the 0.8 s check time out and an album never kept said
 // Offline after 4.8 s. A slow check is not offline: a late answer is waited for, up to noAnswerMs.
 test('IAR-W25: a check with no answer in time is a busy server, not offline: never-kept data waits for it up to the navigation bound', async () => {

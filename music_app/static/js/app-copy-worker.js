@@ -25,6 +25,9 @@
   'use strict';
 
   const COPY_HEADER = 'X-Album-Haven-App-Copy';
+  // The page already found the server unreachable (runtime/pending-projection-fetch.js): kept data
+  // answers at once instead of after the wait that tells a busy server from a cut network.
+  const PAGE_UNREACHABLE_HEADER = 'X-Album-Haven-Unreachable';
   const VERSION_HEADER = 'X-Album-Haven-Asset-Version';
   const EXPIRES_HEADER = 'X-Album-Haven-App-Copy-Expires';
   const COPY_FAMILY = 'album-haven-app-copy-';
@@ -1050,6 +1053,12 @@
         return response;
       });
       const settled = arrived.then(response => ({ response }), error => ({ error }));
+      // A page that already knows the server is unreachable scrolls its kept gallery page by page,
+      // each page at once; the request still goes on, and its answer is kept if one comes.
+      if (request.headers.get(PAGE_UNREACHABLE_HEADER) === '1') {
+        const kept = await keptData(url);
+        if (kept) return kept;
+      }
       const waitMs = unreachableAt && now() - unreachableAt < UNREACHABLE_KNOWN_MS ? 0 : dataCheckMs;
       let timer;
       let outcome = await Promise.race([

@@ -5374,6 +5374,10 @@ test('a reconnect that a probe started is left to connect, however slowly, while
   await probe();
   await settleTwice(harness);
   assert.equal(harness.sockets.length, 3, 'one hung for 3 s is replaced');
+  // Chromium delays a page's sockets for seconds after its failed handshakes: a 4 s deadline gave
+  // every such attempt up and kept the network-back socket failing for 16 s.
+  assert.ok(timers.pending().some(({ delay }) => delay === 16_000), 'and may take the longest deadline to open');
+  assert.equal(timers.pending().some(({ delay }) => delay === 4_000), false);
 
   for (let now = 5_500; now <= 9_000; now += 1_500) {
     harness.setNow(now);

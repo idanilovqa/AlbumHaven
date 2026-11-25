@@ -3137,13 +3137,18 @@ function connectStreamingSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm?heartbeat=${STREAMING_HEARTBEAT_MS}${streamingSocketClientQuery()}`);
   socket.binaryType = 'arraybuffer';
-  const doublings = Math.min(Number(engine.detached?.abandonedConnects) || 0, STREAMING_CONNECT_DEADLINE_DOUBLINGS);
+  const probed = Boolean(engine.detached?.probedReconnect);
+  // An attempt begun once the server answered gets the longest deadline: Chromium delays a page's
+  // sockets by seconds after its failed handshakes, and giving such a delayed attempt up counts as
+  // one more failure, so short deadlines kept every attempt failing for as long as 16 s after the
+  // network was back (and the queue's next song never came).
+  const doublings = probed ? STREAMING_CONNECT_DEADLINE_DOUBLINGS
+    : Math.min(Number(engine.detached?.abandonedConnects) || 0, STREAMING_CONNECT_DEADLINE_DOUBLINGS);
   const connectDeadline = engine.detached
     ? window.setTimeout(() => abandonStreamingConnectingSocket(socket, { timedOut: true }),
       STREAMING_CONNECT_DEADLINE_MS * 2 ** doublings)
     : 0;
   socket.connectStartedMs = performance.now();
-  const probed = Boolean(engine.detached?.probedReconnect);
   if (engine.detached) engine.detached.probedReconnect = false;
   const reachabilityProbe = engine.detached && !probed ? probeStreamingReachability(socket) : 0;
   socket.onopen = () => {

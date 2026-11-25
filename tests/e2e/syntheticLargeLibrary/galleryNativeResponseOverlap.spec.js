@@ -250,6 +250,7 @@ async function dispatchTouchSwipe(ui, cdp, point, startY, endY) {
 async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY, page) {
   const observedHeights = [];
   const sections = [];
+  let wheelTravels = true;
   for (let rootPage = 0; rootPage < HELD_DRAG_ROOT_PAGES; rootPage += 1) {
     if (rootPage > 0) await swipeIntoNextRootPage(ui, cdp, point, lowerY, page);
     const rejected = [];
@@ -291,6 +292,19 @@ async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY, p
         throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify({
           swipes, stalledSwipes, candidates, rejected, sections,
         })}`);
+      }
+      // A root page puts the next start tens of thousands of pixels ahead: 280 px swipes took over a
+      // minute per page, so the far travel is one native wheel scroll that stops a viewport short of
+      // the start, and the swipes below only fine-tune. The held drag itself is always a touch.
+      const travel = next.plan.target - geometry.scrollTop;
+      if (wheelTravels && Math.abs(travel) > geometry.clientHeight * 2) {
+        await page.mouse.move(point(lowerY).x, lowerY);
+        await page.mouse.wheel(0, travel - Math.sign(travel) * geometry.clientHeight);
+        await ui.waitForNativeScrollSettled({ maximumFrames: 240 });
+        const travelled = (await ui.readGalleryContextGeometry()).scrollTop - geometry.scrollTop;
+        if (Math.abs(travelled) < 1) wheelTravels = false;
+        swipes += 1;
+        continue;
       }
       const distance = prepositionSwipeDistance(next.plan, geometry.scrollTop);
       if (distance > 0) {

@@ -1104,6 +1104,21 @@
       "rollback": "Test-only contract; each re-render already disposes the previous observers and listener. Reverting returns this entry to static proof."
     },
     {
+      "id": "js:runtime/album-track-table.js#syncAlbumTrackTableSections",
+      "action": "toggle listeners installed by syncAlbumTrackTableSections",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-track-table.js#syncAlbumTrackTableSections:event:toggle"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-track-table.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/album-track-table.js#triggerAlbumTrackPlayActivation",
       "action": "animationend listeners installed by triggerAlbumTrackPlayActivation",
       "entrypoints": [
@@ -4811,9 +4826,8 @@
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#openNonAlbumModal",
-      "action": "toggle listeners installed by openNonAlbumModal",
+      "action": "scheduleBrowserAnimationFrame timers installed by openNonAlbumModal",
       "entrypoints": [
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#openNonAlbumModal:event:toggle",
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#openNonAlbumModal:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [

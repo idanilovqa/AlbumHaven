@@ -3552,15 +3552,12 @@ class PostgresLibraryBrowseRepository:
 
             if listed_missing is not False and (detail := missing_detail()) is not None:
                 return detail
-            # A projected album takes its album facts (cover, size) from its first row. The stored album whose
-            # key is the requested one goes first, as on the list, never an emptied base of a separated release.
-            albums = _problematic_album_projection_payloads(sorted(
+            albums = _problematic_album_projection_payloads(
                 _lay_pending_ignored_repairs(
                     self._load_problematic_file_rows(album_key=normalized_album_key, connection=connection),
                     connection,
-                ),
-                key=lambda row: str(_row_mapping(row).get("album_key") or "") != normalized_album_key,
-            ))
+                )
+            )
             requested_keys = set(_problematic_album_key_candidates(normalized_album_key))
             matching_albums = [album for album in albums if str(album.get("key") or "") in requested_keys]
             # One relation-alias read serves every matching album.
@@ -4474,8 +4471,14 @@ class PostgresLibraryBrowseRepository:
                 )
                 return [*album_rows(cursor), *standalone_rows()]
             if normalized_album_key is not None:
+                requested_key = str(album_key or "").strip()
+                # A year key a scan stored is its own album (a re-recording, say): read only that album.
+                duplicate_album_ids = (
+                    _load_duplicate_candidate_album_ids(active_connection, [requested_key], repository=self)
+                    if requested_key != normalized_album_key else []
+                )
                 candidate_keys = [normalized_album_key]
-                if normalized_album_key != str(album_key or "").strip():
+                if not duplicate_album_ids and normalized_album_key != requested_key:
                     # Separate-release keys use canonical album metadata, which
                     # can differ from the durable persisted artist credit.
                     identities = active_connection.execute("""
@@ -4505,7 +4508,7 @@ class PostgresLibraryBrowseRepository:
                             identity.get("album_edition"),
                         ) == normalized_album_key
                     ]
-                duplicate_album_ids = _load_duplicate_candidate_album_ids(
+                duplicate_album_ids = duplicate_album_ids or _load_duplicate_candidate_album_ids(
                     active_connection, candidate_keys, repository=self,
                 )
                 cursor = execute(

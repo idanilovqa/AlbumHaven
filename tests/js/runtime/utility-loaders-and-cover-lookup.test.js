@@ -56,13 +56,16 @@ test('request capture: Problematic Files loads one bounded page and one complete
         clearBrowserTimeout() {},
       }), problematicAlbums };
     },
-    async act({ capture, context, problematicAlbums }) {
+    async act({ capture, context, problematicAlbums }, pass) {
       const before = capture.requests.length;
       await Promise.all([context.loadProblematicFiles(true), context.loadProblematicFiles(true)]);
       await context.loadProblematicFiles();
       assert.equal(context.state.utility.problematicFiles.length, problematicAlbums);
       const requests = capture.urls().slice(before);
-      assert.deepEqual(requests, ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+      // Reloading the complete list the open tab shows reads only the complete list (PF-NEW-PROBLEMS).
+      assert.deepEqual(requests, pass === 1
+        ? ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']
+        : ['/utilities/problematic-files']);
       return { requests };
     },
   });

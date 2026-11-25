@@ -887,7 +887,7 @@ test('closing the tag editor hides before deferred reorder cleanup', () => {
   assert.equal(listReleaseCount, 2);
 });
 
-test('Problematic Files tag edits own the detail overlay before the edit request settles', async () => {
+test('Problematic Files tag edits own the detail overlay until the save is acknowledged, then apply its entry', async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';
   const album = {
     key: 'artist::album',
@@ -897,6 +897,7 @@ test('Problematic Files tag edits own the detail overlay before the edit request
   };
   const response = createDeferred();
   const claims = [];
+  const settlements = [];
   const watchedTasks = [];
   const utilityModal = { hidden: false };
   const closedOverlay = { hidden: true };
@@ -923,6 +924,9 @@ test('Problematic Files tag edits own the detail overlay before the edit request
       const mutation = { taskId, albumKey: expectedAlbumKey };
       claims.push({ taskId, originalAlbum, expectedAlbumKey, mutation });
       return mutation;
+    },
+    settleProblematicSaveTaskMutation(taskId, options) {
+      settlements.push({ taskId, options, watchesBefore: watchedTasks.length });
     },
     watchSaveTask(taskId, options) {
       watchedTasks.push({ taskId, options });
@@ -954,14 +958,103 @@ test('Problematic Files tag edits own the detail overlay before the edit request
         save_task_status: 'completed',
         requires_view_refresh: true,
         updated_albums: [],
+        updated_problematic_album: null,
       };
     },
   });
   await confirmation;
 
   assert.equal(claims[0].mutation.taskId, 'persisted-save-task');
+  // The overlay ends with the acknowledgement, before the Gallery reconciliation, and the album with no
+  // problem left leaves the list at the same moment.
+  assert.equal(settlements.length, 1);
+  assert.equal(settlements[0].taskId, 'persisted-save-task');
+  assert.equal(settlements[0].watchesBefore, 0);
+  assert.equal(settlements[0].options.reconcileSelection, true);
+  assert.strictEqual(settlements[0].options.problematicAlbum, null);
   assert.equal(watchedTasks.length, 1);
   assert.equal(watchedTasks[0].taskId, 'persisted-save-task');
+  assert.equal(watchedTasks[0].options.problematicMutationOriginKey, '');
+  assert.equal(watchedTasks[0].options.problematicEntryApplied, true, 'no whole-list read follows the entry');
+});
+
+test('a finishing Problematic Files tag edit ends the detail overlay at the acknowledgement and keeps the list until the save completes', async () => {
+  const trackPath = 'C:\Music\Artist\Album\01 - Selected.flac';
+  const album = {
+    key: 'artist::album',
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album', title: 'Selected', year: '' }],
+  };
+  const settlements = [];
+  const watchedTasks = [];
+  const closedOverlay = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById(id) {
+        return id === 'utility-modal' ? { hidden: false } : closedOverlay;
+      },
+    },
+    getTagEditConfirmElements() { return { overlay: closedOverlay }; },
+    getTagEditorElements() { return { overlay: closedOverlay }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { year: '1999' } };
+    },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert() {},
+    claimProblematicSaveTaskMutation(taskId, _originalAlbum, expectedAlbumKey) {
+      return { taskId, albumKey: expectedAlbumKey };
+    },
+    settleProblematicSaveTaskMutation(taskId, options) {
+      settlements.push({ taskId, options });
+    },
+    watchSaveTask(taskId, options) {
+      watchedTasks.push({ taskId, options });
+    },
+    async fetch() {
+      return {
+        ok: true,
+        status: 202,
+        async json() {
+          // As the server answers a save whose library update is still finishing.
+          return {
+            ok: true,
+            save_task_id: 'finishing-save-task',
+            save_task_status: 'finishing',
+            requires_view_refresh: false,
+            updated_albums: [],
+            updated_problematic_album: null,
+          };
+        },
+      };
+    },
+  });
+  context.state.utility = {
+    activeTab: 'problematic-files',
+    loaded: true,
+    selectedProblematicKey: album.key,
+    pendingProblematicSaveTasks: {},
+  };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(settlements.length, 1);
+  assert.equal(settlements[0].taskId, 'finishing-save-task');
+  assert.equal(settlements[0].options.reconcileSelection, true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(settlements[0].options, 'problematicAlbum'),
+    false,
+    'an unfinished save has no entry yet: the album stays listed until the save completes',
+  );
+  assert.equal(watchedTasks.length, 1);
+  assert.equal(watchedTasks[0].options.problematicMutationOriginKey, '');
+  assert.equal(watchedTasks[0].options.problematicEntryApplied, false, 'the completed save reconciles the list');
 });
 
 test('Album Details falls back to natural filename order when track numbers are missing', () => {

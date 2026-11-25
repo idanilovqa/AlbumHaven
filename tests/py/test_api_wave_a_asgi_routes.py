@@ -4224,6 +4224,54 @@ def test_problematic_files_origin_keeps_targeted_problem_refresh(monkeypatch):
     assert "find_problematic_album_by_track_paths" not in captured
 
 
+def test_problematic_files_origin_media_write_answers_with_its_album_entry(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+
+    track_paths = {"C:/Music/Artist/Album/01 - One.flac", "C:/Music/Artist/Album/02 - Two.flac"}
+    read_paths: list[set[str]] = []
+    entries = {"saved": {"key": "artist::album::year::1999", "problem_reasons": ["Missing cover"]}}
+
+    class KeyedRepository:
+        def __init__(self, config):
+            assert config == {"database": "isolated"}
+
+        def build_problematic_album_payload_by_track_paths(self, paths):
+            read_paths.append(set(paths))
+            if entries["saved"] is RuntimeError:
+                raise RuntimeError("read failed")
+            return entries["saved"]
+
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", KeyedRepository)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config={"database": "isolated"}, logger=None)))
+    origin = {"problematic_files_origin": True, "updates": {path: {"year": "1999"} for path in track_paths}}
+    completed = asgi_routes._selected_postgres_media_write_response(
+        {"ok": True, "save_task_id": "task", "save_task_status": "completed", "updated_problematic_album": None},
+    )
+
+    def answer(payload, value):
+        return asyncio.run(asgi_routes._with_problematic_files_origin_album(request, payload, value))
+
+    # The entry is read by the album's files once the save completed, never by a whole-list read.
+    assert answer(origin, completed)["updated_problematic_album"] == entries["saved"]
+    assert read_paths == [track_paths]
+    entries["saved"] = None
+    assert answer(origin, completed)["updated_problematic_album"] is None, "no problem left"
+    assert answer(origin, completed)["requires_view_refresh"] is True
+
+    # Saves started elsewhere, and saves still finishing, read nothing.
+    read_paths.clear()
+    assert answer({**origin, "problematic_files_origin": False}, completed) == completed
+    finishing = ({"ok": True, "save_task_id": "task", "save_task_status": "finishing"}, 202)
+    assert answer(origin, finishing) == finishing
+    assert read_paths == []
+
+    # A failed read leaves the entry unknown; the save itself stands.
+    entries["saved"] = RuntimeError
+    failed = answer(origin, completed)
+    assert failed["ok"] is True
+    assert "updated_problematic_album" not in failed
+
+
 def test_postgres_exception_edit_state_hydrates_requested_paths_without_replacing_full_runtime_cache(
     app, asgi_app, monkeypatch
 ):

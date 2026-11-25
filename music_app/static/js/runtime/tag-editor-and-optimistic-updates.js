@@ -1030,6 +1030,20 @@ async function confirmManualTagEdit() {
     ) {
       provisionalProblematicMutation.taskId = String(data.save_task_id);
     }
+    if (provisionalProblematicMutation) {
+      // The detail overlay ends with the acknowledgement. A completed save carries its album's own
+      // Problematic Files entry, which updates the list at the same moment; the watch below then only
+      // reconciles the Gallery.
+      saveTaskWatchOptions.problematicMutationOriginKey = '';
+      saveTaskWatchOptions.problematicEntryApplied = responseIsTerminal
+        && Object.prototype.hasOwnProperty.call(data, 'updated_problematic_album');
+      await settleProblematicSaveTaskMutation(String(provisionalProblematicMutation.taskId || ''), {
+        reconcileSelection: true,
+        ...(saveTaskWatchOptions.problematicEntryApplied
+          ? { problematicAlbum: data.updated_problematic_album }
+          : {}),
+      });
+    }
     if (terminalResponseNeedsCanonicalRefresh) {
       pendingProblematicEntry.accept();
       await watchSaveTask(data.save_task_id || pendingProblematicEntry.key, {
@@ -1040,7 +1054,8 @@ async function confirmManualTagEdit() {
       pendingProblematicEntry.accept();
       scheduleTagEditSaveTaskWatch(data.save_task_id, saveTaskWatchOptions);
     } else if (
-      Object.prototype.hasOwnProperty.call(data, 'updated_problematic_album')
+      !provisionalProblematicMutation
+      && Object.prototype.hasOwnProperty.call(data, 'updated_problematic_album')
       && responseOwnsVisibleResources
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
@@ -1062,16 +1077,6 @@ async function confirmManualTagEdit() {
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
       pendingProblematicEntry.settle();
-      if (
-        provisionalProblematicMutation
-        && !terminalResponseNeedsCanonicalRefresh
-        && typeof settleProblematicSaveTaskMutation === 'function'
-      ) {
-        await settleProblematicSaveTaskMutation(
-          String(provisionalProblematicMutation.taskId || ''),
-          { reconcileSelection: true },
-        );
-      }
       if (!terminalResponseNeedsCanonicalRefresh) {
         settleTagEditViewMutation(tagEditMutationClaim);
       }

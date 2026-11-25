@@ -555,6 +555,9 @@ test('pauses and resumes from Android controls run the web pause and resume path
 
   bridge.event('playback.state', { ...state(1, 'paused', 4000), initiator: 'system' });
   assert.equal(player.pauses.length, 1);
+  // Android paused already (a call took the audio): no pause goes back, which would count as the
+  // user's and drop the resume Android holds for the end of the call.
+  assert.equal(commands(bridge, 'playback.pause').length, 0);
   assert.equal(player.pauses[0].paused, false);
   assert.equal(player.pauses[0].currentTime, 4);
   assert.equal(api.snapshot().paused, true);
@@ -564,8 +567,9 @@ test('pauses and resumes from Android controls run the web pause and resume path
   bridge.event('playback.state', { ...state(1, 'loading', 4000), initiator: 'system' });
   assert.equal(JSON.stringify(player.toggles), '[{"focusTimelineOnResume":false}]');
   assert.equal(api.snapshot().paused, false);
-  // The web's own pause is already applied when Android reports it.
+  // The web's own pause is already applied when Android reports it, and is sent.
   await api.pause();
+  assert.equal(commands(bridge, 'playback.pause').length, 1);
   bridge.event('playback.state', state(1, 'paused', 5000));
   assert.equal(player.pauses.length, 1);
 });

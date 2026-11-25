@@ -15150,6 +15150,7 @@ function pauseAndroidNativePlayback() {
   native.ownerIntent = false;
   native.snapshot.paused = true;
   if (native.mode !== 'error') native.mode = 'paused';
+  if (native.followingSystemPause) return Promise.resolve();
   return sendAndroidNativeTransport('playback.pause').then(() => undefined);
 }
 
@@ -15347,7 +15348,14 @@ function followAndroidNativeSystemState(payload) {
   const active = payload.state === 'playing' || payload.state === 'buffering' || payload.state === 'loading';
   if (payload.state === 'paused' && !snapshot.paused && typeof pausePlayerPlaybackForHandoff === 'function') {
     snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
-    void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    // Android paused already, so no pause goes back: a pause from the page counts as the user's and
+    // drops the resume Android holds for the end of a call.
+    androidNativePlayback.followingSystemPause = true;
+    try {
+      void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    } finally {
+      androidNativePlayback.followingSystemPause = false;
+    }
   } else if (active && snapshot.paused && typeof togglePlayerPlayback === 'function') {
     togglePlayerPlayback({ focusTimelineOnResume: false });
   }

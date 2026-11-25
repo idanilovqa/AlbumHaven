@@ -271,7 +271,7 @@ export class GalleryPage extends BasePage {
     this.artistInfoTrigger = this.galleryContext.locator('[data-artist-info-trigger]');
     this.artistInfoPanel = page.locator('[data-artist-info-overlay]');
     this.artistInfoHeading = this.artistInfoPanel.locator('h2');
-    this.artistInfoCredit = this.artistInfoPanel.locator('[data-artist-info-credit]');
+    this.artistInfoTaggedAsLines = this.artistInfoPanel.getByText(/Tagged as/);
     this.artistInfoCountryPills = this.artistInfoPanel.locator('.ui-metadata-pill--country');
     this.artistInfoGenrePills = this.artistInfoPanel.locator('.ui-metadata-pill--genre');
     this.artistInfoIdentities = this.artistInfoPanel.locator('[data-artist-info-identities]');

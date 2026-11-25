@@ -270,10 +270,10 @@ const CASES = {
         { name: 'dark wave', voteCount: 0 }, { name: 'ambient', voteCount: 0 },
       ], discogsArtistId: 424242,
     });
-    await fixture.renamedMatchedArtist('Onségen Ensemble', 'Shamaani Duo', 'Hunka lunka', {
-      mbid: 'd6b3e0a2-7c1d-4f7c-90bc-73c8bd2ac431', name: 'Korpiklaani',
+    await fixture.renamedMatchedArtist('Onségen Ensemble', 'Quillmere Duo', 'First Embers', {
+      mbid: 'd6b3e0a2-7c1d-4f7c-90bc-73c8bd2ac431', name: 'Brackenfold Choir',
       country: { code: 'FI', name: 'Finland' }, genres: [{ name: 'folk metal', voteCount: 10 }],
-    }, { creditName: 'Shamaani Duo' });
+    }, { creditName: 'Quillmere Duo' });
   },
   'FTC-MBID-002': async (fixture) => {
     await fixture.splitArtist('Compilation Signal Lead', [

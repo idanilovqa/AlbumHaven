@@ -964,15 +964,11 @@ function renderGalleryArtistInfo(anchor) {
   const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
   const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz);
-  // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the
-  // title, and the tag is named beside the links (display only).
+  // Matched under another name: the MusicBrainz name is the title.
   const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);
-  const credit = displayName !== artist
-    ? `<p class="artist-info-overlay__source" data-artist-info-credit>Tagged as ${escapeHtml(artist)} in your files.</p>`
-    : '';
   const identities = buildGalleryArtistIdentitiesHtml(group.artist_musicbrainz);
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(displayName)}</h2>${metadata ? `<div class="artist-info-overlay__metadata">${metadata}</div>` : ''}</div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${identities}${credit}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(displayName)}</h2>${metadata ? `<div class="artist-info-overlay__metadata">${metadata}</div>` : ''}</div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${identities}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
   // A long biography that still fits in five lines needs no clamp or fade.
   const summaryElement = overlay.querySelector('[data-artist-info-long]');
   if (summaryElement && summaryElement.scrollHeight <= summaryElement.clientHeight + 1) summaryElement.removeAttribute('data-artist-info-long');

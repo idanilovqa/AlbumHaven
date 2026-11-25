@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { expect, test } from '../support/baseFixtures.js';
 import { createArtistTreeFixture, removeArtistTreeFixture } from '../helpers/artistTreeEditFixture.js';
 import { holdSaveBeforeMediaWrite } from '../helpers/structuralSavePollWindowHelpers.js';
+import { GalleryActions, TagEditorActions } from '../actions/index.js';
+import { GalleryPage, TagEditor } from '../poms/index.js';
 
 const SAVE_PATH = '/utilities/edit-tags';
 let ownedFixture;
@@ -61,13 +63,14 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     page, managedAppLifecycle, galleryActions, appBarActions, navigationPanelActions, searchToolbarActions,
   }) => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 8);
-    const band = `Moorvale ${suffix}`;
-    const other = `Infinity Vale ${suffix}`;
+    const band = `Moorhaven ${suffix}`;
+    const other = `Infinity Spire ${suffix}`;
+    const guest = `Guest Voice ${suffix}`;
     await openLibrary({ managedAppLifecycle, galleryActions, appBarActions }, [
       ...albumTracks(band, 'Shadow Vale', ['Shadow Vale', 'North Gate']),
       // The other band's first track is a guest's, and only its file name names the searched band.
       ...albumTracks(other, 'Open Orbit', ['Stone Hall', 'Open Orbit'], {
-        artist: index => (index === 0 ? `Guest Voice ${suffix}` : other),
+        artist: index => (index === 0 ? guest : other),
         fileName: (index, title) => (index === 0
           ? `01. ${title} [feat. members of '${band}'].mp3`
           : `0${index + 1}. ${title}.mp3`),
@@ -81,7 +84,8 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     await navigationPanelActions.waitForSidebarSelection(band);
     await galleryActions.waitForSelectedArtistGallery(band, { queryValue: band });
     const typedTree = await navigationPanelActions.readSidebarArtistNames();
-    expect(typedTree, 'The typed search tree shows only the searched band.').toEqual([band]);
+    // The guest's own track names the band; the other band only holds that guest's track.
+    expect(typedTree, 'The typed search tree shows the band and the guest, never the other band.').toEqual([guest, band]);
 
     await page.reload();
     await searchToolbarActions.waitForQuery(band);
@@ -162,7 +166,7 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
 
   test('FTC-TAGS-046 a save made while an earlier save of the same tracks is still running writes its change instead of reporting success without one', { tag: '@area:tag-edit' }, async ({
     page, managedAppLifecycle, galleryActions, appBarActions, navigationPanelActions, tagEditorActions,
-  }) => {
+  }, testInfo) => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 8);
     const band = `Duskmoor ${suffix}`;
     const renamed = `Duskmoor2 ${suffix}`;
@@ -170,7 +174,7 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     await openLibrary({ managedAppLifecycle, galleryActions, appBarActions },
       albumTracks(band, album, ['Grey Shore', 'North Gate']));
     const { tagEditor } = tagEditorActions;
-    const saveSetting = albumArtist => page.waitForResponse(response => (
+    const saveSetting = (onPage, albumArtist) => onPage.waitForResponse(response => (
       response.request().method() === 'POST'
       && new URL(response.url()).pathname === SAVE_PATH
       && Object.values(JSON.parse(response.request().postData() || '{}').updates || {})
@@ -184,27 +188,34 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     await tagEditorActions.setAlbumArtist(renamed);
     // The first save is held before it records or writes anything, as a slow save is.
     saveGate = await holdSaveBeforeMediaWrite();
-    const firstSave = saveSetting(renamed);
+    const firstSave = saveSetting(page, renamed);
     await tagEditor.applyButton.click();
     await tagEditor.confirmButton.click();
     await expect(tagEditor.overlay).toBeHidden();
 
-    // While it runs, the album is given its old album artist back.
-    await navigationPanelActions.selectSidebarArtistByName(renamed);
-    await galleryActions.waitForSelectedArtistGallery(renamed);
-    await galleryActions.openAlbumTagEditorFromContextMenu(album);
-    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
-    await tagEditorActions.selectAllTracks();
-    await tagEditorActions.setAlbumArtist(band);
-    const secondSave = saveSetting(band);
-    await tagEditor.applyButton.click();
-    await tagEditor.confirmButton.click();
-    // The second save reaches the server while the first still holds the tracks.
-    await Promise.race([secondSave, new Promise(resolve => { setTimeout(resolve, 3000); })]);
-    await saveGate.release();
-    saveGate = null;
-    expect((await (await firstSave).json()).ok).toBe(true);
-    const second = await (await secondSave).json();
+    // While it runs, a page opened on the new album artist gives the album its old one back.
+    const opened = await page.context().newPage();
+    let second;
+    try {
+      const openedGallery = new GalleryActions(new GalleryPage(opened, testInfo));
+      const openedEditor = new TagEditorActions(new TagEditor(opened, testInfo));
+      await openArtist(openedGallery, renamed);
+      await openedGallery.openAlbumTagEditorFromContextMenu(album);
+      await openedEditor.waitForOpen({ expectedTrackCount: 2 });
+      await openedEditor.selectAllTracks();
+      await openedEditor.setAlbumArtist(band);
+      const secondSave = saveSetting(opened, band);
+      await openedEditor.tagEditor.applyButton.click();
+      await openedEditor.tagEditor.confirmButton.click();
+      // The second save reaches the server while the first still holds the tracks.
+      await Promise.race([secondSave, new Promise(resolve => { setTimeout(resolve, 3000); })]);
+      await saveGate.release();
+      saveGate = null;
+      expect((await (await firstSave).json()).ok).toBe(true);
+      second = await (await secondSave).json();
+    } finally {
+      await opened.close();
+    }
     expect(second.ok, 'The second save reports success.').toBe(true);
     expect(second.changed_count, 'A save that reports success has written its change.').toBe(2);
 

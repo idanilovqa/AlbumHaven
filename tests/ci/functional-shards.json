@@ -641,6 +641,27 @@
               "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
               "case": "FTC-MOBILE-HOME-002 mobile Home closes Loose Tracks and renders Home",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+              "case": "FTC-LOOSE-NAV-001 the navigation-tree header sits on the Gallery title baseline",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+              "case": "FTC-LOOSE-NAV-002 reopening the Artist Tree over Loose Tracks selects no artist after a search",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+              "case": "FTC-LOOSE-NAV-003 Loose Tracks opened from the drawer shows the hamburger that reopens the tree",
+              "area": "gallery-search"
             }
           ]
         }

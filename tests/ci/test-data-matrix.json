@@ -10696,6 +10696,72 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-001 the navigation-tree header sits on the Gallery title baseline",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:loose-nav-tree-header"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "navigation-tree-header-gallery-title-baseline"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-nav-tree-header",
+      "filesystemCopy": "media/cases/loose-nav-tree-header"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-002 reopening the Artist Tree over Loose Tracks selects no artist after a search",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:loose-nav-tree-selection"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-page-keeps-loose-tracks-open-on-tree-reopen",
+      "loose-tracks-page-artist-tree-has-no-selection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-nav-tree-selection",
+      "filesystemCopy": "media/cases/loose-nav-tree-selection"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-003 Loose Tracks opened from the drawer shows the hamburger that reopens the tree",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:loose-tracks-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "loose-tracks-drawer-page-shows-hamburger-not-back",
+      "loose-tracks-page-hamburger-reopens-navigation-tree"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/dropdownControl.spec.js",
@@ -12901,6 +12967,32 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": ["loose-tracks-mobile-back-title-alignment"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksTableDensity.spec.js",
+    "case": "Loose Tracks rows use the larger table density with a gap under the title at 1440px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["loose-tracks-default-density-title-gap-1440"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksTableDensity.spec.js",
+    "case": "Loose Tracks rows use the larger table density with a gap under the title at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["loose-tracks-default-density-title-gap-390"],
     "ownerApproval": "approved"
   },
   {

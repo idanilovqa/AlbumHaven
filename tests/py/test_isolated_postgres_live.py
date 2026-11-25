@@ -9029,3 +9029,65 @@ def test_live_reconciliation_owner_replays_journaled_albums_so_tag_edits_resume(
 
     assert not scoped.relation_reconciliation_due(fixture.config)
     assert relations.ensure_relation_projection_ready(fixture.config)["rebuild_reason"] == "healthy"
+
+
+def test_live_relation_snapshot_decodes_stay_on_start_up_and_saves_never_rebuild_the_whole_library(
+        watcher_repair_inventory, monkeypatch):
+    """FTC-GALLERY-STARTUP-005Q / FTC-TAGS-026P: the whole relation snapshot (every stored view and artist search
+    row) is decoded at most once per start, twice when a replay runs, and never on a request, save, watcher or
+    reconciliation-job path. A structural save's queued relation work replays its albums; it never rebuilds the
+    whole library's relations."""
+    import logging
+    from types import SimpleNamespace
+
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import relation_projection_postgres as relations
+    from music_app.services import scoped_relation_projection as scoped
+    from music_app.services import state
+    from music_app.services.relation_reconciliation import RelationReconciliationOwner
+
+    fixture = watcher_repair_inventory
+    entries = [
+        fixture.entry("Owner/Album One/01.flac", artist="Owner", album="Album One"),
+        fixture.entry("Guest/Album Two/01.flac", artist="Guest", album="Album Two"),
+    ]
+    fixture.seed(*entries)
+    decodes = []
+    snapshot_sql = relations._load_relation_projection_sql
+
+    def counted_snapshot_sql():
+        decodes.append(True)
+        return snapshot_sql()
+
+    def whole_library(*_args, **_kwargs):
+        pytest.fail("a save or start-up path rebuilt the whole library's relations")
+
+    monkeypatch.setattr(relations, "_load_relation_projection_sql", counted_snapshot_sql)
+    monkeypatch.setattr(relations, "build_relation_views_from_postgres_rows", whole_library)
+    monkeypatch.setattr(relations, "load_relation_source_rows_sql", whole_library)
+    app = SimpleNamespace(config=fixture.config, library_state={}, logger=logging.getLogger("test"),
+                          relation_projection_startup_started_at=None)
+
+    def start_up():
+        decodes.clear()
+        state.ensure_runtime_relation_projection_ready(app)
+        return len(decodes)
+
+    assert start_up() <= 1, "one snapshot decode per process start"
+
+    # A structural save (an album moves to another artist) and the relation work it queues.
+    decodes.clear()
+    moved = {**entries[1], "artist": "Owner", "album_artist": "Owner", "mtime": entries[1]["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={moved["path"]: moved})
+    state._run_scheduled_relation_projection_rebuild(fixture.config, logging.getLogger("test"), "structural_tag_edit")
+    gallery.ensure_gallery_projection_ready(fixture.config)
+    assert decodes == [], "a save and its queued relation and gallery work decode no whole snapshot"
+
+    # A start with journaled albums to replay, then the reconciliation job.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("update library.local_albums set artist_id = artist_id where id = (select min(id) from library.local_albums)")
+    assert start_up() <= 2, "two snapshot decodes when a replay runs"
+    decodes.clear()
+    RelationReconciliationOwner(fixture.config, reconciled=lambda: None).run_once()
+    assert decodes == [], "the reconciliation job decodes no whole snapshot"
+    assert not scoped.relation_reconciliation_due(fixture.config)

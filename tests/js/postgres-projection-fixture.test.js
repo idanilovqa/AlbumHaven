@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-test('projection fixture stales one isolated local library through the setup role', async () => {
-  const { markRelationProjectionStale } = await import('../e2e/helpers/postgresProjectionFixture.js');
+test('projection fixture journals one old-writer album move through the setup role', async () => {
+  const { journalOldWriterRelationChange } = await import('../e2e/helpers/postgresProjectionFixture.js');
   const calls = [];
   const env = {
     ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
       'postgresql://album_haven_migrator:test-only@127.0.0.1:54329/album_haven_fake_e2e',
   };
 
-  const affected = await markRelationProjectionStale({
+  const affected = await journalOldWriterRelationChange({
     env,
+    keepArtist: "Neal O'Morse",
     platform: 'linux',
     execFileAsync: async (command, args, options) => {
       calls.push({ command, args, options });
@@ -26,14 +27,17 @@ test('projection fixture stales one isolated local library through the setup rol
   assert.equal(calls[0].options.env.PGPASSWORD, 'test-only');
   const sql = calls[0].args.at(-1);
   assert.match(sql, /join app\.bootstrap_owners/u);
-  assert.match(sql, /'relation_projection'.*'relation_views'.*'relations_last_built'/su);
-  assert.match(sql, /select count\(\*\) from updated/u);
+  // An old writer moves one album through the journaling triggers; the published projection stays in place.
+  assert.match(sql, /update library\.local_albums albums\s+set artist_id = owner\.id/u);
+  assert.doesNotMatch(sql, /'relation_projection'/u);
+  assert.match(sql, /artists\.name <> 'Neal O''Morse'/u);
+  assert.match(sql, /select count\(\*\) from moved/u);
 });
 
 test('projection fixture rejects non-isolated databases before launching psql', async () => {
-  const { markRelationProjectionStale } = await import('../e2e/helpers/postgresProjectionFixture.js');
+  const { journalOldWriterRelationChange } = await import('../e2e/helpers/postgresProjectionFixture.js');
   await assert.rejects(
-    markRelationProjectionStale({
+    journalOldWriterRelationChange({
       env: { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://postgres@localhost:54329/postgres' },
       execFileAsync: async () => { throw new Error('must not connect'); },
     }),

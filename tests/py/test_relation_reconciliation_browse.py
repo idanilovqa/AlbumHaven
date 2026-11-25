@@ -53,7 +53,10 @@ def test_readiness_serves_the_stored_relation_rows_when_the_index_needs_reconcil
     assert result["relation_views"] == _STORED_VIEWS
 
 
-def test_tag_edits_still_refuse_with_a_readable_message():
+def test_tag_edits_still_refuse_with_a_readable_message(monkeypatch):
+    monkeypatch.setattr(scoped, "_compatibility_state", lambda _connection, _library_id: {
+        "source_fingerprint": None, "publication_xid": None,
+    })
     connection = SimpleNamespace(execute=lambda *_args, **_kwargs: SimpleNamespace(fetchone=lambda: {
         "library_id": 1,
         "normalized_builder_version": relations.RELATION_PROJECTION_BUILDER_VERSION,

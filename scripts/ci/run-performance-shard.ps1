@@ -76,6 +76,8 @@ $foundationRoot = Join-Path $RunnerTemp 'album-haven-performance-foundations'
 $resultRoot = Join-Path $RepositoryRoot 'test-results\playwright-performance-targets'
 $failedTargets = [System.Collections.Generic.List[string]]::new()
 $databaseMutatingTargets = @(
+    # FTC-GALLERY-STARTUP-005Q journals an old-writer album move before its cold start.
+    'selected-artist',
     'edit-tags-post-edit',
     'cover-lookup',
     'notification-history',

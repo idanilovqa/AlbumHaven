@@ -570,12 +570,12 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     library_id = context['library_id']
     compatibility_state = _compatibility_state(connection, library_id)
     if compatibility_state is None and not prepare_compatibility:
-        raise RuntimeError('Relation compatibility preparation is required before editing tags.')
+        raise relations.RelationReconciliationRequired('Relation compatibility preparation is required before editing tags.')
     if compatibility_state is not None and not prepare_compatibility and (
         compatibility_state['source_fingerprint'] != context.get('normalized_source_fingerprint')
         or compatibility_state['publication_xid'] != context.get('normalized_publication_xid')
     ):
-        raise RuntimeError('Relation compatibility evidence changed; explicit preparation is required.')
+        raise relations.RelationReconciliationRequired('Relation compatibility evidence changed; explicit preparation is required.')
     metadata = dict(context.get('metadata') or {})
     normalized_fingerprint = context.get('normalized_source_fingerprint')
     fingerprint_changed = normalized_fingerprint is not None and (
@@ -584,9 +584,9 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     )
     replay_pending = reason == 'pending_source_changes'
     if fingerprint_changed and not replay_pending:
-        raise RuntimeError('Library source evidence changed; explicit startup reconciliation is required.')
+        raise relations.RelationReconciliationRequired('Library source evidence changed; explicit startup reconciliation is required.')
     if metadata.get('builder_version') != relations.RELATION_PROJECTION_BUILDER_VERSION:
-        raise RuntimeError('Library relation index requires startup reconciliation before editing tags.')
+        raise relations.RelationReconciliationRequired('Library relation index requires startup reconciliation before editing tags.')
     stamp = float(context.get('relations_last_built') or 0)
     ids = set(album_ids)
     keys = set(album_keys)

@@ -40,6 +40,11 @@ _COOPERATIVE_YIELD_INTERVAL = 256
 _BACKGROUND_COOPERATIVE_SLEEP_SECONDS = 0.002
 
 
+class RelationReconciliationRequired(RuntimeError):
+    """The scoped relation index needs explicit reconciliation: tag edits refuse with this message, while
+    readiness keeps serving the stored relation rows (FTC-GALLERY-STARTUP-005Q)."""
+
+
 def _raise_if_projection_cancelled(cancel_requested: object | None) -> None:
     if cancel_requested is not None and cancel_requested.is_set():
         raise InterruptedError("Relation projection readiness was cancelled.")
@@ -569,7 +574,11 @@ def _ensure_relation_projection_ready(
     scan_cache = _relation_projection_scan_cache_from_row(snapshot_row)
     if scan_cache.get('normalized_relation_dirty') and not allow_initialized_rebuild:
         from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
-        ensure_pending_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
+        try:
+            ensure_pending_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
+        except RelationReconciliationRequired as refusal:
+            return _stored_relation_rows_result(config, connect=connect, refusal=refusal, logger=logger,
+                                                started_at=started_at)
         with connector(database_url) as connection:
             with _cancel_active_connection_on_request(connection, cancel_requested):
                 snapshot_row = _first_row(connection.execute(_load_relation_projection_sql()))
@@ -588,7 +597,11 @@ def _ensure_relation_projection_ready(
     if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
         raise RuntimeError("Shared browsing cannot rebuild a stale relation projection: " + reason)
     if scan_cache.get('normalized_relation_initialized') and not allow_initialized_rebuild:
-        raise RuntimeError('Initialized library projection requires explicit startup reconciliation: ' + reason)
+        return _stored_relation_rows_result(
+            config, connect=connect, logger=logger, started_at=started_at,
+            refusal=RelationReconciliationRequired(
+                'Initialized library projection requires explicit startup reconciliation: ' + reason),
+        )
 
     try:
         for attempt in range(_PROJECTION_READY_MAX_ATTEMPTS):
@@ -994,6 +1007,36 @@ def _restore_unchanged_projection(
         startup_rebuilt=False,
         reason="source_unchanged",
         duration_ms=duration_ms,
+    )
+
+
+def _stored_relation_rows_result(
+    config: Mapping[str, object],
+    *,
+    connect: Callable[[str], Any] | None,
+    refusal: RelationReconciliationRequired,
+    logger: object | None,
+    started_at: float,
+) -> dict[str, object]:
+    """Readiness from the stored relation rows while the index waits for explicit reconciliation.
+
+    Browsing never waits on a whole-library rebuild here; tag edits keep refusing with the same message.
+    """
+    from music_app.services.scoped_relation_projection import load_current_relation_state
+
+    try:
+        stored = load_current_relation_state(config, connect=connect)
+    except RuntimeError:
+        raise refusal from None  # no stored relation rows to serve either
+    warning = getattr(logger, "warning", None)
+    if callable(warning):
+        warning("Relation index needs reconciliation; browsing serves the stored relation rows: %s", refusal)
+    return _projection_result(
+        stored["relation_views"],
+        {},
+        startup_rebuilt=False,
+        reason="reconciliation_required",
+        duration_ms=(perf_counter() - started_at) * 1000,
     )
 
 

@@ -20,7 +20,7 @@ import {
   waitForPostgresBrowseWarmRoot,
 } from '../helpers/realAppBenchmarkHelpers.js';
 import { readStartupDiagnostics } from '../helpers/appOpenAllArtistsHelpers.js';
-import { markRelationProjectionStale } from '../helpers/postgresProjectionFixture.js';
+import { journalOldWriterRelationChange } from '../helpers/postgresProjectionFixture.js';
 
 const CASE_ID = 'FTC-GALLERY-STARTUP-005Q';
 const SELECTED_ARTIST_BUDGET = Object.freeze(
@@ -89,17 +89,17 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
   }, testInfo) => {
     requirePostgresRuntimeEnv('the stale-projection selected-artist benchmark');
 
-    await stepLogger.step('Stop the isolated app, stale its relation projection, and restart it', async () => {
+    await stepLogger.step('Stop the isolated app, journal an old-writer relation change, and restart it', async () => {
       await managedAppLifecycle.stop();
       try {
-        await markRelationProjectionStale();
+        await journalOldWriterRelationChange({ keepArtist: COLD_SELECTED_ARTIST });
       } finally {
         await managedAppLifecycle.restart();
       }
     });
 
     const selectedStartupMs = await stepLogger.step(
-      'Open one selected artist while the full projection rebuild runs',
+      'Open one selected artist while the journaled relation changes replay',
       async () => measureActionTime(
         () => galleryActions.goto(
           `/?surface=albums&artist=${encodeURIComponent(COLD_SELECTED_ARTIST)}`,
@@ -163,7 +163,7 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       { timeout: 5000 },
     ).toEqual({ awaiting: false, pending: null });
 
-    await stepLogger.step('Hydrate the complete current tree after the background rebuild', async () => {
+    await stepLogger.step('Hydrate the complete current tree after the background replay', async () => {
       await expect.poll(
         async () => (await galleryActions.readRelationProjectionReadiness()).ready,
         { timeout: 120000 },

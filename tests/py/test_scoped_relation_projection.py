@@ -42,6 +42,8 @@ def test_initialized_stale_readiness_never_falls_back_to_full_inventory(monkeypa
     from contextlib import nullcontext
     from music_app.services import relation_projection_postgres as relations
 
+    from music_app.services import scoped_relation_projection as scoped
+
     class Snapshot:
         def execute(self, statement, *_args):
             assert statement == relations._load_relation_projection_sql()
@@ -56,7 +58,19 @@ def test_initialized_stale_readiness_never_falls_back_to_full_inventory(monkeypa
         pytest.fail('An initialized stale read must not load the full inventory')
 
     monkeypatch.setattr(relations, 'load_relation_source_rows_sql', forbidden)
-    with pytest.raises(RuntimeError, match='explicit startup reconciliation'):
+    # FTC-GALLERY-STARTUP-005Q: readiness serves the stored relation rows; only tag edits wait.
+    monkeypatch.setattr(scoped, 'load_current_relation_state',
+                        lambda _config, connect=None: {'relation_views': {'artists': ['A']}})
+    result = relations._ensure_relation_projection_ready(
+        {'ALBUM_HAVEN_APP_DATABASE_URL': 'isolated'},
+        connect=lambda _url: nullcontext(Snapshot()))
+    assert (result['ready'], result['rebuild_reason']) == (True, 'reconciliation_required')
+
+    def no_stored_rows(_config, connect=None):
+        raise RuntimeError('Current relation state could not resolve the local library.')
+
+    monkeypatch.setattr(scoped, 'load_current_relation_state', no_stored_rows)
+    with pytest.raises(relations.RelationReconciliationRequired, match='explicit startup reconciliation'):
         relations._ensure_relation_projection_ready(
             {'ALBUM_HAVEN_APP_DATABASE_URL': 'isolated'},
             connect=lambda _url: nullcontext(Snapshot()))

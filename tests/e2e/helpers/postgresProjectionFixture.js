@@ -5,31 +5,48 @@ import { resolveIsolatedE2ESetupConnection } from './isolatedPostgresConnection.
 import { resolvePsqlCommands } from './postgresClientCommand.js';
 
 const execFileAsyncDefault = promisify(execFile);
-const STALE_PROJECTION_SQL = `
+// The way a scoped relation index really goes stale: an older writer changes relation source rows (here it moves one
+// album to another artist), so the triggers journal the album in library.local_relation_dirty_albums and the
+// source fingerprint changes. The next start replays the journal per album ('pending_source_changes').
+function oldWriterRelationChangeSql(keepArtist) {
+  const keep = String(keepArtist).replaceAll("'", "''");
+  return `
 with target as (
-  select libraries.id
+  select libraries.id as library_id
   from library.libraries libraries
   join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
   where libraries.library_kind = 'local'
   order by libraries.id
   limit 1
-), updated as (
-  update library.libraries libraries
-  set metadata = jsonb_set(
-    coalesce(libraries.metadata, '{}'::jsonb),
-    '{scan_cache}',
-    coalesce(libraries.metadata -> 'scan_cache', '{}'::jsonb)
-      - 'relation_projection' - 'relation_views' - 'relations_last_built',
-    true
-  )
-  from target
-  where libraries.id = target.id
-  returning libraries.id
+), album as (
+  select albums.id, albums.artist_id
+  from library.local_albums albums
+  join target on target.library_id = albums.library_id
+  join library.local_artists artists on artists.id = albums.artist_id
+  where artists.name <> '${keep}'
+  order by albums.id desc
+  limit 1
+), owner as (
+  select artists.id
+  from library.local_artists artists
+  join target on target.library_id = artists.library_id
+  cross join album
+  where artists.id <> album.artist_id and artists.name <> '${keep}'
+    and exists (select 1 from library.local_albums owned where owned.artist_id = artists.id)
+  order by artists.id desc
+  limit 1
+), moved as (
+  update library.local_albums albums
+  set artist_id = owner.id
+  from album, owner
+  where albums.id = album.id
+  returning albums.id
 )
-select count(*) from updated;
+select count(*) from moved;
 `;
+}
 
-export async function markRelationProjectionStale(options = {}) {
+export async function journalOldWriterRelationChange(options = {}) {
   const env = options.env || process.env;
   const connection = resolveIsolatedE2ESetupConnection(
     env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL,
@@ -45,10 +62,10 @@ export async function markRelationProjectionStale(options = {}) {
       const result = await execute(commands[index], [
         '--no-psqlrc', '--quiet', '--tuples-only', '--no-align',
         `--dbname=${connection.databaseTarget}`,
-        '--set=ON_ERROR_STOP=1', '--command', STALE_PROJECTION_SQL,
+        '--set=ON_ERROR_STOP=1', '--command', oldWriterRelationChangeSql(options.keepArtist ?? ''),
       ], { encoding: 'utf8', env: childEnv, windowsHide: true });
       const affected = Number.parseInt(String(result.stdout || '').trim(), 10);
-      if (affected !== 1) throw new Error(`Expected one isolated library; updated ${affected || 0}.`);
+      if (affected !== 1) throw new Error(`Expected one album moved by an old writer; moved ${affected || 0}.`);
       return affected;
     } catch (error) {
       if (error?.code !== 'ENOENT' || index === commands.length - 1) throw error;

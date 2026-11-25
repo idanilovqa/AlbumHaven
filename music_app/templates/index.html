@@ -89,6 +89,12 @@
           {% if bootstrap_payload.initial_view.gallery_scale_percent and bootstrap_payload.initial_view.gallery_scale_percent != 100 %}<input type="hidden" name="gallery_scale_percent" value="{{ bootstrap_payload.initial_view.gallery_scale_percent }}">{% endif %}
           {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
         </form>
+        {# The kept-library notice, in the app bar on every library page. A phone shows the short line;
+           a tap (focus) shows the full one under the bar. #}
+        <div class="app-bar-offline" id="app-copy-offline-notice" tabindex="0" hidden>
+          {{ offline_notice('Offline. Showing your library as last seen, changes are off until Album Haven can be reached', variant='line', class_name='app-bar-offline__full') }}
+          {{ offline_notice('Offline', variant='line', class_name='app-bar-offline__short') }}
+        </div>
         <div class="toolbar-right">
           {% call action_button('Cover art lookups', class_name='cover-lookup-drawer-button', id='cover-lookup-drawer-button', title='Cover art lookups', attributes={'data-toggle-cover-lookup-drawer': '1'}) %}
             <span class="cover-lookup-drawer-glyph" aria-hidden="true">
@@ -184,7 +190,6 @@
           </div>
           <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
       {% endcall %}
-      {{ offline_notice('Offline. Showing your library as last seen, changes are off until Album Haven can be reached', variant='line', hidden=true, element_id='app-copy-offline-notice', class_name='app-copy-offline-notice') }}
 
       <div class="gallery-anchored-menu" id="gallery-album-types-menu" data-anchored-surface="album-types" data-trigger-anchor-context="content" role="group" aria-label="Album types" hidden>
         <span class="gallery-menu-title">Album types</span>

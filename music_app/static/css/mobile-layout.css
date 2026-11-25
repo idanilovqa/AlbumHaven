@@ -72,6 +72,21 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .shell-layout .app-bar.is-search-open { grid-template-columns: 40px minmax(0, 1fr) 40px; }
   .app-bar--library.is-search-open #search-form { grid-column: 2; width: 100%; }
   .app-bar--library.is-search-open .toolbar-right > :not(.account-menu-component) { display: none; }
+  /* The kept-library notice: "Offline" after the search button; a tap shows the full line under
+     the bar until focus leaves it. The open search takes its place. */
+  .shell-layout .app-bar--library { grid-template-columns: 40px 40px minmax(0, 1fr) auto; }
+  .shell-layout .app-bar--library > .toolbar-right { grid-column: 4; }
+  .shell-layout .app-bar--library.is-search-open { grid-template-columns: 40px minmax(0, 1fr) 40px; }
+  .shell-layout .app-bar--library.is-search-open > .toolbar-right { grid-column: 3; }
+  .app-bar--library.is-search-open > .app-bar-offline { display: none; }
+  .app-bar-offline { justify-content: flex-start; padding: 0 4px; position: static; }
+  .app-bar-offline__short { display: flex; }
+  .app-bar-offline:focus .app-bar-offline__full {
+    display: flex; position: absolute; top: 100%; left: 12px; right: 12px; justify-content: center;
+    padding: 10px 12px; border-radius: 0 0 12px 12px; background: var(--app-chrome);
+  }
+  .app-bar-offline:focus .app-bar-offline__full .offline-notice__text { white-space: normal; }
+  .app-bar-offline__full { display: none; }
   #mobile-search-button { position: relative; }
   .app-bar--library:not(.is-search-open) #mobile-search-button[data-has-query="true"]::before {
     content: ''; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;

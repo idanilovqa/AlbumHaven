@@ -336,6 +336,8 @@ def _membership_problem_group_headers_sql(
               files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}',
               ''
             ) is not null
+            -- album_local_membership.current_membership_label: the obsolete stored label is no label.
+            and files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}' <> 'Mixed album metadata in one folder'
             and lower(btrim(coalesce(
               case when exception_override.override_payload ? 'exception_type'
                 then exception_override.override_payload ->> 'exception_type'
@@ -442,6 +444,8 @@ def _non_album_candidates_sql(
         """(
           nullif(library.local_track_files.metadata #>>
             '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
+          and library.local_track_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}'
+            <> 'Mixed album metadata in one folder'
           and lower(btrim(coalesce(
             case when exception_override.override_payload ? 'exception_type'
               then exception_override.override_payload ->> 'exception_type'
@@ -509,6 +513,7 @@ def _non_album_candidates_sql(
                 and folder_files.scan_cache_stale is false
                 and nullif(folder_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '')
                   is not null
+                and folder_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' <> 'Mixed album metadata in one folder'
               -- Fence, not redundant: offset 0 stops subquery pull-up, so this lookup stays a parameterized
               -- probe of local_track_files_loose_group_idx per folder whatever the statistics; flattened, the
               -- planner may join the whole table instead.
@@ -519,6 +524,7 @@ def _non_album_candidates_sql(
     membership_file_predicate = "" if membership_folders else "files.scan_cache_stale is false\n            and "
     membership_problem_predicate = "" if membership_folders else (
         "and nullif(files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null"
+        " and files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' <> 'Mixed album metadata in one folder'"
     )
     # A batch's override ranking runs once, over the batch's own files only (materialized, each file's overrides
     # looked up by its key); otherwise it was re-run per outer row of the main join.
@@ -786,7 +792,7 @@ def _non_album_candidates_sql(
           library.local_track_files.content_signature,
           library.local_track_files.metadata as track_file_metadata,
           (library.local_track_files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
-            'local_album_membership_problem', nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '')
+            'local_album_membership_problem', nullif(nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', ''), 'Mixed album metadata in one folder')
           ) as file_entry,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album}}' as raw_file_album,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album_artist}}' as raw_file_album_artist,

@@ -171,7 +171,10 @@ def test_canonical_file_size_controls_empty_detection(canonical, cached, expecte
 
 
 def test_repository_count_and_cached_items_follow_physical_reason_exclusion(monkeypatch):
+    from types import SimpleNamespace
     from uuid import uuid4
+
+    from music_app.services import rule_state_postgres
 
     class SnapshotConnection:
         def __enter__(self):
@@ -181,6 +184,10 @@ def test_repository_count_and_cached_items_follow_physical_reason_exclusion(monk
             return False
 
         def execute(self, sql, params=None):
+            if sql == rule_state_postgres._load_scoped_ignored_repair_intents_sql():
+                # The pending Ignore intents read laid over each payload: no publication is holding one back.
+                assert params == {"identities": sorted({row["album_key"], row["file_private_path"]})}
+                return SimpleNamespace(fetchall=lambda: [])
             assert str(sql) in {
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
                 "SET LOCAL work_mem = '16MB'", "SET LOCAL jit = off",

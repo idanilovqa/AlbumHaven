@@ -235,6 +235,10 @@ function androidBase64(bytes) {
   return window.btoa(binary);
 }
 
+// The browser reads a download's blob URL after the click returns, so a URL revoked in the same task
+// can lose the download. Each page-built download keeps its URL until the next one replaces it.
+let pageFileDownloadUrl = '';
+
 async function downloadPageFile(filename, mimeType, text) {
   if (await connectAndroidBridge() && hasAndroidCapability(ANDROID_FILES_CAPABILITY)) {
     const bytes = new TextEncoder().encode(text);
@@ -246,9 +250,10 @@ async function downloadPageFile(filename, mimeType, text) {
     }
     return;
   }
-  const objectUrl = URL.createObjectURL(new Blob([text], { type: mimeType }));
+  if (pageFileDownloadUrl) URL.revokeObjectURL(pageFileDownloadUrl);
+  pageFileDownloadUrl = URL.createObjectURL(new Blob([text], { type: mimeType }));
   const anchor = document.createElement('a');
-  anchor.href = objectUrl;
+  anchor.href = pageFileDownloadUrl;
   anchor.download = filename;
   anchor.hidden = true;
   document.body.appendChild(anchor);
@@ -256,7 +261,6 @@ async function downloadPageFile(filename, mimeType, text) {
     anchor.click();
   } finally {
     anchor.remove();
-    URL.revokeObjectURL(objectUrl);
   }
 }
 

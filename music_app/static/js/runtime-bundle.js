@@ -37199,12 +37199,13 @@ function removeCoverLookupPendingAttachment(imageId) {
 function extractCoverLookupPendingAttachments() {
   const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments : [];
-  if (!attachments.length) return 0;
+  let matchedLocalRef = '';
   const staged = attachments.filter((item) => {
     const localRef = findCoverLookupLocalCardShowing(item.fingerprint);
     if (!localRef) return true;
     // Already one of the album's images: point at it instead of staging a copy.
     state.coverLookup.modal.suggestedLocalRef = localRef;
+    matchedLocalRef = localRef;
     const objectUrl = String(item.object_url || '').trim();
     if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
     return false;
@@ -37215,7 +37216,15 @@ function extractCoverLookupPendingAttachments() {
       ? state.coverLookup.modal.pastedImages : []),
   ];
   state.coverLookup.modal.manualImageAttachments = [];
-  return attachments.length;
+  return matchedLocalRef;
+}
+
+// Owner (sandbox2): after Extract, the gallery scrolls to the local card a pasted copy matched.
+function revealCoverLookupLocalCard(localRef) {
+  if (!localRef || typeof document === 'undefined') return;
+  const card = Array.from(document.querySelectorAll('#cover-lookup-modal [data-select-local-cover]'))
+    .find((node) => coverLookupLocalPathMatches(node.getAttribute('data-select-local-cover'), localRef));
+  card?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'smooth' });
 }
 
 async function handleCoverLookupClipboardPaste(clipboardData) {
@@ -42510,11 +42519,12 @@ async function addRemoteCoverLinksFromLookup() {
   const attachmentCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments.length : 0;
   if (!album || (!urls.length && !attachmentCount)) return;
-  extractCoverLookupPendingAttachments();
+  const matchedLocalRef = extractCoverLookupPendingAttachments();
   if (!urls.length) {
     state.coverLookup.modal.manualStatusText = '';
     state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
+    revealCoverLookupLocalCard(matchedLocalRef);
     return;
   }
   try {
@@ -42524,6 +42534,7 @@ async function addRemoteCoverLinksFromLookup() {
     state.coverLookup.modal.manualStatusText = '';
     state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
+    revealCoverLookupLocalCard(matchedLocalRef);
     const response = await fetch('/utilities/cover-lookup/add-remote', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

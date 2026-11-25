@@ -8529,7 +8529,7 @@ require('node:test')('extracting a staged image leaves art unchosen until Save',
     };
     context.renderCoverLookupDrawer = () => {};
 
-    assert.equal(context.extractCoverLookupPendingAttachments(), 1);
+    assert.equal(context.extractCoverLookupPendingAttachments(), '', 'no local card matched');
     assert.equal(calls.length, 0);
     assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, false);
     assert.equal(context.state.coverLookup.modal.pastedImages[0].id, `staged-${status}`);

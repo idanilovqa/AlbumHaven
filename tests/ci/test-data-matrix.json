@@ -14513,6 +14513,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a pasted copy of a local image scrolls the gallery to that card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pasted-duplicate-scrolls-to-existing-card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a different pasted image does not scroll to the local card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "distinct-pasted-image-keeps-gallery-scroll"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
     "case": "a card pressed while a candidate update re-renders the gallery shows its blue frame in the next frame",
     "profile": null,

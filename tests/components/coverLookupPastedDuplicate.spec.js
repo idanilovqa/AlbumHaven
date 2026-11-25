@@ -72,3 +72,38 @@ test('extracting a different pasted image stages it under PASTED IMAGES', async 
   await expect(page.locator('.cover-lookup-subsection-title', { hasText: 'PASTED IMAGES' })).toHaveCount(1);
   await expect(page.locator('[data-select-local-cover="x-ref"]')).not.toHaveClass(/is-suggested/);
 });
+
+test('extracting a pasted copy of a local image scrolls the gallery to that card', async ({ page }) => {
+  await openLookupWithLocalCover(page);
+  // The local card starts far below the visible part of the lookup's scrolling body.
+  await page.addStyleTag({ content: `
+    #cover-lookup-modal-body { height: 360px; overflow-y: auto; }
+    #cover-lookup-modal-body::before { content: ''; display: block; height: 1600px; }
+  ` });
+  const body = page.locator('#cover-lookup-modal-body');
+  const card = page.locator('[data-select-local-cover="x-ref"]');
+  const cardInsideBody = () => page.evaluate(() => {
+    const bodyRect = document.getElementById('cover-lookup-modal-body').getBoundingClientRect();
+    const cardRect = document.querySelector('[data-select-local-cover="x-ref"]').getBoundingClientRect();
+    return cardRect.top >= bodyRect.top - 0.5 && cardRect.bottom <= bodyRect.bottom + 0.5;
+  });
+  expect(await body.evaluate((node) => node.scrollTop)).toBe(0);
+  expect(await cardInsideBody()).toBe(false);
+  await pasteAndExtract(page, 'x', 1000);
+  await expect(card).toHaveClass(/is-suggested/);
+  await expect.poll(cardInsideBody).toBe(true);
+  // Settled: the card stays fully in view.
+  await page.waitForTimeout(400);
+  expect(await cardInsideBody()).toBe(true);
+});
+
+test('extracting a different pasted image does not scroll to the local card', async ({ page }) => {
+  await openLookupWithLocalCover(page);
+  await page.addStyleTag({ content: `
+    #cover-lookup-modal-body { height: 360px; overflow-y: auto; }
+    #cover-lookup-modal-body::before { content: ''; display: block; height: 1600px; }
+  ` });
+  await pasteAndExtract(page, 'y', 1000);
+  await page.waitForTimeout(400);
+  expect(await page.locator('#cover-lookup-modal-body').evaluate((node) => node.scrollTop)).toBe(0);
+});

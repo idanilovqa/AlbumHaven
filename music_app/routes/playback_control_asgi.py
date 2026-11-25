@@ -28,7 +28,8 @@ from music_app.services.listen_history import (
 )
 from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
-from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
+from music_app.services.playback_claims_postgres import PostgresPlaybackClaims, validate_taker
+from music_app.services.playback_handover import GONE
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
@@ -42,6 +43,10 @@ _SCROBBLE_ACTION = "integration.lastfm.scrobble"
 _NOTIFICATION_ARTWORK_EDGE = 768
 # A claim heartbeat every ten seconds is logged only when it is this slow.
 _QUIET_STEP_LOG_MS = 1000
+# How long Play here waits for the playing client to say anything before it is refused.
+HANDOVER_ANSWER_SECONDS = 1.5
+# How long a plain press waits for a paused holder's word that nothing of it sounds: its output's drain.
+YIELD_ANSWER_SECONDS = 1.5
 ARTWORK_PREFIX = "/playback/artwork/"
 # A resume token never expires, and its payload names library files.
 redact_access_log_paths(ARTWORK_PREFIX)
@@ -55,7 +60,8 @@ async def playback_call(function, *args, **kwargs):
     try:
         return await run_in_threadpool(function, *args, **kwargs)
     except PlaybackContractError as error:
-        raise HTTPException(error.status_code, str(error)) from None
+        headers = {"Retry-After": str(error.retry_after)} if error.retry_after else None
+        raise HTTPException(error.status_code, str(error), headers=headers) from None
 
 
 async def reference_call(request, call):
@@ -111,8 +117,10 @@ async def playback_refs(request: Request) -> JSONResponse:
         result = await reference_call(request, lambda service: service.issue_batch(
             request.state.current_actor, tracks, on_media=media.append))
     # The queue's tracks are what plays next: their MP3 maps are read now, in the background, so a
-    # start or a jump to any of them streams at once instead of scanning the file first.
-    _prepare_streams(media)
+    # start or a jump to any of them streams at once instead of scanning the file first. A browser
+    # asking only for resume tokens to keep (`prepare: false`) reads nothing.
+    if payload.get("prepare") is not False:
+        _prepare_streams(media)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -135,11 +143,11 @@ def _prepare_streams(paths: list[Path]) -> None:
 
 @router.post("/playback/refs/resume")
 async def resume_playback_refs(request: Request) -> JSONResponse:
-    """Fresh references for the resume tokens a native player persisted instead of references."""
+    """Fresh references for the resume tokens a player persisted instead of references or paths."""
     async with timed_playback_step("refs resume"):
         payload = await playback_payload(request)
         result = await reference_call(request, lambda service: service.exchange_resume_tokens(
-            request.state.current_actor, payload.get("tracks")))
+            request.state.current_actor, payload.get("tracks"), include_path=payload.get("includePath") is True))
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -155,9 +163,10 @@ async def playback_artwork(request: Request, resume_token: str) -> Response:
 
 
 @router.get("/playback/state")
-async def playback_state(request: Request, client_id: str = ""):
+async def playback_state(request: Request, client_id: str = "", include_path: bool = False):
+    hub = request.app.state.playback_pcm_registry.handover
     result = await playback_call(PostgresPlaybackClaims(playback_config(request)).get,
-        request.state.current_actor, client_id)
+        request.state.current_actor, client_id, include_path=include_path, reachable=hub.connected)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -166,21 +175,152 @@ async def acquire_playback(request: Request):
     # A first claim gates a start's first sound; a heartbeat renews one already held.
     async with timed_playback_step("claim", "renew", "scrobbling_ms") as timing:
         payload = await playback_payload(request)
-        if payload.get("state") != "playing":
+        # "paused": a renewal of a holder that keeps its claim through a pause.
+        if payload.get("state") not in ("playing", "paused"):
             raise HTTPException(400, "Invalid playback state.")
-        timing["renew"] = timing["quiet"] = payload.get("claimToken") is not None
-        result = await playback_call(PostgresPlaybackClaims(playback_config(request)).acquire,
-            request.state.current_actor, client_id=payload.get("clientId"),
-            client_surface=payload.get("clientSurface"), track=payload.get("track"),
-            claim_token=payload.get("claimToken"), handoff=payload.get("handoff"))
-        claimed_at = time.perf_counter()
-        scrobbling = await _scrobbling_status(request)
-        timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)
-    return JSONResponse({**result, **scrobbling}, headers={"Cache-Control": "no-store"})
+        if payload.get("confirm") is not None:
+            if (payload["confirm"] is not True or payload.get("takeover") is not True or payload["state"] != "playing"
+                    or type(payload.get("silencesItself", False)) is not bool
+                    or payload.keys() - {"protocol", "state", "clientId", "clientSurface", "takeover", "confirm",
+                                         "silencesItself"}):
+                raise HTTPException(400, "Invalid playback handover.")
+            return await _confirmed_takeover(request, payload)
+        renews = payload.get("claimToken") is not None
+        timing["renew"] = timing["quiet"] = renews
+        track, reference = await _claimed_track(request, payload)
+        claims = PostgresPlaybackClaims(playback_config(request))
+
+        def acquire(**yielded):
+            return playback_call(claims.acquire, request.state.current_actor, client_id=payload.get("clientId"),
+                client_surface=payload.get("clientSurface"), track=track,
+                claim_token=payload.get("claimToken"), handoff=payload.get("handoff"),
+                takeover=payload.get("takeover", False), position=payload.get("position"),
+                silences_itself=payload.get("silencesItself", False), paused=payload["state"] == "paused",
+                **yielded)
+
+        try:
+            result = await acquire()
+        except HTTPException as refused:
+            # A start refused for a holder (no draining page to wait for) asks it once whether it plays.
+            if refused.status_code != 409 or refused.headers or renews or payload.get("handoff") is not None:
+                raise
+            result = await _start_over_quiet_holder(request, claims, payload.get("clientId"), acquire, refused)
+        if not renews:
+            _tell_others_claimed(request, payload.get("clientId"))
+        scrobbling = {}
+        if renews:
+            claimed_at = time.perf_counter()
+            scrobbling = await _scrobbling_status(request)
+            timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)
+    return JSONResponse({**result, **reference, **scrobbling}, headers={"Cache-Control": "no-store"})
+
+
+def _tell_others_claimed(request, client_id):
+    """The account's other connected clients hear at once that a client took playback."""
+    account_id = getattr(request.state.current_actor, "account_id", None)
+    if account_id is not None:
+        request.app.state.playback_pcm_registry.handover.tell_others(
+            account_id, client_id, {"type": "playback-claimed"})
+
+
+async def _start_over_quiet_holder(request, claims, client_id, acquire, refused):
+    """A plain press while another client holds the claim asks that holder over its socket. It starts, over
+    that holder's claim only, on the holder's word that nothing of it sounds (given from its output's real
+    state, its claim dropped as it says so), or when the holder is gone: no socket, or no word at all in
+    time. A holder that plays declines, and the press is refused: Play here takes it over.
+    """
+    hub = request.app.state.playback_pcm_registry.handover
+    observed = await playback_call(claims.holder, request.state.current_actor)
+    if observed["client_id"] in (None, client_id) or observed["silent"]:
+        raise refused
+    holder = (observed["account_id"], observed["library_id"], observed["client_id"])
+    taken = False
+    try:
+        answer = await hub.yielded(*holder, timeout=YIELD_ANSWER_SECONDS)
+        # A holder that has just claimed may still be opening its socket: not gone yet.
+        if answer == "declined" or (answer == GONE and observed["fresh"]
+                                    and not hub.connected(observed["account_id"], observed["client_id"])):
+            raise refused
+        result = await acquire(yielded_digest=observed["digest"])
+        taken = True
+        return result
+    finally:
+        await hub.settled(*holder, taken=taken)
+
+
+async def _claimed_track(request, payload):
+    """The claim's track and what the answer adds to it. A start is one request (the
+    shortened wait): a browser without a reference names its song by path and is issued one in the same call.
+    """
+    track = payload.get("track")
+    if not isinstance(track, dict) or "path" not in track:
+        return track, {}
+    if payload.get("clientSurface") != "private_web" or "playbackRef" in track:
+        raise HTTPException(400, "Invalid playback request.")
+    media: list[Path] = []
+    issued = await reference_call(request, lambda service: service.issue_batch(
+        request.state.current_actor, [{"clientKey": "claim", "path": track["path"]}], on_media=media.append))
+    _prepare_streams(media)
+    reference = issued["tracks"][0]["playbackRef"]
+    named = {key: value for key, value in track.items() if key != "path"}
+    return {**named, "playbackRef": reference}, {"playbackRef": reference, "referenceExpiresAt": issued["expiresAt"]}
+
+
+async def _confirmed_takeover(request, payload):
+    """playback.claim.takeover, confirmed: the holder stops and says what sounds and where. Without its word
+    that it is silent the press is refused: nothing starts without an answer."""
+    claims, actor = PostgresPlaybackClaims(playback_config(request)), request.state.current_actor
+    hub = request.app.state.playback_pcm_registry.handover
+    client_id = payload.get("clientId")
+    async with timed_playback_step("handover", "confirmed", "ask_ms") as timing:
+        await playback_call(validate_taker, client_id, payload.get("clientSurface"))
+        observed = await playback_call(claims.holder, actor)
+        # A pause gives the claim back while the other tab still shows Play here: it is asked all the same.
+        # With no claim but a last-played record nobody is asked: its song goes on where it was last heard.
+        paused = observed["client_id"] is None and not observed["silent"]
+        if paused:
+            released = hub.released(observed["account_id"], observed["library_id"])
+            if released is None:
+                return JSONResponse(await playback_call(claims.get, actor, client_id),
+                    headers={"Cache-Control": "no-store"})
+            observed = {**observed, "client_id": released[0], "digest": released[1]}
+        holder = (observed["account_id"], observed["library_id"], observed["client_id"])
+        asked_at = time.perf_counter()
+        answer = None
+        taken = False
+        if observed["client_id"] != client_id and not observed.get("silent"):
+            answer = await hub.ask(*holder, accepts=lambda token: claims.holds(observed, token),
+                timeout=HANDOVER_ANSWER_SECONDS)
+        # A holder that is gone (no socket, no word at all) plays nowhere that can be reached: its song goes on
+        # here from its last known place, and it stops once it reaches the server again.
+        gone = answer == GONE and not (observed.get("fresh") and not hub.connected(observed["account_id"], observed["client_id"]))
+        if answer == GONE:
+            answer = None
+        timing["ask_ms"] = round((time.perf_counter() - asked_at) * 1000)
+        try:
+            if paused and not (answer and answer["track"]):
+                return JSONResponse(await playback_call(claims.get, actor, client_id),
+                    headers={"Cache-Control": "no-store"})
+            if answer is None and not gone and not observed.get("silent"):
+                raise HTTPException(409, "Playback is active on another client.")
+            result = await playback_call(claims.hand_over, actor, client_id=client_id,
+                client_surface=payload.get("clientSurface"), observed=observed, answer=answer,
+                silences_itself=payload.get("silencesItself", False), gone=gone)
+            taken = True
+        finally:
+            await hub.settled(*holder, taken=taken)
+        timing["confirmed"] = result["confirmed"]
+        _tell_others_claimed(request, client_id)
+        # A client of this same account and library: the one tab the taker may silence in its own browser.
+        result = {**result, "previousClientId": observed["client_id"]}
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 async def _scrobbling_status(request):
     """`scrobbling.available`: whether this claim's now-playing and scrobble writes can reach Last.fm.
+
+    Only a renewal says it: a start is answered without waiting for the lookup, which took over half of a
+    claim's time (the shortened wait).
 
     True only when the actor may send both, the Last.fm API is configured and the account holds a
     session; it reveals nothing else. Omitted when it cannot be read, so clients fall back to the
@@ -281,8 +421,10 @@ async def _scrobble_staged_completion(config, completion, entry, actor):
 @router.delete("/playback/state")
 async def release_playback(request: Request):
     payload = await playback_payload(request)
-    await playback_call(PostgresPlaybackClaims(playback_config(request)).release,
+    released = await playback_call(PostgresPlaybackClaims(playback_config(request)).release,
         request.state.current_actor, client_id=payload.get("clientId"), claim_token=payload.get("claimToken"))
+    if released:
+        request.app.state.playback_pcm_registry.handover.remember_release(**released)
     return JSONResponse({"protocol": 1}, headers={"Cache-Control": "no-store"})
 
 

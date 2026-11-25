@@ -195,3 +195,199 @@ def test_index_template_loads_the_app_copy_client_before_the_app(asgi_app):
     client = text.index(f'<script src="/static/js/app-copy.js?v={version}" defer></script>')
     assert client < text.index("/static/app.js?v=")
     assert 'id="app-copy-offline-notice"' in text
+
+
+def test_every_stylesheet_and_script_of_the_app_page_can_be_kept_by_the_copy(asgi_app):
+    """Offline, Settings and Account were unstyled. The copy keeps only what
+    the server marks immutable, which takes the current version; an unversioned asset is no-store."""
+    import re
+
+    version = asgi_app.state.runtime_asset_version
+    _status, _headers, body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+    text = body.decode("utf-8")
+    assets = set(re.findall(r'<link rel="stylesheet" href="(/static/[^"]+)"', text))
+    assets |= set(re.findall(r'<script src="(/static/[^"]+)"', text))
+    assert {"/static/css/account.css", "/static/css/admin-members.css", "/static/css/settings-navigation.css",
+            "/static/js/selection-accent.js"} <= {asset.split("?")[0] for asset in assets}
+
+    for asset in sorted(assets):
+        path, _, query = asset.partition("?")
+        assert query == f"v={version}", asset
+        status, headers, _body = run_asgi_request(asgi_app, "GET", path, query={"v": version})
+        assert status == 200, asset
+        assert headers["cache-control"] == "public, max-age=31536000, immutable", asset
+
+
+def _signed_in_since(asgi_app, authenticated_at):
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
+
+    class Resolver:
+        def resolve(self, _raw_token):
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=1,
+                session_id=1,
+                username_display="Test Listener",
+                authenticated_at=authenticated_at,
+                is_bootstrap_owner=True,
+                current_library_id=1,
+                library_relationships=(LibraryRelationship(1, "owner", True),),
+            )
+
+    asgi_app.state.current_actor_resolver = Resolver()
+
+
+def _expires(headers):
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(int(headers["x-album-haven-app-copy-expires"]) / 1000, timezone.utc)
+
+
+def test_copy_expires_after_seven_days_while_the_session_lasts_longer(asgi_app):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    _signed_in_since(asgi_app, now - timedelta(days=1))
+
+    _status, headers, _body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+
+    assert abs(_expires(headers) - (now + timedelta(days=7))) < timedelta(minutes=1)
+
+
+def test_copy_never_outlives_the_session(asgi_app):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    # The default session ends 90 days after signing in, two days from now.
+    _signed_in_since(asgi_app, now - timedelta(days=88))
+
+    _status, headers, _body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+
+    assert abs(_expires(headers) - (now + timedelta(days=2))) < timedelta(minutes=1)
+
+
+def test_copy_never_outlives_a_short_idle_window(asgi_app):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    _signed_in_since(asgi_app, now)
+    asgi_app.state.auth_policy_config = {
+        **asgi_app.state.auth_policy_config,
+        "session": {"idle_seconds": 3 * 3600, "absolute_seconds": 30 * 86400},
+    }
+
+    _status, headers, _body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+
+    assert abs(_expires(headers) - (now + timedelta(hours=3))) < timedelta(minutes=1)
+
+
+def test_app_copy_switched_off_retires_the_worker_and_leaves_the_page_without_it(asgi_app, monkeypatch):
+    monkeypatch.setenv("ALBUM_HAVEN_APP_COPY", "off")
+
+    status, headers, body = run_asgi_request(asgi_app, "GET", "/app-copy-worker.js")
+    _page_status, _page_headers, page = run_asgi_request(asgi_app, "GET", "/")
+
+    assert status == 200
+    assert headers["cache-control"] == "no-cache"
+    assert b"unregister()" in body and b"album-haven-app-copy-" in body
+    assert b"addEventListener('fetch'" not in body
+    assert b"/static/js/app-copy.js" not in page
+    assert "x-album-haven-app-copy" not in headers
+
+
+@pytest.mark.parametrize("request_headers", [{}, COPY_REQUEST])
+def test_every_app_page_names_its_account_for_the_place_back_returns_to(asgi_app, request_headers):
+    _status, _headers, body = run_asgi_request(asgi_app, "GET", "/", headers=request_headers)
+    _account_status, _account_headers, account_body = run_asgi_request(asgi_app, "GET", "/app-copy/account")
+    account = decode_json(account_body)["account"]
+
+    assert f'<meta name="album-haven-account" content="{account}">'.encode() in body
+    place_script = body.index(b"/static/js/return-place.js?v=")
+    tag = body[body.rindex(b"<script", 0, place_script):body.index(b">", place_script)]
+    assert b"defer" not in tag, "it runs before the first paint"
+    assert place_script < body.index(b"<body"), "it runs before the first paint"
+
+
+# ---- Library data the worker keeps for views already seen (IAR-W20..IAR-W22) ----
+
+
+def _data_app(account_id: int | None = 7):
+    """A small app with the data marking installed, answering as the real data routes do."""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from music_app.services.app_copy import mark_app_copy_data
+
+    app = FastAPI()
+    app.state.runtime_asset_version = "v9"
+    app.state.auth_policy_config = {
+        "hmac": {"secret": "test-only-policy-origin-key-32-bytes-minimum", "key_version": 1},
+        "session": {"idle_seconds": 3600},
+    }
+
+    @app.get("/album-details")
+    async def album_details():
+        return JSONResponse({"ok": True, "album": {"key": "Broadcast::Tender"}})
+
+    @app.get("/view-data")
+    async def view_data():
+        return JSONResponse({"ok": False, "code": "gallery_projection_pending"}, status_code=503)
+
+    @app.get("/status")
+    async def status():
+        return JSONResponse({"ok": True})
+
+    @app.middleware("http")
+    async def mark(request, call_next):
+        response = await call_next(request)
+        mark_app_copy_data(request, response)
+        return response
+
+    @app.middleware("http")
+    async def signed_in(request, call_next):
+        request.state.current_actor = SimpleNamespace(account_id=account_id, authenticated_at=None)
+        return await call_next(request)
+
+    return app
+
+
+def test_data_fetched_by_the_copy_is_marked_for_its_account_with_the_fields_it_must_not_keep():
+    from types import SimpleNamespace
+
+    from music_app.services.app_copy import APP_COPY_REDACTED_KEYS, app_copy_account
+
+    status, headers, body = run_asgi_request(_data_app(), "GET", "/album-details", query={"album_key": "x"}, headers=COPY_REQUEST)
+
+    assert status == 200
+    assert decode_json(body)["album"]["key"] == "Broadcast::Tender"
+    assert headers["cache-control"] == "private, no-store"
+    assert headers["x-album-haven-app-copy"] == app_copy_account(SimpleNamespace(account_id=7))
+    assert headers["x-album-haven-asset-version"] == "v9"
+    assert int(headers["x-album-haven-app-copy-expires"]) > 0
+    assert headers["x-album-haven-app-copy-redact"].split(",") == list(APP_COPY_REDACTED_KEYS)
+    assert {"path", "src", "track_paths"} <= set(APP_COPY_REDACTED_KEYS)
+
+
+@pytest.mark.parametrize(("path", "copy_request", "account_id"), [
+    ("/album-details", False, 7),  # the page's own request, not the worker's
+    ("/view-data", True, 7),  # the app's own 503: not an answer to keep
+    ("/status", True, 7),  # not library data
+    ("/album-details", True, None),  # nobody signed in
+])
+def test_other_data_answers_are_never_marked(path, copy_request, account_id):
+    _status, headers, _body = run_asgi_request(
+        _data_app(account_id), "GET", path, headers=COPY_REQUEST if copy_request else {},
+    )
+
+    assert "x-album-haven-app-copy" not in headers
+    assert "x-album-haven-app-copy-redact" not in headers
+
+
+def test_data_is_not_marked_while_the_copy_is_switched_off(monkeypatch):
+    monkeypatch.setenv("ALBUM_HAVEN_APP_COPY", "off")
+
+    _status, headers, _body = run_asgi_request(_data_app(), "GET", "/album-details", headers=COPY_REQUEST)
+
+    assert "x-album-haven-app-copy" not in headers

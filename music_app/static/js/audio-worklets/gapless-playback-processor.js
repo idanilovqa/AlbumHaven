@@ -30,6 +30,8 @@
       emittedFrames: 0,
       authoritativeTotalFrames: 0,
       firstFrameReported: false,
+      // The engine already buffered this stream's start, so it plays without the startup cushion.
+      primed: false,
       boundaryTailDecided: false,
     };
   }
@@ -45,6 +47,7 @@
     ring.emittedFrames = 0;
     ring.authoritativeTotalFrames = 0;
     ring.firstFrameReported = false;
+    ring.primed = false;
     ring.boundaryTailDecided = false;
   }
 
@@ -114,13 +117,16 @@
   }
 
   class GaplessPlaybackProcessor extends AudioWorkletProcessor {
-    constructor() {
+    constructor(options) {
       super();
       this.generation = 0;
       this.sampleRate = 0;
       this.configured = false;
       this.current = createRing(1);
       this.continuity = createRing(1);
+      // Streams this generation's current ring played and left: the engine learns of a cutover by
+      // message, so their next chunks may still arrive, and are dropped.
+      this.retiredStreamIds = new Set();
       this.renderedFrames = 0;
       this.timelineFrame = 0;
       this.playing = false;
@@ -149,12 +155,36 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.continuityTimelineStartFrame = 0;
       this.consecutiveAlbumContinuity = false;
+      // The player fails closed: nothing sounds without a grant still inside the time
+      // allowed without the server. Kept here, so no frozen page or sleeping computer outlasts it.
+      this.awaitsPermission = options?.processorOptions?.awaitsPermission === true;
+      this.soundUntilWallMs = 0;
+      this.soundFramesLeft = 0;
       this.port.onmessage = ({ data }) => this.handleCommand(data);
+    }
+
+    // By the wall clock, which a computer's sleep cannot stop, and by the audio clock, which setting the
+    // wall clock back cannot extend.
+    permitSound(message) {
+      const untilMs = Number(message.untilMs) || 0;
+      const forMs = Math.min(Number(message.forMs) || 0, untilMs - Date.now());
+      this.soundUntilWallMs = untilMs;
+      this.soundFramesLeft = Math.max(0, Math.floor((forMs * sampleRate) / 1000));
+    }
+
+    // Time passes in every quantum, playing or not.
+    maySound(frames) {
+      if (!this.awaitsPermission) return true;
+      if (this.soundFramesLeft <= 0) return false;
+      this.soundFramesLeft -= frames;
+      return Date.now() < this.soundUntilWallMs;
     }
 
     reset(generation, timelineStartFrame = 0) {
       this.generation = generation;
+      this.retiredStreamIds.clear();
       clearRing(this.current);
       clearRing(this.continuity);
       this.renderedFrames = timelineStartFrame;
@@ -177,6 +207,7 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.continuityTimelineStartFrame = 0;
       this.consecutiveAlbumContinuity = false;
     }
 
@@ -188,6 +219,23 @@
       }
       if (message.type === 'seek-reset') {
         this.seekReset(message);
+        return;
+      }
+      if (message.type === 'may-sound') {
+        this.permitSound(message);
+        return;
+      }
+      if (message.type === 'silence-port') {
+        // A Worker's port: it reaches the audio thread while the page's own thread is busy.
+        this.silencePort = message.port;
+        this.silencePort.onmessage = () => { this.playing = false; };
+        return;
+      }
+      if (message.type === 'silence') {
+        // Whatever the generation: zeros from the next quantum on. Every position rendered before this
+        // was posted before the answer, so the page then knows the last frame it sent out.
+        this.playing = false;
+        this.port.postMessage({ type: 'silenced' });
         return;
       }
       if (!this.configured || message.generation !== this.generation) return;
@@ -208,6 +256,10 @@
       else if (message.type === 'reserve-buffered-seek') this.reserveBufferedSeek(message);
       else if (message.type === 'expect-continuity') {
         this.expectContinuity = message.active === true;
+        // A stream spliced into the same track continues its timeline; a new track starts at zero.
+        this.continuityTimelineStartFrame = isIntegerBetween(message.timelineStartFrame, 0, Number.MAX_SAFE_INTEGER)
+          ? message.timelineStartFrame
+          : 0;
         this.consecutiveAlbumContinuity = this.expectContinuity
           && message.consecutiveAlbumBoundary === true;
       }
@@ -256,6 +308,7 @@
     }
 
     enqueue(message) {
+      if (this.retiredStreamIds.has(message.streamId)) return;
       const ring = this.ringForRole(message.role);
       let rejection = '';
       if (!ring) rejection = 'unknown-role';
@@ -312,6 +365,7 @@
     }
 
     markEos(message) {
+      if (this.retiredStreamIds.has(message.streamId)) return;
       const ring = this.ringForRole(message.role);
       const validEmittedFrames = isIntegerBetween(
         message.emittedFrames,
@@ -410,7 +464,8 @@
           || this.continuity.streamId !== message.streamId
           || this.continuity.bufferedFrames <= 0) return;
       this.pendingSeek = { ...this.pendingSeek, streamId: message.streamId,
-        timelineStartFrame: message.timelineStartFrame, ready: true };
+        timelineStartFrame: message.timelineStartFrame, ready: true,
+        primed: message.primed === true };
     }
 
     reserveSeek(message) {
@@ -605,6 +660,7 @@
 
     promoteContinuity() {
       const oldCurrent = this.current;
+      if (oldCurrent.streamId !== null) this.retiredStreamIds.add(oldCurrent.streamId);
       this.current = this.continuity;
       this.continuity = oldCurrent;
       clearRing(this.continuity);
@@ -626,6 +682,7 @@
       this.boundaryIncomingLeft[0] = this.continuity.samples[incomingSource];
       this.boundaryIncomingRight[0] = this.continuity.samples[incomingSource + 1];
       this.promoteContinuity();
+      this.current.primed = pending.primed === true;
       this.timelineFrame = pending.timelineStartFrame;
       this.pendingSeek = null;
       this.port.postMessage({
@@ -649,6 +706,14 @@
           },
         },
       });
+      if (this.rebuffering && this.playing && this.current.primed) {
+        // A switched-to song is already filled to its head: the old song running dry is not its wait.
+        this.rebuffering = false;
+        this.port.postMessage({
+          type: 'buffering-end', generation: this.generation, streamId: this.current.streamId,
+          role: 'current', timelineFrame: this.timelineFrame,
+        });
+      }
       return true;
     }
 
@@ -747,8 +812,10 @@
       right.fill(0);
       this.commitPreparedSeek();
       this.commitBufferedSeek(left.length);
-      if (!this.playing || !this.configured) return true;
-      if (!this.current.firstFrameReported && !this.current.eos
+      const maySound = this.maySound(left.length);
+      // Held, it consumes nothing: it goes on from this frame.
+      if (!maySound || !this.playing || !this.configured) return true;
+      if (!this.current.firstFrameReported && !this.current.primed && !this.current.eos
           && this.current.bufferedFrames < this.startupBufferFrames) return true;
       if (this.rebuffering) {
         const refillReady = this.current.bufferedFrames >= this.startupBufferFrames
@@ -921,7 +988,8 @@
             this.promoteContinuity();
             this.expectContinuity = false;
             this.consecutiveAlbumContinuity = false;
-            this.timelineFrame = 0;
+            this.timelineFrame = this.continuityTimelineStartFrame;
+            this.continuityTimelineStartFrame = 0;
             if (consecutiveAlbum) this.trimConsecutiveAlbumHead();
             continue;
           }
@@ -1093,6 +1161,7 @@
           generation: this.generation,
           streamId: this.current.streamId,
           timelineFrame: this.timelineFrame,
+          contextTime: currentTime,
         });
       }
       this.renderedFrames += left.length;

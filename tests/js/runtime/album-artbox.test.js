@@ -35,10 +35,9 @@ function loadAlbumArtbox() {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
   };
   vm.createContext(context);
-  vm.runInContext(
-    fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'album-artbox.js'), 'utf8'),
-    context,
-  );
+  for (const name of ['offline-notice.js', 'album-artbox.js']) {
+    vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', name), 'utf8'), context);
+  }
   return context;
 }
 
@@ -209,4 +208,13 @@ test('gallery card text and descendants do not gain separate hover colors', () =
     appearanceCss,
     /:not\(\.album-card \*\)[^{]*:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:/s,
   );
+});
+
+test('AlbumArtbox offline state draws the OfflineNotice cloud for art the server could not be reached for', () => {
+  const { buildAlbumArtboxHtml, buildOfflineCloudHtml } = loadAlbumArtbox();
+  const html = buildAlbumArtboxHtml({ state: 'offline', label: 'Cover art unavailable' });
+
+  assert.match(html, /class="album-artbox album-artbox--offline" data-album-artbox-state="offline" aria-label="Cover art unavailable"/);
+  assert.ok(html.includes(`<span class="album-artbox__offline-mark">${buildOfflineCloudHtml()}</span>`));
+  assert.doesNotMatch(html, /album-artbox__missing-mark|Loading cover art/);
 });

@@ -50,16 +50,20 @@ function capabilitiesFor({ name, payload }) {
   if (name === 'files.save') return ['files.save.v1'];
   if (name === 'playback.setLoop' || name === 'playback.clearLoop') return ['playback.native.v1', 'playback.loops.v2'];
   if (name === 'playback.loadQueue' && payload.keepCurrent) return ['playback.native.v1', 'playback.queue.v1'];
+  if (name === 'playback.loadQueue' && 'takeover' in payload) return ['playback.native.v1', 'playback.takeover.v1'];
   if (name.startsWith('playback.')) return ['playback.native.v1'];
   return [`unknown command ${name}`];
 }
 
 const V1_LOAD = readJson('v1.json').loadQueueRequest.payload;
-const sortedKeys = (value, optional) => Object.keys(value).filter(key => key !== optional).sort().join();
+const sortedKeys = (value, ...optional) => Object.keys(value).filter(key => !optional.includes(key)).sort().join();
 
-/** PlaybackBridge.parseLoad accepts exactly the v1 keys, with `keepCurrent` and `resumeToken` optional. */
+/**
+ * PlaybackBridge.parseLoad accepts exactly the v1 keys, with `keepCurrent` and `resumeToken` optional,
+ * and `takeover` from a shell that declares playback.takeover.v1 (capabilitiesFor checks that).
+ */
 function isV1LoadQueue(payload) {
-  return sortedKeys(payload, 'keepCurrent') === sortedKeys(V1_LOAD)
+  return sortedKeys(payload, 'keepCurrent', 'takeover') === sortedKeys(V1_LOAD)
     && Array.isArray(payload.items)
     && payload.items.every(item => sortedKeys(item, 'resumeToken') === sortedKeys(V1_LOAD.items[0], 'resumeToken'));
 }
@@ -366,3 +370,131 @@ test('a shell that negotiates a protocol outside the site range leaves the site 
   assert.equal(await api.connectAndroidBridge(), null);
   assert.equal(api.isAndroidUpdateRequired(), true);
 });
+
+// Play here on an installed phone (production blocker, 2026-11-22). These are the key sets and the
+// capabilities of PlaybackBridge.kt and BridgeController.kt at the two published tags, which refuse any
+// other key. They are fixed history: the record and the v1 fixture move on, these shells do not.
+const PUBLISHED_LOAD_KEYS = ['queueRevision', 'items', 'currentIndex', 'positionMs', 'loop', 'autoplay'];
+const PUBLISHED_ITEM_KEYS = [
+  'playbackRef', 'listenKey', 'title', 'artist', 'album', 'artworkUrl', 'durationMs', 'trackNumber', 'queueGroup',
+];
+const PUBLISHED_OPTIONAL_ITEM_KEYS = ['resumeToken', 'year'];
+const PUBLISHED_CAPABILITIES = [
+  'app.copy.v1', 'downloads.link.v1', 'files.save.v1', 'playback.album_details.v1', 'playback.loops.v2',
+  'playback.media_session.v1', 'playback.native.v1', 'playback.queue.v1', 'playback.resumption.v1', 'updates.manual.v1',
+];
+const PUBLISHED_SHELLS = [
+  { tag: 'android/stable/10', versionCode: 10, sourceCommit: 'e1bf2ddf753dfdc1144a1cdc06956c95c1550b0c' },
+  { tag: 'android/stable/9', versionCode: 9, sourceCommit: '7df5bd91f0e7b955841ac5b8d0e3f8d3c69ef0ae' },
+];
+const PHONE = '11111111-1111-4111-8111-111111111111';
+
+function publishedShellAccepts({ name, payload }) {
+  if (name !== 'playback.loadQueue') return true;
+  const keys = Object.keys(payload).filter(key => key !== 'keepCurrent').sort().join();
+  return keys === [...PUBLISHED_LOAD_KEYS].sort().join() && payload.items.every(item => (
+    PUBLISHED_ITEM_KEYS.every(key => key in item)
+      && Object.keys(item).every(key => [...PUBLISHED_ITEM_KEYS, ...PUBLISHED_OPTIONAL_ITEM_KEYS].includes(key))));
+}
+
+/** A phone that shows another device playing, with the page's own Play button code and claim requests. */
+async function phoneShowingAnotherDevice({ versionCode, capabilities, clientId = PHONE, refuseLoad = false }) {
+  const base = stableHandshake(stableShells.shells.latest, capabilities);
+  const handshake = { ...base, versionCode, playback: { ...base.playback, clientId } };
+  const published = !capabilities.includes('playback.takeover.v1');
+  const site = loadSite({ respond: (message) => {
+    if (message.name === 'bridge.handshake') return handshake;
+    const refused = message.name === 'playback.loadQueue' && refuseLoad || published && !publishedShellAccepts(message);
+    return refused ? { ok: false, error: { code: 'invalid_payload', message: 'Invalid playback command' } } : null;
+  } });
+  const { context, api } = site;
+  const loop = path.join(runtimeDir, 'player-loop-playback.js');
+  vm.runInContext(fs.readFileSync(loop, 'utf8'), context, { filename: loop });
+  context.updatePlayerUi = () => {};
+  Object.assign(context, { setInterval: () => 0, clearInterval: () => {} }); // the claim heartbeat never ticks here
+  context.getPlayerPlaybackSnapshot = () => context.getStreamingPlaybackSnapshot();
+  context.getPlayerPlaybackSnapshot = () => context.getStreamingPlaybackSnapshot();
+  const toasts = [];
+  context.showToast = text => toasts.push(text);
+  const requests = [];
+  const refs = context.fetch;
+  context.fetch = async (url, init = {}) => {
+    if (!String(url).startsWith('/playback/state')) return refs(url, init);
+    requests.push({ method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+    // The confirmed answer: from here on the other device has stopped and lost its claim.
+    return { ok: true, status: 200, json: async () => ({
+      protocol: 1, claimToken: 'taken', leaseMs: 30000, expiresAt: new Date(Date.now() + 30000).toISOString(),
+      confirmed: true, path: tracks[0].path, position: { ms: 30000, durationMs: 180000 },
+      track: { playbackRef: 'opaque-ref-0', title: tracks[0].title, artist: tracks[0].artist, album: tracks[0].album, artworkUrl: null },
+    }) };
+  };
+  context.playTrackFromPayload = (track, options) => api.start(track, { ...options, autoplay: true });
+  await api.connectAndroidBridge();
+  context.syncMirroredPlaybackState({ is_playing_elsewhere: true, track: { title: 'Their song', artist: 'Them', album: '' } });
+  const writes = () => requests.filter(request => request.method !== 'GET');
+  return { ...site, toasts, writes };
+}
+
+for (const shell of PUBLISHED_SHELLS) {
+  const installed = { versionCode: shell.versionCode, capabilities: PUBLISHED_CAPABILITIES };
+  const name = `${shell.tag} (${shell.sourceCommit.slice(0, 9)})`;
+
+  test(`Play pressed on ${name} while another device plays never stops that device`, async () => {
+    const { context, bridge, writes } = await phoneShowingAnotherDevice(installed);
+    assert.equal(context.isPlaybackPlayingElsewhere(), false, 'no Play here is offered');
+    context.togglePlayerPlayback();
+    await new Promise(setImmediate);
+    assert.deepEqual(writes(), [], 'no claim request');
+    assert.deepEqual(bridge.sent.filter(message => !publishedShellAccepts(message)), []);
+    assert.deepEqual(commands(bridge, 'playback.loadQueue'), []);
+  });
+
+  test(`a takeover asked of ${name} is refused before any claim request`, async () => {
+    const { context, bridge, writes, toasts } = await phoneShowingAnotherDevice(installed);
+    assert.equal(await context.takeOverPlaybackHere(), false);
+    assert.deepEqual(writes(), []);
+    assert.deepEqual(commands(bridge, 'playback.loadQueue'), []);
+    assert.deepEqual(toasts, ['Playback is active in another tab.'], 'the notice that is already there');
+  });
+
+  test(`no start ever sends ${name} a key it does not know`, async () => {
+    const { api, bridge } = await phoneShowingAnotherDevice(installed);
+    await api.start(tracks[0], { autoplay: true, takeover: true });
+    assert.equal(commands(bridge, 'playback.loadQueue').length, 1);
+    assert.deepEqual(bridge.sent.filter(message => !publishedShellAccepts(message)), []);
+    assert.deepEqual(bridge.refused, []);
+  });
+}
+
+const CAN_TAKE_OVER = [...PUBLISHED_CAPABILITIES, 'playback.takeover.v1'];
+
+test('Play pressed on a shell that declares takeover takes over as the phone', async () => {
+  const { context, bridge, writes } = await phoneShowingAnotherDevice({ versionCode: 11, capabilities: CAN_TAKE_OVER });
+  assert.equal(context.isPlaybackPlayingElsewhere(), true);
+  assert.equal(Boolean(await context.takeOverPlaybackHere()), true);
+  assert.equal(writes().length, 1);
+  assert.equal(writes()[0].body.confirm, true);
+  assert.equal(writes()[0].body.clientId, PHONE);
+  assert.equal(writes()[0].body.clientSurface, 'mobile');
+  assert.equal(commands(bridge, 'playback.loadQueue')[0].payload.takeover, true);
+  assert.deepEqual(bridge.refused, []);
+});
+
+test('a phone that could not start gives the claim it took back, so its next Play is not refused', async () => {
+  const { context, writes } = await phoneShowingAnotherDevice({ versionCode: 11, capabilities: CAN_TAKE_OVER, refuseLoad: true });
+  await assert.rejects(context.takeOverPlaybackHere());
+  assert.deepEqual(writes().map(request => request.method), ['PUT', 'DELETE']);
+  assert.equal(writes()[1].body.claimToken, 'taken');
+  assert.equal(writes()[1].body.clientId, PHONE);
+});
+
+for (const [what, phone] of [
+  ['names no client', { capabilities: CAN_TAKE_OVER, clientId: '' }],
+  ['has no way to play', { capabilities: ['app.copy.v1', 'playback.takeover.v1'] }],
+]) {
+  test(`a shell that ${what} never stops another device`, async () => {
+    const { context, writes } = await phoneShowingAnotherDevice({ versionCode: 11, ...phone });
+    assert.equal(await context.takeOverPlaybackHere(), false);
+    assert.deepEqual(writes(), []);
+  });
+}

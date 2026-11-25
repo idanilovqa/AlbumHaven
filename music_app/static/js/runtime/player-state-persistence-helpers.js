@@ -186,12 +186,35 @@ let playerUnloadWasPlaying = null;
 let playerUnloadStatePersisted = false;
 let playerUnloadPlaybackSnapshot = null;
 
+// What this tab played when its page left, for that tab's next page alone: the saved state above is every
+// tab's, and a tab resumes only what that same tab was playing.
+const PLAYER_TAB_STATE_STORAGE_KEY = 'albumhaven.playerTabState.v1';
+
+function takeTabPlayerState() {
+  if (typeof getSessionStorageItem !== 'function') return null;
+  const raw = getSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY);
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return null;
+  }
+}
+
 function resetPlayerUnloadPersistence() {
+  // Back from the page cache this page goes on itself.
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY);
   const playbackSnapshot = playerUnloadPlaybackSnapshot;
   playerUnloadWasPlaying = null;
   playerUnloadStatePersisted = false;
   playerUnloadPlaybackSnapshot = null;
   return playbackSnapshot;
+}
+
+// The signed-in account the saved player belongs to; '' where the page names none.
+function pagePlaybackAccount() {
+  return typeof pageAccountKey === 'function' ? pageAccountKey() : '';
 }
 
 function persistPlayerState(force = false, options = {}) {
@@ -204,9 +227,17 @@ function persistPlayerState(force = false, options = {}) {
       state.player.lastPersistedSnapshot = '';
       return;
     }
-    snapshot = JSON.stringify(payload);
+    // The device keeps resume tokens, never paths (player-saved-tokens.js); until the current song's
+    // token arrives the last saved player stays.
+    const record = typeof playerStateForDevice === 'function' ? playerStateForDevice(payload) : payload;
+    if (!record) return;
+    const account = pagePlaybackAccount();
+    snapshot = JSON.stringify(account ? { ...record, account } : record);
     if (!force && snapshot === state.player.lastPersistedSnapshot) return;
     setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
+    if (options.allowAfterUnload && typeof setSessionStorageItem === 'function') {
+      setSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY, snapshot);
+    }
     state.player.lastPersistedSnapshot = snapshot;
   } catch (_error) {
     // Ignore storage errors so playback never breaks.
@@ -220,7 +251,9 @@ function persistPlayerStateForUnload(reason) {
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  // Let the lease expire: an unload release could overtake the final beacon.
+  // A playing page releases by its final beacon alone, which a release could overtake; one that is not
+  // playing releases now, as no lease frees it. The next page of this tab knows the claim either way.
+  if (typeof keepPlaybackClaimForThisTab === 'function') keepPlaybackClaimForThisTab();
   flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {
     preservePlayingState: true,
@@ -236,20 +269,62 @@ function restorePlayerState() {
     && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   if (state.player.restoredFromStorage) return;
   state.player.restoredFromStorage = true;
-  const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
-  if (!raw) return;
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (_error) {
+  const tabState = takeTabPlayerState();
+  const resumesThisTab = Boolean(tabState)
+    && typeof canThisTabResumePlayback === 'function' && canThisTabResumePlayback();
+  let parsed = resumesThisTab ? tabState : null;
+  if (!parsed) {
+    const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+    if (!raw) return;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (_error) {
+      return;
+    }
+  }
+  // Another account's player, or one saved before players named their account, is never shown.
+  if ((parsed?.account || '') !== pagePlaybackAccount()) {
+    if (!resumesThisTab) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
     return;
   }
+  if (typeof playerStateFromDevice !== 'function') {
+    restoreSavedPlayer(parsed, resumesThisTab, null);
+    return;
+  }
+  // Registered before the paths are asked for: a playing tab goes on at the page's pageshow, which
+  // may come before the server answers.
+  const pageShown = typeof window !== 'undefined' && typeof window.addEventListener === 'function'
+    ? new Promise(resolve => window.addEventListener('pageshow', resolve, { once: true }))
+    : null;
+  const restoreFromDevice = () => playerStateFromDevice(parsed).then((inMemory) => {
+    // A record that names paths, another key's tokens, or a song no longer in the library.
+    if (!inMemory) {
+      removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+      return;
+    }
+    // A song chosen meanwhile wins over the saved one.
+    if (state.player.current) return;
+    restoreSavedPlayer(inMemory, resumesThisTab, pageShown);
+  }, () => {
+    // No answer: the saved player comes back once the server does.
+    if (typeof onServerReachableAgain !== 'function') return;
+    const stop = onServerReachableAgain(() => {
+      stop();
+      void restoreFromDevice();
+    });
+  });
+  void restoreFromDevice();
+}
+
+// [pageShown] resolves at the page's pageshow when the player was restored after it was registered.
+function restoreSavedPlayer(parsed, resumesThisTab, pageShown) {
   const track = parsed?.track;
   if (!track || !track.src) return;
   const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
-  const savedPaused = typeof parsed.paused === 'boolean'
+  // Only this tab's own playing goes on by itself: anything else opens paused and claims nothing.
+  const savedPaused = !resumesThisTab || (typeof parsed.paused === 'boolean'
     ? parsed.paused
-    : !Boolean(parsed.wasPlaying);
+    : !Boolean(parsed.wasPlaying));
   const ownershipResult = !savedPaused
     && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
@@ -319,9 +394,12 @@ function restorePlayerState() {
       } : {}),
       });
     };
+    if (typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
     const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
       ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
-    const restoredRolePromise = !savedPaused
+    const restoredRolePromise = !savedPaused && pageShown
+      ? pageShown.then(startRestoredRole)
+      : !savedPaused
       && typeof window !== 'undefined'
       && typeof window.addEventListener === 'function'
       ? new Promise((resolve, reject) => {

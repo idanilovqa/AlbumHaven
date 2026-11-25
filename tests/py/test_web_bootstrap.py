@@ -1887,6 +1887,7 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "capability-ui.js",
         "client-device-preferences.js",
         "client-layout-bootstrap.js",
+        "return-place.js",
         "surface-dismissal.js",
         "button-component.js",
         "editor-page.js",

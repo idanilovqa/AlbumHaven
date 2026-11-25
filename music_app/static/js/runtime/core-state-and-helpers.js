@@ -274,6 +274,8 @@ const state = {
   },
   player: {
     selectedTrack: null,
+    // What the player shows: the current song once it sounds (resolveShownPlayerTrack).
+    shown: null,
     streaming: {
       mode: 'stopped',
       generation: 0,
@@ -420,7 +422,7 @@ const state = {
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';
-const PLAYER_STATE_STORAGE_KEY = 'albumhaven.playerState.v1';
+const PLAYER_STATE_STORAGE_KEY = 'albumhaven.playerState.v2';
 
 
 function getDetectedBrowserTimeZone() {

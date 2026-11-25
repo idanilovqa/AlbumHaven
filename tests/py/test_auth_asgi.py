@@ -306,6 +306,50 @@ def test_get_login_mints_hidden_one_time_token_and_hardened_cookie(auth_asgi):
     assert "Domain=" not in cookie
 
 
+class FakeActorResolver:
+    """A session cookie naming 'live' is signed in; any other is a session that ended."""
+
+    def resolve(self, raw_session_token):
+        from music_app.services.current_actor import ActorState, CurrentActor
+        if raw_session_token == "live":
+            return CurrentActor(state=ActorState.ACTIVE, account_id=41, session_id=8)
+        return CurrentActor(state=ActorState.ANONYMOUS)
+
+
+def test_get_login_sends_someone_signed_in_to_the_app_and_shows_the_form_otherwise(auth_asgi):
+    app, preauth, _login = _app(auth_asgi)
+    app.state.current_actor_resolver = FakeActorResolver()
+
+    status, headers, _body = _request(app, "GET", headers={"cookie": f"{SESSION_COOKIE}=live"})
+    assert status == 303 and dict(headers)["location"] == "/"
+    assert "no-store" in dict(headers)["cache-control"]
+    assert preauth.issued == [CSRF, NEXT_CSRF], "no sign-in token is issued for someone signed in"
+    status, headers, _body = _request(app, "GET", headers={"cookie": f"{SESSION_COOKIE}=live"},
+                                      query="return_to=%2Falbums%3Fview%3Dgrid")
+    assert status == 303 and dict(headers)["location"] == "/albums?view=grid"
+    status, headers, _body = _request(app, "GET", headers={"cookie": f"{SESSION_COOKIE}=live"},
+                                      query="return_to=%2F%2Fevil.example")
+    assert status == 303 and dict(headers)["location"] == "/"
+
+    # A session that ended, no session, and the form's own token refresh all get the form.
+    preauth.issued = [CSRF] * 3
+    for headers in ({"cookie": f"{SESSION_COOKIE}=ended"}, {},
+                    {"cookie": f"{SESSION_COOKIE}=live", "accept": "application/json"}):
+        status, _headers, _body = _request(app, "GET", headers=headers)
+        assert status == 200
+
+
+def test_get_login_names_the_copy_worker_only_while_the_copy_is_on(auth_asgi, monkeypatch):
+    """IAR-W12: the sign-in page installs the copy's worker, so the library page after it is kept."""
+    worker_meta = '<meta name="album-haven-app-copy-worker" content="/app-copy-worker.js?mode=web">'
+    app, _, _ = _app(auth_asgi)
+    monkeypatch.delenv("ALBUM_HAVEN_APP_COPY", raising=False)
+    assert worker_meta in _request(app, "GET")[2].decode()
+
+    monkeypatch.setenv("ALBUM_HAVEN_APP_COPY", "off")
+    assert worker_meta not in _request(app, "GET")[2].decode()
+
+
 def test_get_login_renders_approved_v007_semantic_controls_and_assets(auth_asgi):
     app, _, _ = _app(auth_asgi)
 
@@ -1937,3 +1981,33 @@ def test_invitation_handoff_without_cookie_terminates_at_normal_invalid_form(aut
     assert status == 400 and "location" not in dict(headers)
     assert b'http-equiv="refresh"' not in body
     assert b'name="new_password"' not in body
+
+
+# Sign-out clears the player: the account's last-played song and place go, never a live claim (the claims
+# service keeps those), and the sign-out itself never fails for it.
+def test_sign_out_forgets_the_last_played_record_and_never_fails_for_it(auth_asgi, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    forgotten = []
+
+    class Claims:
+        def __init__(self, config):
+            self.config = config
+
+        def forget_last_played(self, actor):
+            if actor == "unreachable":
+                raise RuntimeError("database unavailable")
+            forgotten.append((actor, self.config["ALBUM_HAVEN_APP_DATABASE_URL"]))
+
+    monkeypatch.setattr(auth_asgi, "PostgresPlaybackClaims", Claims)
+
+    def request(actor):
+        return SimpleNamespace(state=SimpleNamespace(current_actor=actor),
+                               app=SimpleNamespace(state=SimpleNamespace(config={"ALBUM_HAVEN_APP_DATABASE_URL": "db"})))
+
+    asyncio.run(auth_asgi._forget_last_played(request("owner"), {}))
+    asyncio.run(auth_asgi._forget_last_played(request("unreachable"), {}))
+    asyncio.run(auth_asgi._forget_last_played(SimpleNamespace(state=SimpleNamespace(), app=None), {}))
+
+    assert forgotten == [("owner", "db")]

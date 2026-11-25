@@ -4,6 +4,7 @@ import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import replace
 import json
+from urllib.parse import urlencode
 import math
 from pathlib import Path
 import struct
@@ -271,10 +272,12 @@ def test_pcm_socket_uses_managed_account_playback_permission(
         ("missing-capability", 4403),
     ],
 )
+@pytest.mark.parametrize("control", ["open", "refresh-only probe"])
 def test_pcm_socket_revalidates_durable_authority_before_each_open(
     playback_app,
     media_path,
     decoder_factory,
+    control,
     revoked_actor,
     expected_close_code,
 ):
@@ -312,11 +315,124 @@ def test_pcm_socket_revalidates_durable_authority_before_each_open(
         async with websocket_session(playback_app, "/playback/pcm") as socket:
             assert socket.accepted is True
             resolver.revoked = True
-            await socket.send_json(open_command(media_path))
+            await socket.send_json(
+                open_command(media_path)
+                if control == "open"
+                else {"type": "probe", "requestId": 1, "path": str(media_path), "authorityOnly": True}
+            )
             assert await socket.receive_close() == expected_close_code
 
     asyncio.run(scenario())
     assert decoder_factory.instances == []
+
+
+def test_pcm_socket_scans_an_mp3_open_while_its_authority_refresh_is_pending(
+    playback_app,
+    decoder_factory,
+    monkeypatch,
+):
+    import threading
+
+    from music_app.services import playback_encoded
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    mp3_path = Path(playback_app.state.config["MUSIC_DIR"]) / "Artist" / "Album" / "track.mp3"
+    mp3_path.parent.mkdir(parents=True, exist_ok=True)
+    mp3_path.write_bytes(b"not-really-mp3")
+    scan_started = threading.Event()
+    scanned: list[Path] = []
+
+    def scan(path):
+        scanned.append(path)
+        scan_started.set()
+        return None
+
+    monkeypatch.setattr(playback_stream_asgi, "mp3_stream_map", scan)
+    monkeypatch.setattr(playback_encoded, "mp3_stream_map", scan)
+
+    class SlowRefreshResolver:
+        calls = 0
+        refresh_saw_scan: bool | None = None
+
+        def resolve(self, _token):
+            self.calls += 1
+            if self.calls > 1 and self.refresh_saw_scan is None:
+                # The refresh answers only after the scan began, or after 5 s without it.
+                self.refresh_saw_scan = scan_started.wait(5)
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=(CapabilityGrant("library.media.read", "library", 23),),
+            )
+
+    resolver = SlowRefreshResolver()
+    playback_app.state.current_actor_resolver = resolver
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(mp3_path.resolve(), codecs=["mp3"]))
+            metadata = await socket.receive_json()
+            assert metadata["type"] == "metadata"
+
+    asyncio.run(scenario())
+    assert resolver.refresh_saw_scan is True
+    assert scanned[0] == mp3_path.resolve()
+    assert len(decoder_factory.instances) == 1
+
+
+def test_pcm_socket_opens_never_reread_the_library_root_settings(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    import threading
+
+    from music_app.services import library_roots
+
+    store_type = library_roots.PostgresLibraryRootSettingsStore
+    # Each read names its thread, so a failure says which work read the roots.
+    loads: list[str] = []
+    original_load = store_type.load_settings
+
+    def counted_load(self, *args, **kwargs):
+        loads.append(f"store on {threading.current_thread().name}")
+        return original_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(store_type, "load_settings", counted_load)
+    # The test runtime stubs the roots reader; a start must use neither it nor the store.
+    stubbed_roots = library_roots.get_library_roots
+
+    def counted_roots(config):
+        loads.append(f"roots on {threading.current_thread().name}")
+        return stubbed_roots(config)
+
+    monkeypatch.setattr(library_roots, "get_library_roots", counted_roots)
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(media_path))
+            assert (await socket.receive_json())["type"] == "metadata"
+            loads_after_first_open = len(loads)
+            await socket.send_json(open_command(media_path, generation=2, streamId=2))
+            assert (await socket.receive_json())["type"] == "metadata"
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            await socket.receive_json()
+            return loads_after_first_open
+
+    loads_after_first_open = asyncio.run(scenario())
+    assert loads_after_first_open <= 1, loads
+    assert len(loads) == loads_after_first_open, loads
+    assert len(decoder_factory.instances) == 2
 
 
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
@@ -329,7 +445,7 @@ def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed
         def __init__(self) -> None:
             self.calls: list[tuple[Path, int]] = []
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.calls.append((path, bins))
             return WaveformPeaks(
                 left=tuple(index / 280 for index in range(280)),
@@ -360,6 +476,43 @@ def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed
     assert int(headers["content-length"]) == len(body)
 
 
+@pytest.mark.parametrize(
+    ("priority", "expected_current"),
+    [("current", True), ("", False), ("prefetch", False), ("CURRENT", False)],
+)
+def test_waveform_route_marks_only_the_playing_song_request_as_current(
+    playback_app,
+    media_path,
+    priority,
+    expected_current,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    class RegistryDouble:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, int, bool]] = []
+
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
+            self.calls.append((path, bins, current))
+            return WaveformPeaks(left=(0.25,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    registry = RegistryDouble()
+    playback_app.state.waveform_peaks_registry = registry
+    query = {"path": str(media_path), "bins": "720"}
+    if priority:
+        query["priority"] = priority
+
+    status, _headers, _body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query=query,
+    )
+
+    assert status == 200
+    assert registry.calls == [(media_path, 720, expected_current)]
+
+
 def test_waveform_route_allows_the_bounded_higher_detail_player_density(
     playback_app,
     media_path,
@@ -370,7 +523,7 @@ def test_waveform_route_allows_the_bounded_higher_detail_player_density(
         def __init__(self) -> None:
             self.calls: list[tuple[Path, int]] = []
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.calls.append((path, bins))
             return WaveformPeaks(
                 left=(0.25,) * bins,
@@ -414,7 +567,7 @@ def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bound
         def __init__(self) -> None:
             self.calls: list[tuple[Path, int]] = []
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.calls.append((path, bins))
             return WaveformPeaks(
                 left=(0.25,) * bins,
@@ -534,7 +687,7 @@ def test_waveform_route_persists_generated_saved_loop_peaks_when_file_is_unchang
             return True
 
     class RegistryDouble:
-        async def run(self, path, *, bins):
+        async def run(self, path, *, bins, current=False):
             assert path == saved_loop_path and bins == 280
             return generated
 
@@ -580,7 +733,7 @@ def test_waveform_route_treats_saved_loop_cache_failure_as_rebuildable(
             raise RuntimeError("cache write unavailable")
 
     class RegistryDouble:
-        async def run(self, path, *, bins):
+        async def run(self, path, *, bins, current=False):
             assert path == saved_loop_path and bins == 280
             return WaveformPeaks(left=(0.1,) * bins, right=(0.2,) * bins, sample_count=bins)
 
@@ -662,7 +815,7 @@ def test_waveform_route_skips_cache_write_when_saved_loop_disappears_after_build
         async def get_cached(self, *_args, **_kwargs):
             return None
 
-        async def run(self, _path, *, bins):
+        async def run(self, _path, *, bins, current=False):
             return WaveformPeaks(
                 left=(0.2,) * bins,
                 right=(0.4,) * bins,
@@ -757,7 +910,7 @@ def test_waveform_route_rejects_missing_or_invalid_saved_loop_id_without_startin
         def __init__(self) -> None:
             self.run_calls = 0
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             self.run_calls += 1
             raise AssertionError(f"unexpected peak job for {bins} bins")
 
@@ -804,7 +957,7 @@ def test_waveform_route_cache_only_probe_returns_hit_or_204_without_starting_job
             self.calls.append((path, bins))
             return cached if len(self.calls) == 1 else None
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             raise AssertionError(f"cache-only probe must not start peak job for {bins} bins")
 
     registry = RegistryDouble()
@@ -857,7 +1010,7 @@ def test_waveform_route_only_literal_one_selects_cache_only_mode(
         async def get_cached(self, _path: Path, *, bins: int):
             raise AssertionError(f"cachedOnly={cached_only} must not probe cache for {bins} bins")
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.run_calls.append((path, bins))
             return expected
 
@@ -891,7 +1044,7 @@ def test_waveform_route_accepts_media_from_additional_library_categories(
     calls = []
 
     class RegistryDouble:
-        async def run(self, path, *, bins):
+        async def run(self, path, *, bins, current=False):
             calls.append(path)
             return WaveformPeaks(left=(0.25,) * bins, right=(0.5,) * bins, sample_count=bins)
 
@@ -912,7 +1065,7 @@ def test_waveform_route_rejects_unconfigured_or_missing_media_without_starting_j
         def __init__(self) -> None:
             self.run_calls = 0
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             self.run_calls += 1
             raise AssertionError(f"unexpected peak job for {bins} bins")
 
@@ -955,7 +1108,7 @@ def test_waveform_route_returns_429_when_application_wide_peak_job_is_occupied(
     from music_app.services.waveform_peaks import WaveformPeaksBusyError
 
     class BusyRegistryDouble:
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             assert bins == 280
             raise WaveformPeaksBusyError("waveform peak job already active")
 
@@ -987,7 +1140,7 @@ def test_waveform_route_cache_only_probe_returns_429_when_registry_is_shutting_d
             assert bins == 280
             raise WaveformPeaksBusyError("waveform peak job already active")
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             self.run_calls += 1
             raise AssertionError(f"cache-only probe must not start peak job for {bins} bins")
 
@@ -1016,7 +1169,7 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
         def __init__(self, monitor_started: asyncio.Event):
             self.monitor_started = monitor_started
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             assert bins == 280
             # Raise only once the disconnect monitor is blocked in receive();
             # otherwise the handler can cancel it before it ever starts.
@@ -1106,7 +1259,7 @@ def test_waveform_disconnect_waits_for_exact_peak_cleanup_before_returning_204(
         messages: list[dict[str, object]] = []
 
         class CleanupGatedRegistryDouble:
-            async def run(self, _path: Path, *, bins: int):
+            async def run(self, _path: Path, *, bins: int, current: bool = False):
                 assert bins == 280
                 started.set()
                 try:
@@ -1174,7 +1327,7 @@ def test_waveform_http_disconnect_cancels_active_job_releases_slot_and_admits_ne
         ffmpeg_cancelled = asyncio.Event()
         calls = 0
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             nonlocal calls
             calls += 1
             assert bins == 280
@@ -1774,6 +1927,202 @@ def test_pcm_socket_processes_replacement_while_partial_credit_drain_is_waiting(
     asyncio.run(scenario())
 
 
+def _hold_opens_of(decoder_factory, monkeypatch, name: str) -> list[asyncio.Event]:
+    """Decoder starts for [name] wait until the returned event, created in the test's loop, is set."""
+    release: list[asyncio.Event] = []
+    start = decoder_factory.start
+
+    async def held_start(command):
+        decoder = await start(command)
+        if command.path.name == name:
+            await release[0].wait()
+        return decoder
+
+    monkeypatch.setattr(playback_stream_asgi.PcmDecoderProcess, "start", held_start)
+    return release
+
+
+# With the CPU at 100%, a switch right after a song started first closed the next
+# track's open, still pending on the server, and its own open waited for that stale one
+# (1.8-2.3 s). The control loop no longer awaits an open: a close cancels it.
+def test_pcm_socket_answers_a_switch_without_waiting_for_the_open_it_closes(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    stale_path = media_path.with_name("stale.wav")
+    stale_path.write_bytes(b"decoder-boundary-fixture")
+    release = _hold_opens_of(decoder_factory, monkeypatch, stale_path.name)
+
+    async def scenario() -> None:
+        release.append(asyncio.Event())
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            await socket.send_json(open_command(stale_path, streamId=2, role="continuity"))
+            await socket.send_json(
+                {"type": "close", "generation": 1, "streamId": 2, "reason": "replaced"}
+            )
+            await socket.send_json(open_command(media_path, streamId=3, role="continuity"))
+            metadata = await asyncio.wait_for(socket.receive_json(), timeout=5)
+            assert (metadata["type"], metadata["streamId"]) == ("metadata", 3)
+            # Nothing of the cancelled open follows: the next message answers a later control.
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 3, "frames": 1}
+            )
+            assert_pcm_message(
+                await asyncio.wait_for(socket.receive_bytes(), timeout=5),
+                generation=1, stream_id=3, role="continuity", sequence=0, frame_count=1,
+            )
+            # The stale decoder, once started, is cancelled and its open sends nothing.
+            release[0].set()
+            for _ in range(50):
+                await asyncio.sleep(0.01)
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 1, "frames": 1}
+            )
+            assert_pcm_message(
+                await asyncio.wait_for(socket.receive_bytes(), timeout=5),
+                generation=1, stream_id=1, role="current", sequence=0, frame_count=1,
+            )
+
+    asyncio.run(scenario())
+    # Closed before or after its decoder started: a started one is cancelled, never left running.
+    stale = [decoder for decoder in decoder_factory.instances if decoder.command.stream_id == 2]
+    assert all(decoder.cancel_calls == 1 for decoder in stale)
+
+
+def test_pcm_socket_bounds_the_opens_it_runs_beside_its_control_loop(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    import threading
+
+    held_path = media_path.with_name("held.wav")
+    held_path.write_bytes(b"decoder-boundary-fixture")
+    release = threading.Event()
+    resolve = playback_stream_asgi._resolve_socket_media_path
+
+    def held_resolve(config, raw_path):
+        if raw_path.endswith(held_path.name):
+            release.wait(10)
+        return resolve(config, raw_path)
+
+    monkeypatch.setattr(playback_stream_asgi, "_resolve_socket_media_path", held_resolve)
+    limit = playback_stream_asgi.MAX_PENDING_CONTROLS_PER_CONNECTION
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            for stream_id in range(2, 2 + limit):
+                await socket.send_json(open_command(held_path, streamId=stream_id, role="continuity"))
+                await socket.send_json(
+                    {"type": "close", "generation": 1, "streamId": stream_id, "reason": "replaced"}
+                )
+            await socket.send_json(open_command(held_path, streamId=2 + limit, role="continuity"))
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 1, "frames": 1}
+            )
+            async def first_audio() -> bytes:
+                # Released, the pending open may answer its metadata before the credited audio.
+                while True:
+                    message = await socket.receive_message()
+                    if message.get("bytes") is not None:
+                        return message["bytes"]
+
+            answer = asyncio.ensure_future(first_audio())
+            done, _pending = await asyncio.wait({answer}, timeout=0.5)
+            assert not done, "past the bound, the credit waits for a pending open to finish"
+            release.set()
+            assert_pcm_message(
+                await asyncio.wait_for(answer, timeout=5),
+                generation=1, stream_id=1, role="current", sequence=0, frame_count=1,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_feeds_the_playing_song_while_another_open_is_pending(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    pending_path = media_path.with_name("pending.wav")
+    pending_path.write_bytes(b"decoder-boundary-fixture")
+    release = _hold_opens_of(decoder_factory, monkeypatch, pending_path.name)
+
+    async def scenario() -> None:
+        release.append(asyncio.Event())
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            await socket.send_json(open_command(pending_path, streamId=2, role="continuity"))
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 1, "frames": 1}
+            )
+            assert_pcm_message(
+                await asyncio.wait_for(socket.receive_bytes(), timeout=5),
+                generation=1, stream_id=1, role="current", sequence=0, frame_count=1,
+            )
+            release[0].set()
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_refreshes_authority_for_a_prepared_track_without_reading_its_rate(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    rate_reads = []
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "read_native_sample_rate",
+        lambda path: rate_reads.append(path) or 44_100,
+    )
+    refreshes = []
+    authorize = playback_stream_asgi._PlaybackPcmConnection._authorize_media_read
+
+    async def counted_authorize(connection):
+        refreshes.append(1)
+        return await authorize(connection)
+
+    monkeypatch.setattr(
+        playback_stream_asgi._PlaybackPcmConnection, "_authorize_media_read", counted_authorize
+    )
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {"type": "probe", "requestId": 9, "path": str(media_path), "authorityOnly": True}
+            )
+            assert await socket.receive_json() == {"type": "probe-result", "requestId": 9}
+
+    asyncio.run(scenario())
+    assert refreshes == [1]
+    # A press on a decoded track must not wait for an ffmpeg rate read.
+    assert rate_reads == []
+
+
+def test_pcm_socket_refresh_only_probe_still_refuses_media_outside_the_library(
+    playback_app,
+    tmp_path,
+):
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"decoder-boundary-fixture")
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {"type": "probe", "requestId": 9, "path": str(outside), "authorityOnly": True}
+            )
+            assert await socket.receive_close() == 4404
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "second_open",
     [
@@ -1902,6 +2251,7 @@ def test_pcm_promotion_ack_does_not_wait_for_outgoing_credit_task_cleanup(playba
             self.cancel_calls += 1
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
@@ -2027,6 +2377,7 @@ def test_pcm_promotion_drops_outgoing_read_that_completes_after_retirement(
             self.cancel_calls += 1
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object] | bytes] = []
@@ -2578,6 +2929,7 @@ def test_pcm_socket_serializes_current_and_continuity_websocket_sends():
             self.cancel_calls += 1
 
     class ConcurrentSendRejectingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.send_in_progress = False
             self.overlapping_send_count = 0
@@ -2687,6 +3039,7 @@ def test_pcm_credit_drain_yields_without_timer_delay_amplification(monkeypatch):
             return PcmChunk(frame_count=1, pcm=struct.pack("<ff", 0.25, -0.25))
 
     class ImmediatelyWritableWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.send_count = 0
 
@@ -2758,6 +3111,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
     monkeypatch,
 ):
     class DisconnectingDuringOpenWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.client_closed = False
@@ -2774,6 +3128,8 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
                     "type": "websocket.receive",
                     "text": json.dumps(open_command(media_path)),
                 }
+            # The open runs beside the control loop: the client leaves once it is under way.
+            await self.open_under_way.wait()
             return {"type": "websocket.disconnect", "code": 1000}
 
         async def send_json(self, _event: dict[str, object]) -> None:
@@ -2795,6 +3151,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
         monkeypatch.setattr(playback_stream_asgi.PcmDecoderProcess, "start", blocked_start)
         registry = playback_stream_asgi.PlaybackPcmRegistry()
         websocket = DisconnectingDuringOpenWebSocketDouble()
+        websocket.open_under_way = start_entered
         connection = await registry.acquire_connection(websocket)
         assert connection is not None
 
@@ -2819,6 +3176,7 @@ def test_unrelated_metadata_send_runtime_error_still_propagates(
     decoder_factory,
 ):
     class FailingMetadataWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             configure_authenticated_request_double(self)
@@ -2870,6 +3228,7 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
     expected_finish_calls,
 ):
     class DisconnectingPcmWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.controls = [
@@ -2877,18 +3236,24 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
                 {"type": "credit", "generation": 1, "streamId": 1, "frames": 1},
             ]
             self.decoder_error_send_calls = 0
+            self.metadata_sent = asyncio.Event()
             configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
 
         async def receive(self) -> dict[str, object]:
+            if len(self.controls) == 1:
+                # Clients credit a stream once its metadata arrived; the open runs beside the loop.
+                await self.metadata_sent.wait()
             return {
                 "type": "websocket.receive",
                 "text": json.dumps(self.controls.pop(0)),
             }
 
         async def send_json(self, event: dict[str, object]) -> None:
+            if event.get("type") == "metadata":
+                self.metadata_sent.set()
             if event.get("type") == "error":
                 self.decoder_error_send_calls += 1
                 raise RuntimeError("Cannot call send once a close message has been sent")
@@ -2982,6 +3347,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
                 self.shutdown_finished.set()
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
@@ -3011,7 +3377,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
         connection = await registry.acquire_connection(websocket)
         assert connection is not None
 
-        open_task = asyncio.create_task(connection._open(open_command(media_path)))
+        open_task = connection._start_open(open_command(media_path))
         await start_entered.wait()
         shutdown_task = asyncio.create_task(registry.shutdown())
         await registry.shutdown_started.wait()
@@ -3034,6 +3400,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
 
 def test_connection_accept_failure_releases_admitted_registry_slot():
     class AcceptFailureWebSocketDouble:
+        query_params: dict[str, str] = {}
         async def accept(self) -> None:
             raise RuntimeError("accept failed")
 
@@ -3065,6 +3432,7 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
                 self.shutdown_finished.set()
 
     class BlockingRejectWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.close_entered = asyncio.Event()
             self.allow_close = asyncio.Event()
@@ -3120,6 +3488,7 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
 @pytest.mark.parametrize("private_detail", ["", r"C:\private\music\track.flac Bearer secret-playback-token"])
 def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resources(private_detail, caplog):
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         async def close(self, *, code: int) -> None:
             assert code == 1001
             raise RuntimeError("socket close failed")
@@ -3182,6 +3551,7 @@ def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resou
 
 def test_registry_shutdown_reports_cancelled_decoder_and_releases_healthy_resources():
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.close_calls = 0
 
@@ -3243,6 +3613,7 @@ def test_registry_shutdown_reports_cancelled_decoder_and_releases_healthy_resour
 
 def test_registry_shutdown_reports_cancelled_connection_shutdown_task():
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         pass
 
     async def scenario() -> None:
@@ -3343,6 +3714,32 @@ def test_a_keepalive_keeps_the_socket_and_any_other_field_is_refused(playback_ap
     assert asyncio.run(scenario()) == 4400
 
 
+def test_a_client_that_asks_hears_a_heartbeat_however_long_answers_take(playback_app, media_path):
+    async def scenario() -> list[str]:
+        heard = []
+        async with websocket_session(playback_app, "/playback/pcm?heartbeat=100") as socket:
+            for _ in range(2):
+                heard.append((await asyncio.wait_for(socket.receive_json(), 2))["type"])
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            while (event := await asyncio.wait_for(socket.receive_json(), 2))["type"] == "heartbeat":
+                pass
+            heard.append(event["type"])
+        return heard
+
+    assert asyncio.run(scenario()) == ["heartbeat", "heartbeat", "probe-result"]
+
+
+def test_no_heartbeat_unless_asked_or_outside_its_bounds(playback_app, media_path):
+    async def scenario(path: str) -> str:
+        async with websocket_session(playback_app, path) as socket:
+            await asyncio.sleep(0.3)
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            return (await asyncio.wait_for(socket.receive_json(), 2))["type"]
+
+    for path in ("/playback/pcm", "/playback/pcm?heartbeat=50", "/playback/pcm?heartbeat=x"):
+        assert asyncio.run(scenario(path)) == "probe-result", path
+
+
 def test_a_seek_table_request_must_be_a_boolean(playback_app, media_path, decoder_factory):
     async def scenario() -> int:
         async with websocket_session(playback_app, "/playback/pcm") as socket:
@@ -3350,3 +3747,204 @@ def test_a_seek_table_request_must_be_a_boolean(playback_app, media_path, decode
             return await socket.receive_close()
 
     assert asyncio.run(scenario()) == 4400
+
+
+def test_waveform_route_streams_the_playing_song_waveform_as_it_builds(
+    playback_app,
+    media_path,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    class RegistryDouble:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, int, bool]] = []
+
+        async def run(self, path, *, bins, current=False, on_progress=None, client=None):
+            self.calls.append((path, bins, current))
+            await asyncio.sleep(0)
+            on_progress(WaveformPeaks(left=(0.25,) * bins, right=(0.0,) * bins, sample_count=bins))
+            await asyncio.sleep(0.05)
+            on_progress(WaveformPeaks(left=(0.5,) * bins, right=(0.0,) * bins, sample_count=bins))
+            await asyncio.sleep(0.05)
+            return WaveformPeaks(left=(0.75,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    registry = RegistryDouble()
+    playback_app.state.waveform_peaks_registry = registry
+    messages: list[dict[str, object]] = []
+    requested = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal requested
+        if requested:
+            # The browser stays connected while the waveform streams.
+            await asyncio.Event().wait()
+        requested = True
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        messages.append(message)
+
+    query = urlencode(
+        {"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1"}
+    )
+    asyncio.run(
+        playback_app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/playback/waveform",
+                "raw_path": b"/playback/waveform",
+                "query_string": query.encode("ascii"),
+                "headers": [(b"host", b"testserver")],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+            },
+            receive,
+            send,
+        )
+    )
+
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    headers = {key.decode("latin1"): value.decode("latin1") for key, value in start["headers"]}
+    body = b"".join(
+        message.get("body", b"") for message in messages if message["type"] == "http.response.body"
+    )
+    assert start["status"] == 200
+    assert headers["content-type"] == "application/x-ndjson"
+    lines = [json.loads(line) for line in body.decode("utf-8").splitlines()]
+    assert [line["complete"] for line in lines] == [False, False, True]
+    assert [line["left"][0] for line in lines] == [0.25, 0.5, 0.75]
+    assert all(line["sampleCount"] == 720 and len(line["right"]) == 720 for line in lines)
+    assert registry.calls == [(media_path, 720, True)]
+
+
+def test_waveform_route_knows_the_asking_account_and_playback_client(playback_app, media_path):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    asked = []
+
+    class RegistryDouble:
+        async def run(self, path, *, bins, current=False, on_progress=None, client=None):
+            asked.append(client)
+            return WaveformPeaks(left=(0.5,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    client_id = "4f7c0b62-2b55-4e0e-9a43-3f0c6f1d2a10"
+    for extra in ({"client_id": client_id}, {"client_id": "x" * 500}):
+        status, _headers, _body = run_asgi_request(
+            playback_app,
+            "GET",
+            "/playback/waveform",
+            query={"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1", **extra},
+        )
+        assert status == 200
+
+    (account_id, named), (_same_account, oversized) = asked
+    assert account_id is not None
+    assert named == client_id
+    assert len(oversized) <= 64
+
+
+def test_waveform_progressive_request_left_before_any_progress_frees_its_build(
+    playback_app,
+    media_path,
+):
+    """A press cancels the previous song's request, often before its build has shown anything."""
+    from music_app.services.waveform_peaks import WaveformPeaksRegistry
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def builder(path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            if path.name == "pressed.mp3":
+                return "peaks"
+            started.set()
+            await cancel_event.wait()
+            stopped.set()
+            raise asyncio.CancelledError()
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        playback_app.state.waveform_peaks_registry = registry
+        incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        await incoming.put({"type": "http.request", "body": b"", "more_body": False})
+        messages: list[dict[str, object]] = []
+
+        async def send(message: dict[str, object]) -> None:
+            messages.append(message)
+
+        query = urlencode({"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1"})
+        left = asyncio.create_task(
+            playback_app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": "/playback/waveform",
+                    "raw_path": b"/playback/waveform",
+                    "query_string": query.encode("ascii"),
+                    "headers": [(b"host", b"testserver")],
+                    "client": ("testclient", 50000),
+                    "server": ("testserver", 80),
+                },
+                incoming.get,
+                send,
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        try:
+            await incoming.put({"type": "http.disconnect"})
+            await asyncio.wait_for(left, timeout=1)
+            assert stopped.is_set() is False  # a seek may still rejoin it
+
+            # The same account and player press another song.
+            pressed = registry.run(Path("pressed.mp3"), bins=720, current=True, client=(1, ""))
+            assert await pressed == "peaks"
+            await asyncio.wait_for(stopped.wait(), timeout=1)
+        finally:
+            left.cancel()
+            await asyncio.gather(left, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_status"),
+    [("cached", 200), ("busy", 429)],
+)
+def test_waveform_route_answers_a_finished_playing_song_build_without_streaming(
+    playback_app,
+    media_path,
+    outcome,
+    expected_status,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks, WaveformPeaksBusyError
+
+    class RegistryDouble:
+        async def run(self, path, *, bins, current=False, on_progress=None, client=None):
+            if outcome == "busy":
+                raise WaveformPeaksBusyError("waveform peak job already active")
+            return WaveformPeaks(left=(0.75,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+
+    status, headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1"},
+    )
+
+    assert status == expected_status
+    assert headers["content-type"] == "application/json"
+    payload = decode_json(body)
+    if outcome == "cached":
+        assert payload == {"left": [0.75] * 720, "right": [0.5] * 720, "sampleCount": 720}
+    else:
+        assert payload == {"error": "waveform peak job already active"}

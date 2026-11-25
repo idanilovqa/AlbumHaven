@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { pageHoldsPlaybackClaim } from '../helpers/gaplessPlaybackHelpers.js';
 
 function parseDisplayedPlayerTime(label) {
   const currentLabel = String(label || '').split('/')[0].trim();
@@ -231,38 +232,39 @@ export class GlobalPlayerActions {
     await expect.poll(() => this.readCurrentPlaybackSummary(), { timeout: options.timeout || 10000 }).toEqual(expected);
   }
 
-  async expectOwnershipBlocked({ artist, album, title }) {
+  /**
+   * Mockup playback-elsewhere-status v003: "Playing in another tab" centred over
+   * the whole dimmed player, the other device's song still there underneath, and Play lifted above
+   * the dimming, enabled and pressable.
+   */
+  async expectPlayingElsewhereOverlay({ artist, album, title }) {
     const player = this.globalPlayer;
-    await expect(player.time).toHaveText('Playing in another tab');
+    await expect(player.elsewhereOverlay).toBeVisible();
+    await expect(player.elsewhereOverlay).toHaveText('Playing in another tab');
+    await expect(player.time).toBeHidden();
     await expect(player.title).toContainText(artist);
     await expect(player.title).toContainText(title);
     await expect(player.albumLink).toHaveText(album);
-    await expect(player.title).toBeVisible();
-    await expect(player.albumLink).toBeVisible();
-    await expect(player.playButton).toBeDisabled();
     await expect(player.timeline).toBeDisabled();
-    await expect(player.playButton).toHaveAttribute('aria-label', 'Playback locked in another tab');
     await expect(player.timelineWrap).not.toHaveClass(/\bis-idle\b/u);
     expect(['none', 'normal']).toContain(await player.readIdleOverlayContent());
-    // The disabled treatment and status must not obscure the mirrored metadata.
-    await expect(player.playButton).not.toHaveCSS('opacity', '1');
-    await expect(player.playButton).not.toHaveCSS('cursor', 'pointer');
-    const [textBounds, status] = await Promise.all([
-      player.readOwnershipMetadataTextBounds(), player.time.boundingBox(),
-    ]);
-    expect(status).not.toBeNull();
-    for (const { selector, text, clip, metadata } of textBounds) {
-      expect(text.right - text.left, `${selector} text width`).toBeGreaterThan(0);
-      expect(text.bottom - text.top, `${selector} text height`).toBeGreaterThan(0);
-      for (const owner of [clip, metadata]) {
-        expect(text.left, `${selector} left clipping`).toBeGreaterThanOrEqual(owner.left - 1);
-        expect(text.right, `${selector} right clipping`).toBeLessThanOrEqual(owner.right + 1);
-      }
-      expect(text.right <= status.x + 1
-        || status.x + status.width <= text.left + 1
-        || text.bottom <= status.y + 1
-        || status.y + status.height <= text.top + 1, `${selector} does not overlap status`).toBe(true);
+    await expect(player.playButton).toBeEnabled();
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Play here');
+    await expect(player.playButton).toHaveCSS('opacity', '1');
+    await expect(player.playButton).toHaveCSS('cursor', 'pointer');
+    const geometry = await player.readElsewhereOverlayGeometry();
+    expect(geometry.labelText).toBe('Playing in another tab');
+    for (const side of ['left', 'right', 'top', 'bottom']) {
+      expect(Math.abs(geometry.overlay[side] - geometry.player[side]), `overlay ${side} edge`).toBeLessThanOrEqual(1);
     }
+    const centre = edges => [(edges.left + edges.right) / 2, (edges.top + edges.bottom) / 2];
+    const [labelX, labelY] = centre(geometry.label);
+    const [playerX, playerY] = centre(geometry.player);
+    expect(Math.abs(labelX - playerX), 'label centred across the player').toBeLessThanOrEqual(2);
+    expect(Math.abs(labelY - playerY), 'label centred down the player').toBeLessThanOrEqual(2);
+    expect(geometry.overlayBackground).toContain('radial-gradient');
+    expect(geometry.playReceivesPress, 'Play sits above the dimming').toBe(true);
+    expect(geometry.titleCoveredByOverlay, 'the rest of the player is dimmed under the overlay').toBe(true);
   }
 
   async pauseAndReadListenCheckpoint() {
@@ -387,20 +389,23 @@ export class GlobalPlayerActions {
     };
   }
 
+  // A Play the server had not answered yet plays without a claim, so its pause has none to give back.
   async pauseToReleasePlaybackClaim() {
     const player = this.globalPlayer;
     if (player.page.isClosed() || !await player.playButton.isVisible()
         || await player.playButton.getAttribute('aria-label') !== 'Pause') return;
-    const released = player.page.waitForResponse(response => (
+    const released = await pageHoldsPlaybackClaim(player.page) && player.page.waitForResponse(response => (
       response.request().method() === 'DELETE' && new URL(response.url()).pathname === '/playback/state'
     ));
     await this.togglePlaybackWithSpace({ paused: true });
-    expect((await released).ok()).toBe(true);
+    if (released) expect((await released).ok()).toBe(true);
   }
 
   async togglePlaybackWithSpace(expectedState, options = {}) {
     await this.globalPlayer.timeline.focus();
     await expect(this.globalPlayer.timeline).toBeFocused();
+    // A timed press marks its start here, after focus and just before the key.
+    if (typeof options.beforePress === 'function') await options.beforePress();
     await this.globalPlayer.timeline.press('Space');
     await this.waitForPlaybackState(expectedState, options);
     return this.readCurrentPlaybackSummary();

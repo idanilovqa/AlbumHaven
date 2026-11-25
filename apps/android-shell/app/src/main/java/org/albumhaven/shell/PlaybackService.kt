@@ -251,6 +251,13 @@ class PlaybackService : MediaLibraryService() {
          */
         override fun selectOrigin(origin: String) {
             if (origin == this@PlaybackService.origin) return
+            startOver(origin)
+        }
+
+        /** Nothing of the account's playback outlives signing out: the player starts over empty. */
+        override fun signedOut() = startOver(this@PlaybackService.origin)
+
+        private fun startOver(origin: String) {
             retireController()
             newExecutors()
             restoreStore.clear()
@@ -324,7 +331,7 @@ class PlaybackService : MediaLibraryService() {
         val clientId = restoredClientId ?: UUID.randomUUID().toString()
         lateinit var created: NativePlaybackController
         created = NativePlaybackController(
-            transports = OkHttpPcmTransportFactory(client, shellSession),
+            transports = OkHttpPcmTransportFactory(client, shellSession, clientId),
             claimApi = HttpPlaybackClaimApi(client, shellSession),
             listenApi = HttpListenEffectApi(client, shellSession),
             sinks = ::AudioTrackPcmSink,

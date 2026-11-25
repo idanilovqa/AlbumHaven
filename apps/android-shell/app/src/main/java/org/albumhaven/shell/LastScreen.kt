@@ -52,6 +52,18 @@ internal class LastScreen(private val directory: File, private val io: Executor)
         }, Handler(Looper.getMainLooper()))
     }
 
+    /** Signed out: the picture of the account's last page goes. */
+    fun clear() {
+        try {
+            io.execute {
+                about.delete()
+                image.delete()
+            }
+        } catch (_: RejectedExecutionException) {
+            // Shutting down: the next start finds it, and its page never matches a signed-out one.
+        }
+    }
+
     /** The picture of exactly [url] on [origin] in this [orientation], or null. */
     fun load(origin: String, url: String, orientation: Int): Bitmap? = try {
         val saved = Properties().apply { about.inputStream().use(::load) }

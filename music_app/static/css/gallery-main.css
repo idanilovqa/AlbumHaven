@@ -199,6 +199,14 @@
 .artist-info-overlay__full-page:disabled { color: color-mix(in srgb, var(--appearance-accent, var(--appearance-player-accent, #55c7ff)) 45%, transparent); cursor: default; }
 .gallery-card-info .album-subtitle { white-space: nowrap; text-overflow: ellipsis; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
+/* The OfflineNotice message, centered both ways where the albums go (v004). */
+.gallery-unreachable { display: grid; place-items: center; min-height: min(60vh, 460px); padding: 32px 16px; }
+/* The end of a kept gallery when more albums cannot load: the OfflineNotice line. */
+.gallery-end-offline { padding: 18px 14px 26px; }
+/* The unreachable view is the only message: the kept-library notice does not show above it.
+   Marked on <body> (applyUnreachableView), never found with :has(), which Chrome re-checks on
+   every change anywhere in the page (FTC-COVERS-019P). */
+body[data-gallery-view-unreachable] #app-copy-offline-notice { display: none; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
 .album-card[data-gallery-display="covers"]:hover .gallery-card__focus-title, .album-card[data-gallery-display="covers"]:focus-within .gallery-card__focus-title { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {

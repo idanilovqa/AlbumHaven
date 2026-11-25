@@ -1,4 +1,4 @@
-// The server builds one waveform at a time and answers 429 meanwhile. The shipped peak loader and
+// The server answers 429 while it builds other waveforms first. The shipped peak loader and
 // waveform drawing must keep waiting out a busy builder for the current track and then draw it.
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
@@ -37,7 +37,14 @@ async function mountWaveformPlayer(page) {
         waveform: { renderToken: 0, compactPeaks: null },
       },
     };
-    window.getStreamingPlaybackSnapshot = () => ({ generation: 7, duration: 200, currentTime: 0 });
+    // As in the app, the engine's snapshot carries the playing generation.
+    window.getStreamingPlaybackSnapshot = () => ({
+      generation: window.state.player.streaming.generation, duration: 200, currentTime: 0,
+    });
+    // The shown song is player-loop-playback.js's: here the current track, sounding.
+    window.resolveShownPlayerTrack = (playback) => ({
+      track: window.state.player.current, live: true, currentTime: playback.currentTime, duration: playback.duration,
+    });
   }, { current: trackPath });
   for (const file of ['player-waveform-peaks.js', 'player-and-waveform.js']) {
     await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });

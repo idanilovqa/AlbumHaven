@@ -68,6 +68,39 @@ function renderTrackModalLoadingState(album) {
   }
 }
 
+// The open album's details could not be loaded because the server cannot be reached: the artbox
+// shows the offline cloud and the loading rows give way to the OfflineNotice line; nothing spins.
+// The album Album Details shows as unreachable, loaded again once the server answers.
+let trackModalUnreachableAlbum = null;
+
+function renderTrackModalUnreachableState(album) {
+  const els = getTrackModalElements();
+  if (!els.overlay || !album) return;
+  trackModalUnreachableAlbum = album;
+  const detail = serverUnreachableDetail('the details');
+  els.subtitle.textContent = '';
+  els.cover.innerHTML = `
+    <div class="track-modal-cover-shell">
+      ${buildAlbumArtboxHtml({ state: 'offline', label: 'Cover art unavailable' })}
+    </div>
+  `;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'message', title: SERVER_UNREACHABLE_TITLE, message: detail })}</li>`;
+}
+
+// The server answers again (onServerReachableAgain): Album Details still showing Offline for the
+// album it is open on loads that album.
+function reloadTrackModalAfterServerReachable() {
+  const els = getTrackModalElements();
+  const shown = state.modalReleases?.[state.modalReleaseIndex];
+  const album = trackModalUnreachableAlbum || (shown?.fromDeviceCopy ? shown : null);
+  trackModalUnreachableAlbum = null;
+  if (!album || !els.overlay || els.overlay.hidden || !shown) return;
+  if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
+  // Details shown from the device copy are loaded again from the server, never kept as loaded.
+  openTrackModal({ ...album, preview_only: true, fromDeviceCopy: false });
+}
+if (typeof onServerReachableAgain === 'function') onServerReachableAgain(reloadTrackModalAfterServerReachable);
+
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
@@ -458,6 +491,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
       payload = null;
     }
   }
+  if (response.ok && payload?.ok && payload?.album && isDeviceCopyAnswer(response)) {
+    return { ...payload.album, fromDeviceCopy: true };
+  }
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
     error.status = response.status;
@@ -517,6 +553,9 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
         return loadTrackModalAlbumDetails(normalizedAlbumKey,
           promotedToForeground ? { ...options, speculative: false } : options);
       }
+      // Details from the device copy stand in until the server answers; they are never kept as
+      // loaded, so the next open asks the server again.
+      if (album?.fromDeviceCopy) return album;
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);
@@ -714,6 +753,8 @@ function openTrackModal(album, options = {}) {
     const loadToken = invalidatePendingTrackModalLoad();
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
     openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
+    // Already offline: Offline at once instead of loading rows; an answer still replaces it.
+    if (isOfflineShown()) renderTrackModalUnreachableState(albumWithPlaybackContext);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
       albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
@@ -727,6 +768,7 @@ function openTrackModal(album, options = {}) {
         : refreshedAlbum;
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
+      trackModalUnreachableAlbum = null;
       invalidatePendingTrackModalLoad();
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch(async (error) => {
@@ -744,6 +786,10 @@ function openTrackModal(album, options = {}) {
             console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);
           });
         }
+        return;
+      }
+      if (error?.serverUnreachable) {
+        renderTrackModalUnreachableState(albumWithPlaybackContext);
         return;
       }
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);

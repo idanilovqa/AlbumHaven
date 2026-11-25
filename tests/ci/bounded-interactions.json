@@ -380,7 +380,7 @@
       "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/cover"
+          "/cover/*"
         ],
         "forbidden": [
           "/view-data",
@@ -406,6 +406,55 @@
         "artist-tree-scroll-navigation"
       ],
       "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:app-copy-worker.js#data",
+      "action": "Load one library data answer online, again offline from the copy, and again with no answer (one reachability check), with other data kept",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#data:request:fetch",
+        "js:music_app/static/js/app-copy-worker.js#data:timer:setTimeout",
+        "js:music_app/static/js/app-copy-worker.js#serverReachable:request:fetch",
+        "js:music_app/static/js/app-copy-worker.js#serverReachable:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data",
+          "/album-details",
+          "/home-data",
+          "/app-copy/account"
+        ],
+        "forbidden": [
+          "/status",
+          "/"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: a data request reaches only its own address, whatever the kept data; a hung one adds one check",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Remove the data route from the worker (DATA_PATHS and the data handler) and this entry; data requests then pass through the worker to the network as before and nothing is kept for them. Kept data entries are deleted with the copy on the next forget. No server data change."
     },
     {
       "id": "js:app-copy-worker.js#fetchPage",
@@ -452,6 +501,52 @@
       "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:app-copy-worker.js#fillAssets",
+      "action": "Save the current view: fetch once each versioned asset its page loads that the copy does not keep",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#fillAssets:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/static/*",
+          "/static/*/*",
+          "/static/*/*/*"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: saving the view fetches only the versioned assets its page loads that are not kept",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
       "id": "js:app-copy-worker.js#fillCovers",
       "action": "Save the current view: keep its page and fill one batch of its unseen covers",
       "entrypoints": [
@@ -468,7 +563,7 @@
       "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/cover"
+          "/cover/*"
         ],
         "forbidden": [
           "/view-data",
@@ -494,6 +589,36 @@
         "artist-tree-scroll-navigation"
       ],
       "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:app-copy-worker.js#keptSoFar",
+      "action": "One bounded wait (200 ms) for copy work already started, when the server cannot be reached",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#keptSoFar:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:app-copy-worker.js#serverFirst",
+      "action": "One 10 s wait per browser navigation for the server's first answer, after which the copy shows",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#serverFirst:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:app-copy-worker.js#versionedAsset",
@@ -584,7 +709,7 @@
       },
       "budgets": {
         "requests": 10,
-        "timers": 10,
+        "timers": 20,
         "renderCommits": 0
       },
       "growth": {
@@ -598,9 +723,10 @@
     },
     {
       "id": "js:app-copy.js#createAppCopyClient",
-      "action": "online/visibilitychange listeners installed by createAppCopyClient",
+      "action": "online/pagehide/visibilitychange listeners installed by createAppCopyClient",
       "entrypoints": [
         "js:music_app/static/js/app-copy.js#createAppCopyClient:event:online",
+        "js:music_app/static/js/app-copy.js#createAppCopyClient:event:pagehide",
         "js:music_app/static/js/app-copy.js#createAppCopyClient:event:visibilitychange"
       ],
       "owners": [
@@ -822,6 +948,21 @@
       "rollback": "Test-only contract; the worklet is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its message entrypoint."
     },
     {
+      "id": "js:audio-worklets/gapless-playback-processor.js#GaplessPlaybackProcessor.handleCommand",
+      "action": "message listeners installed by GaplessPlaybackProcessor.handleCommand (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/audio-worklets/gapless-playback-processor.js#GaplessPlaybackProcessor.handleCommand:event:message"
+      ],
+      "owners": [
+        "music_app/static/js/audio-worklets/gapless-playback-processor.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:capability-ui.js#install",
       "action": "DOMContentLoaded/click listeners installed by install",
       "entrypoints": [
@@ -839,8 +980,9 @@
     },
     {
       "id": "js:client-device-preferences.js#createStore",
-      "action": "online/pagehide listeners installed by createStore",
+      "action": "online, server-reachable and pagehide listeners installed by createStore",
       "entrypoints": [
+        "js:music_app/static/js/client-device-preferences.js#createStore:event:album-haven:server-reachable",
         "js:music_app/static/js/client-device-preferences.js#createStore:event:online",
         "js:music_app/static/js/client-device-preferences.js#createStore:event:pagehide"
       ],
@@ -870,12 +1012,13 @@
     },
     {
       "id": "js:login.js#<top-level>",
-      "action": "click/pageshow/submit/visibilitychange listeners installed by <top-level>",
+      "action": "click/pageshow/submit/visibilitychange listeners and the one-shot sign-in wait for the copy worker installed by <top-level>",
       "entrypoints": [
         "js:music_app/static/js/login.js#<top-level>:event:click",
         "js:music_app/static/js/login.js#<top-level>:event:pageshow",
         "js:music_app/static/js/login.js#<top-level>:event:submit",
-        "js:music_app/static/js/login.js#<top-level>:event:visibilitychange"
+        "js:music_app/static/js/login.js#<top-level>:event:visibilitychange",
+        "js:music_app/static/js/login.js#<top-level>:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/login.js"
@@ -894,6 +1037,38 @@
       ],
       "owners": [
         "music_app/static/js/password-recovery.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:return-place.js#createReturnPlace",
+      "action": "Hide and load again a page Back took from memory (one storage write); take every kept place on a sign-out submit",
+      "entrypoints": [
+        "js:music_app/static/js/return-place.js#createReturnPlace:event:pagehide",
+        "js:music_app/static/js/return-place.js#createReturnPlace:event:pageshow",
+        "js:music_app/static/js/return-place.js#createReturnPlace:event:submit"
+      ],
+      "owners": [
+        "music_app/static/js/return-place.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:return-place.js#hide",
+      "action": "One timer that shows the gallery after 10 s at the latest while it returns to its place",
+      "entrypoints": [
+        "js:music_app/static/js/return-place.js#hide:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/return-place.js"
       ],
       "rules": [
         "BI-03"
@@ -1733,6 +1908,46 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-init.js#<top-level>#viewMissing",
+      "action": "One request for the view of an address never kept as a page, on a page started from the device copy offline",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-init.js#<top-level>:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-init.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": [
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-init-playback-ownership.test.js",
+      "testIdentity": "request capture: a page started offline for an address never kept asks for its own view once",
+      "rollback": "Test-only request-capture contract; the offline startup request is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-init.js#runHydration",
@@ -3798,6 +4013,83 @@
       }
     },
     {
+      "id": "js:runtime/gallery-return-place.js#<top-level>",
+      "action": "Take the gallery place (the mounted cards) before a navigation, and keep it (at most 50 places) when the entry or the page is left",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:click",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:currententrychange",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:focusin",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:pagehide",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:submit",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:visibilitychange"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-return-place.js#returnToGalleryPlace",
+      "action": "Back or Forward deep in All artists: ask for one gallery window around the artist left at",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToGalleryPlace:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/gallery-return-place.js#returnToPlace",
+      "action": "While returning to a place only: the first scroll, touch, key or press hands over to the user",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:keydown",
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:pointerdown",
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:touchstart",
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:wheel"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "delta",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-return-place.js#waitForReturnFrame",
+      "action": "One frame at a time while returning: at most 10 s of waiting and 90 alignment frames",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#waitForReturnFrame:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/in-page-tabs.js#mountInPageTabs",
       "action": "click/keydown listeners installed by mountInPageTabs",
       "entrypoints": [
@@ -4653,11 +4945,94 @@
       "rollback": "Revert the open modal's on-screen control watch together with its registerFloatingNotification#2 contract; placement then reads every control of the open modal on each frame again. No data or API change."
     },
     {
+      "id": "js:runtime/gallery-refresh-and-status.js#resumeGalleryAfterServerReachable",
+      "action": "Once the server answers again, one reload of the view that could not load",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#resumeGalleryAfterServerReachable:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": []
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: once the server answers again, a view that could not load reloads once, however many failed",
+      "performanceTargets": [],
+      "rollback": "Remove the recovery after an unreachable server; surfaces then stay Offline until the user acts again. No data or API change."
+    },
+    {
+      "id": "js:runtime/pending-projection-fetch.js#serverReachability",
+      "action": "While the server is unreachable, one bounded /health probe every 2.5 s (each given up after 4 s), and one at once on the browser's online event",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#<top-level>:event:offline",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#noteServerUnreachable:event:online",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#serverAnswersHealthCheck:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#serverAnswersHealthCheck:timer:setTimeout",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#scheduleReachabilityProbe:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-projection-fetch.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/health"
+        ],
+        "forbidden": []
+      },
+      "cardinalities": {
+        "small": 3,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 2,
+        "timers": 4,
+        "outputEmissions": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: while the server is unreachable, one /health probe per tick, however many requests failed",
+      "performanceTargets": [],
+      "rollback": "Remove the recovery after an unreachable server; surfaces then stay Offline until the user acts again. No data or API change."
+    },
+    {
       "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",
-      "action": "Retry a pending projection request once per second until it answers, cancels, or reaches its 60 s deadline",
+      "action": "Retry a pending projection request once per second until it answers, cancels, or reaches its 60 s deadline; a request unanswered after 4 s checks /health once and is given up when that does not answer either",
       "entrypoints": [
         "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:event:abort",
-        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchGivingUpWhenUnreachable:event:abort",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchGivingUpWhenUnreachable:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:request:fetchGivingUpWhenUnreachable",
         "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:timer:setTimeout"
       ],
       "owners": [
@@ -4672,6 +5047,7 @@
       "requestOwnership": {
         "allowed": [
           "/album-details",
+          "/health",
           "/home-data",
           "/utilities/problematic-files",
           "/utilities/problematic-files/detail",
@@ -4824,6 +5200,43 @@
       "rollback": "Revert the ownership presentation comparison in syncMirroredPlaybackState; every broadcast from another tab then repaints the whole player and waveform again. No data or API change."
     },
     {
+      "id": "js:runtime/playback-ownership-helpers.js#initPlaybackOwnershipCoordinator:online",
+      "action": "online listeners installed by initPlaybackOwnershipCoordinator (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#initPlaybackOwnershipCoordinator:event:online"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/playback-ownership-helpers.js#mayEngineStart",
+      "action": "playbackOwnershipRequest requests installed by mayEngineStart (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#mayEngineStart:request:playbackOwnershipRequest"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/state"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest",
       "action": "Select tracks in a burst, renew the claim, release it, and be refused by another owner",
       "entrypoints": [
@@ -4890,6 +5303,37 @@
       }
     },
     {
+      "id": "js:runtime/playback-ownership-helpers.js#publishPlaybackPositionSoon",
+      "action": "setTimeout timers installed by publishPlaybackPositionSoon (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#publishPlaybackPositionSoon:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 6,
+        "production": 2160
+      },
+      "budgets": {
+        "requests": 2,
+        "renderCommits": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
+      "testIdentity": "bounded interaction: a burst of seeks publishes the claimed place at most twice",
+      "performanceTargets": [],
+      "rollback": "Revert publishPlaybackPositionSoon; Play here elsewhere then reads the place a seek, start or gapless move left from the next renewal instead. No data or API change."
+    },
+    {
       "id": "js:runtime/playback-ownership-helpers.js#requestPlaybackClaim",
       "action": "playbackOwnershipRequest requests installed by requestPlaybackClaim",
       "entrypoints": [
@@ -4910,6 +5354,21 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/playback-ownership-helpers.js#scheduleUnansweredPlaybackClaimRetry",
+      "action": "setTimeout timers installed by scheduleUnansweredPlaybackClaimRetry (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#scheduleUnansweredPlaybackClaimRetry:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#startPlaybackOwnershipHeartbeat",
@@ -4940,6 +5399,21 @@
       "testIdentity": "bounded interaction: a playback ownership heartbeat repaints the player only when the lock changes",
       "performanceTargets": [],
       "rollback": "Revert the ownership presentation comparison in syncMirroredPlaybackState and acceptPlaybackClaim; every 10-second heartbeat then repaints the whole player and waveform again. No data or API change."
+    },
+    {
+      "id": "js:runtime/playback-ownership-helpers.js#waitToAskAgain",
+      "action": "setTimeout timers installed by waitToAskAgain (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#waitToAskAgain:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/player-browser-playback-integration.js#observeBrowserPlaybackAudioContext",
@@ -5090,6 +5564,22 @@
       "rollback": "Test-only request-capture contract; playback requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:runtime/player-loop-playback.js#afterNextPlayerPaint",
+      "action": "requestAnimationFrame/setTimeout timers installed by afterNextPlayerPaint (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-loop-playback.js#afterNextPlayerPaint:timer:requestAnimationFrame",
+        "js:music_app/static/js/runtime/player-loop-playback.js#afterNextPlayerPaint:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-loop-playback.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-loop-playback.js#attachPlayerEvents",
       "action": "change/click/focusin/input/keydown/pointercancel/pointerdown/pointermove/pointerup/resize listeners installed by attachPlayerEvents",
       "entrypoints": [
@@ -5176,6 +5666,22 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-loop-playback.js#renderGlobalPlayerCover",
+      "action": "error/load listeners installed by renderGlobalPlayerCover",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-loop-playback.js#renderGlobalPlayerCover:event:error",
+        "js:music_app/static/js/runtime/player-loop-playback.js#renderGlobalPlayerCover:event:load"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-loop-playback.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-loop-playback.js#saveCurrentLoop",
       "action": "fetch requests installed by saveCurrentLoop",
       "entrypoints": [
@@ -5202,22 +5708,6 @@
       "action": "requestAnimationFrame timers installed by schedule",
       "entrypoints": [
         "js:music_app/static/js/runtime/player-loop-playback.js#schedule:timer:requestAnimationFrame"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/player-loop-playback.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:runtime/player-loop-playback.js#setCurrentPlayerTrack",
-      "action": "error/load listeners installed by setCurrentPlayerTrack",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/player-loop-playback.js#setCurrentPlayerTrack:event:error",
-        "js:music_app/static/js/runtime/player-loop-playback.js#setCurrentPlayerTrack:event:load"
       ],
       "owners": [
         "music_app/static/js/runtime/player-loop-playback.js"
@@ -5281,6 +5771,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-streaming-decoders.js#createStreamingDecoder",
+      "action": "setTimeout timers installed by createStreamingDecoder (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-decoders.js#createStreamingDecoder:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-decoders.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-streaming-decoders.js#loadStreamingDecoderScript",
       "action": "error/load listeners installed by loadStreamingDecoderScript",
       "entrypoints": [
@@ -5295,6 +5800,51 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#connectStreamingSilenceRelay",
+      "action": "Worker workers installed by connectStreamingSilenceRelay (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSilenceRelay:worker:Worker"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#connectStreamingSocket",
+      "action": "setTimeout timers installed by connectStreamingSocket (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: a hung connect given up at its deadline opens one socket per cycle over 1,000 attempts",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#keepStreamingSocketAlive",
@@ -5329,13 +5879,29 @@
       "rollback": "Test-only contract; the keepalive is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its setInterval entrypoint."
     },
     {
-      "id": "js:runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine",
-      "action": "close/error/message/open/processorerror listeners installed by prepareStreamingPlaybackEngine",
+      "id": "js:runtime/player-streaming-engine.js#openBrowserStreamingTrack",
+      "action": "setTimeout timers installed by openBrowserStreamingTrack (hand-written: --sync was not run)",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:close",
-        "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:error",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#openBrowserStreamingTrack:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine",
+      "action": "message/processorerror listeners installed by prepareStreamingPlaybackEngine, and the socket's close/error/message/open listeners installed by connectStreamingSocket (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:close",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:error",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:message",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#connectStreamingSocket:event:open",
         "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:message",
-        "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:open",
         "js:music_app/static/js/runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine:event:processorerror"
       ],
       "owners": [
@@ -5382,10 +5948,10 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrack",
-      "action": "setTimeout timers installed by startBrowserStreamingTrack",
+      "id": "js:runtime/player-streaming-engine.js#silenceStreamingPlaybackForHandover",
+      "action": "setTimeout timers installed by silenceStreamingPlaybackForHandover (hand-written: --sync was not run)",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#startBrowserStreamingTrack:timer:setTimeout"
+        "js:music_app/static/js/runtime/player-streaming-engine.js#silenceStreamingPlaybackForHandover:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/player-streaming-engine.js"
@@ -5397,10 +5963,10 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/player-streaming-engine.js#waitForStreamingReplacementCushion",
-      "action": "setTimeout timers installed by waitForStreamingReplacementCushion",
+      "id": "js:runtime/player-streaming-engine.js#waitOutStreamingOutputLatency",
+      "action": "setTimeout timers installed by waitOutStreamingOutputLatency (hand-written: --sync was not run)",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#waitForStreamingReplacementCushion:timer:setTimeout"
+        "js:music_app/static/js/runtime/player-streaming-engine.js#waitOutStreamingOutputLatency:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/player-streaming-engine.js"
@@ -5410,6 +5976,139 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#probeStreamingReachability",
+      "action": "setInterval timers installed by probeStreamingReachability, and the playback-state question and its deadline in askStreamingServer, which the reconnect retry asks too (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#askStreamingServer:request:fetch",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#askStreamingServer:timer:setTimeout",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#probeStreamingReachability:timer:setInterval"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/state"
+        ],
+        "forbidden": []
+      },
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "request capture: the reachability probe asks only the playback state, once per tick, over a 1,000-tick outage",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#publishStreamingDiagnostics",
+      "action": "requestAnimationFrame timers installed by publishStreamingDiagnostics (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#publishStreamingDiagnostics:timer:requestAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#scheduleStreamingReconnect",
+      "action": "setTimeout timers installed by scheduleStreamingReconnect (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#scheduleStreamingReconnect:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 20
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: a reconnect retry asks once and opens one socket per tick over a 1,000-attempt outage",
+      "performanceTargets": [],
+      "rollback": "Revert the commit that makes a retry ask the playback state first; retries then open one socket each without a question, and this budget returns to 10."
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#watchStreamingNetwork",
+      "action": "change/offline/online listeners installed by watchStreamingNetwork (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingNetwork:event:change",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingNetwork:event:offline",
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingNetwork:event:online"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#watchStreamingSocketLiveness",
+      "action": "setInterval timers installed by watchStreamingSocketLiveness (hand-written: --sync was not run)",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#watchStreamingSocketLiveness:timer:setInterval"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 0,
+        "outputEmissions": 0,
+        "domMutations": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: the socket liveness check does no work per tick over a 1,000-tick session",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its reachable hazards."
     },
     {
       "id": "js:runtime/player-waveform-peaks.js#loadSavedLoopWaveformPeaks",
@@ -5436,32 +6135,25 @@
     },
     {
       "id": "js:runtime/player-waveform-peaks.js#loadWaveformPeaks",
-      "action": "fetch requests, setTimeout timers installed by loadWaveformPeaks",
+      "action": "abort listener installed by loadWaveformPeaks",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-waveform-peaks.js#loadWaveformPeaks:request:fetch",
-        "js:music_app/static/js/runtime/player-waveform-peaks.js#loadWaveformPeaks:timer:setTimeout"
+        "js:music_app/static/js/runtime/player-waveform-peaks.js#loadWaveformPeaks:event:abort"
       ],
       "owners": [
         "music_app/static/js/runtime/player-waveform-peaks.js"
       ],
       "rules": [
-        "BI-03",
-        "BI-13"
+        "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/playback/waveform"
-        ],
-        "forbidden": []
-      }
+      "proof": "static"
     },
     {
-      "id": "js:runtime/player-waveform-peaks.js#probeCachedWaveformPeaks",
-      "action": "fetch requests installed by probeCachedWaveformPeaks",
+      "id": "js:runtime/player-waveform-peaks.js#fetchWaveformPeaks",
+      "action": "fetch requests, setTimeout timers installed by fetchWaveformPeaks",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-waveform-peaks.js#probeCachedWaveformPeaks:request:fetch"
+        "js:music_app/static/js/runtime/player-waveform-peaks.js#fetchWaveformPeaks:request:fetch",
+        "js:music_app/static/js/runtime/player-waveform-peaks.js#fetchWaveformPeaks:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/player-waveform-peaks.js"
@@ -11012,14 +11704,32 @@
         "py:music_app/routes/playback_control_asgi.py#acquire_playback:route:PUT /playback/state"
       ],
       "owners": [
-        "music_app/routes/playback_control_asgi.py"
+        "music_app/routes/playback_control_asgi.py",
+        "music_app/services/mp3_stream_map.py"
       ],
       "rules": [
         "BI-04",
+        "BI-06",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 1,
+        "open_calls": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_playback_seek_table.py::test_a_claim_naming_its_song_by_path_prepares_only_that_songs_stream",
+      "testIdentity": "test_a_claim_naming_its_song_by_path_prepares_only_that_songs_stream",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/playback_control_asgi.py#playback_refs",
@@ -13577,6 +14287,38 @@
       "proof": "static"
     },
     {
+      "id": "py:services/playback_timing.py#watch_event_loop",
+      "action": "Run background watch_event_loop",
+      "entrypoints": [
+        "py:music_app/services/playback_timing.py#watch_event_loop:background:while"
+      ],
+      "owners": [
+        "music_app/services/playback_timing.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/playback_timing.py#watched_thread_work",
+      "action": "Run watcher watched_thread_work",
+      "entrypoints": [
+        "py:music_app/services/playback_timing.py#watched_thread_work:watcher:name"
+      ],
+      "owners": [
+        "music_app/services/playback_timing.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:services/private_route_boundary.py#_PrivateCachePolicy.__call__",
       "action": "Set the cache policy on each private answer's headers from its own Cache-Control and its address, reading no body",
       "entrypoints": [
@@ -14406,10 +15148,10 @@
       "proof": "static"
     },
     {
-      "id": "py:services/waveform_peaks.py#WaveformPeaksRegistry._schedule_completed_task_release",
-      "action": "Run scheduler WaveformPeaksRegistry._schedule_completed_task_release",
+      "id": "py:services/waveform_peaks.py#_BuildJob.publish",
+      "action": "Run publisher _BuildJob.publish",
       "entrypoints": [
-        "py:music_app/services/waveform_peaks.py#WaveformPeaksRegistry._schedule_completed_task_release:scheduler:name"
+        "py:music_app/services/waveform_peaks.py#_BuildJob.publish:publisher:name"
       ],
       "owners": [
         "music_app/services/waveform_peaks.py"
@@ -14419,6 +15161,47 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-saved-tokens.js#savedPlayerTokens",
+      "action": "The saved player names songs by resume token: one batch for songs saved before their token arrived, and one exchange of the saved tokens for paths when the page restores the player",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-saved-tokens.js#playerTracksFromDevice:request:fetch",
+        "js:music_app/static/js/runtime/player-saved-tokens.js#requestPlaybackResumeTokens:request:fetch",
+        "js:music_app/static/js/runtime/player-state-persistence-helpers.js#restorePlayerState:event:pageshow"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-saved-tokens.js",
+        "music_app/static/js/runtime/player-state-persistence-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/refs",
+          "/playback/refs/resume"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:app-copy.js#setServerUnreachable",
+      "action": "One timer per unreachable spell: the Offline line shows only once the server has stayed unreachable for 10 s",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy.js#setServerUnreachable:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
       "proof": "static"
     }
   ]

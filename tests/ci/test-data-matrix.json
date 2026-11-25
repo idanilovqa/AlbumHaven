@@ -2,6 +2,222 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back each show their place, never reset to the start, never stop or disable Play, and the last one plays",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": ["playback:rapid-online-seeks-under-load"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["seek-never-resets", "play-never-disabled", "last-seek-plays"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-rapid-seeks",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 5,
+    "databaseScenarios": ["playback:offline-seeks-both-ways"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["received-seek-plays", "past-seek-waits-playing", "play-never-disabled", "automatic-resume-on-reconnect"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-offline-seeks",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": ["playback:round7-wifi-outage"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["received-audio-seek-plays-at-once", "head-never-resets-to-start", "automatic-resume-when-server-back", "single-play-continues", "single-press-starts-another-song"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-round7-outage",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-005 owner round 7 with the server answering 530 for a minute after Wi-Fi returns: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": ["playback:round7-tunnel-530-window"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["received-audio-seek-plays-at-once", "head-never-resets-to-start", "automatic-resume-when-server-back", "single-play-continues", "single-press-starts-another-song"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-round7-tunnel",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received audio in an outage shows its place at once with one click and keeps the waveform, playback goes on by itself when the network returns, and one press plays another song",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": ["playback:loaded-outage-seek-waveform-and-one-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["seek-place-shown-at-once", "one-click-seek", "waveform-kept-offline", "automatic-resume-on-reconnect", "single-press-starts-another-song", "cpu-load-tolerated"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-loaded-outage",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playAfterPause.spec.js",
+    "case": "FTC-PLAYER-030 Pressing Play after Pause asks the server and plays the paused song on from its place, on a normal and a 4x slower processor",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 5,
+    "databaseScenarios": ["playback:play-after-pause-timing"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["play-after-pause-asks-the-server-before-sound", "audible-resumed-track"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:play-after-pause-timing",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["playback:silent-holder-closed-browser"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["silent-holder-gives-way", "first-press-plays", "no-refused-claim"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-silent-holder",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": ["playback:live-holder-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["press-shows-overlay-at-once", "never-starts-then-stops"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-live-holder",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": ["playback:page-load-then-first-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["page-load-claim-gives-way", "single-press-plays"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-page-load-press",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 5,
+    "databaseScenarios": ["playback:press-another-song-title"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["pressed-title-never-reverts"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-title-steady",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": ["playback:closed-tab-then-play-elsewhere"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["closed-tab-claim-gives-way", "single-press-plays-elsewhere"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-closed-tab",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 6,
+    "databaseScenarios": ["playback:two-context-takeover-at-position"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["visible-elsewhere-overlay", "pressable-play-above-dimming", "takeover-continues-song-at-position", "single-audible-owner"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-takeover",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/playbackOwnership.spec.js",
     "case": "FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate paused listens",
     "profile": "functional-core",
@@ -13,6 +229,122 @@
     "expectedContracts": ["visible-blocked-metadata", "single-audible-owner", "bidirectional-handoff", "paused-listen-identity", "exactly-once-provider", "persistent-visible-totals"],
     "mutationOwnership": {
       "databaseIdentity": "case:playback-ownership",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackStartLatency.spec.js",
+    "case": "FTC-PLAYER-026 the first song after the page opens and a switch to another song both sound within a second while the CPU is busy",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "playback:click-to-sound-under-cpu-load"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:playback-length-signals"
+    ],
+    "expectedContracts": [
+      "first-song-click-to-sound-budget",
+      "switch-click-to-sound-budget",
+      "audible-selected-track"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-start-latency",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+    "case": "FTC-PLAYER-028 A press on the next track of the playing album starts it as soon as the server confirms the press",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "playback:prepared-next-press"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:playback-length-signals"
+    ],
+    "expectedContracts": [
+      "prepared-press-click-to-sound-budget",
+      "confirmed-before-sound",
+      "no-second-download",
+      "previous-song-audible-until-cut",
+      "pressed-title-stays"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-prepared-next-press",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+    "case": "FTC-PLAYER-029 The playing song keeps sounding through a press until the pressed song starts",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "playback:switch-keeps-song-sounding"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:playback-length-signals"
+    ],
+    "expectedContracts": [
+      "previous-song-audible-until-cut",
+      "last-pressed-song-follows",
+      "pressed-title-stays"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-switch-continuity",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["playback:offline-seek-and-resume"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["offline-seek-holds-place", "playing-state-kept-offline", "automatic-resume-on-reconnect", "single-play-press-resumes"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-offline-seek",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received audio falls silent at once and stays playing, and after the network returns one press plays the current or another song",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": ["playback:silent-outage-seek-and-one-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["offline-seek-holds-place", "playing-state-kept-offline", "automatic-resume-on-reconnect", "single-play-press-resumes"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-silent-outage",
       "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
     },
     "ownerApproval": "approved"
@@ -2226,6 +2558,52 @@
     "mutationOwnership": {
       "databaseIdentity": "case:paused-loop-waveform",
       "filesystemCopy": "media/cases/paused-loop-waveform"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/loops.functional.spec.js",
+    "case": "FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "waveform:playing-song-preempts-prefetch"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:waveform-prefetch-priority"
+    ],
+    "expectedContracts": [
+      "playing-waveform-preempts-prefetch"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:waveform-prefetch-priority",
+      "filesystemCopy": "media/cases/waveform-prefetch-priority"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/loops.functional.spec.js",
+    "case": "FTC-PLAYER-025 the first song played right after sign-in draws its own waveform about a second after it starts",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "auth:fresh-sign-in-session",
+      "waveform:first-song-after-sign-in"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "first-song-waveform-with-playback"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:first-song-after-sign-in"
     },
     "ownerApproval": "approved"
   },
@@ -10219,6 +10597,280 @@
     "mutationOwnership": {
       "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
     },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W01 a browser loads the library from the server and keeps a copy without file paths",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-server-first",
+      "copy-stores-no-file-paths"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W05 offline, the saved library appears at once, read-only, and recovers without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-offline-read-only",
+      "offline-recovery-without-reload"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W09 after the first visit, a new tab opened offline shows the saved library, never a connection error",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-first-visit-offline-new-tab"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W10 offline, reloading an artist opened online shows that artist's kept albums, and an artist never opened names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "offline-reload-opens-artist-seen-online",
+      "browser-copy-offline-reload-names-unreachable-view"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W11 a slow connection that is still online never shows the Offline notice while the library loads",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-slow-online-no-offline-notice"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
+    "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "auth:instant-return-sign-out-w02"
+    ],
+    "executionWave": 2,
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sign-out-deletes-browser-copy"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:instant-return-sign-out-w02",
+      "filesystemCopy": "media/cases/instant-return-sign-out-w02"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unreachable-album-details-stop-loading",
+      "unreachable-artist-named-without-other-view"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnSignIn.spec.js",
+    "case": "FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library, and more albums show 'Offline. Can't load more albums, check your network or try again later'",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "sign-in-keeps-library-before-offline",
+      "unreachable-more-albums-message"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnOfflineData.spec.js",
+    "case": "FTC-IAR-W20 after browsing online, an offline reload still opens every artist and album already seen, by the tree and by scrolling, and their details",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "offline-reload-opens-artists-seen-from-the-tree",
+      "offline-reload-scrolls-gallery-pages-seen",
+      "offline-reload-opens-album-details-seen",
+      "offline-never-seen-album-says-offline",
+      "online-again-data-comes-from-the-server"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W14 a navigation with no answer shows the saved library with the Offline line after 10 s, never sooner, and goes live in place when the answer comes",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "no-answer-shows-copy-after-wait",
+      "held-answer-goes-live-in-place"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+    "case": "FTC-IAR-W15 offline, album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the network returning, without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "offline-surfaces-recover-without-reload"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+    "case": "FTC-IAR-W16 with the server down behind its tunnel (502), album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the server answering, without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "server-down-surfaces-recover-without-reload"
+    ],
     "ownerApproval": "approved"
   }
 ]

@@ -8,7 +8,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="album-haven-version" content="{{ app_version }}">
   {% if app_copy_account %}<meta name="album-haven-app-copy" content="network" data-account="{{ app_copy_account }}">{% endif %}
-  <script src="/static/js/app-copy.js?v={{ runtime_asset_version }}" defer></script>
+  {% if account_key %}<meta name="album-haven-account" content="{{ account_key }}">{% endif %}
+  {# Not deferred: it runs before the first paint, and before any other script can resume a page from memory. #}
+  <script src="/static/js/return-place.js?v={{ runtime_asset_version }}"></script>
+  {% if app_copy_enabled %}<script src="/static/js/app-copy.js?v={{ runtime_asset_version }}" defer></script>{% endif %}
   <title>{{ app_name }} v{{ app_version }}</title>
   <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script" fetchpriority="high">
   <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script" fetchpriority="high">
@@ -17,6 +20,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/alert-components.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/offline-notice.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-artbox-and-gallery-card.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-details-components.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-track-table.css') }}?v={{ runtime_asset_version }}">
@@ -25,9 +29,9 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/track-modal-and-lightbox.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-modal.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/shell-persistent-player.css') }}?v={{ runtime_asset_version }}">
-  <link rel="stylesheet" href="/static/css/admin-members.css">
-  <link rel="stylesheet" href="/static/css/account.css">
-  <link rel="stylesheet" href="/static/css/settings-navigation.css">
+  <link rel="stylesheet" href="/static/css/admin-members.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/account.css?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/settings-navigation.css?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="/static/css/app-chrome.css?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery-main.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/trigger-anchor.css') }}?v={{ runtime_asset_version }}">
@@ -73,6 +77,7 @@
   {% from "partials/gallery-bar.html" import gallery_bar %}
   {% from "partials/playback-control-cluster.html" import playback_control_cluster %}
   {% from "components/on-page-alert.html" import on_page_alert %}
+  {% from "components/offline-notice.html" import offline_notice %}
   <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
     {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/" data-shell-horizontal-align="gallery-body">
@@ -84,6 +89,12 @@
           {% if bootstrap_payload.initial_view.gallery_scale_percent and bootstrap_payload.initial_view.gallery_scale_percent != 100 %}<input type="hidden" name="gallery_scale_percent" value="{{ bootstrap_payload.initial_view.gallery_scale_percent }}">{% endif %}
           {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
         </form>
+        {# The kept-library notice, in the app bar on every library page. A phone shows the short line;
+           a tap (focus) shows the full one under the bar. #}
+        <div class="app-bar-offline" id="app-copy-offline-notice" tabindex="0" hidden>
+          {{ offline_notice('Offline. Showing your library as last seen, changes are off until Album Haven can be reached', variant='line', class_name='app-bar-offline__full') }}
+          {{ offline_notice('Offline', variant='line', class_name='app-bar-offline__short') }}
+        </div>
         <div class="toolbar-right">
           {% call action_button('Cover art lookups', class_name='cover-lookup-drawer-button', id='cover-lookup-drawer-button', title='Cover art lookups', attributes={'data-toggle-cover-lookup-drawer': '1'}) %}
             <span class="cover-lookup-drawer-glyph" aria-hidden="true">
@@ -179,7 +190,6 @@
           </div>
           <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
       {% endcall %}
-      {{ on_page_alert('This is your library as last seen, so it may be out of date. Changes are off until Album Haven can be reached.', severity='warning', title='Offline', role='status', hidden=true, class_name='app-copy-offline-notice', attributes={'id': 'app-copy-offline-notice'}) }}
 
       <div class="gallery-anchored-menu" id="gallery-album-types-menu" data-anchored-surface="album-types" data-trigger-anchor-context="content" role="group" aria-label="Album types" hidden>
         <span class="gallery-menu-title">Album types</span>
@@ -234,6 +244,7 @@
           <div id="albums-spacer-top"></div>
           <div id="artist-groups" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.gallery_html|safe }}</div>
           <div id="albums-spacer-bottom"></div>
+          {{ offline_notice('', variant='line', hidden=true, element_id='gallery-end-offline', class_name='gallery-end-offline') }}
         </div>
       </div>
       {% endif %}
@@ -273,6 +284,9 @@
     <div class="settings-outlet" data-settings-outlet></div>
   </main>
   <div class="global-player shell-bottom-player" data-shell-slot="bottom_player" data-shell-content-kind="{{ shell_bottom_player.content_kind or 'global_player' }}" data-shell-is-persistent="{{ 'true' if shell_bottom_player.is_persistent else 'false' }}">
+    <div class="player-elsewhere-overlay" data-player-elsewhere role="status" hidden>
+      <span class="player-elsewhere-label">Playing in another tab</span>
+    </div>
     <div class="player-shell">
       <span class="player-empty-message" data-player-empty-message role="status" hidden>Nothing is playing</span>
       <div class="player-controls">

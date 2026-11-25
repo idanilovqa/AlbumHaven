@@ -546,10 +546,25 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0178_add_musicbrainz_associated_artists.sql",
         "0200_create_cover_references.sql",
         "0201_backfill_cover_references.sql",
+        "0202_create_playback_last_played.sql",
         "0210_create_schema_migration_attestations.sql",
         "0293_create_cover_provider_cache.sql",
         "0299_create_android_attestation_revocations.sql",
     ]
+
+
+def test_playback_last_played_migration_is_one_keyed_record_per_account_and_library():
+    sql = (MIGRATIONS_DIR / "0202_create_playback_last_played.sql").read_text(encoding="utf-8")
+    normalized = " ".join(sql.split()).lower()
+
+    assert "create table if not exists app.playback_last_played" in normalized
+    assert "primary key (account_id, library_id)" in normalized
+    assert "references app.accounts(id) on delete cascade" in normalized
+    assert "references library.libraries(id) on delete cascade" in normalized
+    assert "check ((position_ms is null) = (duration_ms is null))" in normalized
+    assert "grant select, insert, update, delete on app.playback_last_played to album_haven_app" in normalized
+    # No token, holder or credential: only the song and the place it was last heard at.
+    assert "token" not in normalized and "client_id" not in normalized
 
 
 def test_gallery_projection_artist_lookup_migration_indexes_anchor_and_boundary_queries():

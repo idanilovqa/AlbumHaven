@@ -5,8 +5,10 @@ from __future__ import annotations
 from music_app.services.postgres_connections import pooled_connection as _connect
 
 from collections.abc import Callable, Mapping
+from time import perf_counter
 from typing import Any
 
+from music_app.services import playback_timing
 from music_app.services.auth_sessions_postgres import (
     PostgresAuthSessionService,
     ResolvedBrowserSession,
@@ -47,7 +49,10 @@ class PostgresCurrentActorResolver:
         self._connect = connect or _connect
 
     def resolve(self, raw_session_token: object) -> CurrentActor:
+        started_at = perf_counter()
         with self._connect(self._database_url) as connection:
+            # The pool's wait, or a new connection when it has none to lend.
+            started_at = playback_timing.mark_step("refresh_checkout_ms", started_at)
             transaction = getattr(connection, "transaction", None)
             if not callable(transaction):
                 raise RuntimeError("Current actor resolution requires transaction support.")
@@ -56,11 +61,14 @@ class PostgresCurrentActorResolver:
                     raw_session_token,
                     connection=connection,
                 )
+            # The session read and, when its activity is stamped, the row lock, update and commit.
+            started_at = playback_timing.mark_step("refresh_session_ms", started_at)
             if session is None:
                 return CurrentActor.anonymous()
             if not isinstance(session, ResolvedBrowserSession):
                 raise RuntimeError("Current actor session context is invalid.")
             actor = self._actor(connection, session.account_id, session.session_id, session.authenticated_at)
+            playback_timing.mark_step("refresh_actor_ms", started_at)
         if actor is None:
             raise RuntimeError("Current actor context is invalid.")
         return actor

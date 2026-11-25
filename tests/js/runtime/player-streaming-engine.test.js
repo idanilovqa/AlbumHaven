@@ -107,6 +107,9 @@ function createEngineHarness(options = {}) {
     postMessage(message, transfer = []) {
       this.messages.push({ message, transfer });
       this.processor?.port.onmessage({ data: message });
+      if (message.type === 'silence' && !this.processor) {
+        queueMicrotask(() => this.dispatch({ type: 'silenced' }));
+      }
       if (message.type === 'stop' && options.stopPostMessage) {
         options.stopPostMessage(message);
       }
@@ -132,7 +135,8 @@ function createEngineHarness(options = {}) {
             }
           },
           Float32Array, Math, Number, Object, currentTime: 12.5, sampleRate: 48_000,
-          registerProcessor: (_name, Processor) => { port.processor = new Processor(); },
+          Date: FakeDate,
+          registerProcessor: (_name, Processor) => { port.processor = new Processor(nodeOptions); },
         };
         port.events = [];
         vm.createContext(processorContext);
@@ -220,6 +224,18 @@ function createEngineHarness(options = {}) {
       this.onclose = null;
       this.closeCalls = 0;
       sockets.push(this);
+      // A refused connection never opens: the browser reports only its close.
+      const refusal = options.refuseConnection?.(sockets.length);
+      // A hanging connection neither opens nor closes.
+      if (refusal === 'hang') {
+        this.readyState = 0;
+        return;
+      }
+      if (refusal) {
+        this.readyState = 0;
+        queueMicrotask(() => this.unexpectedClose({ code: refusal === true ? 1006 : refusal }));
+        return;
+      }
       queueMicrotask(() => this.onopen?.({}));
     }
 
@@ -265,7 +281,9 @@ function createEngineHarness(options = {}) {
     }
   }
 
+  const windowListeners = [];
   const window = {
+    addEventListener: (type, listener) => windowListeners.push({ type, listener }),
     AudioContext: FakeAudioContext,
     WebSocket: FakeWebSocket,
     location: { protocol: 'http:', host: 'album-haven.test' },
@@ -331,16 +349,25 @@ function createEngineHarness(options = {}) {
     },
     window,
     createStreamingDecoder: options.createStreamingDecoder,
-    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
+    loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
     handleStreamingPlaybackFirstFrame: options.handleStreamingPlaybackFirstFrame,
     handleStreamingPlaybackBoundary: options.handleStreamingPlaybackBoundary,
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
     handleStreamingPlaybackEnded: options.handleStreamingPlaybackEnded,
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
     ensureStreamingDecoders: options.ensureStreamingDecoders,
+    getLocalStorageItem: options.getLocalStorageItem,
+    setLocalStorageItem: options.setLocalStorageItem,
     updatePlayerUi: options.updatePlayerUi,
+    fetch: options.fetch,
+    getPlaybackOwnershipTabId: options.getPlaybackOwnershipTabId,
+    answerPlaybackHandover: options.answerPlaybackHandover,
+    settlePlaybackHandover: options.settlePlaybackHandover,
+    yieldPausedPlaybackClaim: options.yieldPausedPlaybackClaim,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
-    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
+    loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
+    ...(options.document ? { document: options.document } : {}),
+    ...(options.requestAnimationFrame ? { requestAnimationFrame: options.requestAnimationFrame } : {}),
   };
   window.window = window;
   vm.createContext(context);
@@ -376,6 +403,9 @@ function createEngineHarness(options = {}) {
     sockets,
     setNow(value) {
       now = value;
+    },
+    dispatchWindowEvent(type) {
+      for (const entry of windowListeners) if (entry.type === type) entry.listener({ type });
     },
     async settle() {
       await new Promise((resolve) => setImmediate(resolve));
@@ -1474,6 +1504,97 @@ test('drops stale generation, unknown stream, and non-monotonic PCM without pois
   assert.equal(harness.api.snapshot().diagnostics.staleMessages, 3);
 });
 
+test('a resume marks when its first audible frame renders, once, on the page clock', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('resume-mark.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const consumed = (nonZeroSamples) => harness.nodes[0].port.dispatch({
+    type: 'consumed',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    frames: 40,
+    bufferedFrames: 0,
+    audible: true,
+    finiteSamples: 80,
+    nonZeroSamples,
+    peakSample: nonZeroSamples ? 0.5 : 0,
+    samples: [],
+  });
+  const marks = () => {
+    const { resumedAtMs, resumeFirstFrameAtMs } = harness.api.snapshot().diagnostics;
+    // Unset until a song resumes, as the page reads them (`|| 0`).
+    return [resumedAtMs || 0, resumeFirstFrameAtMs || 0];
+  };
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0, contextTime: 1,
+  });
+  consumed(21);
+  assert.deepEqual(marks(), [0, 0], 'a start is no resume');
+
+  await harness.api.pause();
+  harness.setNow(2_000);
+  await harness.api.resume();
+  harness.setNow(2_010);
+  consumed(0);
+  assert.deepEqual(marks(), [2_000, 0], 'silence is no first audible frame');
+  harness.setNow(2_020);
+  consumed(21);
+  harness.setNow(2_030);
+  consumed(21);
+
+  assert.deepEqual(marks(), [2_000, 2_020]);
+});
+
+test('a resume tells its caller once, on its song\'s first audible frame, and a pause, seek or start drops it', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack('resume-sound.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const consumed = (nonZeroSamples) => harness.nodes[0].port.dispatch({
+    type: 'consumed',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    frames: 40,
+    bufferedFrames: 0,
+    audible: true,
+    finiteSamples: 80,
+    nonZeroSamples,
+    peakSample: nonZeroSamples ? 0.5 : 0,
+    samples: [],
+  });
+  const heard = [];
+  const resumeListening = async (label) => {
+    await harness.api.pause();
+    await harness.api.resume(null, null, null, () => heard.push(label));
+  };
+
+  await resumeListening('first');
+  consumed(0);
+  assert.deepEqual(heard, [], 'silence is not its sound');
+  consumed(21);
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'once, on the first audible frame');
+
+  await resumeListening('paused again');
+  await harness.api.pause();
+  await harness.api.resume();
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a pause drops it');
+
+  await resumeListening('sought');
+  await harness.api.seek(30);
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a seek drops it');
+
+  await resumeListening('replaced');
+  await harness.api.start(makeTrack('other.flac'));
+  consumed(21);
+  assert.deepEqual(heard, ['first'], 'a start drops it');
+});
+
 test('pause and explicit resume keep context, processor, and snapshot state aligned', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());
@@ -2534,6 +2655,7 @@ test('active replacement prepares two buffered seconds while paused replacement 
       generation: replacement.generation,
       streamId: replacement.streamId,
       timelineStartFrame: 0,
+      primed: true,
     });
     assert.equal(typeof starting.then, 'function');
   });
@@ -2836,7 +2958,7 @@ test('second rapid replacement reuses the promoted current before its exact prom
   const stopCountBeforeSecondSelection = harness.portMessages('stop').length;
   const resumeCallsBeforeSecondSelection = context.resumeCalls;
   const playCountBeforeSecondSelection = harness.portMessages('play').length;
-  const secondStarting = harness.api.start(secondReplacementTrack);
+  // The promoted current has a second buffered, so the next switch crosses over from it.
   receivePcmAndAssertEnqueue(harness, {
     role: 1,
     generation: firstReplacement.generation,
@@ -2844,6 +2966,7 @@ test('second rapid replacement reuses the promoted current before its exact prom
     sequence: 1,
     samples: new Array(36_000 * 2).fill(0.5),
   }, { role: 'current' });
+  const secondStarting = harness.api.start(secondReplacementTrack);
   await harness.settle();
 
   assert.equal(harness.sent('close').length, closeCountBeforeSecondSelection);
@@ -3862,8 +3985,15 @@ test('prepared replacement preserves its buffered outgoing cushion while retaini
   );
 });
 
-test('replacement decoder opens only after the outgoing stream has an actual render cushion', async () => {
-  const harness = createEngineHarness();
+test('a switch from an outgoing song with under a second buffered crosses over without waiting for a cushion', async () => {
+  const timers = [];
+  const harness = createEngineHarness({
+    setTimeout(callback, delay) {
+      timers.push({ callback, delay });
+      return timers.length;
+    },
+    clearTimeout() {},
+  });
   await harness.api.start(makeTrack('outgoing-vbr.mp3'));
   const outgoing = harness.sent('open')[0];
   acceptMetadata(harness, outgoing);
@@ -3880,31 +4010,34 @@ test('replacement decoder opens only after the outgoing stream has an actual ren
     renderedFrame: 0,
     contextTime: 12.5,
   });
-  harness.api.start(makeTrack('replacement.flac'));
 
-  assert.equal(
-    harness.sent('open').length,
-    1,
-    'the replacement decoder must not compete while only outgoing credit is pending',
-  );
-
-  receivePcmAndAssertEnqueue(harness, {
-    generation: outgoing.generation,
-    streamId: outgoing.streamId,
-    sequence: 1,
-    samples: new Array(46_801 * 2).fill(0.25),
-  });
+  const starting = harness.api.start(makeTrack('replacement.flac'));
   await harness.settle();
-  const replacement = harness.sent('open').at(-1);
-  acceptMetadata(harness, replacement);
 
-  assert.deepEqual(
-    harness.sent('credit')
-      .filter(({ streamId }) => streamId === replacement.streamId)
-      .map(({ frames }) => frames),
-    [48_000],
-    'replacement decoding begins once one second of outgoing audio is actually buffered',
-  );
+  assert.equal(timers.filter(({ delay }) => delay === 1000).length, 0, 'nothing waits for the outgoing cushion');
+  const fresh = harness.sent('open').at(-1);
+  assert.equal(fresh.role, 'continuity', 'the outgoing song plays until the new one sounds');
+  assert.equal(fresh.path, makeTrack('replacement.flac').path);
+  assert.equal(fresh.generation, outgoing.generation);
+  assert.equal(harness.portMessages('configure').length, 1, 'nothing clears the outgoing audio');
+  acceptMetadata(harness, fresh);
+  assert.ok(harness.sent('credit').some(({ streamId }) => streamId === fresh.streamId),
+    'the new song is credited however little of the outgoing one is left');
+  receivePcmAndAssertEnqueue(harness, {
+    role: 1,
+    generation: fresh.generation,
+    streamId: fresh.streamId,
+    samples: new Array(12_000 * 2).fill(0.5),
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'seek-boundary',
+    generation: fresh.generation,
+    outgoingStreamId: outgoing.streamId,
+    incomingStreamId: fresh.streamId,
+    renderedFrame: 128,
+    timelineFrame: 0,
+  });
+  assert.equal((await starting).streamId, fresh.streamId);
 });
 
 test('replacement remains live when outgoing ended races worklet seek reservation', async () => {
@@ -4001,53 +4134,6 @@ test('paused replacement suppresses raced outgoing ended without restarting the 
   assert.equal(harness.api.snapshot().paused, true);
   assert.deepEqual(ended, []);
   assert.equal(harness.portMessages('play').length, playCount);
-});
-
-test('stalled outgoing replacement cushion falls back to a cold replacement start', async () => {
-  const timers = [];
-  const harness = createEngineHarness({
-    setTimeout(callback, delay) {
-      timers.push({ callback, delay, cleared: false });
-      return timers.length;
-    },
-    clearTimeout(id) {
-      if (timers[id - 1]) timers[id - 1].cleared = true;
-    },
-  });
-  await harness.api.start(makeTrack('stalled-outgoing.flac'));
-  const outgoing = harness.sent('open')[0];
-  acceptMetadata(harness, outgoing);
-  receivePcmAndAssertEnqueue(harness, {
-    generation: outgoing.generation,
-    streamId: outgoing.streamId,
-    samples: new Array(1_199 * 2).fill(0.25),
-  });
-  harness.nodes[0].port.dispatch({
-    type: 'first-frame',
-    generation: outgoing.generation,
-    streamId: outgoing.streamId,
-    renderedFrame: 0,
-    contextTime: 12.5,
-  });
-
-  const starting = harness.api.start(makeTrack('fallback.flac'));
-  assert.equal(harness.sent('open').length, 1);
-  assert.equal(timers.length, 1);
-  assert.equal(timers[0].delay, 1000);
-  timers[0].callback();
-  await harness.settle();
-
-  const fallback = harness.sent('open').at(-1);
-  assert.equal(fallback.role, 'current');
-  assert.equal(fallback.path, makeTrack('fallback.flac').path);
-  assert.notEqual(fallback.generation, outgoing.generation);
-  acceptMetadata(harness, fallback);
-  receivePcmAndAssertEnqueue(harness, {
-    generation: fallback.generation,
-    streamId: fallback.streamId,
-    samples: new Array(12_000 * 2).fill(0.5),
-  });
-  assert.equal((await starting).streamId, fallback.streamId);
 });
 
 test('consumed audio replenishes a promoted current stream in coarse windows', async () => {
@@ -4197,10 +4283,10 @@ test('one buffering episode requests one coarse refill and preserves play intent
   assert.equal(harness.engine.diagnostics.buffering, false);
 });
 
-test('a new current generation starts its cached waveform probe before playback readiness', async () => {
+test('a new current generation asks for its waveform when its stream opens, before playback readiness', async () => {
   const probes = [];
   const harness = createEngineHarness({
-    probeCachedWaveformPeaks: (path, generation) => {
+    loadPlayingWaveformPeaks: (path, generation) => {
       probes.push({ path, generation });
       return Promise.resolve(null);
     },
@@ -4971,109 +5057,415 @@ test('paused metadata and consumption update accounting without credit until exp
   assert.ok(diagnostics.inFlightFrames.continuity <= 5 * 48_000);
 });
 
-test('unexpected socket close reconnects once from the rendered position and leaves an explicit retry after a second loss', async () => {
-  let uiUpdates = 0;
-  const failed = createEngineHarness({ updatePlayerUi: () => { uiUpdates += 1; } });
-  const track = makeTrack();
-  await failed.api.start(track);
-  const first = failed.sent('open')[0];
-  failed.nodes[0].port.dispatch({
-    type: 'position',
-    generation: first.generation,
-    streamId: first.streamId,
-    timelineFrame: 3 * 48_000,
+// The head never resets to the start, and the song goes on when the network is back. A laptop serving
+// the app through
+// a tunnel that answers 530 for about a minute after its Wi-Fi returns: every attempt in that
+// minute fails. A lost socket under audio that cannot play on waits at the heard place, still
+// playing, and reopens there on the first socket the server answers, with nothing pressed.
+test('a lost socket waits playing at the heard place and reopens there once the server answers, however many attempts fail first', async () => {
+  let serverBack = false;
+  const timers = manualTimers();
+  const harness = createEngineHarness({
+    refuseConnection: (count) => count > 1 && !serverBack,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
   });
-  failed.sockets[0].fail(new Error('transport gone'));
-  const errorSnapshot = failed.api.snapshot();
-  assert.notEqual(errorSnapshot.mode, 'error');
-  assert.match(errorSnapshot.diagnostics.lastSocketError.message, /transport gone/);
-  assert.equal(failed.nodes[0].disconnectCalls, 0);
-  assert.equal(failed.contexts[0].closeCalls, 0);
-  failed.sockets[0].unexpectedClose({ code: 1006, reason: 'network disappeared' });
-  await failed.settle();
-  await failed.settle();
-
-  assert.equal(failed.sockets.length, 2);
-  const recovered = failed.sockets[1].sent.find(({ type }) => type === 'open');
-  assert.equal(recovered.path, track.path);
-  assert.equal(recovered.startFrame, 3 * 48_000);
-  assert.equal(failed.api.snapshot().diagnostics.lastError, undefined);
-  assert.equal(failed.nodes[0].disconnectCalls, 1);
-  assert.equal(failed.contexts[0].closeCalls, 1);
-
-  failed.sockets[1].unexpectedClose({ code: 1006, reason: 'network disappeared again' });
-  await failed.settle();
-  await failed.settle();
-
-  const failedSnapshot = failed.api.snapshot();
-  assert.equal(failed.sockets.length, 2, 'automatic recovery is bounded to one attempt');
-  assert.equal(failedSnapshot.mode, 'error');
-  assert.equal(failedSnapshot.paused, true);
-  assert.equal(failedSnapshot.diagnostics.lastError.source, 'socket');
-  assert.match(failedSnapshot.diagnostics.lastError.message, /1006|network disappeared again/);
-  assert.ok(uiUpdates > 0, 'transport failure refreshes the visible player state');
-
-  assert.equal(await failed.api.resume(), true);
-  await failed.settle();
-  assert.equal(failed.sockets.length, 3, 'an explicit play retries after automatic recovery is exhausted');
-  const retried = failed.sockets[2].sent.find(({ type }) => type === 'open');
-  assert.equal(retried.path, track.path);
-  assert.equal(retried.startFrame, 3 * 48_000);
-
-  const stopped = createEngineHarness();
-  await stopped.api.start(makeTrack());
-  await stopped.api.stop('owner-stop');
-
-  const stoppedSnapshot = stopped.api.snapshot();
-  assert.equal(stoppedSnapshot.mode, 'stopped');
-  assert.equal(stoppedSnapshot.diagnostics.lastError, undefined);
-});
-
-test('audible socket recovery restores the automatic reconnect allowance', async () => {
-  const harness = createEngineHarness();
   const track = makeTrack();
   await harness.api.start(track);
   const first = harness.sent('open')[0];
   harness.nodes[0].port.dispatch({
-    type: 'position',
-    generation: first.generation,
-    streamId: first.streamId,
-    timelineFrame: 3 * 48_000,
+    type: 'position', generation: first.generation, streamId: first.streamId, timelineFrame: 3 * 48_000,
   });
 
-  harness.sockets[0].unexpectedClose({ code: 1006, reason: 'first network loss' });
-  await harness.settle();
-  await harness.settle();
+  harness.sockets[0].unexpectedClose({ code: 1006, reason: 'network disappeared' });
+  await settleTwice(harness);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+    await settleTwice(harness);
+  }
+  const waiting = harness.api.snapshot();
+  assert.notEqual(waiting.mode, 'error', 'failed attempts never end the wait');
+  assert.equal(waiting.paused, false, 'the player stays on play');
+  assert.equal(waiting.currentTime, 3, 'the head stays at the heard place, never the start');
+  assert.equal(harness.contexts[0].closeCalls, 0);
 
-  const recovered = harness.sockets[1].sent.find(({ type }) => type === 'open');
-  assert.ok(recovered);
-  harness.nodes[1].port.dispatch({
-    type: 'first-frame',
-    generation: recovered.generation,
-    streamId: recovered.streamId,
-    renderedFrame: 0,
-    contextTime: 4,
+  serverBack = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  const reopened = harness.sockets.at(-1).sent.find(({ type }) => type === 'open');
+  assert.equal(reopened.path, track.path);
+  assert.equal(reopened.startFrame, 3 * 48_000);
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+// One press starts another song after an outage. Each press
+// in the minute the tunnel answered 530 failed and needed another; one press now waits for the server.
+test('another song pressed once while the server is still away opens on the first socket it answers', async () => {
+  let serverBack = false;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !serverBack,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
   });
-  harness.nodes[1].port.dispatch({
-    type: 'position',
-    generation: recovered.generation,
-    streamId: recovered.streamId,
-    timelineFrame: 48_000,
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  let failure = null;
+  const started = harness.api.start(makeTrack('02.mp3')).catch((error) => { failure = error; });
+  await settleTwice(harness);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+    await settleTwice(harness);
+  }
+  assert.equal(failure, null, 'the press is not refused while the server is away');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+
+  serverBack = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  await settleTwice(harness);
+  const opened = harness.sockets.at(-1).sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(opened?.path, makeTrack('02.mp3').path, 'the one press opens the song');
+  assert.equal(opened.startFrame, 0);
+  void started;
+});
+
+test('a socket lost while another song waits to replace the playing one opens that song on the next socket, and the press completes', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  await settleTwice(harness);
+
+  let pressed;
+  const press = harness.api.start(makeTrack('02.mp3')).then((role) => { pressed = role; });
+  await settleTwice(harness);
+  assert.equal(harness.engine.pendingSeek?.kind, 'replacement', 'the song is prepared beside the playing one');
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  const opened = harness.sockets.at(-1).sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(opened?.path, makeTrack('02.mp3').path);
+  assert.equal(opened.startFrame, 0);
+  await press;
+  assert.equal(pressed?.track.path, makeTrack('02.mp3').path, 'the press settles with the reopened song');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// Hosted FTC-PLAYBACK-OFFLINE-002: the socket died while a press on another song was still
+// starting. The old song's splice, or a restart of the old song at its place, then took the press's place.
+test('a socket lost while a press on another song is still starting opens only that song on the next socket', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.pause();
+  await settleTwice(harness);
+
+  let failure = null;
+  const press = harness.api.start(makeTrack('02.mp3')).catch((error) => { failure = error; });
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  const opens = harness.sockets.slice(1).flatMap((socket) => socket.sent.filter(({ type }) => type === 'open'));
+  assert.deepEqual(opens.map(({ path, startFrame }) => [path, startFrame]), [[makeTrack('02.mp3').path, 0]],
+    'only the pressed song opens, from its start');
+  assert.equal(failure, null);
+  assert.equal(harness.engine.roles.current?.track.path, makeTrack('02.mp3').path);
+  void press;
+});
+
+// Hosted FTC-PLAYBACK-OFFLINE-001/003: two restarts in one outage left a close queued for
+// the first restart's stream, whose open never left the page. The server refused that close (4400)
+// on the next socket and the player stopped with an error.
+test('the next socket never gets a control for a stream that was not opened on it', async () => {
+  let online = false;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
   });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.dispatchWindowEvent('offline');
+  await settleTwice(harness);
+  await harness.api.seek(200);
+  await settleTwice(harness);
+  const unsent = { type: 'close', generation: harness.engine.generation, streamId: harness.engine.nextStreamId + 7, reason: 'replacement' };
+  harness.engine.pendingControls.unshift(unsent);
 
-  harness.sockets[1].unexpectedClose({ code: 1006, reason: 'later network loss' });
-  await harness.settle();
-  await harness.settle();
+  online = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  const sent = harness.sockets.at(-1).sent;
+  assert.deepEqual(sent.filter(({ type }) => type === 'close'), [], 'no close for a stream the server never opened');
+  assert.deepEqual(sent.filter(({ type }) => type === 'open').map(({ startFrame }) => startFrame), [200 * 48_000]);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
 
-  assert.equal(harness.sockets.length, 3);
-  const recoveredAgain = harness.sockets[2].sent.find(({ type }) => type === 'open');
-  assert.ok(recoveredAgain);
-  assert.equal(recoveredAgain.path, track.path);
-  assert.equal(recoveredAgain.startFrame, 4 * 48_000);
-  const snapshot = harness.api.snapshot();
-  assert.notEqual(snapshot.mode, 'error');
-  assert.equal(snapshot.diagnostics.lastError, undefined);
-  assert.equal(snapshot.diagnostics.transportReconnects, 2);
+// A network that froze and came back gave no sign, and playback resumed 19.6 s
+// later while an attempt with the doubled 16 s deadline hung. The server is asked every 1.5 s whether it
+// answers; once it does, the hanging attempt is replaced at once with the short deadline.
+test('after a frozen network, the hanging reconnect is replaced as soon as the server answers again', async () => {
+  let frozen = true;
+  const timers = manualTimers();
+  const probes = [];
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count > 1 && frozen ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async (url) => {
+      probes.push(url);
+      if (frozen) throw new TypeError('Failed to fetch');
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  // Three hung attempts double the next one's deadline to 16 s.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const deadline = timers.pending().find(({ delay }) => delay >= 4_000);
+    timers.fire(deadline);
+    await settleTwice(harness);
+    const retry = timers.pending().find(({ delay }) => delay <= 2_000);
+    if (retry) timers.fire(retry);
+    await settleTwice(harness);
+  }
+  assert.ok(timers.pending().some(({ delay }) => delay === 16_000), 'the hanging attempt has the long deadline');
+  const hanging = harness.sockets.length;
+
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1).callback();
+  // The attempt has hung for a while: well past a healthy connect.
+  harness.setNow(5_000);
+  await probe();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, hanging, 'while the server does not answer, the attempt waits');
+
+  frozen = false;
+  await probe();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, hanging + 1, 'the server answered: a fresh attempt at once');
+  assert.ok(probes.every((url) => url === '/playback/state'));
+  assert.equal(harness.sockets.at(-1).readyState, 1, 'the fresh attempt opened');
+  assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// After a minute of 502s, another song pressed in it played 4.8-18 s after the
+// server answered: the reconnect waited out 2 s, then the claim waited out its own 2 s retry. Attempts
+// the network refuses are retried every second, and the reopened socket has the claim ask at once.
+test('a socket that reopens after an outage has a claim waiting out its retry ask at once', async () => {
+  let serverBack = false;
+  let retriedNow = 0;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !serverBack,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  harness.context.retryUnansweredPlaybackClaimNow = () => { retriedNow += 1; return true; };
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const delays = [];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const retry = timers.pending().find(({ delay }) => delay <= 2_000);
+    delays.push(retry.delay);
+    timers.fire(retry);
+    await settleTwice(harness);
+  }
+  assert.deepEqual(delays, [500, 1_000, 1_000, 1_000], 'refused attempts are retried every second');
+  assert.equal(retriedNow, 0);
+
+  serverBack = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  assert.equal(harness.sockets.at(-1).readyState, 1);
+  assert.equal(retriedNow, 1, 'the claim asks as soon as the socket is back');
+});
+
+// After a minute of tunnel 530 handshakes, Chromium held each new socket 1-5 s before sending it,
+// past its 4 s deadline, and one press played nothing for 8 s after the server answered (hosted
+// FTC-PLAYBACK-OFFLINE-005). A retry asks over HTTP first: no socket while the browser is offline or
+// the tunnel answers without its server, and one on the first answer.
+test('a reconnect retry opens no socket while offline or while the tunnel answers 530, and one on the first answer', async () => {
+  let status = 530;
+  const asked = [];
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count === 2,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async (url) => {
+      asked.push(url);
+      return { ok: status < 400, status, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2, 'the lost socket is replaced at once');
+  const retry = async () => {
+    timers.fire(timers.pending().find(({ delay }) => delay <= 1_000));
+    await settleTwice(harness);
+  };
+
+  for (let attempt = 0; attempt < 5; attempt += 1) await retry();
+  assert.equal(harness.sockets.length, 2, 'no socket while the tunnel answers 530');
+  assert.deepEqual(asked, Array(5).fill('/playback/state'), 'one question per retry');
+
+  status = 200;
+  harness.context.window.navigator = { onLine: false };
+  for (let attempt = 0; attempt < 3; attempt += 1) await retry();
+  assert.equal(harness.sockets.length, 2, 'no socket while offline');
+  assert.equal(asked.length, 5, 'and no question either');
+
+  harness.context.window.navigator = { onLine: true };
+  await retry();
+  assert.equal(harness.sockets.length, 3, 'the first answer opens one socket');
+  assert.equal(harness.sockets.at(-1).readyState, 1);
+  assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// Once the server answered again, every probe replaced the attempt then
+// connecting, which takes 1.6-2 s through the tunnel, so no socket ever opened. The attempt a probe
+// starts is on the network that answers and is left to connect; another is replaced only once it
+// has hung for 3 s.
+test('a reconnect that a probe started is left to connect, however slowly, while the server answers', async () => {
+  let reachable = false;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count > 1 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async () => {
+      if (!reachable) throw new TypeError('Failed to fetch');
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1)?.callback();
+
+  harness.setNow(1_000);
+  reachable = true;
+  await probe();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2, 'an attempt connecting for a second is not replaced');
+
+  harness.setNow(4_000);
+  await probe();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 3, 'one hung for 3 s is replaced');
+  // Chromium delays a page's sockets for seconds after its failed handshakes: a 4 s deadline gave
+  // every such attempt up and kept the network-back socket failing for 16 s.
+  assert.ok(timers.pending().some(({ delay }) => delay === 16_000), 'and may take the longest deadline to open');
+  assert.equal(timers.pending().some(({ delay }) => delay === 4_000), false);
+
+  for (let now = 5_500; now <= 9_000; now += 1_500) {
+    harness.setNow(now);
+    await probe();
+    await settleTwice(harness);
+  }
+  assert.equal(harness.sockets.length, 3, 'the attempt the probe started is left to connect');
+  assert.equal(harness.sockets.at(-1).closeCalls, 0);
+});
+
+// The app notices at once that the network is back. After Wi-Fi returns a tunnel answers 530 for minutes, then 200. Every 530 is still
+// unreachable, the server is asked again on every tick without backing off, and the first 200
+// replaces the hung attempt on that tick.
+test('a hung reconnect is replaced on the first good answer after a run of tunnel 530s, asked every tick', async () => {
+  let status = 530;
+  const asked = [];
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async (url) => {
+      asked.push(harness.context.performance.now());
+      return { ok: status < 400, status, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2);
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1).callback();
+
+  for (let now = 400; now <= 20_000; now += 400) {
+    harness.setNow(now);
+    await probe();
+    await settleTwice(harness);
+  }
+  assert.equal(harness.sockets.length, 2, 'a 530 is not an answer: the attempt is not replaced');
+  const afterHang = asked.filter((at) => at >= 3_000);
+  assert.ok(afterHang.length >= 40, `asked on every tick once the attempt hung: ${afterHang.length}`);
+  assert.ok(afterHang.every((at, index) => index === 0 || at - afterHang[index - 1] === 400), 'never backing off');
+
+  status = 200;
+  harness.setNow(20_400);
+  await probe();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 3, 'the first 200 replaces the hung attempt on that tick');
+  assert.equal(harness.sockets.at(-1).readyState, 1);
+  assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
+});
+
+// After a 10 s outage another song pressed at once played 8.4 s later, while
+// an attempt begun during the outage hung out its time. A press is a fresh reason to try: the attempt
+// begun before it is replaced at once.
+test('a press on another song while a reconnect hangs replaces that attempt at once', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2);
+  assert.equal(harness.sockets[1].readyState, 0, 'the attempt begun in the outage hangs');
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[1].closeCalls, 1, 'the hanging attempt is given up');
+  assert.equal(harness.sockets.length, 3, 'a fresh attempt starts at once');
+  const opened = harness.sockets[2].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(opened?.path, makeTrack('02.mp3').path);
+});
+
+test('a refused socket still stops playback with an error', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  harness.sockets[0].unexpectedClose({ code: 4401, reason: 'unauthenticated' });
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.api.snapshot().mode, 'error');
 });
 
 test('concurrent prepare calls share one in-flight context, worklet, node, and socket', async () => {
@@ -6012,6 +6404,11 @@ test('unknown active-stream control type is a fatal socket protocol error', asyn
   assert.match(settled.diagnostics.lastError.message, /unknown|protocol|control/i);
 });
 
+// A browser that has played a song at 44.1 kHz: its starts guess that rate instead of asking.
+const PLAYED_AT_44_100 = {
+  getLocalStorageItem: (key) => (key === 'albumhaven.playbackSampleRate.v1' ? '44100' : ''),
+};
+
 test('tracks play in a context at their own sample rate with rate-scaled buffers', async () => {
   const harness = createEngineHarness({ trackSampleRates: new Map(), trackSampleRate: () => 44_100 });
   const track = makeTrack();
@@ -6034,6 +6431,7 @@ test('a queued track at another rate opens no continuity and is handed over on e
   const ended = [];
   
   const harness = createEngineHarness({
+    ...PLAYED_AT_44_100,
     trackSampleRates: new Map(),
     trackSampleRate: (path) => (path.endsWith('next.flac') ? 96_000 : 44_100),
     handleStreamingPlaybackEnded: (event) => ended.push(structuredClone(event)),
@@ -6052,7 +6450,7 @@ test('a queued track at another rate opens no continuity and is handed over on e
   harness.engine.diagnostics.bufferedFrames.current = 44_100;
   const nextTrack = makeTrack('next.flac');
   await harness.api.continuity(nextTrack);
-  assert.equal(harness.sockets[0].probes.length, 1, 'the next track never waits for a probe');
+  assert.equal(harness.sockets[0].probes.length, 0, 'neither the start nor the next track waits for a probe');
   const refused = harness.sent('open').at(-1);
   assert.equal(refused.sampleRate, 44_100);
   harness.sockets[0].receive({
@@ -6102,13 +6500,138 @@ test('a same-rate queued track keeps the context and opens gapless continuity', 
   assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
 });
 
-test('an unreadable track rate fails the start instead of assuming one', async () => {
-  const harness = createEngineHarness({ trackSampleRates: new Map(), trackSampleRate: () => 0 });
+test('the idle preparation verifies decoders and builds a suspended graph at the remembered rate', async () => {
+  let decoderChecks = 0;
+  const harness = createEngineHarness({
+    trackSampleRates: new Map(),
+    ensureStreamingDecoders: () => { decoderChecks += 1; return Promise.resolve(['mp3']); },
+    getLocalStorageItem: (key) => (key === 'albumhaven.playbackSampleRate.v1' ? '48000' : ''),
+  });
 
-  await assert.rejects(harness.api.start(makeTrack()), /sample rate could not be read/);
+  await harness.context.prepareIdleStreamingPlayback();
 
-  assert.equal(harness.contexts.length, 0);
-  assert.equal(harness.sent('open').length, 0);
+  assert.equal(decoderChecks, 1);
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.contexts[0].sampleRate, 48_000);
+  assert.equal(harness.contexts[0].state, 'suspended', 'nothing renders before a press');
+
+  await harness.api.start(makeTrack('01.mp3'));
+  assert.equal(harness.contexts.length, 1, 'the press reuses the idle graph');
+  assert.equal(harness.sent('open')[0].sampleRate, 48_000);
+});
+
+test('inside the APK the idle preparation readies only the socket', async () => {
+  let decoderChecks = 0;
+  const harness = createEngineHarness({
+    ensureStreamingDecoders: () => { decoderChecks += 1; return Promise.resolve(['mp3']); },
+  });
+  harness.context.isInsideAndroidShell = () => true;
+
+  await harness.context.prepareIdleStreamingPlayback();
+
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.contexts.length, 0, 'the native engine plays; no web audio graph is built');
+  assert.equal(decoderChecks, 0);
+});
+
+test('the rate a song played at is remembered for the next page', async () => {
+  const stored = new Map();
+  const harness = createEngineHarness({
+    trackSampleRates: new Map(),
+    setLocalStorageItem: (key, value) => stored.set(key, value),
+  });
+  await harness.api.start(makeTrack('01.mp3'));
+  // Nothing played yet, so the start asked the rate and opened at the answer.
+  const open = harness.sent('open')[0];
+  assert.equal(open.sampleRate, 48_000);
+
+  acceptMetadata(harness, open, { sampleRate: 48_000 });
+
+  assert.equal(stored.get('albumhaven.playbackSampleRate.v1'), '48000');
+});
+
+test('a start at an unknown rate opens at once at the rate this browser last played, without a probe', async () => {
+  const harness = createEngineHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
+
+  await harness.api.start(makeTrack('01.mp3'));
+
+  assert.equal(harness.sockets[0].probes.length, 0);
+  assert.equal(harness.contexts[0].sampleRate, 44_100);
+  assert.equal(harness.sent('open')[0].sampleRate, 44_100);
+});
+
+test('a browser that has played no song asks the rate first and opens once, even over an idle graph', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map() });
+  await harness.context.prepareIdleStreamingPlayback();
+
+  await harness.api.start(makeTrack('01.mp3'));
+
+  assert.equal(harness.sockets[0].probes.length, 1);
+  assert.equal(harness.sent('open').length, 1);
+  assert.equal(harness.sent('open')[0].sampleRate, 48_000);
+});
+
+test('a start the server refuses for its rate starts again at the reported rate', async () => {
+  const harness = createEngineHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
+  const track = makeTrack('01.flac');
+  await harness.api.start(track, { startSeconds: 2 });
+  const guessed = harness.sent('open')[0];
+  assert.equal(guessed.startFrame, 88_200);
+
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: guessed.generation,
+    streamId: guessed.streamId,
+    sampleRate: 96_000,
+    fallbackSampleRate: 48_000,
+  });
+  await harness.settle();
+
+  assert.equal(harness.engine.diagnostics.lastError, undefined);
+  assert.equal(harness.contexts[0].closeCalls, 1);
+  assert.equal(harness.contexts[1].sampleRate, 96_000);
+  assert.equal(harness.sockets.length, 1, 'the socket survives the rate change');
+  assert.equal(harness.sent('close').length, 0, 'the refused stream was never opened');
+  const restarted = harness.sent('open').at(-1);
+  assert.equal(restarted.role, 'current');
+  assert.equal(restarted.path, track.path);
+  assert.equal(restarted.sampleRate, 96_000);
+  assert.equal(restarted.startFrame, 192_000);
+  assert.equal(harness.engine.roles.current.streamId, restarted.streamId);
+  assert.equal(harness.contexts[1].state, 'running');
+});
+
+test('a paused start at an unknown rate asks the rate first and opens once', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map() });
+
+  const restored = await harness.api.start(makeTrack('01.flac'), { startSeconds: 2, autoplay: false });
+
+  assert.equal(harness.sockets[0].probes.length, 1);
+  assert.equal(harness.sent('open').length, 1);
+  assert.equal(harness.sent('open')[0].sampleRate, 48_000);
+  assert.equal(restored.generation, 1);
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+test('a guessed start paused before its refusal starts again paused', async () => {
+  const harness = createEngineHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
+  await harness.api.start(makeTrack('01.flac'));
+  const guessed = harness.sent('open')[0];
+  await harness.api.pause();
+
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: guessed.generation,
+    streamId: guessed.streamId,
+    sampleRate: 48_000,
+    fallbackSampleRate: 48_000,
+  });
+  await harness.settle();
+
+  assert.equal(harness.sent('open').at(-1).sampleRate, 48_000);
+  assert.equal(harness.engine.mode, 'paused');
+  assert.equal(harness.api.snapshot().paused, true);
 });
 
 function encodedFrame(open, sequence, bytes) {
@@ -6199,18 +6722,22 @@ test('audio the server sends on open counts as already requested', async () => {
 
 test('encoded bytes are requested separately from decoded ring credit', async () => {
   const harness = encodedHarness();
-  await startEncoded(harness, makeTrack('01.mp3'));
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
 
   const credit = harness.sent('credit');
-  assert.equal(credit.length, 1, 'one bounded byte request is outstanding at a time');
-  assert.equal(credit[0].frames, 64 * 1024);
+  assert.equal(credit.length, 4, 'a bounded window of byte requests is in flight');
+  assert.ok(credit.every(({ frames }) => frames === 64 * 1024));
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(64 * 1024)));
+  await harness.settle();
+  assert.equal(harness.sent('credit').length, 5, 'each answered request is replaced, never more');
 });
 
 test('encoded bytes beyond granted credit are a protocol failure', async () => {
   const harness = encodedHarness();
   const open = await startEncoded(harness, makeTrack('01.mp3'));
 
-  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array((64 * 1024) + 1)));
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array((256 * 1024) + 1)));
 
   assert.match(harness.engine.diagnostics.lastError.message, /byte credit/);
 });
@@ -6306,6 +6833,18 @@ test('a good connection keeps FLAC at original quality', async () => {
   assert.equal(harness.sent('open').at(-1).quality, undefined);
 });
 
+test('a FLAC start on a measured slow connection still reads its size before choosing quality', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 44_100 });
+  harness.engine.transferBytes = 125_000;
+  harness.engine.transferMs = 1_000;
+  const track = makeTrack('hi.flac');
+
+  await harness.api.start(track);
+
+  assert.deepEqual(harness.sockets[0].probes.map(({ path }) => path), [track.path]);
+  assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
+});
+
 test('a manual quality preference overrides the connection measurement', async () => {
   const harness = encodedHarness();
   harness.engine.lastStallAtMs = 1_000;
@@ -6374,6 +6913,289 @@ test('padding after the last mapped sample never delays end of stream', async ()
   assert.equal(harness.portMessages('eos').at(-1).emittedFrames, 1_152);
 });
 
+// Confirmed handover: Play here elsewhere asks the playing tab over this socket.
+test('another client taking playback is read at once, not at the next heartbeat', async (t) => {
+  let reads = 0;
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  harness.context.handlePlaybackOwnershipEvent = async () => { reads += 1; };
+  await harness.api.start(makeTrack(), { startSeconds: 0 });
+
+  harness.sockets[0].receive({ type: 'playback-claimed' });
+  await harness.settle();
+
+  assert.equal(reads, 1);
+  assert.equal(harness.engine.diagnostics.staleMessages || 0, 0, 'no stream message is taken for it');
+});
+
+test('the socket names its client, hands a handover to the player and answers only while it is open', async () => {
+  const asked = [];
+  const settled = [];
+  const harness = createEngineHarness({
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    answerPlaybackHandover: async (requestId) => { asked.push(requestId); },
+    settlePlaybackHandover: async () => { settled.push(true); },
+  });
+  const track = makeTrack();
+  await harness.api.start(track, { startSeconds: 87 });
+  const socket = harness.sockets[0];
+  assert.equal(new URL(socket.url).searchParams.get('client_id'), '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70');
+
+  socket.receive({ type: 'handover', requestId: 'request-1' });
+  await harness.settle();
+  assert.deepEqual(asked, [], 'it stops for nothing before it knows the press is still wanted');
+  assert.equal(socket.sent.at(-1).type, 'handover-wanted');
+  assert.equal(socket.sent.at(-1).requestId, 'request-1');
+  socket.receive({ type: 'handover-stop', requestId: 'request-1' });
+  socket.receive({ type: 'handover-done', requestId: 'request-1' });
+  await harness.settle();
+  assert.deepEqual(asked, ['request-1']);
+  assert.deepEqual(settled, [true]);
+
+  const sounding = harness.context.getSoundingStreamingPlayback();
+  assert.equal(sounding.track.path, track.path);
+  assert.equal(sounding.seconds, 87, 'a start with no audio yet is at its start place');
+
+  assert.equal(harness.context.sendStreamingHandoverAnswer({ type: 'handover-answer', requestId: 'request-1' }), true);
+  socket.readyState = 3;
+  assert.equal(harness.context.sendStreamingHandoverAnswer({ type: 'handover-answer', requestId: 'request-2' }), false);
+  assert.notEqual(harness.engine.mode, 'error', 'an answer that cannot be sent never fails playback');
+});
+
+// Review of the confirmed handover: the engine and the ownership code for real, not stand-ins for each
+// other. The holder stops, and its answer still goes out on the socket it was asked on.
+test('a playing tab asked by Play here falls silent and its answer reaches the socket it was asked on', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const track = makeTrack();
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: { claimToken: 'holder-claim', leaseDeadline: Infinity, path: track.path,
+      referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'holder-ref' } },
+  };
+  harness.context.state.player.current = track;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  await harness.api.start(track, { startSeconds: 87 });
+  const socket = harness.sockets[0];
+
+  await harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+
+  const answer = socket.sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(answer, 'the answer was sent');
+  assert.equal(answer.position.ms, 87000);
+  assert.equal(answer.track.playbackRef, 'holder-ref');
+  assert.equal(harness.api.snapshot().paused, true, 'and it is silent');
+  assert.equal(socket.readyState, 1, 'the socket stays for the end of the press');
+});
+
+test('asked during a switch, the real engine answers the song still sounding and keeps the socket', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const old = makeTrack('01.flac');
+  const pressed = makeTrack('02.flac');
+  await harness.api.start(old, { startSeconds: 88 });
+  const open = harness.sent('open')[0];
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: open.generation, streamId: open.streamId, renderedFrame: 0, contextTime: 1,
+  });
+  // Comfortably buffered, so it sounds on through the switch. Not the engine's threshold.
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  const switching = harness.api.start(pressed);
+  void Promise.resolve(switching).catch(() => {});
+  await harness.settle();
+  const known = (track, playbackRef, claimToken) => ({ claimToken, leaseDeadline: Infinity, path: track.path,
+    referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef } });
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: known(pressed, 'pressed-ref', 'holder-claim'),
+    previousClaim: known(old, 'old-ref', 'holder-claim'),
+  };
+  harness.context.state.player.current = old;
+  harness.context.state.player.selectedTrack = pressed;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  const socket = harness.sockets[0];
+
+  await harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+
+  const answer = socket.sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(answer, 'the answer was sent');
+  assert.equal(answer.track.playbackRef, 'old-ref', 'the song that sounds');
+  assert.ok(answer.position.ms >= 87000 && answer.position.ms <= 89000, `at its place: ${answer.position.ms}`);
+  assert.equal(socket.readyState, 1);
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+// Two tabs never sound at the same time, not even shortly.
+test('a tab asked by Play here answers only when its output is silent, at the last frame it sent out', async (t) => {
+  const timers = [];
+  const harness = createEngineHarness({
+    realProcessor: true,
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    setTimeout: (callback, delay) => timers.push({ callback, delay }),
+    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+  });
+  t.after(() => harness.api.stop());
+  const ownershipPath = path.join(path.dirname(enginePath), 'playback-ownership-helpers.js');
+  vm.runInContext(fs.readFileSync(ownershipPath, 'utf8'), harness.context, { filename: ownershipPath });
+  const track = makeTrack();
+  harness.context.state.player.ownership = {
+    tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
+    heartbeatTimer: 1, initialized: true,
+    activeClaim: { claimToken: 'holder-claim', leaseDeadline: Infinity, path: track.path,
+      soundDeadline: Number.MAX_SAFE_INTEGER, soundUntilWallMs: Number.MAX_SAFE_INTEGER,
+      referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'holder-ref' } },
+  };
+  harness.context.state.player.current = track;
+  harness.context.getPlayerPlaybackSnapshot = () => harness.api.snapshot();
+  await harness.api.start(track);
+  Object.assign(harness.contexts[0], { baseLatency: 0.02, outputLatency: 0.3 });
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  for (const sequence of [0, 1]) {
+    receivePcmAndAssertEnqueue(harness, {
+      generation: open.generation, streamId: open.streamId, sequence,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+  }
+  const node = harness.nodes[0];
+  node.render();
+  node.deliverEvents();
+  // Rendered before the question arrived, not yet told to the page.
+  for (let quantum = 0; quantum < 99; quantum += 1) assert.equal(node.render()[0][0], 0.25);
+  timers.length = 0;
+
+  const answered = harness.context.answerPlaybackHandover('request-1');
+  await harness.settle();
+  const answer = () => harness.sockets[0].sent.find(({ type }) => type === 'handover-answer');
+  assert.ok(node.render()[0].every((sample) => sample === 0), 'nothing more is rendered');
+  assert.equal(answer(), undefined, 'no answer before the audio thread says it is silent');
+  node.deliverEvents();
+  await harness.settle();
+  assert.equal(answer(), undefined, 'no answer while rendered audio is still in the output buffer');
+  assert.equal(harness.api.snapshot().paused, true);
+  const drain = timers.filter(({ cleared, delay }) => !cleared && delay >= 320 && delay < 1000);
+  assert.equal(drain.length, 1, 'it waits out the base and output latency');
+  drain[0].callback();
+  await answered;
+
+  assert.equal(answer().position.ms, Math.round((100 * 128) / 48), 'nothing repeated, nothing skipped');
+});
+
+// Play here starts in tab 2 without a glitch.
+test('a paused tab that takes over starts once at that place, with none of the audio it had buffered', async (t) => {
+  const harness = createEngineHarness({ realProcessor: true });
+  t.after(() => harness.api.stop());
+  const fill = (open, value) => {
+    acceptMetadata(harness, open);
+    for (const sequence of [0, 1]) {
+      receivePcmAndAssertEnqueue(harness, {
+        generation: open.generation, streamId: open.streamId, sequence,
+        samples: new Array(48_000 * 2).fill(value),
+      });
+    }
+  };
+  await harness.api.start(makeTrack('mine.flac'));
+  fill(harness.sent('open')[0], 0.25);
+  const node = harness.nodes[0];
+  node.render();
+  node.deliverEvents();
+  await harness.api.pause();
+  const opensBefore = harness.sent('open').length;
+  const playsBefore = harness.portMessages('play').length;
+
+  await harness.api.start(makeTrack('theirs.flac'), { startSeconds: 87.654 });
+  const output = [];
+  for (let quantum = 0; quantum < 4; quantum += 1) output.push(...node.render()[0]);
+  assert.ok(output.every((sample) => sample === 0), 'nothing sounds before the confirmed place has arrived');
+  const opens = harness.sent('open').slice(opensBefore);
+  assert.equal(opens.length, 1, 'one stream, no second start');
+  assert.equal(opens[0].startFrame, Math.round(87.654 * 48_000));
+  fill(opens[0], 0.75);
+  for (let quantum = 0; quantum < 4; quantum += 1) {
+    assert.ok(node.render()[0].every((sample) => sample === 0.75), 'only the taken-over song, from its first frame');
+  }
+  assert.equal(harness.portMessages('play').length - playsBefore, 1);
+});
+
+test('with no node the handover has nothing to silence', async () => {
+  const harness = createEngineHarness();
+  const drained = await harness.context.silenceStreamingPlaybackForHandover();
+  assert.equal(await drained(), true);
+});
+
+test('the audio thread gets a port from a Worker that only this tab\u2019s takeover can use', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => 'this-tab' });
+  const workers = [];
+  Object.assign(harness.context, {
+    PLAYBACK_OWNERSHIP_CHANNEL_NAME: 'albumhaven.playbackOwnership.v1',
+    Blob,
+    Worker: class {
+      constructor() { this.messages = []; workers.push(this); }
+      postMessage(message) { this.messages.push(message); }
+    },
+    MessageChannel: class { constructor() { this.port1 = { side: 1 }; this.port2 = { side: 2 }; } },
+    URL: { createObjectURL: () => 'blob:relay', revokeObjectURL: () => {} },
+  });
+  await harness.api.start(makeTrack());
+
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].messages[0].clientId, 'this-tab');
+  assert.equal(workers[0].messages[0].port.side, 2);
+  assert.equal(harness.portMessages('silence-port')[0].port.side, 1);
+
+  // The Worker's own script: it relays only a takeover of this very tab.
+  const source = vm.runInContext('STREAMING_SILENCE_RELAY_SOURCE', harness.context);
+  const channel = {};
+  const scope = { BroadcastChannel: class { constructor() { return channel; } } };
+  vm.createContext(scope);
+  vm.runInContext(source, scope);
+  const relayed = [];
+  scope.onmessage({ data: { channel: 'c', clientId: 'this-tab', port: { postMessage: (m) => relayed.push(m) } } });
+  channel.onmessage({ data: { type: 'changed', clientId: 'this-tab' } });
+  channel.onmessage({ data: { type: 'taken-over', clientId: 'another-tab' } });
+  assert.deepEqual(relayed, []);
+  channel.onmessage({ data: { type: 'taken-over', clientId: 'this-tab' } });
+  assert.deepEqual(relayed, ['silence']);
+});
+
+// A pause keeps the claim a while; a plain press on another device asks this paused tab to yield, under one
+// contract shared with the phone and the server.
+test('the socket says it answers a yield and hands one to the player', async () => {
+  const contract = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'fixtures', 'playback-handover-yield-v1.json'), 'utf8'));
+  const asked = [];
+  const harness = createEngineHarness({
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    yieldPausedPlaybackClaim: async (requestId) => { asked.push(requestId); },
+  });
+  await harness.api.start(makeTrack(), { startSeconds: 0 });
+  const socket = harness.sockets[0];
+  const [key, value] = contract.socketQuery.split('=');
+  assert.equal(new URL(socket.url).searchParams.get(key), value);
+
+  socket.receive(contract.ask);
+  await harness.settle();
+
+  assert.deepEqual(asked, [contract.ask.requestId]);
+  assert.equal(socket.sent.some((message) => String(message.type).startsWith('handover-')), false,
+    'the player answers, not the socket');
+});
+
+// The WebView prepares a socket when idle. Named as the phone, Play here elsewhere would ask it instead of
+// the native player: today's APK would never answer, a new one would be passed over for the newer socket.
+test('in the app the idle web socket does not speak for the native player', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  harness.context.isAndroidNativePlayback = () => true;
+  await harness.api.prepare();
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.sockets[0].url.includes('client_id='), false);
+});
+
 test('music playback asks for large output buffers', async () => {
   const harness = createEngineHarness();
 
@@ -6390,12 +7212,15 @@ test('audio output details are reported once and again only when dropouts grow',
   const context = harness.contexts[0];
   context.baseLatency = 0.05;
   context.playbackStats = { underrunEvents: 0, underrunDuration: 0 };
-  const position = () => harness.nodes[0].port.dispatch({
-    type: 'position',
-    generation: open.generation,
-    streamId: open.streamId,
-    timelineFrame: 48_000,
-  });
+  const position = () => {
+    harness.sockets[0].receive({ type: 'heartbeat' });
+    harness.nodes[0].port.dispatch({
+      type: 'position',
+      generation: open.generation,
+      streamId: open.streamId,
+      timelineFrame: 48_000,
+    });
+  };
 
   harness.setNow(10_000);
   position();
@@ -6414,10 +7239,10 @@ test('audio output details are reported once and again only when dropouts grow',
   assert.equal(report.statsAvailable, true);
 });
 
-test('a prepared replacement checks the waveform cache before audio is ready', async () => {
+test('a prepared replacement asks for its waveform before audio is ready', async () => {
   const probes = [];
   const harness = createEngineHarness({
-    probeCachedWaveformPeaks: (path, generation) => probes.push({ path, generation }),
+    loadPlayingWaveformPeaks: (path, generation) => probes.push({ path, generation }),
   });
   await harness.api.start(makeTrack('01.flac'));
   const open = harness.sent('open')[0];
@@ -6463,7 +7288,10 @@ test('a seek stops the old position downloading so its audio arrives first', asy
 });
 
 test('a switch to an unknown encoded track opens at once and needs one second of head', async () => {
-  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 48_000 });
+  const harness = encodedHarness({
+    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000]]),
+    trackSampleRate: () => 48_000,
+  });
   await harness.api.start(makeTrack('01.mp3'));
   const open = harness.sent('open')[0];
   acceptMetadata(harness, open, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
@@ -6540,10 +7368,13 @@ function fakeSeekTable(open, frames = 2_000_000) {
 function recordingDecoders() {
   const decoders = [];
   const create = () => {
-    const decoder = { inputs: [], ready: Promise.resolve(), free() {} };
+    const decoder = { inputs: [], ready: Promise.resolve(), free() {}, carried: 0 };
     decoder.decode = (bytes) => {
       decoder.inputs.push(bytes);
-      const samplesDecoded = Math.floor(bytes.length / 100) * 1_152;
+      // A frame split between two inputs decodes with the second, as a streaming decoder's does.
+      const available = decoder.carried + bytes.length;
+      decoder.carried = available % 100;
+      const samplesDecoded = Math.floor(available / 100) * 1_152;
       const left = new Float32Array(samplesDecoded);
       return { channelData: [left, left], samplesDecoded };
     };
@@ -6551,6 +7382,20 @@ function recordingDecoders() {
     return decoder;
   };
   return { decoders, create };
+}
+
+/** The half-second liveness check of the engine's current socket. */
+function liveness(harness) {
+  const checks = harness.intervals.filter(({ delay }) => delay === 500);
+  return checks.at(-1);
+}
+
+/** Runs the liveness check on time, every half second, from [fromMs] to [untilMs]. */
+function checkLivenessUntil(harness, fromMs, untilMs) {
+  for (let now = fromMs; now <= untilMs; now += 500) {
+    harness.setNow(now);
+    liveness(harness).callback();
+  }
 }
 
 async function startLocallySeekable(harness, receivedBytes) {
@@ -6582,7 +7427,7 @@ test('a seek inside the received bytes decodes them here, from the seek table, w
   assert.equal(harness.portMessages('reserve-seek').at(-1).streamId, local.streamId);
   // 30 s is sample 1,440,000: decoding starts eight frames early, at frame 1,242's bytes.
   const fed = decoders.at(-1).inputs;
-  assert.equal(fed[0].length, 300_000 - 124_200);
+  assert.equal(fed[0].length, 16 * 1024, 'one decode slice, not the rest of the song');
   assert.equal(fed[0][0], 124_200 % 251);
 
   harness.nodes[0].port.dispatch({
@@ -6603,9 +7448,61 @@ test('a seek inside the received bytes decodes them here, from the seek table, w
   // Bytes the server keeps sending reach the role now reading the stream.
   harness.sockets[0].receive(encodedFrame(open, 1, new Uint8Array(100)));
   await harness.settle();
-  assert.equal(decoders.at(-1).inputs.at(-1).length, 100);
+  assert.equal(local.encoded.queue.at(-1).length, 100, 'queued behind the received bytes not yet decoded');
   // Its credits still name the server's stream.
   assert.ok(harness.sent('credit').every(credit => credit.streamId === open.streamId));
+});
+
+// A seek shows the head at its new place at once. The rest of
+// the song decoded in one call held the click's task, and the page's paint, for seconds.
+test('a local seek decodes only what its credit asks, a slice at a time, before the click returns', async () => {
+  const { decoders, create } = recordingDecoders();
+  const harness = encodedHarness({ createStreamingDecoder: create });
+  await startLocallySeekable(harness, 300_000);
+  const decodersBefore = decoders.length;
+
+  void harness.api.seek(10);
+  // The seek's own decoder, reading the received bytes.
+  assert.equal(decoders.length, decodersBefore + 1);
+  const decoder = decoders.at(-1);
+  const inClick = [...decoder.inputs];
+  await harness.settle();
+  const fed = decoder.inputs;
+
+  assert.equal(harness.engine.roles.continuity.local, true);
+  assert.ok(inClick.every((bytes) => bytes.length <= 16 * 1024), 'the click decodes at most a slice per call');
+  assert.ok(fed.every((bytes) => bytes.length <= 16 * 1024));
+  const decodedBytes = fed.reduce((total, bytes) => total + bytes.length, 0);
+  // 10 s starts at byte 41,000 (eight frames early): the rest of the received song is 259,000 bytes.
+  assert.ok(decodedBytes <= 2 * 16 * 1024, `decoded ${decodedBytes} bytes for a quarter second of credit`);
+  assert.equal(harness.engine.snapshot.currentTime, 10, 'the playhead is at the new place');
+});
+
+// At 4x CPU a press on another song went unanswered for 15 s while every
+// decoded chunk serialised the engine snapshot onto the page root. The snapshot is written once a frame.
+test('the diagnostics snapshot is written at most once per animation frame, however often the engine changes', async () => {
+  const writes = [];
+  const frames = [];
+  const { create } = recordingDecoders();
+  const harness = encodedHarness({
+    createStreamingDecoder: create,
+    document: { documentElement: { setAttribute: (name, value) => writes.push({ name, value }) } },
+    requestAnimationFrame: (callback) => frames.push(callback),
+  });
+  await startLocallySeekable(harness, 300_000);
+  void harness.api.seek(10);
+  await harness.settle();
+  assert.equal(writes.length, 0, 'nothing is written before the frame');
+  assert.equal(frames.length, 1, 'one frame is asked for, however many changes came');
+
+  frames.shift()();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].name, 'data-streaming-diagnostics');
+  assert.equal(JSON.parse(writes[0].value).currentTime, 10, 'the frame writes the latest snapshot');
+
+  harness.context.publishStreamingDiagnostics();
+  harness.context.publishStreamingDiagnostics();
+  assert.equal(frames.length, 1, 'the next changes ask for the next frame once');
 });
 
 test('a seek past the received bytes still asks the server', async () => {
@@ -6625,7 +7522,7 @@ test('the web lookup answers the shared seek-table vectors exactly as the server
   const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'playback-seek-table-v1.json'), 'utf8'));
   const harness = encodedHarness();
   let checked = 0;
-  for (const section of [fixture, fixture.flac]) {
+  for (const section of [fixture, fixture.flac, fixture.seekStream]) {
     for (const vector of section.cases) {
       const window = harness.context.lookupStreamingSeekTable(section.table, {
         initialSkip: section.initialSkip,
@@ -6796,7 +7693,7 @@ test('a kept track starts mid-track from its seek table', async () => {
 
   assert.equal(harness.sent('open').length, 0);
   assert.equal(decoders.at(-1).inputs[0][0], 124_200 % 251);
-  assert.equal(decoders.at(-1).inputs[0].length, 173_700 - 124_200);
+  assert.equal(decoders.at(-1).inputs[0].length, 16 * 1024, 'the kept bytes decode a slice at a time');
 });
 
 test('a successor prepared ahead is kept at the local audible boundary', async () => {
@@ -6834,6 +7731,2308 @@ test('a successor prepared ahead is kept at the local audible boundary', async (
     type: 'promoted', generation: current.generation, streamId: continuity.streamId, role: 'current',
   });
   assert.equal(kept.length, 1, 'it is kept once');
+});
+
+// ---- Network switches: the received audio plays on and the stream is spliced back in ----
+// These tests compare roles by stream id: a failing comparison of role objects renders their whole
+// graph, decoded PCM included, which takes gigabytes.
+
+function manualTimers() {
+  const timers = [];
+  return {
+    setTimeout: (callback, delay) => {
+      timers.push({ callback, delay, cleared: false, fired: false });
+      return timers.length;
+    },
+    clearTimeout: (id) => {
+      if (timers[id - 1]) timers[id - 1].cleared = true;
+    },
+    pending: () => timers.filter(({ cleared, fired }) => !cleared && !fired),
+    fire(timer) {
+      timer.fired = true;
+      timer.callback();
+    },
+  };
+}
+
+function receiveOn(socket, open, message) {
+  socket.receive({ generation: open.generation, streamId: open.streamId, role: open.role, ...message });
+}
+
+function acceptEncodedMetadata(socket, open, changes = {}) {
+  receiveOn(socket, open, {
+    type: 'metadata', sampleRate: 48_000, channels: 2, codec: 'mp3', skipFrames: 0,
+    totalFrames: 2_000_000 - open.startFrame, initialCreditBytes: 0, provisionalTotalFrames: 2_000_000,
+    requestedStartFrame: open.startFrame, timelineStartFrame: open.startFrame, ...changes,
+  });
+}
+
+async function settleTwice(harness) {
+  await harness.settle();
+  await harness.settle();
+}
+
+test('the web splice frame answers the shared seek-table vectors exactly as the server does', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'playback-seek-table-v1.json'), 'utf8'));
+  const harness = encodedHarness();
+  let checked = 0;
+  for (const section of [fixture, fixture.flac, fixture.seekStream]) {
+    for (const vector of section.wholeThroughCases) {
+      const frame = harness.context.wholeThroughStreamingSeekTable(section.table, {
+        initialSkip: section.initialSkip,
+        initialTotal: section.initialTotal,
+        streamStart: section.streamStart,
+        receivedBytes: vector.receivedBytes,
+      });
+      assert.equal(frame, vector.frame, JSON.stringify(vector));
+      checked += 1;
+    }
+  }
+  assert.ok(checked > 10);
+});
+
+test('a network change after the whole song arrived plays it on and prepares its successor on the next socket', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const open = await startLocallySeekable(harness, 173_700);
+  receiveOn(harness.sockets[0], open, { type: 'eos', emittedFrames: 2_000_000, authoritativeTotalFrames: 2_000_000 });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  await harness.api.continuity(makeTrack('02.mp3'));
+  await harness.settle();
+  const next = harness.sent('open').at(-1);
+  assert.equal(next.role, 'continuity');
+  const current = harness.engine.roles.current;
+  const sentOnLostSocket = harness.sockets[0].sent.length;
+
+  harness.sockets[0].unexpectedClose();
+
+  assert.equal(harness.engine.roles.current?.streamId, current.streamId, 'the song keeps playing');
+  assert.equal(harness.contexts[0].closeCalls, 0);
+  assert.equal(harness.nodes[0].disconnectCalls, 0);
+  const detached = harness.api.snapshot();
+  assert.notEqual(detached.mode, 'error');
+  assert.equal(detached.paused, false);
+  assert.equal(detached.diagnostics.transportDetaches, 1);
+  assert.equal(detached.diagnostics.transportState, 'detached-offline');
+  assert.equal(harness.engine.roles.continuity?.streamId ?? null, null, 'the successor was streaming on the lost socket');
+  assert.equal(harness.portMessages('expect-continuity').at(-1).active, true, 'the song end waits for its successor');
+
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].sent.length, sentOnLostSocket, 'nothing is sent on the lost socket');
+  assert.equal(harness.sockets.length, 2);
+  const reopened = harness.sockets[1].sent.filter(({ type }) => type === 'open');
+  assert.deepEqual(reopened.map(({ path: trackPath, role, startFrame }) => ({ trackPath, role, startFrame })),
+    [{ trackPath: makeTrack('02.mp3').path, role: 'continuity', startFrame: 0 }]);
+  assert.ok(harness.sockets[1].sent.every(({ streamId }) => streamId === undefined || streamId > next.streamId),
+    'no control names a stream of the lost socket');
+  assert.equal(harness.engine.roles.current?.streamId, current.streamId);
+  assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+
+test('a network change mid-song plays the received audio to a whole frame and splices the rest in there', async () => {
+  const boundaries = [];
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    handleStreamingPlaybackBoundary: (event) => boundaries.push(event),
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  const current = harness.engine.roles.current;
+  const duration = harness.api.snapshot().duration;
+  const sentOnLostSocket = harness.sockets[0].sent.length;
+
+  harness.sockets[0].unexpectedClose();
+
+  // Byte 100,000 starts seek point 1,000; one full stride short of it is seek point 999.
+  const splice = 999 * 1_152;
+  const detached = harness.api.snapshot();
+  assert.equal(detached.diagnostics.lastSpliceFrame, splice);
+  assert.equal(detached.diagnostics.transportState, 'detached-splice');
+  assert.notEqual(detached.mode, 'error');
+  assert.equal(harness.engine.roles.current?.streamId, current.streamId);
+  assert.equal(current.encoded.eos.authoritativeTotalFrames, splice, 'the received stream ends at the splice frame');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(harness.portMessages('expect-continuity').at(-1))),
+    { type: 'expect-continuity', generation: open.generation, active: true, timelineStartFrame: splice },
+  );
+  assert.equal(harness.contexts[0].closeCalls, 0);
+
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].sent.length, sentOnLostSocket);
+  const spliceOpen = harness.sockets[1].sent.find(({ type }) => type === 'open');
+  assert.deepEqual([spliceOpen.path, spliceOpen.role, spliceOpen.startFrame, spliceOpen.seekTable],
+    [makeTrack('01.mp3').path, 'continuity', splice, true]);
+  acceptEncodedMetadata(harness.sockets[1], spliceOpen);
+  await harness.settle();
+
+  harness.nodes[0].port.dispatch({
+    type: 'boundary', generation: open.generation, outgoingStreamId: current.streamId,
+    incomingStreamId: spliceOpen.streamId, renderedFrame: 50_000, timelineFrame: splice + 128,
+    capture: { outgoing: { frames: 64 }, incoming: { frames: 64 } },
+  });
+
+  const joined = harness.api.snapshot();
+  assert.equal(harness.engine.roles.current.streamId, spliceOpen.streamId);
+  assert.equal(boundaries.length, 0, 'the player stays on the same song');
+  assert.equal(joined.currentTime, (splice + 128) / 48_000);
+  assert.equal(joined.duration, duration);
+  assert.equal(joined.diagnostics.transportState, 'connected');
+  assert.equal(joined.diagnostics.transportResumes, 1);
+  const promote = harness.sockets[1].sent.find(({ type }) => type === 'promote');
+  assert.equal(promote.streamId, spliceOpen.streamId);
+  harness.nodes[0].port.dispatch({
+    type: 'position', generation: open.generation, streamId: spliceOpen.streamId, timelineFrame: splice + 4_096,
+  });
+  assert.equal(harness.api.snapshot().currentTime, (splice + 4_096) / 48_000, 'the position keeps advancing from the splice');
+});
+
+test('the received stream cut at the splice frame delivers exactly its frames and keeps the song length', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const open = await startLocallySeekable(harness, 100_000);
+  const duration = harness.api.snapshot().duration;
+  harness.sockets[0].unexpectedClose();
+  const current = harness.engine.roles.current;
+  for (let step = 0; step < 40 && !current.eosReceived; step += 1) {
+    harness.engine.diagnostics.bufferedFrames.current = 0;
+    harness.engine.diagnostics.inFlightFrames.current = 0;
+    current.encoded.localCreditFrames += 48_000;
+    await harness.context.pumpStreamingEncodedRole(current);
+    await harness.settle();
+  }
+
+  assert.equal(current.eosReceived, true);
+  const eos = harness.portMessages('eos').at(-1);
+  assert.equal(eos.streamId, open.streamId);
+  assert.equal(eos.emittedFrames, 999 * 1_152);
+  assert.equal(eos.authoritativeTotalFrames, 999 * 1_152);
+  const enqueued = harness.portMessages('enqueue').filter(({ streamId }) => streamId === open.streamId);
+  assert.equal(enqueued.reduce((total, { frameCount }) => total + frameCount, 0), 999 * 1_152);
+  assert.equal(harness.api.snapshot().duration, duration);
+});
+
+test('a lost socket with no seek table waits at the heard position and reopens there on the next socket', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'), { totalFrames: 2_000_000, initialCreditBytes: 4_000 });
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(1_000)));
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96_000 });
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  assert.equal(harness.contexts[0].closeCalls, 0);
+  const restarted = harness.sockets[1].sent.find(({ type }) => type === 'open');
+  assert.equal(restarted.startFrame, 96_000);
+  assert.equal(harness.api.snapshot().currentTime, 2);
+});
+
+test('a refused socket is an error, not a network change', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+
+  harness.sockets[0].unexpectedClose({ code: 4401, reason: 'unauthenticated' });
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets.length, 1, 'no reconnect is attempted');
+  assert.equal(harness.api.snapshot().mode, 'error');
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, undefined);
+});
+
+test('reconnects keep trying while the received audio plays, and once it runs out the player waits silently at the heard frame', async () => {
+  const timers = manualTimers();
+  let online = false;
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 240_000 });
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2, 'the first attempt is immediate');
+
+  const delays = [];
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const [timer] = timers.pending();
+    delays.push(timer.delay);
+    timers.fire(timer);
+    await settleTwice(harness);
+  }
+  assert.deepEqual(delays, [500, 1_000, 1_000, 1_000, 1_000, 1_000]);
+  assert.equal(harness.sockets.length, 8);
+  assert.notEqual(harness.api.snapshot().mode, 'error', 'failures stay silent while audio plays');
+
+  harness.nodes[0].port.dispatch({
+    type: 'underrun', generation: open.generation, streamId: open.streamId, role: 'current',
+    renderedFrame: 1, missingFrames: 128,
+  });
+  // Losing the network never stops playback, however long.
+  assert.deepEqual(timers.pending().map(({ delay }) => delay), [1_000], 'no deadline ends the wait');
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    timers.fire(timers.pending()[0]);
+    await settleTwice(harness);
+  }
+  const waiting = harness.api.snapshot();
+  assert.equal(waiting.mode, 'buffering');
+  assert.equal(waiting.paused, false);
+  assert.equal(waiting.currentTime, 5, 'the head stays at the heard frame');
+  assert.equal(harness.contexts[0].closeCalls, 0);
+
+  online = true;
+  timers.fire(timers.pending()[0]);
+  await settleTwice(harness);
+  const splice = harness.sockets.at(-1).sent.find(({ type }) => type === 'open');
+  assert.equal(splice.startFrame, harness.engine.diagnostics.lastSpliceFrame, 'the rest of the song joins at the splice');
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+test('pausing while the network is gone stops the attempts and playing again resumes them', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(timers.pending().length, 1);
+
+  await harness.api.pause();
+  assert.equal(timers.pending().length, 0);
+
+  assert.equal(await harness.api.resume(), true);
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 3, 'playing again tries at once');
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+test('a socket lost while paused keeps the received audio: Play plays it, and a seek inside it, with no network', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 300_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96_000 });
+  await harness.api.pause();
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const paused = harness.api.snapshot();
+  assert.equal(paused.diagnostics.transportState, 'detached-splice');
+  assert.equal(paused.mode, 'paused');
+  assert.equal(harness.sockets.length, 1, 'a paused player tries the network only once played');
+  assert.equal(timers.pending().length, 0);
+
+  await harness.api.seek(3);
+  await settleTwice(harness);
+  assert.equal(harness.engine.roles.continuity.local, true, 'the seek decodes the received audio here');
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.equal(harness.api.snapshot().paused, true);
+
+  assert.equal(await harness.api.resume(), true);
+  await settleTwice(harness);
+  const playing = harness.api.snapshot();
+  assert.equal(playing.paused, false);
+  assert.notEqual(playing.mode, 'error');
+  assert.equal(playing.currentTime, 3);
+  assert.equal(harness.sockets.length, 2, 'playing tries the network again');
+});
+
+test('offline and paused, a seek past the received audio places the head there and stays paused until Play', async () => {
+  const timers = manualTimers();
+  let online = false;
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await harness.api.pause();
+
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  const placed = harness.api.snapshot();
+  assert.equal(placed.currentTime, 60);
+  assert.equal(placed.paused, true, 'no sound and no advance');
+  assert.notEqual(placed.mode, 'error');
+  assert.equal(timers.pending().length, 0, 'nothing is retried while paused');
+
+  online = true;
+  assert.equal(await harness.api.resume(), true);
+  await settleTwice(harness);
+  const opened = harness.sockets.filter(({ readyState }) => readyState === 1);
+  assert.equal(opened.length, 1);
+  assert.deepEqual(opened[0].sent.filter(({ type }) => type === 'open').map(({ startFrame }) => startFrame), [2_880_000]);
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+test('offline after a lost socket, a seek moves the waiting place and the song opens there once the network is back', async () => {
+  let online = false;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startEncoded(harness, makeTrack('01.mp3'), { totalFrames: 2_000_000, initialCreditBytes: 4_000 });
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(1_000)));
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96_000 });
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.api.snapshot().currentTime, 2);
+
+  await harness.api.seek(40);
+  await settleTwice(harness);
+  assert.equal(harness.api.snapshot().currentTime, 40);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+
+  online = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  const reopened = harness.sockets.at(-1).sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(reopened.startFrame, 40 * 48_000);
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+test('the browser coming back online tries at once', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count === 2,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const [waiting] = timers.pending();
+
+  harness.dispatchWindowEvent('online');
+  await settleTwice(harness);
+
+  assert.equal(waiting.cleared, true);
+  assert.equal(harness.sockets.length, 3);
+  assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
+});
+
+test('a socket that stays open but heard nothing for a moment after a network change is replaced', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+
+  harness.setNow(1_500);
+  harness.dispatchWindowEvent('online');
+  assert.equal(harness.sockets[0].closeCalls, 0, 'it was heard a moment ago');
+
+  harness.setNow(5_000);
+  harness.dispatchWindowEvent('online');
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1);
+  assert.equal(harness.sockets[1].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
+});
+
+test('offline, a seek inside a song that fully arrived decodes it here', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 173_700);
+  receiveOn(harness.sockets[0], open, { type: 'eos', emittedFrames: 2_000_000, authoritativeTotalFrames: 2_000_000 });
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(30);
+
+  assert.equal(harness.sent('open').length, opens);
+  assert.equal(harness.engine.roles.continuity.local, true);
+  assert.equal(harness.portMessages('reserve-seek').at(-1).timelineStartFrame, 1_440_000);
+});
+
+test('offline, a seek before the splice frame decodes here and still ends at the splice frame', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 150_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const splice = 1_499 * 1_152;
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(10);
+
+  const local = harness.engine.roles.continuity;
+  assert.equal(harness.sent('open').length, opens);
+  assert.equal(local.local, true);
+  assert.equal(local.startFrame, 480_000);
+  assert.equal(local.encoded.eos.authoritativeTotalFrames, splice);
+  assert.equal(harness.api.snapshot().diagnostics.lastSpliceFrame, splice);
+});
+
+test('offline, a committed seek before the splice frame keeps the splice expected at its frame', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 150_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await harness.api.seek(10);
+  const local = harness.engine.roles.continuity;
+
+  harness.nodes[0].port.dispatch({
+    type: 'seek-boundary', generation: open.generation, outgoingStreamId: open.streamId,
+    incomingStreamId: local.streamId, renderedFrame: 128, timelineFrame: 480_000, silentFrames: 0,
+  });
+  await harness.settle();
+
+  assert.equal(harness.engine.roles.current?.streamId, local.streamId);
+  const expectation = harness.portMessages('expect-continuity').at(-1);
+  assert.deepEqual([expectation.active, expectation.timelineStartFrame], [true, 1_499 * 1_152],
+    'the seeked audio still waits for the rest of the track at the splice frame');
+});
+
+test('offline, a seek past the received audio jumps at once and plays from there once the network is back', async () => {
+  const timers = manualTimers();
+  let online = false;
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  await harness.api.seek(60);
+  await settleTwice(harness);
+
+  const jumped = harness.api.snapshot();
+  assert.equal(jumped.currentTime, 60);
+  assert.equal(jumped.paused, false);
+  assert.notEqual(jumped.mode, 'error');
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation, 'the old audio stops at once');
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.sockets.filter(({ readyState }) => readyState === 1).length, 0, 'offline, no socket opened');
+
+  online = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 5_000));
+  await settleTwice(harness);
+
+  const opened = harness.sockets.filter(({ readyState }) => readyState === 1);
+  assert.equal(opened.length, 1);
+  const reopened = opened[0].sent.filter(({ type }) => type === 'open');
+  assert.deepEqual(reopened.map(({ role, startFrame }) => [role, startFrame]), [['current', 2_880_000]]);
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+
+// CPU at 100%: a click shows its place at once, and the first click moves the head there.
+test('offline, a seek past the received audio shows its place and silences the old audio before the slow restart, whose last reports do not move the head', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  // Nothing is awaited: on a loaded machine the restart has not run yet.
+  const seek = harness.api.seek(60);
+  assert.equal(harness.api.snapshot().currentTime, 60, 'the place shows at once');
+  assert.ok(harness.portMessages('pause').some(({ generation }) => generation === open.generation),
+    'the old audio stops at once');
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 480_000 });
+  harness.nodes[0].port.dispatch({
+    type: 'consumed', generation: open.generation, streamId: open.streamId,
+    role: 'current', frames: 24_000, bufferedFrames: 24_000,
+  });
+  assert.equal(harness.api.snapshot().currentTime, 60, 'the old audio\'s reports leave the head at the place');
+
+  await seek;
+  await settleTwice(harness);
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation);
+});
+
+// With Wi-Fi off, the socket stays open and silent, so the
+// seek waited on it and the player fell into a paused error at the keepalive.
+test('the browser going offline gives up the open socket at once, so a seek past the received audio waits silently at its target', async () => {
+  const timers = manualTimers();
+  let online = true;
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+
+  online = false;
+  harness.dispatchWindowEvent('offline');
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is not waited on');
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1);
+
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  const jumped = harness.api.snapshot();
+  assert.equal(jumped.currentTime, 60);
+  assert.equal(jumped.paused, false);
+  assert.notEqual(jumped.mode, 'error');
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation, 'the old audio stops at once');
+
+  online = true;
+  harness.dispatchWindowEvent('online');
+  await settleTwice(harness);
+  const opened = harness.sockets.filter(({ readyState }) => readyState === 1);
+  assert.equal(opened.length, 1);
+  assert.deepEqual(
+    opened[0].sent.filter(({ type }) => type === 'open').map(({ role, startFrame }) => [role, startFrame]),
+    [['current', 2_880_000]],
+  );
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+
+// On a laptop, a click past the received audio stops the music at once, the time moves there and Play
+// never pauses by itself. A laptop with another network
+// interface never reports `offline`: the socket stays open and silent.
+test('a seek the open socket does not begin to answer jumps to its target silently and keeps playing, with no offline event', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+
+  harness.setNow(1_000);
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  assert.ok(harness.engine.pendingSeek, 'past the received audio, the seek asks the server');
+  harness.setNow(1_500);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100 });
+  assert.equal(harness.sockets[0].closeCalls, 0, 'an answer may still be on its way');
+
+  harness.setNow(1_800);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 200 });
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the unanswering socket is given up');
+  const held = harness.api.snapshot();
+  assert.equal(held.currentTime, 60);
+  assert.equal(held.paused, false, 'the player stays playing, silent at its target');
+  assert.notEqual(held.mode, 'error');
+  assert.equal(held.diagnostics.transportState, 'detached-seek');
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation, 'the old audio stops at once');
+  assert.ok(harness.portMessages('pause').some(({ generation }) => generation === open.generation),
+    'the old audio is silenced before the jump reconfigures the worklet');
+  assert.equal(harness.portMessages('play').at(-1).generation, harness.portMessages('configure').at(-1).generation,
+    'the jump plays on at its target');
+});
+
+test('a socket that hears nothing, not even a heartbeat, is given up while the received audio plays, with no network event', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const open = await startLocallySeekable(harness, 100_000);
+
+  harness.setNow(5_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100 });
+  assert.equal(harness.sockets[0].closeCalls, 0, 'heard a few seconds ago, as a slow network delivers');
+
+  harness.setNow(6_500);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 200 });
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1);
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.sockets[1].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152, 'the rest joins at the splice');
+});
+
+// One press starts another song after the network is back. A start or a song's rate asked of a socket that died
+// without closing is never answered: the socket, which hears not even the server's heartbeat, is
+// replaced, and what waited on it goes again on the new one, so one press starts the song.
+test('paused, a start asked of a socket that hears nothing goes again on a new socket, with no second press', async () => {
+  const harness = encodedHarness();
+  await startEncoded(harness, makeTrack('01.mp3'));
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  void harness.api.start(makeTrack('03.mp3'));
+  await settleTwice(harness);
+  checkLivenessUntil(harness, 1_500, 5_500);
+  assert.equal(harness.sockets[0].closeCalls, 0, 'heard a few seconds ago: a busy server is not a dead one');
+  checkLivenessUntil(harness, 6_000, 6_500);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1)?.path, makeTrack('03.mp3').path,
+    'the last press goes on the new socket');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// With the CPU at 100%, another track, even on the same album, sometimes took up to 10 s to start.
+// A loaded server fell silent for about a second while a switch waited on its
+// open; the socket was given up after 750 ms, and the new socket's connect and open took 4-17 s more.
+// The old song still plays through a switch, so its socket gets the patience of any silent socket.
+test('a switch whose open a busy server leaves unanswered for a moment keeps its socket', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const outgoing = await startLocallySeekable(harness, 400_000);
+  harness.setNow(1_000);
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  const replacement = harness.sockets[0].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(replacement.path, makeTrack('02.mp3').path);
+  assert.equal(harness.engine.pendingSeek?.kind, 'replacement', 'the switch crosses over from the playing song');
+
+  for (let now = 1_500; now <= 5_500; now += 500) {
+    harness.setNow(now);
+    harness.nodes[0].port.dispatch({
+      type: 'position', generation: outgoing.generation, streamId: outgoing.streamId, timelineFrame: now,
+    });
+    liveness(harness).callback();
+  }
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 0, 'a server silent for seconds is busy, not gone');
+  assert.equal(harness.sockets.length, 1);
+
+  checkLivenessUntil(harness, 6_000, 6_500);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 1, 'a socket silent for longer is still given up');
+});
+
+test('a busy server that only beats its heart is waited on, however long it takes to answer', async () => {
+  const harness = encodedHarness();
+  await startEncoded(harness, makeTrack('01.mp3'));
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  for (let now = 1_500; now <= 30_000; now += 500) {
+    harness.setNow(now);
+    harness.sockets[0].receive({ type: 'heartbeat' });
+    liveness(harness).callback();
+  }
+  assert.equal(harness.sockets[0].closeCalls, 0);
+  assert.equal(harness.sockets.length, 1);
+});
+
+test('a liveness check that ran late, on a page too busy to read what arrived, decides nothing', async () => {
+  const harness = encodedHarness();
+  await startEncoded(harness, makeTrack('01.mp3'));
+  harness.setNow(9_000);
+  liveness(harness).callback();
+  assert.equal(harness.sockets[0].closeCalls, 0, 'the heartbeats may be waiting to be read');
+  harness.setNow(9_500);
+  liveness(harness).callback();
+  assert.equal(harness.sockets[0].closeCalls, 1, 'on time, the silence counts');
+});
+
+// Hosted FTC-PLAYBACK-OFFLINE-002: paused through the outage, one press on another song
+// asked a dead socket for that song's rate and waited forever.
+test('a rate probe asked of a socket that hears nothing goes again on a new socket, so one press starts the song', async () => {
+  const harness = encodedHarness({ holdSampleRateProbes: true, trackSampleRates: new Map() });
+  // A 320 kbps stream still asks for its rate before it opens.
+  harness.engine.qualityPreference = '320';
+  const first = harness.api.start(makeTrack('01.flac'));
+  for (let turn = 0; turn < 20 && !harness.sockets[0]?.probes.length; turn += 1) await harness.settle();
+  harness.sockets[0].receive({ type: 'probe-result', requestId: harness.sockets[0].probes[0].requestId, sampleRate: 48_000 });
+  await first;
+  acceptMetadata(harness, harness.sent('open').at(-1), { codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000 });
+  await harness.settle();
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.flac'));
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.flac').path, 'the new song asks for its rate');
+  checkLivenessUntil(harness, 1_500, 6_500);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
+  const again = harness.sockets[1].probes.at(-1);
+  assert.equal(again?.path, makeTrack('02.flac').path, 'the probe goes again on the new socket');
+  harness.sockets[1].receive({ type: 'probe-result', requestId: again.requestId, sampleRate: 48_000 });
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1)?.path, makeTrack('02.flac').path);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+test('a guessed-rate start asked of a socket that hears nothing opens the song on a new socket, so one press starts it', async () => {
+  const harness = encodedHarness({ ...PLAYED_AT_44_100, trackSampleRates: new Map() });
+  await harness.api.start(makeTrack('01.mp3'));
+  acceptMetadata(harness, harness.sent('open').at(-1), {
+    sampleRate: 44_100, codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000,
+  });
+  await harness.settle();
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  const guessed = harness.sockets[0].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(guessed?.path, makeTrack('02.mp3').path, 'the new song opens at once, with no probe');
+  assert.equal(harness.sockets[0].probes.length, 0);
+  checkLivenessUntil(harness, 1_500, 6_500);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
+  await settleTwice(harness);
+  await settleTwice(harness);
+  const reopened = harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(reopened?.path, makeTrack('02.mp3').path, 'the song opens again on the new socket');
+  assert.equal(reopened.sampleRate, 44_100);
+  assert.notEqual(reopened.streamId, guessed.streamId, 'a fresh stream, never one named on the old socket');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// Hosted FTC-PLAYBACK-OFFLINE-001: back online, a seek past the received audio waited on a socket
+// that fell silent while another song's rate was still asked. The new socket asked that rate again,
+// but the seek's open never went on it, and the head waited at its place for ever.
+test('a seek whose silent socket is replaced while another song\'s rate is still asked opens at its place on the new socket, once', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    holdSampleRateProbes: true,
+    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000]]),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  void harness.context.requestStreamingSampleRate(makeTrack('02.mp3'));
+  await harness.settle();
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.mp3').path, 'the next song asks its rate');
+
+  harness.setNow(1_000);
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  assert.ok(harness.engine.pendingSeek, 'past the received audio, the seek asks the server');
+  harness.setNow(1_800);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 200 });
+  await settleTwice(harness);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
+  assert.equal(harness.sockets.length, 2);
+  assert.deepEqual(
+    harness.sockets[1].sent.filter(({ type }) => type === 'open').map(({ path, startFrame }) => [path, startFrame]),
+    [[makeTrack('01.mp3').path, 2_880_000]],
+    'one open, at the seek\'s place, on the new socket',
+  );
+  assert.equal(harness.sockets[1].probes.at(-1)?.path, makeTrack('02.mp3').path, 'the rate is asked again too');
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+test('a start whose silent socket is replaced while another song\'s rate is still asked opens on the new socket, once', async () => {
+  const harness = encodedHarness({
+    holdSampleRateProbes: true,
+    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000], [makeTrack('02.mp3').path, 48_000]]),
+  });
+  await startEncoded(harness, makeTrack('01.mp3'));
+  await harness.api.pause();
+  await harness.settle();
+  void harness.context.requestStreamingSampleRate(makeTrack('03.mp3'));
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  const first = harness.sockets[0].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(first?.path, makeTrack('02.mp3').path, 'the press opens its song');
+  checkLivenessUntil(harness, 1_500, 6_500);
+  await settleTwice(harness);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
+  const opens = harness.sockets[1].sent.filter(({ type }) => type === 'open');
+  assert.deepEqual(opens.map(({ path }) => path), [makeTrack('02.mp3').path], 'one open of the pressed song on the new socket');
+  assert.notEqual(opens[0].streamId, first.streamId, 'a fresh stream, never one named on the old socket');
+  assert.equal(harness.sockets[1].probes.at(-1)?.path, makeTrack('03.mp3').path, 'the rate is asked again too');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// A press whose song's rate is still asked is already switching to that song: the engine says which,
+// as it does once the switch waits for its audio, so a second press during it is seen as one.
+test('a press still asking its song\'s rate names the song it switches to', async () => {
+  const harness = encodedHarness({ holdSampleRateProbes: true, trackSampleRates: new Map() });
+  // A 320 kbps stream of a song not played before asks for its rate before it opens.
+  harness.engine.qualityPreference = '320';
+  const first = harness.api.start(makeTrack('01.flac'));
+  for (let turn = 0; turn < 20 && !harness.sockets[0]?.probes.length; turn += 1) await harness.settle();
+  harness.sockets[0].receive({ type: 'probe-result', requestId: harness.sockets[0].probes[0].requestId, sampleRate: 48_000 });
+  await first;
+  acceptMetadata(harness, harness.sent('open').at(-1), { codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000 });
+  await harness.settle();
+  const switchingTo = () => harness.context.streamingEngineState().pendingStart?.track?.path;
+  const opened = (name) => harness.sockets[0].sent.some(({ type, path }) => type === 'open' && path === makeTrack(name).path);
+
+  void harness.api.start(makeTrack('02.flac'));
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.flac').path, 'its rate is asked');
+  assert.equal(opened('02.flac'), false, 'nothing is opened before the rate is known');
+  assert.equal(switchingTo(), makeTrack('02.flac').path, 'the press names its song while the rate is asked');
+
+  void harness.api.start(makeTrack('03.flac'));
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('03.flac').path);
+  assert.equal(opened('03.flac'), false);
+  assert.equal(switchingTo(), makeTrack('03.flac').path, 'a later press takes over');
+});
+
+// Hosted FTC-PLAYBACK-OFFLINE-002, 2ecca92bb's parent: paused, the socket closed while a press on
+// another song was on its way, and for 60 s no socket and no open followed.
+for (const [received, kind] of [[100_000, 'whose received audio can be spliced'], [0, 'with no audio received']]) {
+  test(`a paused player ${kind} whose socket closes while a press is on its way opens the pressed song on one new socket`, async () => {
+    const harness = encodedHarness();
+    await startLocallySeekable(harness, received);
+    await harness.api.pause();
+    await harness.settle();
+    // The press waits on the browser's cache of kept songs while the socket closes.
+    let answerCache;
+    Object.assign(harness.context, {
+      streamingTrackCacheKey: (track, quality) => `${track.path}|${quality || 'original'}`,
+      loadStreamingCachedTrack: () => new Promise((resolve) => { answerCache = resolve; }),
+      keepStreamingCachedTrack: () => {},
+    });
+
+    const press = harness.api.start(makeTrack('02.mp3'));
+    await harness.settle();
+    assert.equal(typeof answerCache, 'function', 'the press is on its way');
+    harness.sockets[0].unexpectedClose();
+    await settleTwice(harness);
+    answerCache(null);
+    await settleTwice(harness);
+    await settleTwice(harness);
+
+    assert.equal(harness.sockets.length, 2, 'one new socket');
+    const opens = harness.sockets[1].sent.filter(({ type }) => type === 'open');
+    assert.deepEqual(opens.map(({ path }) => path), [makeTrack('02.mp3').path], 'one open, of the pressed song');
+    assert.notEqual(harness.api.snapshot().mode, 'error');
+    void press;
+  });
+}
+
+// Hosted FTC-PLAYBACK-OFFLINE-002 on 2ecca92bb: paused through an outage after the song had played,
+// the socket that died without closing was given up, and a press on another song then played the
+// paused song again instead of the pressed one.
+for (const order of ['given up before the press', 'given up after the press']) {
+  test(`paused with received audio, a silent socket ${order} leaves the pressed song, never the paused one, to play`, async () => {
+    const harness = encodedHarness();
+    const paused = await startLocallySeekable(harness, 100_000);
+    await harness.api.pause();
+    await harness.settle();
+
+    if (order === 'given up before the press') {
+      checkLivenessUntil(harness, 1_500, 6_500);
+      await settleTwice(harness);
+    }
+    void harness.api.start(makeTrack('02.mp3'));
+    await settleTwice(harness);
+    if (order === 'given up after the press') {
+      checkLivenessUntil(harness, 1_500, 6_500);
+      await settleTwice(harness);
+    }
+    await settleTwice(harness);
+    await settleTwice(harness);
+
+    assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is given up');
+    const later = harness.sockets.slice(1).flatMap((socket) => socket.sent.filter(({ type }) => type === 'open'));
+    assert.deepEqual(later.map(({ path }) => path), [makeTrack('02.mp3').path], 'one open, of the pressed song only');
+    assert.equal(harness.engine.roles.current?.track?.path, makeTrack('02.mp3').path);
+    assert.notEqual(harness.engine.roles.current?.streamId, paused.streamId);
+    assert.notEqual(harness.api.snapshot().mode, 'error');
+  });
+}
+
+test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const first = harness.sockets[1].sent.find(({ type }) => type === 'open');
+
+  harness.dispatchWindowEvent('offline');
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[1].closeCalls, 1);
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1, 'still the one outage');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+  assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, first.startFrame);
+});
+
+test('losing the next socket before the splice joined opens the splice again on the one after', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const first = harness.sockets[1].sent.find(({ type }) => type === 'open');
+  const sentOnSecond = harness.sockets[1].sent.length;
+
+  harness.sockets[1].unexpectedClose();
+  assert.equal(harness.engine.roles.continuity?.streamId ?? null, null);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[1].sent.length, sentOnSecond);
+  const again = harness.sockets[2].sent.find(({ type }) => type === 'open');
+  assert.equal(again.startFrame, first.startFrame);
+  assert.ok(again.streamId > first.streamId);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+test('a reconnect attempt that hangs is given up after a few seconds and the next one is made', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2);
+  assert.equal(harness.sockets[1].readyState, 0, 'the attempt hangs');
+
+  const deadline = timers.pending().find(({ delay }) => delay === 4_000);
+  assert.ok(deadline, 'the hanging attempt has a deadline');
+  timers.fire(deadline);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[1].closeCalls, 1);
+
+  timers.fire(timers.pending().find(({ delay }) => delay === 500));
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets.length, 3);
+  assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// CPU at 100%: playback goes on when the network is back. On a loaded machine a connection can take longer than the deadline to open.
+test('each reconnect attempt cut off by its deadline allows the next one twice as long, up to 16 s', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count > 1 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  const deadlines = [];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const deadline = timers.pending().find(({ delay }) => delay >= 4_000);
+    deadlines.push(deadline.delay);
+    timers.fire(deadline);
+    await settleTwice(harness);
+    timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+    await settleTwice(harness);
+  }
+
+  assert.deepEqual(deadlines, [4_000, 8_000, 16_000, 16_000]);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+test('a network change during a hanging reconnect replaces it at once', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  harness.dispatchWindowEvent('online');
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[1].closeCalls, 1);
+  assert.equal(harness.sockets.length, 3);
+  assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
+  assert.equal(timers.pending().filter(({ delay }) => delay <= 5_000).length, 0, 'no attempt is left waiting');
+});
+
+test('a successor that fully arrived stays prepared through a network change and needs no new stream', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const open = await startLocallySeekable(harness, 173_700);
+  receiveOn(harness.sockets[0], open, { type: 'eos', emittedFrames: 2_000_000, authoritativeTotalFrames: 2_000_000 });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  await harness.api.continuity(makeTrack('02.mp3'));
+  await harness.settle();
+  const next = harness.sent('open').at(-1);
+  acceptEncodedMetadata(harness.sockets[0], next, { totalFrames: 20_000, provisionalTotalFrames: 20_000, initialCreditBytes: 2_000 });
+  harness.sockets[0].receive(encodedFrame(next, 0, new Uint8Array(2_000)));
+  receiveOn(harness.sockets[0], next, { type: 'eos', emittedFrames: 20_000, authoritativeTotalFrames: 20_000 });
+  await harness.settle();
+  const releases = harness.portMessages('drop-continuity').length;
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.engine.roles.continuity?.streamId, next.streamId, 'the successor stays');
+  assert.equal(harness.engine.roles.continuity.local, true);
+  assert.equal(harness.portMessages('drop-continuity').length, releases);
+  assert.equal(harness.sockets[1].sent.filter(({ type }) => type === 'open').length, 0, 'nothing is reopened');
+  assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+
+test('pausing while a splice is pending keeps it: playing again joins the rest of the song at the same frame', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count === 2,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await harness.api.pause();
+  assert.equal(timers.pending().length, 0, 'a paused player makes no attempt');
+
+  assert.equal(await harness.api.resume(), true);
+  await settleTwice(harness);
+
+  const splice = harness.sockets[2].sent.find(({ type }) => type === 'open');
+  assert.equal(splice.startFrame, 999 * 1_152);
+  assert.equal(harness.api.snapshot().diagnostics.lastSpliceFrame, 999 * 1_152);
+  const expectation = harness.portMessages('expect-continuity').at(-1);
+  assert.deepEqual([expectation.active, expectation.timelineStartFrame], [true, 999 * 1_152]);
+});
+
+test('a seek once the next socket is open, before the splice joined, asks the server and counts no resume', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const splice = harness.sockets[1].sent.find(({ type }) => type === 'open');
+
+  await harness.api.seek(10);
+
+  const seekOpen = harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.deepEqual([seekOpen.role, seekOpen.startFrame], ['continuity', 480_000]);
+  assert.ok(harness.sockets[1].sent.some(({ type, streamId }) => type === 'close' && streamId === splice.streamId));
+  const snapshot = harness.api.snapshot();
+  assert.equal(snapshot.diagnostics.transportState, 'connected');
+  assert.equal(snapshot.diagnostics.transportResumes, undefined);
+});
+
+// The new song starts at once, and the old song sounds until it does.
+// These render the real worklet: each song is a level, so a quantum says which one is heard.
+const OLD_SONG = 0.25;
+const NEXT_SONG = 0.75;
+const PRESSED_SONG = 0.5;
+const ONE_SECOND = 48_000;
+
+function heard(node) {
+  const left = node.render()[0];
+  return left.every((sample) => sample === left[0]) ? left[0] : 'mixed';
+}
+
+function heardFor(node, quanta) {
+  const levels = new Set();
+  for (let index = 0; index < quanta; index += 1) {
+    levels.add(heard(node));
+    node.deliverEvents();
+  }
+  return [...levels];
+}
+
+function receiveSong(
+  harness, open, level, frames, sequence = 0, role = open.role === 'current' ? 0 : 1, expectations = {},
+) {
+  for (let sent = 0; sent < frames; sent += ONE_SECOND) {
+    receivePcmAndAssertEnqueue(harness, {
+      role,
+      generation: open.generation,
+      streamId: open.streamId,
+      sequence: sequence + sent / ONE_SECOND,
+      samples: new Array(Math.min(ONE_SECOND, frames - sent) * 2).fill(level),
+    }, {
+      socket: harness.sockets.at(-1),
+      // A cut-over stream keeps its wire role and plays as the current one.
+      role: harness.engine.roles.current?.streamId === open.streamId ? 'current' : 'continuity',
+      ...expectations,
+    });
+  }
+}
+
+async function playingSong(t, options = {}) {
+  const harness = createEngineHarness({ realProcessor: true, ...options });
+  t.after(() => harness.api.stop());
+  await harness.api.start(makeTrack('01.flac'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  receiveSong(harness, open, OLD_SONG, 2 * ONE_SECOND);
+  await harness.settle();
+  const node = harness.nodes[0];
+  assert.deepEqual(heardFor(node, 1), [OLD_SONG]);
+  return { harness, node, open };
+}
+
+async function pressTrack(harness, name) {
+  const outcome = {};
+  outcome.done = Promise.resolve(harness.api.start(makeTrack(name))).then(
+    (role) => { outcome.role = role; },
+    (error) => { outcome.error = error; },
+  );
+  await harness.settle();
+  outcome.open = harness.sent('open').filter(({ path }) => path === makeTrack(name).path).at(-1);
+  return outcome;
+}
+
+async function answerOpen(harness, open, level, frames = 2 * ONE_SECOND, expectations = {}) {
+  acceptMetadata(harness, open);
+  receiveSong(harness, open, level, frames, 0, 1, expectations);
+  await harness.settle();
+}
+
+test('a press with under a second of the playing song left keeps it sounding until the new song starts', async (t) => {
+  const { harness, node } = await playingSong(t);
+  heardFor(node, 384);
+  assert.ok(harness.engine.diagnostics.bufferedFrames.current < ONE_SECOND);
+
+  const pressed = await pressTrack(harness, '05.flac');
+
+  assert.deepEqual(heardFor(node, 20), [OLD_SONG], 'the press does not silence the playing song');
+  assert.equal(pressed.open.role, 'continuity');
+  await answerOpen(harness, pressed.open, PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG], 'the short cushion never defers the new song');
+});
+
+test('a press while a switch waits retargets it, and the playing song sounds until the last pressed one starts', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const first = await pressTrack(harness, '05.flac');
+  acceptMetadata(harness, first.open);
+  receiveSong(harness, first.open, NEXT_SONG, 4_800, 0, 1);
+  await harness.settle();
+
+  const last = await pressTrack(harness, '06.flac');
+
+  assert.deepEqual(heardFor(node, 20), [OLD_SONG], 'a second press does not silence the playing song');
+  await first.done;
+  assert.match(first.error.message, /superseded/);
+  assert.ok(harness.sent('close').some(({ streamId }) => streamId === first.open.streamId));
+  assert.equal(last.open.role, 'continuity');
+  await answerOpen(harness, last.open, PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+  await last.done;
+  assert.equal(last.role.streamId, last.open.streamId);
+  assert.equal(harness.engine.diagnostics.lastProcessorReject, undefined);
+});
+
+for (const committed of [false, true]) {
+  test(`a press as a switch cuts over keeps audio playing (${committed ? 'already rendered' : 'not yet rendered'})`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    const first = await pressTrack(harness, '05.flac');
+    await answerOpen(harness, first.open, NEXT_SONG);
+    assert.equal(harness.engine.pendingSeek.prepareSent, true);
+    if (committed) assert.equal(heard(node), NEXT_SONG);
+
+    const last = await pressTrack(harness, '06.flac');
+    assert.equal(heard(node), NEXT_SONG, 'the cut-over already handed to the worklet completes');
+    node.deliverEvents();
+    await harness.settle();
+
+    assert.deepEqual(heardFor(node, 20), [NEXT_SONG]);
+    const open = harness.sent('open').at(-1);
+    assert.equal(open.path, makeTrack('06.flac').path);
+    assert.equal(open.role, 'continuity');
+    await answerOpen(harness, open, PRESSED_SONG);
+    assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+    await last.done;
+    assert.equal(last.role.streamId, open.streamId);
+  });
+}
+
+for (const prepared of [false, true]) {
+  test(`a press while a seek ${prepared ? 'cuts over' : 'waits'} keeps audio playing`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    await harness.api.seek(120);
+    const seek = harness.sent('open').at(-1);
+    if (prepared) await answerOpen(harness, seek, NEXT_SONG, 12_000);
+
+    await pressTrack(harness, '06.flac');
+    if (prepared) {
+      node.render();
+      node.deliverEvents();
+      await harness.settle();
+      // A seek keeps its own cushion; once that is in, its audio is what the press must keep.
+      receiveSong(harness, seek, NEXT_SONG, ONE_SECOND, 1, 1);
+      receiveSong(harness, seek, NEXT_SONG, 36_000, 2, 1);
+      await harness.settle();
+    }
+
+    assert.deepEqual(heardFor(node, 20), [prepared ? NEXT_SONG : OLD_SONG]);
+    const open = harness.sent('open').at(-1);
+    assert.equal(open.path, makeTrack('06.flac').path);
+    assert.equal(open.role, 'continuity');
+    await answerOpen(harness, open, PRESSED_SONG);
+    assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+  });
+}
+
+async function playingWithPreparedNext(t, options = {}) {
+  const playing = await playingSong(t, options);
+  const { harness } = playing;
+  await harness.api.continuity(makeTrack('02.flac'), {
+    kind: 'queued-next', startSeconds: 0, consecutiveAlbumBoundary: true,
+  });
+  const next = harness.sent('open').at(-1);
+  await answerOpen(harness, next, NEXT_SONG);
+  return { ...playing, next };
+}
+
+test('a press just after a gapless track change, before the server acknowledged it, keeps that track sounding', async (t) => {
+  const { harness, node, open } = await playingWithPreparedNext(t);
+  harness.sockets[0].receive({
+    type: 'eos', generation: open.generation, streamId: open.streamId, role: 'current',
+    emittedFrames: 2 * ONE_SECOND, authoritativeTotalFrames: 2 * ONE_SECOND,
+  });
+  await harness.settle();
+  while (harness.engine.roles.current.streamId === open.streamId) {
+    node.render();
+    node.deliverEvents();
+  }
+  assert.ok(harness.engine.pendingPromotion);
+
+  const pressed = await pressTrack(harness, '07.flac');
+
+  assert.deepEqual(heardFor(node, 20), [NEXT_SONG]);
+  assert.equal(pressed.open.role, 'continuity');
+});
+
+test('a press with nothing of the playing song left starts the new song as a fresh stream', async (t) => {
+  const { harness, node } = await playingSong(t);
+  heardFor(node, 752);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 0);
+
+  const pressed = await pressTrack(harness, '05.flac');
+
+  assert.equal(pressed.open.role, 'current', 'with no audio to keep, nothing waits for a cross-over');
+});
+
+function answerAuthority(harness, probe) {
+  harness.sockets.at(-1).receive({ type: 'probe-result', requestId: probe.requestId });
+}
+
+async function pressPreparedNext(t) {
+  const playing = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+  const { harness } = playing;
+  const opens = harness.sent('open').length;
+  const pressed = await pressTrack(harness, '02.flac');
+  return { ...playing, pressed, opens, probe: harness.sockets[0].probes.at(-1) };
+}
+
+test('a press on the prepared next track cuts over to its decoded frames once the press refresh answers', async (t) => {
+  const { harness, node, next, pressed, opens, probe } = await pressPreparedNext(t);
+
+  assert.equal(harness.sent('open').length, opens, 'the decoded track is not opened again');
+  assert.equal(harness.sent('close').some(({ streamId }) => streamId === next.streamId), false);
+  assert.deepEqual(
+    { path: probe?.path, authorityOnly: probe?.authorityOnly },
+    { path: makeTrack('02.flac').path, authorityOnly: true },
+  );
+  // 600 ms of a slow refresh is 225 render quanta.
+  assert.deepEqual(heardFor(node, 225), [OLD_SONG], 'nothing of the new song sounds before the refresh');
+
+  answerAuthority(harness, probe);
+  await harness.settle();
+
+  assert.equal(heard(node), NEXT_SONG, 'the first quantum after the answer is the new song');
+  node.deliverEvents();
+  await pressed.done;
+  assert.equal(pressed.role.streamId, next.streamId);
+  assert.ok(harness.sent('promote').some(({ streamId }) => streamId === next.streamId));
+  assert.equal(harness.api.snapshot().src, makeTrack('02.flac').src);
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.portMessages('configure').length, 1);
+});
+
+test('a pressed next track still filling cuts over when refreshed and filled, not before', async (t) => {
+  const { harness, node } = await playingSong(t, { holdSampleRateProbes: true });
+  await harness.api.continuity(makeTrack('02.flac'), { kind: 'queued-next', startSeconds: 0 });
+  const next = harness.sent('open').at(-1);
+  acceptMetadata(harness, next);
+  receiveSong(harness, next, NEXT_SONG, 4_800, 0, 1);
+  await pressTrack(harness, '02.flac');
+  answerAuthority(harness, harness.sockets[0].probes.at(-1));
+  await harness.settle();
+  assert.deepEqual(heardFor(node, 4), [OLD_SONG]);
+
+  receiveSong(harness, next, NEXT_SONG, 43_200, 1, 1);
+  receiveSong(harness, next, NEXT_SONG, ONE_SECOND, 2, 1);
+  await harness.settle();
+
+  assert.deepEqual(heardFor(node, 4), [NEXT_SONG]);
+});
+
+test('the prepared next track never follows the old song to its end before the press refresh answers', async (t) => {
+  const { harness, node, open, probe } = await pressPreparedNext(t);
+  harness.sockets[0].receive({
+    type: 'eos', generation: open.generation, streamId: open.streamId, role: 'current',
+    emittedFrames: 2 * ONE_SECOND, authoritativeTotalFrames: 2 * ONE_SECOND,
+  });
+  await harness.settle();
+
+  const levels = heardFor(node, 800);
+
+  assert.equal(levels.includes(NEXT_SONG), false);
+  answerAuthority(harness, probe);
+  await harness.settle();
+  assert.deepEqual(heardFor(node, 4), [NEXT_SONG]);
+});
+
+for (const code of [4401, 4403, 1006]) {
+  test(`the prepared next track never sounds when the press refresh ends in ${code}`, async (t) => {
+    const { harness, node } = await pressPreparedNext(t);
+
+    harness.sockets[0].unexpectedClose({ code });
+    await harness.settle();
+
+    assert.equal(heardFor(node, 800).includes(NEXT_SONG), false);
+    if (code === 1006) {
+      assert.equal(harness.sent('open').at(-1).path, makeTrack('02.flac').path,
+        'on the next socket the press is an ordinary open, with its own refresh');
+    }
+  });
+}
+
+test('a press elsewhere while the refresh waits leaves the prepared track silent, late answer or not', async (t) => {
+  const { harness, node, probe } = await pressPreparedNext(t);
+  const last = await pressTrack(harness, '06.flac');
+
+  answerAuthority(harness, probe);
+  await harness.settle();
+
+  assert.deepEqual(heardFor(node, 20), [OLD_SONG]);
+  await answerOpen(harness, last.open, PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+});
+
+test('a prepared track dropped while the refresh waits opens again instead of hanging the press', async (t) => {
+  const { harness, node, probe } = await pressPreparedNext(t);
+  harness.context.closeStreamingContinuityRole('decoder-fallback');
+
+  answerAuthority(harness, probe);
+  await harness.settle();
+
+  const reopened = harness.sent('open').at(-1);
+  assert.equal(reopened.path, makeTrack('02.flac').path);
+  assert.equal(reopened.role, 'continuity');
+  assert.deepEqual(heardFor(node, 4), [OLD_SONG]);
+});
+
+test('a press into the prepared track at another place opens it there', async (t) => {
+  const { harness } = await playingWithPreparedNext(t);
+
+  void harness.api.start(makeTrack('02.flac'), { startSeconds: 30 }).catch(() => {});
+  await harness.settle();
+
+  assert.equal(harness.sent('open').at(-1).startFrame, 30 * ONE_SECOND);
+});
+
+test('a prepared compressed track needs its usual one second of head, after the refresh', async (t) => {
+  const harness = encodedHarness({ holdSampleRateProbes: true });
+  t.after(() => harness.api.stop());
+  await harness.api.start(makeTrack('01.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  receivePcmAndAssertEnqueue(harness, {
+    generation: current.generation, streamId: current.streamId, samples: new Array(ONE_SECOND * 2).fill(OLD_SONG),
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0,
+  });
+  await harness.api.continuity(makeTrack('02.mp3'), { kind: 'queued-next', startSeconds: 0 });
+  const next = harness.sent('open').at(-1);
+  acceptMetadata(harness, next, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  // 42 packets of 1152 frames are just over a second.
+  for (let sequence = 0; sequence < 42; sequence += 1) {
+    harness.sockets[0].receive(encodedFrame(next, sequence, new Uint8Array(100)));
+    await harness.settle();
+  }
+  void harness.api.start(makeTrack('02.mp3')).catch(() => {});
+  await harness.settle();
+  assert.equal(harness.portMessages('prepare-seek').length, 0);
+
+  answerAuthority(harness, harness.sockets[0].probes.at(-1));
+  await harness.settle();
+
+  assert.equal(harness.portMessages('prepare-seek').at(-1)?.streamId, next.streamId);
+});
+
+for (const waiting of ['open', 'retargeted open', 'refresh', 'cut-over']) {
+  test(`a handover pause goes silent at once while a switch waits on its ${waiting}`, async (t) => {
+    const { harness, node, probe } = waiting === 'refresh'
+      ? await pressPreparedNext(t)
+      : await playingSong(t);
+    let pending = null;
+    if (waiting !== 'refresh') pending = await pressTrack(harness, '05.flac');
+    if (waiting === 'retargeted open') pending = await pressTrack(harness, '06.flac');
+    if (waiting === 'cut-over') await answerOpen(harness, pending.open, PRESSED_SONG);
+
+    await harness.api.pause();
+    assert.deepEqual(heardFor(node, 20), [0], 'the handover silences the old song on purpose');
+
+    if (waiting === 'refresh') answerAuthority(harness, probe);
+    else if (waiting !== 'cut-over') {
+      await answerOpen(harness, pending.open, PRESSED_SONG, 2 * ONE_SECOND, { expectedEnqueue: false });
+    }
+    await harness.settle();
+    assert.deepEqual(heardFor(node, 20), [0], 'a late answer never sounds the pressed song');
+    assert.equal(harness.api.snapshot().paused, true);
+  });
+}
+
+// A press as the player makes it: its failure reaches failStreamingEngine, which ends playback.
+function pressInPlayer(harness, name) {
+  const { context } = harness;
+  if (typeof context.playTrackFromPayload !== 'function') {
+    loadLeaseRecoveryRuntime(harness);
+    Object.assign(context, {
+      canStartPlaybackInThisTab: () => true,
+      setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+      renderSelectedTrackState: () => {},
+      beginStreamingPlayerListenSession: () => {},
+    });
+    context.state.player.current = makeTrack('01.flac');
+  }
+  context.observeStreamingFacadeCallback(context.playTrackFromPayload(makeTrack(name)), 'track-selection-start-error');
+  return harness.settle();
+}
+
+test('a socket lost while a press waits on a cut-over opens the pressed song on the next socket', async (t) => {
+  const { harness, node } = await playingSong(t);
+  await pressInPlayer(harness, '05.flac');
+  await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+  assert.equal(harness.engine.pendingSeek.prepareSent, true);
+  await pressInPlayer(harness, '06.flac');
+
+  harness.sockets[0].unexpectedClose({ code: 1006 });
+  await harness.settle();
+  await harness.settle();
+
+  assert.notEqual(harness.engine.mode, 'error');
+  assert.equal(harness.engine.diagnostics.lastError, undefined);
+  assert.equal(harness.engine.node, node);
+  assert.equal(harness.sent('open').at(-1).path, makeTrack('06.flac').path);
+});
+
+for (const failing of ['current', 'continuity']) {
+  test(`a decoder failing in the ${failing} stream while a press waits on a cut-over starts the pressed song`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    await pressInPlayer(harness, '05.flac');
+    await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+    await pressInPlayer(harness, '06.flac');
+
+    harness.context.failStreamingEncodedRole(harness.engine.roles[failing], 'decode-error');
+    await harness.settle();
+    await harness.settle();
+
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.engine.node, node);
+    assert.equal(harness.sent('open').at(-1).path, makeTrack('06.flac').path);
+  });
+}
+
+for (const waiting of ['open', 'refresh']) {
+  test(`a seek while a switch waits on its ${waiting} gives the press up and playback goes on`, async (t) => {
+    const { harness, node } = waiting === 'refresh'
+      ? await playingWithPreparedNext(t, { holdSampleRateProbes: true })
+      : await playingSong(t);
+    const pressed = waiting === 'refresh' ? '02.flac' : '05.flac';
+    await pressInPlayer(harness, pressed);
+    assert.equal(harness.context.state.player.selectedTrack.path, makeTrack(pressed).path);
+
+    await harness.api.seek(120);
+    await harness.settle();
+
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.engine.diagnostics.lastError, undefined);
+    assert.equal(harness.engine.node, node, 'the audio graph is not torn down');
+    assert.equal(harness.context.state.player.selectedTrack, null, 'the title is the playing song again');
+    assert.equal(harness.context.state.player.current.path, makeTrack('01.flac').path);
+    assert.deepEqual(heardFor(node, 8), [OLD_SONG]);
+    assert.equal(harness.sent('open').at(-1).startFrame, 120 * ONE_SECOND);
+  });
+}
+
+test('a seek while a press waits on a cut-over leaves that press to start its song', async (t) => {
+  const { harness, node } = await playingSong(t);
+  await pressInPlayer(harness, '05.flac');
+  await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+  await pressInPlayer(harness, '06.flac');
+
+  await harness.api.seek(120);
+  await harness.settle();
+  await harness.settle();
+
+  assert.notEqual(harness.engine.mode, 'error');
+  assert.equal(harness.engine.node, node);
+  assert.equal(harness.sent('open').at(-1).path, makeTrack('06.flac').path);
+});
+
+test('a failed press still ends in the player error path', async (t) => {
+  const { harness } = await playingSong(t);
+
+  harness.context.observeStreamingFacadeCallback(Promise.reject(new Error('broken')), 'track-selection-start-error');
+  await harness.settle();
+
+  assert.equal(harness.engine.mode, 'error');
+});
+
+function timedPress(harness, name) {
+  harness.context.noteStreamingPress(makeTrack(name));
+  return pressTrack(harness, name);
+}
+
+test('a timed press reports where it waited, in numbers only', async (t) => {
+  const { harness, node } = await playingSong(t);
+  harness.setNow(5_000);
+  const pressed = await timedPress(harness, '05.flac');
+  harness.setNow(5_080);
+  acceptMetadata(harness, pressed.open, { timing: true });
+  harness.setNow(5_120);
+  receiveSong(harness, pressed.open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+  await harness.settle();
+  harness.setNow(5_140);
+  heardFor(node, 2);
+
+  const [report] = harness.sent('start-report');
+  assert.deepEqual(report, {
+    type: 'start-report',
+    generation: pressed.open.generation,
+    audibleStreamId: pressed.open.streamId,
+    prepared: false,
+    presses: 1,
+    pressedAtEpochMs: report.pressedAtEpochMs,
+    firstPressMs: 140,
+    openMs: 0,
+    metadataMs: 80,
+    firstBytesMs: 120,
+    decodedMs: 120,
+    audibleMs: 140,
+  });
+  assert.ok(Number.isInteger(report.pressedAtEpochMs));
+  assert.doesNotMatch(JSON.stringify(report), /05\.flac|Track|src|path|title/);
+  heardFor(node, 4);
+  assert.equal(harness.sent('start-report').length, 1, 'one line per press');
+});
+
+test('a timed press on the prepared next track times its refresh and no bytes', async (t) => {
+  const { harness, node, next } = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+  // The server asked with the metadata of a stream before this press.
+  harness.engine.timingRequested = true;
+  harness.setNow(5_000);
+  await timedPress(harness, '02.flac');
+  harness.setNow(5_600);
+  answerAuthority(harness, harness.sockets[0].probes.at(-1));
+  await harness.settle();
+  harness.setNow(5_603);
+  heardFor(node, 2);
+
+  const [report] = harness.sent('start-report');
+  assert.equal(report.audibleStreamId, next.streamId);
+  assert.deepEqual(
+    [report.prepared, report.openMs, report.metadataMs, report.firstBytesMs, report.decodedMs, report.audibleMs],
+    [true, 0, 600, null, null, 603],
+  );
+});
+
+test('a press reports nothing to a server that did not ask', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const pressed = await timedPress(harness, '05.flac');
+  await answerOpen(harness, pressed.open, PRESSED_SONG);
+  heardFor(node, 4);
+
+  assert.equal(harness.engine.startTiming, null, 'and keeps nothing once the song sounds');
+  assert.equal(harness.sent('start-report').length, 0);
+});
+
+test('a report has no say over playback when its socket is closing', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const { context, engine } = harness;
+  engine.timingRequested = true;
+  context.noteStreamingPress(makeTrack('01.flac'));
+  context.followStreamingPress(engine.roles.current);
+  harness.sockets[0].readyState = 2;
+
+  // A kept track starts to sound with nothing else to send, so the report is the only control.
+  context.markStreamingPress('audibleMs', engine.roles.current);
+
+  assert.notEqual(engine.mode, 'error');
+  assert.equal(engine.diagnostics.lastError, undefined);
+  assert.equal(engine.node, node);
+  assert.equal(harness.sent('start-report').length, 0);
+});
+
+test('a server that stopped asking gets no report', async (t) => {
+  const { harness, node } = await playingSong(t);
+  harness.engine.timingRequested = true;
+  const pressed = await timedPress(harness, '05.flac');
+  await answerOpen(harness, pressed.open, PRESSED_SONG);
+  heardFor(node, 4);
+
+  assert.equal(harness.sent('start-report').length, 0);
+});
+
+for (const waiting of ['open', 'refresh', 'cut-over']) {
+  test(`presses on a row whose start waits on its ${waiting} are counted as one start`, async (t) => {
+    const { harness, node } = waiting === 'refresh'
+      ? await playingWithPreparedNext(t, { holdSampleRateProbes: true })
+      : await playingSong(t);
+    harness.engine.timingRequested = true;
+    const row = waiting === 'refresh' ? '02.flac' : '05.flac';
+    harness.setNow(5_000);
+    await pressInPlayer(harness, row);
+    if (waiting === 'cut-over') await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+    harness.setNow(6_000);
+    await pressInPlayer(harness, row);
+    if (waiting === 'cut-over') {
+      node.render();
+      node.deliverEvents();
+      await harness.settle();
+    }
+    const open = harness.sent('open').at(-1);
+    acceptMetadata(harness, open, { timing: true });
+    receiveSong(harness, open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+    await harness.settle();
+    harness.setNow(6_400);
+    heardFor(node, 4);
+
+    const [report] = harness.sent('start-report');
+    assert.equal(report.presses, 2);
+    assert.equal(report.audibleMs, 400, 'from the last press');
+    assert.equal(report.firstPressMs, 1_400, 'from the first, which is what the listener waited');
+    assert.equal(harness.sent('start-report').length, 1);
+  });
+}
+
+for (const between of ['another row', 'a seek that gave it up']) {
+  test(`a press after ${between} is a start of its own`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    await pressInPlayer(harness, '05.flac');
+    if (between === 'another row') await pressInPlayer(harness, '06.flac');
+    else await harness.api.seek(120);
+    await harness.settle();
+    await pressInPlayer(harness, '05.flac');
+    const open = harness.sent('open').at(-1);
+    acceptMetadata(harness, open, { timing: true });
+    receiveSong(harness, open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+    await harness.settle();
+    heardFor(node, 4);
+
+    const [report] = harness.sent('start-report');
+    assert.equal(report.presses, 1);
+  });
+}
+
+// Play again while a song is still starting is ignored.
+function installRowPresses(harness, current = makeTrack('01.flac')) {
+  const { context } = harness;
+  loadLeaseRecoveryRuntime(harness);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(enginePath), 'album-track-table.js'), 'utf8'), context);
+  Object.assign(context, {
+    canStartPlaybackInThisTab: () => true,
+    // Granted at once, as above: the claim lets the audio thread sound.
+    playbackSoundPermission: () => ({ untilMs: context.Date.now() + 3_600_000, forMs: 3_600_000 }),
+    setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+    renderSelectedTrackState: () => {},
+    beginStreamingPlayerListenSession: () => {},
+    setAlbumPlaybackQueue: () => {},
+    closeListenSegment: () => {},
+    markListenSessionPaused: () => {},
+    maybeScrobbleListenSession: async () => {},
+    persistPausedListenSession: async () => {},
+    releasePlaybackOwnership: async () => {},
+    focusPlayerTimeline: () => {},
+    usesMobilePageLayout: () => true,
+    triggerAlbumTrackPlayActivation: () => {},
+  });
+  context.document = { ...(context.document || {}), getElementById: () => ({ hidden: true }) };
+  context.state.player.current = current;
+  const rows = new Map();
+  const rowOf = (name) => {
+    if (rows.has(name)) return rows.get(name);
+    const track = makeTrack(name);
+    const attributes = { 'data-src': track.src, 'data-track-path': track.path, 'data-track-duration-seconds': '240' };
+    const button = {
+      getAttribute: (key) => attributes[key] || '',
+      classList: { contains: () => false },
+      click: () => context.activateSharedTrackButton(button),
+    };
+    const row = { dataset: {}, querySelector: () => button, ownerDocument: { getSelection: () => null } };
+    rows.set(name, { button, row });
+    return rows.get(name);
+  };
+  return {
+    async press(name) {
+      rowOf(name).button.click();
+      await harness.settle();
+    },
+    // The real mobile handler: the second tap of a double tap asks for a restart.
+    async doubleTap(name) {
+      for (const detail of [1, 2]) {
+        context.handleAlbumTrackRowClick({
+          detail, currentTarget: rowOf(name).row, target: { closest: () => null }, preventDefault() {},
+        });
+        await harness.settle();
+      }
+    },
+  };
+}
+
+const opensOf = (harness, name) => harness.sent('open').filter(({ path: opened }) => opened === makeTrack(name).path);
+const refreshesOf = (harness) => harness.sockets[0].probes.filter(({ authorityOnly }) => authorityOnly === true);
+
+const PENDING_STARTS = {
+  'over a second of the old song left': async (t) => {
+    const playing = await playingSong(t);
+    return { ...playing, rows: installRowPresses(playing.harness), name: '05.flac' };
+  },
+  'under a second of the old song left': async (t) => {
+    const playing = await playingSong(t);
+    heardFor(playing.node, 384);
+    return { ...playing, rows: installRowPresses(playing.harness), name: '05.flac' };
+  },
+  'another switch pending': async (t) => {
+    const playing = await playingSong(t);
+    const rows = installRowPresses(playing.harness);
+    await rows.press('04.flac');
+    return { ...playing, rows, name: '05.flac' };
+  },
+  'a switch just cut over': async (t) => {
+    const playing = await playingSong(t);
+    const rows = installRowPresses(playing.harness);
+    await rows.press('04.flac');
+    await answerOpen(playing.harness, opensOf(playing.harness, '04.flac')[0], NEXT_SONG);
+    playing.node.render();
+    playing.node.deliverEvents();
+    await playing.harness.settle();
+    return { ...playing, rows, name: '05.flac' };
+  },
+  'the pressed row prepared as the next track': async (t) => {
+    const playing = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+    return { ...playing, rows: installRowPresses(playing.harness), name: '02.flac', prepared: true };
+  },
+};
+
+for (const [pending, arrange] of Object.entries(PENDING_STARTS)) {
+  for (const again of ['presses', 'a double tap']) {
+    test(`${again} on a row still starting, with ${pending}, leave its one start waiting`, async (t) => {
+      const { harness, node, rows, name, prepared } = await arrange(t);
+      harness.engine.timingRequested = true;
+      const opens = opensOf(harness, name).length;
+      harness.setNow(5_000);
+      if (again === 'presses') await rows.press(name);
+      else await rows.doubleTap(name);
+      harness.setNow(5_400);
+      for (let press = 0; press < 3; press += 1) await rows.press(name);
+
+      assert.equal(opensOf(harness, name).length, opens + (prepared ? 0 : 1), 'one start');
+      assert.equal(refreshesOf(harness).length, prepared ? 1 : 0, 'one refresh');
+      assert.equal(harness.api.snapshot().paused, false, 'ignored is not a pause');
+
+      harness.setNow(5_700);
+      if (prepared) answerAuthority(harness, refreshesOf(harness)[0]);
+      else {
+        const open = opensOf(harness, name).at(-1);
+        acceptMetadata(harness, open, { timing: true });
+        receiveSong(harness, open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+      }
+      await harness.settle();
+      const levels = heardFor(node, 4);
+      assert.equal(levels.at(-1), prepared ? NEXT_SONG : PRESSED_SONG, 'the one start sounds');
+      const [report] = harness.sent('start-report');
+      assert.equal(report.presses, again === 'presses' ? 4 : 5, 'the timing line still counts each press');
+      assert.equal(report.audibleMs, 700, 'timed from the first press, whose wait was never restarted');
+    });
+  }
+}
+
+test('presses on a row still cutting over leave its one start', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  await answerOpen(harness, opensOf(harness, '05.flac')[0], PRESSED_SONG);
+  assert.equal(harness.engine.pendingSeek.prepareSent, true);
+  await rows.press('05.flac');
+  await rows.doubleTap('05.flac');
+
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+  await harness.settle();
+  assert.equal(opensOf(harness, '05.flac').length, 1);
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+async function coldStartPending(t, options = {}) {
+  const harness = createEngineHarness({ realProcessor: true, ...options });
+  t.after(() => harness.api.stop());
+  const rows = installRowPresses(harness, null);
+  await rows.press('05.flac');
+  await harness.settle();
+  return { harness, rows };
+}
+
+test('with nothing playing, presses and a double tap before the song sounds neither pause nor restart it', async (t) => {
+  const { harness, rows } = await coldStartPending(t);
+  assert.equal(harness.api.snapshot().mode, 'starting');
+  await rows.press('05.flac');
+  await rows.doubleTap('05.flac');
+
+  const opens = opensOf(harness, '05.flac');
+  assert.equal(opens.length, 1);
+  assert.equal(harness.api.snapshot().paused, false);
+  acceptMetadata(harness, opens[0]);
+  receiveSong(harness, opens[0], PRESSED_SONG, 2 * ONE_SECOND);
+  await harness.settle();
+  assert.deepEqual(heardFor(harness.nodes[0], 4), [PRESSED_SONG]);
+  await harness.settle();
+
+  await rows.press('05.flac');
+  assert.equal(harness.api.snapshot().paused, true, 'once it sounds its row pauses it as ever');
+});
+
+for (const late of [false, true]) {
+  test(`a press on the still-sounding song during a switch gives the switch up and it plays on with no gap${late ? ', though the pressed stream answers after' : ''}`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    const rows = installRowPresses(harness);
+    await rows.press('05.flac');
+    assert.equal(harness.context.state.player.selectedTrack.path, makeTrack('05.flac').path);
+    const pressedOpen = opensOf(harness, '05.flac')[0];
+
+    await rows.press('01.flac');
+    await harness.settle();
+    if (late && pressedOpen) {
+      try { await answerOpen(harness, pressedOpen, PRESSED_SONG); } catch { /* its stream is closed */ }
+      await harness.settle();
+    }
+
+    assert.equal(harness.api.snapshot().paused, false, 'not paused');
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.engine.node, node, 'the audio graph is not torn down');
+    assert.equal(harness.context.state.player.selectedTrack, null, 'the rows show the playing song again');
+    assert.equal(harness.context.state.player.current.path, makeTrack('01.flac').path);
+    assert.deepEqual(heardFor(node, 8), [OLD_SONG], 'only the playing song sounds, with no gap');
+  });
+}
+
+test('once a switched-to song sounds its row pauses it as ever', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  await answerOpen(harness, opensOf(harness, '05.flac')[0], PRESSED_SONG);
+  heardFor(node, 4);
+  await harness.settle();
+
+  await rows.press('05.flac');
+  assert.equal(harness.api.snapshot().paused, true);
+});
+
+test('a double tap on a song already sounding still restarts it', async (t) => {
+  const { harness } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  const opens = opensOf(harness, '01.flac').length;
+  await rows.doubleTap('01.flac');
+
+  assert.equal(opensOf(harness, '01.flac').length, opens + 1);
+});
+
+// The pressed song's title and row stayed after the switch it named was given up.
+for (const ended of ['Pause', 'Play of the paused song']) {
+  test(`${ended} during a pending switch stops naming its song`, async (t) => {
+    const { harness } = await playingSong(t);
+    const rows = installRowPresses(harness);
+    const { context } = harness;
+    let drawn = null;
+    context.renderSelectedTrackState = () => {
+      drawn = context.state.player.selectedTrack?.path || context.state.player.current.path;
+    };
+    await rows.press('05.flac');
+    assert.equal(drawn, makeTrack('05.flac').path, 'the pressed song is named from its press, as ever');
+
+    if (ended === 'Pause') context.togglePlayerPlayback();
+    else {
+      // Paused by something other than the player's own Pause, which would already have superseded it.
+      harness.engine.snapshot.paused = true;
+      context.togglePlayerPlayback();
+    }
+    await harness.settle();
+
+    assert.equal(context.state.player.selectedTrack, null);
+    assert.equal(drawn, makeTrack('01.flac').path, 'the player and its rows show the playing song again');
+  });
+}
+
+test('a press on another song during a pending switch names that song at once, and never the playing one between', async (t) => {
+  const { harness } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  const { context } = harness;
+  const drawn = [];
+  context.renderSelectedTrackState = () => {
+    drawn.push(context.state.player.selectedTrack?.path || context.state.player.current.path);
+  };
+  await rows.press('05.flac');
+  await rows.press('06.flac');
+
+  assert.deepEqual(drawn, [makeTrack('05.flac').path, makeTrack('06.flac').path]);
+});
+
+// A seek's socket was replaced while its heartbeats waited to be read by a busy page.
+async function seekWaitingOnTheServer() {
+  // Every later socket is refused: on real timers its reconnects would retry for ever.
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.setNow(1_000);
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  const position = (contextTime) => harness.nodes[0].port.dispatch({
+    type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100, contextTime,
+  });
+  return { harness, position };
+}
+
+for (const heard of [true, false]) {
+  test(`a late page reads its socket before a seek's silence counts (${heard ? 'a heartbeat was waiting' : 'nothing was'})`, async () => {
+    const { harness, position } = await seekWaitingOnTheServer();
+    harness.setNow(1_900);
+    // Rendered at 11.6 s, read at 12.5 s: the page is 900 ms behind, and so may its socket be.
+    position(11.6);
+    position(12.5);
+    await settleTwice(harness);
+    assert.equal(harness.sockets[0].closeCalls, 0, 'neither the late message nor the backlog after it decides');
+
+    if (heard) harness.sockets[0].receive({ type: 'heartbeat' });
+    harness.setNow(2_000);
+    position(12.5);
+    await settleTwice(harness);
+
+    assert.equal(harness.sockets[0].closeCalls, heard ? 0 : 1);
+    if (heard) assert.equal(harness.engine.pendingSeek.prepareSent, false, 'the seek still waits on its own open');
+  });
+}
+
+for (const heard of [true, false]) {
+  test(`an interval check that ran late also reads the socket before a seek is given up (${heard ? 'heard' : 'silent'})`, async () => {
+    const { harness } = await seekWaitingOnTheServer();
+    checkLivenessUntil(harness, 500, 1_000);
+    // 800 ms since the last check: over a heartbeat late, though not late enough to skip.
+    harness.setNow(1_800);
+    liveness(harness).callback();
+    await settleTwice(harness);
+    assert.equal(harness.sockets[0].closeCalls, 0, 'the late check waits for the read');
+
+    if (heard) harness.sockets[0].receive({ type: 'heartbeat' });
+    harness.setNow(1_900);
+    liveness(harness).callback();
+    await settleTwice(harness);
+    assert.equal(harness.sockets[0].closeCalls, heard ? 0 : 1);
+  });
+}
+
+test('on a page that keeps up, 750 ms of silence still gives a seek up at once', async () => {
+  const { harness, position } = await seekWaitingOnTheServer();
+  harness.setNow(1_760);
+  position(12.45);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+});
+
+// A seek made while another waited always asked the server, also for bytes already here.
+for (const waitingOn of ['the server', 'received bytes']) {
+  test(`a seek while another waits on ${waitingOn} reads the received bytes, with no round trip`, async () => {
+    const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+    const open = await startLocallySeekable(harness, 100_000);
+    const opensBefore = harness.sent('open').length;
+    // Both seeks land in one task, before the first could decode its quarter second.
+    void harness.api.seek(waitingOn === 'the server' ? 30 : 10);
+    const waiting = harness.engine.roles.continuity;
+    assert.equal(harness.engine.pendingSeek.prepareSent, false, 'the first seek still waits');
+    const opens = harness.sent('open').length;
+    assert.equal(opens, opensBefore + (waitingOn === 'the server' ? 1 : 0));
+
+    const second = harness.api.seek(12);
+
+    const local = harness.engine.roles.continuity;
+    assert.notEqual(local, waiting);
+    assert.equal(local.local, true);
+    assert.equal(harness.sent('open').length, opens, 'the server is not asked again');
+    assert.equal(harness.engine.pendingSeek.streamId, local.streamId);
+    assert.equal(harness.engine.pendingSeek.startFrame, 576_000);
+    assert.equal(harness.portMessages('reserve-seek').at(-1).streamId, local.streamId);
+    assert.deepEqual(harness.sent('close').map(({ streamId }) => streamId),
+      waitingOn === 'the server' ? [waiting.streamId] : [], 'only the waiting seek stream closes on the server');
+
+    await second;
+    await harness.settle();
+    harness.nodes[0].port.dispatch({
+      type: 'seek-boundary', generation: open.generation, outgoingStreamId: open.streamId,
+      incomingStreamId: local.streamId, renderedFrame: 128, timelineFrame: 576_000, silentFrames: 0,
+    });
+    assert.equal(harness.engine.roles.current, local);
+    assert.equal(harness.api.snapshot().currentTime, 12);
+  });
+}
+
+test('a seek while another already cuts over still asks the server', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.seek(30);
+  harness.engine.pendingSeek.prepareSent = true;
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(12);
+
+  assert.equal(harness.sent('open').length, opens + 1);
+});
+
+// A lost press left no line, and no control said when the page sent it.
+test('with timing asked, an open and a refresh probe say when the page sent them', async (t) => {
+  const { harness } = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+  assert.equal(harness.sent('open')[0].clientSentAtEpochMs, undefined, 'nothing is added before the server asks');
+  harness.engine.timingRequested = true;
+
+  await pressTrack(harness, '02.flac');
+  assert.equal(harness.sockets[0].probes.at(-1).clientSentAtEpochMs, harness.dateNow());
+  await pressTrack(harness, '05.flac');
+  assert.equal(harness.sent('open').at(-1).clientSentAtEpochMs, harness.dateNow());
+});
+
+for (const ended of ['replaced', 'paused', 'seek', 'stopped']) {
+  test(`a press that never sounded reports that it was ${ended}, in numbers only`, async (t) => {
+    const { harness } = await playingSong(t);
+    Object.assign(harness.engine, { timingRequested: true, unheardRequested: true });
+    harness.setNow(5_000);
+    const pressed = await timedPress(harness, '05.flac');
+    harness.setNow(5_900);
+    if (ended === 'replaced') harness.context.noteStreamingPress(makeTrack('06.flac'));
+    else if (ended === 'paused') await harness.api.pause();
+    else if (ended === 'seek') await harness.api.seek(120);
+    else await harness.api.stop();
+    await harness.settle();
+
+    const [report, ...more] = harness.sent('unheard-report');
+    assert.equal(more.length, 0, 'one line');
+    assert.deepEqual(report, {
+      type: 'unheard-report',
+      outcome: ended,
+      prepared: false,
+      pressedStreamId: pressed.open.streamId,
+      presses: 1,
+      pressedAtEpochMs: report.pressedAtEpochMs,
+      firstPressMs: 900,
+      openMs: 0,
+      metadataMs: null,
+      firstBytesMs: null,
+      decodedMs: null,
+      prepareMs: null,
+      endedMs: 900,
+    });
+    assert.doesNotMatch(JSON.stringify(report), /05\.flac|Track|src|path|title/);
+  });
+}
+
+test('a press still silent after fifteen seconds says so once, and goes on waiting', async (t) => {
+  const { harness, node } = await playingSong(t);
+  Object.assign(harness.engine, { timingRequested: true, unheardRequested: true });
+  harness.setNow(5_000);
+  const pressed = await timedPress(harness, '05.flac');
+  for (const now of [19_500, 20_000, 20_500]) {
+    harness.setNow(now);
+    harness.sockets[0].receive({ type: 'heartbeat' });
+    liveness(harness).callback();
+  }
+  assert.deepEqual(harness.sent('unheard-report').map(({ outcome }) => outcome), ['waiting']);
+
+  acceptMetadata(harness, pressed.open, { timing: true, timingUnheard: true });
+  receiveSong(harness, pressed.open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+  await harness.settle();
+  heardFor(node, 2);
+  assert.equal(harness.sent('start-report').length, 1, 'and still reports when it sounds');
+});
+
+test('a server that did not ask for unheard presses gets none', async (t) => {
+  const { harness } = await playingSong(t);
+  harness.engine.timingRequested = true;
+  await timedPress(harness, '05.flac');
+  await harness.api.pause();
+
+  assert.equal(harness.sent('unheard-report').length, 0);
+});
+
+test('a press on a different song still switches, and back', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  await rows.press('06.flac');
+  assert.equal(opensOf(harness, '06.flac').length, 1);
+  await rows.press('05.flac');
+
+  const opens = opensOf(harness, '05.flac');
+  assert.equal(opens.length, 2, 'the song pressed first is another song by then');
+  await answerOpen(harness, opens.at(-1), PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+});
+
+for (const ended of ['Pause', 'a seek']) {
+  test(`after ${ended} gave a pending start up, its row starts it again at once`, async (t) => {
+    const { harness } = await playingSong(t);
+    const rows = installRowPresses(harness);
+    await rows.press('05.flac');
+    if (ended === 'Pause') {
+      harness.context.togglePlayerPlayback();
+      await harness.settle();
+      assert.equal(harness.api.snapshot().paused, true, 'Pause is unchanged');
+    } else await harness.api.seek(120);
+    await harness.settle();
+    await rows.press('05.flac');
+    await harness.settle();
+
+    assert.equal(opensOf(harness, '05.flac').length, 2);
+  });
+}
+
+for (const when of ['before', 'after']) {
+  test(`a start that failed ${when} the player took the song can be pressed again at once`, async (t) => {
+    let harness;
+    let rows;
+    if (when === 'before') {
+      ({ harness } = await playingSong(t));
+      rows = installRowPresses(harness);
+      await rows.press('05.flac');
+    } else {
+      ({ harness, rows } = await coldStartPending(t));
+      assert.equal(harness.context.state.player.current.path, makeTrack('05.flac').path);
+    }
+    harness.sockets[0].unexpectedClose({ code: 4404 });
+    await harness.settle();
+    await harness.settle();
+    assert.equal(harness.engine.mode, 'error');
+    await rows.press('05.flac');
+    await harness.settle();
+    await harness.settle();
+
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.sockets.length, 2, 'it starts again on a new socket');
+  });
+}
+
+test('a start with no sound after fifteen seconds has timed out and can be pressed again', async (t) => {
+  const { harness } = await playingSong(t);
+  const rows = installRowPresses(harness);
+  harness.setNow(10_000);
+  await rows.press('05.flac');
+  harness.setNow(24_999);
+  await rows.press('05.flac');
+  assert.equal(opensOf(harness, '05.flac').length, 1);
+  harness.setNow(25_000);
+  await rows.press('05.flac');
+
+  assert.equal(opensOf(harness, '05.flac').length, 2);
+});
+
+test('an ignored press while the connection is gone retries the connection at once and keeps the one start', async (t) => {
+  const timers = manualTimers();
+  const harness = createEngineHarness({
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  t.after(() => harness.api.stop());
+  await harness.api.start(makeTrack('01.flac'));
+  const rows = installRowPresses(harness);
+  await rows.press('05.flac');
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets[1]?.readyState, 0, 'the attempt begun in the outage hangs');
+  const started = harness.engine.startRequestId;
+
+  await rows.press('05.flac');
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[1].closeCalls, 1, 'the hanging attempt is given up');
+  assert.equal(harness.sockets.length, 3, 'a fresh attempt starts at once');
+  assert.equal(harness.engine.startRequestId, started, 'without starting the song again');
+});
+
+// Nothing is heard before the grant, though the stream loads meanwhile.
+test('a start with no grant loads its audio silently and sounds once the grant arrives', async (t) => {
+  let permission = { untilMs: 0, forMs: 0 };
+  const harness = createEngineHarness({
+    realProcessor: true,
+    playbackSoundPermission: () => permission,
+  });
+  t.after(() => harness.api.stop());
+  harness.context.playbackSoundPermission = () => permission;
+  await harness.api.start(makeTrack());
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  for (const sequence of [0, 1]) {
+    receivePcmAndAssertEnqueue(harness, {
+      generation: open.generation, streamId: open.streamId, sequence,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+  }
+  const node = harness.nodes[0];
+
+  assert.equal(node.options.processorOptions.awaitsPermission, true, 'the audio thread fails closed');
+  assert.ok(harness.sent('credit').length > 0, 'it loads while it waits');
+  for (let quantum = 0; quantum < 10; quantum += 1) assert.ok(node.render()[0].every((sample) => sample === 0));
+
+  permission = { untilMs: Date.now() + 300_000, forMs: 300_000 };
+  harness.context.syncStreamingSoundPermission();
+
+  assert.ok(node.render()[0].some((sample) => sample !== 0));
 });
 
 // Bounded-interaction contracts (tests/ci/bounded-interactions.json): a socket chunk or a worklet
@@ -6915,5 +10114,142 @@ test('bounded interaction: the streaming keepalive sends one control per tick ov
     run,
     budgets: { requests: 10, outputEmissions: 0, domMutations: 0 },
     growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+/** A playing song whose socket is lost; [refuse] answers each later attempt as the test's network does. */
+async function startCountedOutage(counter, refuse, options = {}) {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    // Every socket the engine opens is counted, refused or not.
+    refuseConnection: (count) => {
+      counter.count('requests');
+      return count > 1 ? refuse : false;
+    },
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    ...options,
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  return { harness, timers };
+}
+
+test('bounded interaction: a reconnect retry asks once and opens one socket per tick over a 1,000-attempt outage', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (attempts) => {
+    const counter = createInteractionCounter();
+    const asked = [];
+    // The server answers its questions, but the network refuses every socket.
+    const fetch = async (url) => {
+      counter.count('requests');
+      asked.push(url);
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    const { harness, timers } = await startCountedOutage(counter, true, { fetch });
+    const retry = async () => {
+      timers.fire(timers.pending().find(({ delay }) => delay <= 1_000));
+      await settleTwice(harness);
+    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) await retry();
+    const opened = harness.sockets.length;
+    const questions = asked.length;
+    const work = await counter.measure(async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) await retry();
+    });
+    assert.equal(harness.sockets.length, opened + 10, 'one socket per retry');
+    assert.deepEqual(asked.slice(questions), Array(10).fill('/playback/state'), 'one question per retry');
+    assert.notEqual(harness.api.snapshot().mode, 'error', 'failed attempts never end the wait');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#scheduleStreamingReconnect',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 20 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: a hung connect given up at its deadline opens one socket per cycle over 1,000 attempts', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (attempts) => {
+    const counter = createInteractionCounter();
+    const { harness, timers } = await startCountedOutage(counter, 'hang');
+    const giveUp = async () => {
+      timers.fire(timers.pending().find(({ delay }) => delay >= 4_000));
+      await settleTwice(harness);
+      const retry = timers.pending().find(({ delay }) => delay <= 2_000);
+      if (retry) timers.fire(retry);
+      await settleTwice(harness);
+    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) await giveUp();
+    const opened = harness.sockets.length;
+    const work = await counter.measure(async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) await giveUp();
+    });
+    assert.equal(harness.sockets.length, opened + 10, 'one socket per deadline');
+    assert.notEqual(harness.api.snapshot().mode, 'error', 'hung attempts never end the wait');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#connectStreamingSocket',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 10 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: the socket liveness check does no work per tick over a 1,000-tick session', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (ticks) => {
+    const counter = createInteractionCounter();
+    const { harness } = await startCountedStreamingSession(counter);
+    const socket = harness.engine.socket;
+    const check = liveness(harness).callback;
+    for (let tick = 0; tick < ticks; tick += 1) check();
+    const work = await counter.measure(() => {
+      for (let tick = 0; tick < 10; tick += 1) check();
+    });
+    assert.equal(harness.engine.socket, socket, 'a socket that is heard is kept');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#watchStreamingSocketLiveness',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 0, outputEmissions: 0, domMutations: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});
+
+test('request capture: the reachability probe asks only the playback state, once per tick, over a 1,000-tick outage', async () => {
+  const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+  const { createRequestCapture, measureInteractionContract } = require('../helpers/request-capture.js');
+  await measureInteractionContract('js:runtime/player-streaming-engine.js#probeStreamingReachability', {
+    setup: async (ticks) => {
+      // The network is frozen: attempts hang and the server does not answer.
+      const capture = createRequestCapture(() => Promise.reject(new TypeError('Failed to fetch')));
+      const { harness } = await startCountedOutage(createInteractionCounter(), 'hang', { fetch: capture.fetch });
+      // The attempt has hung well past a healthy connect.
+      harness.setNow(5_000);
+      const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1).callback();
+      for (let tick = 0; tick < ticks; tick += 1) await probe();
+      return { harness, capture, probe };
+    },
+    act: async ({ harness, capture, probe }) => {
+      const sockets = harness.sockets.length;
+      const sent = capture.requests.length;
+      for (let tick = 0; tick < 10; tick += 1) await probe();
+      assert.equal(harness.sockets.length, sockets, 'while the server does not answer, the attempt waits');
+      return { requests: capture.urls().slice(sent) };
+    },
   });
 });

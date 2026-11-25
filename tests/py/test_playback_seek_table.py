@@ -19,6 +19,7 @@ from music_app.services.playback_seek_table import (
     lookup,
     mp3_seek_table,
     read_flac_seek_table,
+    whole_through,
 )
 
 
@@ -105,7 +106,7 @@ def test_flac_entries_start_real_frames_after_the_streams_header(ffmpeg, tmp_pat
 
 def test_the_shared_client_vectors_are_the_reference_lookups_answers():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    for section in (fixture, fixture["flac"]):
+    for section in (fixture, fixture["flac"], fixture["seekStream"]):
         raw = section["table"]
         table = SeekTable(raw["prefixBytes"], raw["prerollFrames"], tuple(raw["offsets"]), tuple(raw["samples"]))
         for case in section["cases"]:
@@ -148,6 +149,17 @@ def test_a_stream_open_waits_for_the_scan_already_running_instead_of_reading_the
     assert module._scans == {}
 
 
+def test_the_shared_splice_vectors_are_the_reference_whole_through_answers():
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    for section in (fixture, fixture["flac"], fixture["seekStream"]):
+        raw = section["table"]
+        table = SeekTable(raw["prefixBytes"], raw["prerollFrames"], tuple(raw["offsets"]), tuple(raw["samples"]))
+        assert section["wholeThroughCases"]
+        for case in section["wholeThroughCases"]:
+            frame = whole_through(table, initial_skip=section["initialSkip"], initial_total=section["initialTotal"],
+                                  stream_start=section["streamStart"], received_bytes=case["receivedBytes"])
+            assert frame == case["frame"], case
+
 
 def test_playback_refs_stream_preparation_contract_reads_only_the_issued_batch(tmp_path, monkeypatch):
     import asyncio
@@ -182,6 +194,80 @@ def test_playback_refs_stream_preparation_contract_reads_only_the_issued_batch(t
         large=1_000,
         run=run,
         budgets={"filesystem_enumerations": 0, "stat_calls": batch_size, "open_calls": batch_size},
+        growth=("stat_calls", 0),
+    )
+    assert small == production
+
+
+def test_a_claim_naming_its_song_by_path_prepares_only_that_songs_stream(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from music_app.routes import playback_control_asgi
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    class References:
+        """issue_batch over [library]: each named file is issued a reference and heard by on_media."""
+
+        library: dict[str, Path] = {}
+
+        def __init__(self, _config):
+            pass
+
+        def issue_batch(self, _actor, tracks, *, on_media=None):
+            issued = []
+            for track in tracks:
+                on_media(References.library[track["path"]])
+                issued.append({"clientKey": track["clientKey"], "playbackRef": "ref"})
+            return {"tracks": issued, "expiresAt": "later"}
+
+    class Claims:
+        def __init__(self, _config):
+            pass
+
+        def acquire(self, _actor, **_claim):
+            return {"protocol": 1, "claimToken": "claim-token"}
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=object()),
+        app=SimpleNamespace(state=SimpleNamespace(config={}, auth_policy_config={})),
+    )
+    monkeypatch.setattr(playback_control_asgi, "PlaybackReferenceService", References)
+    monkeypatch.setattr(playback_control_asgi, "PostgresPlaybackClaims", Claims)
+
+    def run(library_tracks: int) -> OperationCounts:
+        folder = tmp_path / f"library-{library_tracks}"
+        folder.mkdir()
+        References.library = {}
+        for index in range(library_tracks):
+            path = folder / f"{index:05d}.mp3"
+            path.write_bytes(b"not an mp3 frame")
+            References.library[f"song-{index}"] = path
+        payload = {"protocol": 1, "state": "playing", "clientId": "client", "clientSurface": "private_web",
+                   "track": {"path": f"song-{library_tracks - 1}", "title": "Song"}}
+
+        async def payload_of(_request):
+            return payload
+
+        monkeypatch.setattr(playback_control_asgi, "playback_payload", payload_of)
+        counts = OperationCounts()
+
+        async def press() -> None:
+            response = await playback_control_asgi.acquire_playback(request)
+            assert response.status_code == 200
+            await asyncio.gather(*playback_control_asgi._preparing)
+
+        with count_filesystem_and_media(monkeypatch, counts):
+            asyncio.run(press())
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/playback_control_asgi.py#acquire_playback",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 1, "open_calls": 1},
         growth=("stat_calls", 0),
     )
     assert small == production

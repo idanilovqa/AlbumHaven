@@ -149,7 +149,16 @@
     };
     if (enabled) notify(syncState);
     env.addEventListener?.('pagehide', () => { void flush(); });
-    env.addEventListener?.('online', () => { void flush(); });
+    // Retried when the device is online again, or when the page hears from the server again: a
+    // server that was down (or a tunnel restarting) never fires `online` on a device that kept its
+    // network. Settings that could not be loaded are saved from then on, so the notice goes too.
+    const retry = () => {
+      void flush().then((saved) => {
+        if (saved && syncState === 'unavailable') notify('saved');
+      });
+    };
+    env.addEventListener?.('online', retry);
+    env.addEventListener?.('album-haven:server-reachable', retry);
     return api;
   }
 

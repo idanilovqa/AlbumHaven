@@ -22,11 +22,11 @@ if (typeof initPlaybackOwnershipCoordinator === 'function') {
   if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
-if (typeof prepareStreamingPlaybackEngine === 'function'
+if (typeof prepareIdleStreamingPlayback === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   const prepareIdlePlayback = () => {
     if (idlePlaybackPreparationCancelled) return;
-    void prepareStreamingPlaybackEngine().catch((error) => {
+    void prepareIdleStreamingPlayback().catch((error) => {
       console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
     });
   };
@@ -53,6 +53,9 @@ const resolvedBootstrapView = resolveGalleryDisplayPreferenceViewState(
   galleryDisplayPreferenceResolutionOptions,
 );
 applyViewPayload(resolvedBootstrapView, { trackSidebarReveal: false });
+// The server was unreachable and this address was never kept: the kept page standing in for it
+// shows this address's view, named and saying why it cannot load, until the server answers.
+if (window.AlbumHavenAppCopy?.viewMissing) applyUnreachableView(window.location.href);
 if (typeof appBootstrap?.releasePayloadViewState === 'function') {
   appBootstrap.releasePayloadViewState();
 }
@@ -106,7 +109,10 @@ const shellMainContentKind = String(
   state.view?.shell_layout?.slots?.main_content?.content_kind || '',
 ).trim();
 const hasPagedRootInitialView = typeof isPagedRootGallery === 'function' && isPagedRootGallery();
+// A view standing in while the server is unreachable is refreshed once the server answers
+// (onServerAnswer below), never by a startup request that can only fail.
 const shouldStartImmediateHydration = hasPagedRootInitialView || shellMainContentKind === 'discovery_center_page'
+  || state.ui.galleryUnreachable
   ? false
   : shouldRunImmediateStartupHydration(state.view, bootstrap);
 let embeddedStartupViewPatch = startupHydration?.embeddedViewPatch && typeof startupHydration.embeddedViewPatch === 'object'
@@ -332,6 +338,12 @@ if (shouldStartImmediateHydration) {
 window.AlbumHavenAppCopy?.onServerAnswer(() => {
   void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
 });
+// A view whose page was never kept may still have its data on the device (an artist opened
+// online, app-copy-worker.js): asked for once, it replaces the Offline message when the worker
+// answers from what it kept, and the message stays when nothing was kept.
+if (window.AlbumHavenAppCopy?.viewMissing) {
+  void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+}
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
@@ -501,6 +513,7 @@ window.addEventListener('scroll', () => {
 if (typeof syncArtistsDrawerVisibility === 'function') {
   syncArtistsDrawerVisibility();
 }
+if (typeof initReturnPlace === 'function') void initReturnPlace();
 
 const tagEditorFooter = document.getElementById('tag-editor-footer');
 if (tagEditorFooter) {

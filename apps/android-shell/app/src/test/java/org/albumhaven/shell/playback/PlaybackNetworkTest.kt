@@ -93,7 +93,10 @@ class PlaybackNetworkTest {
         assertEquals(cookieHeader, request.headers["Cookie"])
         assertEquals("csrf+value", request.headers[ShellSession.CSRF_HEADER])
         val body = JSONObject(request.body!!.utf8())
-        assertEquals(setOf("protocol", "clientId", "clientSurface", "claimToken", "state", "track"), body.keys().asSequence().toSet())
+        assertEquals(
+            setOf("protocol", "clientId", "clientSurface", "claimToken", "state", "track"),
+            body.keys().asSequence().toSet(),
+        )
         assertEquals("mobile", body.getString("clientSurface"))
         assertTrue(body.isNull("claimToken"))
         assertEquals("playing", body.getString("state"))
@@ -219,10 +222,11 @@ class PlaybackNetworkTest {
         Thread.sleep(200)
 
         val listener = RecordingListener()
-        val socket = OkHttpPcmTransportFactory(client, session()).connect(listener)
+        val socket = OkHttpPcmTransportFactory(client, session(), TEST_CLIENT_ID).connect(listener)
         assertEquals("open", listener.next())
         val upgrade = server.takeRequest(5, TimeUnit.SECONDS)!!
         assertEquals("/playback/pcm", upgrade.url.encodedPath)
+        assertEquals("the socket names the client Play here elsewhere asks", TEST_CLIENT_ID, upgrade.url.queryParameter("client_id"))
         assertTrue(upgrade.connectionIndex in warmed)
         socket.close()
         assertEquals(1000, listener.next())

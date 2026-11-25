@@ -1,0 +1,9 @@
+{
+  "comment": "A plain press on another device asks the holder whether it plays; one that is quiet yields, one that says nothing is gone. pausedRenewalState is what older apps still send. Web, phone and server read this one contract.",
+  "socketQuery": "yields=1",
+  "pausedRenewalState": "paused",
+  "ask": {"type": "handover-yield", "requestId": "4f6b1c2e-8a0d-4e3b-9c57-1d2e3f4a5b6c"},
+  "silent": {"type": "handover-silent", "requestId": "4f6b1c2e-8a0d-4e3b-9c57-1d2e3f4a5b6c"},
+  "declined": {"type": "handover-declined", "requestId": "4f6b1c2e-8a0d-4e3b-9c57-1d2e3f4a5b6c"},
+  "done": {"type": "handover-done", "requestId": "4f6b1c2e-8a0d-4e3b-9c57-1d2e3f4a5b6c", "takenOver": true}
+}

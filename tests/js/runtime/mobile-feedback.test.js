@@ -1203,3 +1203,53 @@ test('notification card status labels stay on one line', () => {
   assert.match(rule, /overflow:\s*hidden/);
   assert.match(rule, /text-overflow:\s*ellipsis/);
 });
+
+// An album with neither a reference nor a key was named by its track paths, which phone-width history kept.
+function loadWithAlbumKeys(globals = {}) {
+  const context = load('mobile-navigation.js', {
+    getAlbumRequestKey: album => String(album?.album_ref || album?.key || '')
+      || (album.tracks || []).map(track => track.path).sort().join('|'),
+    ...globals,
+  });
+  // The grid's two naming rules alone: the rest of its file needs a document.
+  const grid = fs.readFileSync(path.join(runtime, 'virtual-artist-grid.js'), 'utf8');
+  for (const name of ['getAlbumHistoryKey', 'isPathLikeAlbumKey']) {
+    vm.runInContext(grid.match(new RegExp(String.raw`function ${name}\([\s\S]*?\r?\n}\r?\n`))[0], context);
+  }
+  return context;
+}
+
+test('history names an album by its reference, key or id, never by its track paths', () => {
+  const context = loadWithAlbumKeys();
+  const tracks = [{ path: 'Artist/Album/01 - One.flac' }, { path: 'Artist/Album/02 - Two.flac' }];
+
+  assert.equal(context.getAlbumHistoryKey({ album_ref: 'ref-1', key: 'artist::album', album_id: 7, tracks }), 'ref-1');
+  assert.equal(context.getAlbumHistoryKey({ key: 'artist::album', album_id: 7, tracks }), 'artist::album');
+  assert.equal(context.getAlbumHistoryKey({ album_id: 7, tracks }), 'id:7');
+  assert.equal(context.getAlbumHistoryKey({ tracks }), '');
+  const descriptor = context.mobilePageDescriptor('album', { album_id: 7, name: 'Album', tracks });
+  assert.equal(descriptor.albumKey, 'id:7');
+  assert.doesNotMatch(JSON.stringify(descriptor), /\.flac/);
+});
+
+test('a page loaded with an entry that names an album by its paths is rewritten without them', () => {
+  const replaced = [];
+  const signature = 'Artist/Album/01 - One.flac|Artist/Album/02 - Two.flac';
+  const history = {
+    state: { albumHavenNavigationPosition: 3, mobilePages: [
+      { kind: 'album', albumKey: signature },
+      { kind: 'utilities', albumKey: '', parentScrollAnchor: { albumKey: 'Other/Song.mp3', offset: 4 } },
+    ] },
+    replaceState(value, _title, href) { this.state = value; replaced.push(href); },
+  };
+  const context = loadWithAlbumKeys({ URL, window: { innerWidth: 390, history } });
+  const url = new URL(`https://example.test/?surface=albums&mobile_page=album&mobile_album=${encodeURIComponent(signature)}`);
+
+  context.forgetPathLikeAlbumKeys(url);
+
+  assert.equal(replaced.length, 1);
+  assert.doesNotMatch(replaced[0], /flac|mp3/);
+  assert.doesNotMatch(JSON.stringify(history.state), /flac|mp3/);
+  assert.equal(history.state.albumHavenNavigationPosition, 3);
+  assert.deepEqual(history.state.mobilePages.map(page => page.kind), ['utilities']);
+});

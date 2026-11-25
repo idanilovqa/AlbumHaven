@@ -114,6 +114,17 @@
 .app-bar .toolbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .app-bar .toolbar-left { margin: 0; padding-left: 0; }
 .app-bar .toolbar-right { padding-left: 20px; flex-wrap: nowrap; }
+/* The kept-library notice sits between the search and the right toolbar, centred in the space
+   left; its full line keeps to one line and ends in an ellipsis when the bar is narrow. */
+.app-bar--library { grid-template-columns: var(--app-sidebar-width) auto minmax(0, 1fr) auto; }
+.app-bar--library > .toolbar-left { grid-column: 2; grid-row: 1; }
+.app-bar--library > .app-bar-offline { grid-column: 3; grid-row: 1; }
+.app-bar--library > .toolbar-right { grid-column: 4; grid-row: 1; }
+.app-bar-offline { position: relative; display: flex; justify-content: center; min-width: 0; padding: 0 16px; color: var(--app-ink); outline: none; }
+.app-bar-offline[hidden] { display: none; }
+.app-bar-offline__full { min-width: 0; }
+.app-bar-offline__full .offline-notice__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-bar-offline__short { display: none; }
 .app-bar .search-input-wrap { width: 360px; min-width: 0; flex: 0 1 360px; }
 .app-bar input[type='search'] {
   height: 34px;

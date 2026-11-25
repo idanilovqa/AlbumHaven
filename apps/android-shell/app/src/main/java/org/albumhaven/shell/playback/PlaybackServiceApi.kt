@@ -57,6 +57,9 @@ interface PlaybackServiceHandle {
     /** Another origin never inherits playback: the old one stops and releases its claim. */
     fun selectOrigin(origin: String)
 
+    /** Signed out: playback stops and gives its claim back, and its queue goes with the saved copy of it. */
+    fun signedOut()
+
     /** Receives every controller event on the main thread; null stops them. */
     fun setEventListener(listener: ((NativePlaybackEvent) -> Unit)?)
 

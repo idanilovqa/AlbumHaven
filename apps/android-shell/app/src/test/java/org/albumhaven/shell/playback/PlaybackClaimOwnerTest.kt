@@ -37,6 +37,77 @@ class PlaybackClaimOwnerTest {
         assertEquals(2 * PlaybackClaimOwner.HEARTBEAT_MS, owner.nextDeadlineMs())
     }
 
+    // playback.claim.takeover: Play while another device plays moves its song here.
+    @Test
+    fun aTakeoverAcquireAsksOnceToReplaceTheOtherClaimAndEveryRequestReportsWhereTheSongIs() {
+        var heard: ClaimPosition? = ClaimPosition(61_000, 300_000)
+        val reporting = PlaybackClaimOwner(api, TEST_CLIENT_ID, io::addLast, posted::addLast, { now }, events::add) { heard }
+        val outcomes = mutableListOf<ClaimOutcome>()
+        reporting.acquire(track, true, outcomes::add)
+        drain()
+        assertEquals(listOf(ClaimOutcome.GRANTED), outcomes)
+        assertEquals(listOf(true), api.takeovers)
+        assertEquals(listOf<ClaimPosition?>(ClaimPosition(61_000, 300_000)), api.positions)
+
+        heard = ClaimPosition(71_000, 300_000)
+        now = PlaybackClaimOwner.HEARTBEAT_MS
+        reporting.tick()
+        drain()
+        assertEquals("a renewal never takes over again", listOf(true, false), api.takeovers)
+        assertEquals(ClaimPosition(71_000, 300_000), api.positions.last())
+    }
+
+    // A takeover after a seek or a skip got the place of up to ten seconds before.
+    @Test
+    fun aSeekOrASkipIsPublishedAtOnceOneRenewalAtATime() {
+        owner.acquire(track) {}
+        drain()
+        now = 1_000
+        owner.publishNow()
+        assertEquals(1_000L, owner.nextDeadlineMs())
+        owner.tick()
+        assertNull("one in flight", owner.nextDeadlineMs())
+        now = 1_100
+        owner.updateTrack(track.copy(playbackRef = "next-ref"))
+        drain()
+        assertEquals("then the newest", 1_100L, owner.nextDeadlineMs())
+    }
+
+    // The phone that just paused still answers Play here on another device.
+    @Test
+    fun handOverNamesTheHeldTokenOrTheOneJustGivenBack() {
+        owner.acquire(track) {}
+        drain()
+        val held = owner.heldToken
+        owner.release()
+        drain()
+        assertEquals("just paused", held, owner.handOver())
+
+        owner.acquire(track) {}
+        drain()
+        val playing = owner.heldToken
+        assertEquals("playing", playing, owner.handOver())
+    }
+
+    @Test
+    fun anUnansweredTakeoverIsSentAgainAsOneAndAnAnswerSettlesIt() {
+        api.acquireResponse = { ClaimResponse.Unreachable }
+        owner.acquire(track, true) {}
+        drain()
+        api.acquireResponse = { ClaimResponse.Granted("token-taken") }
+        now = PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertEquals(listOf(true, true), api.takeovers)
+        assertTrue(owner.owned)
+
+        owner.release()
+        drain()
+        owner.acquire(track) {}
+        drain()
+        assertEquals("a later Play is an ordinary acquire", false, api.takeovers.last())
+    }
+
     @Test
     fun concurrentRequestsShareOneAcquisition() {
         val outcomes = mutableListOf<ClaimOutcome>()
@@ -278,5 +349,72 @@ class PlaybackClaimOwnerTest {
 
         assertTrue(api.calls.isEmpty())
         assertTrue(events.isEmpty())
+    }
+
+    // No network is no reason to wait, and no reason to stop: a dead phone blocks nobody, as a press elsewhere
+    // asks it and starts when it says nothing.
+    @Test
+    fun aClaimMaySoundThroughAnOutageUntilTheServerSaysAnotherPlays() {
+        assertFalse("nothing before the grant", owner.maySound())
+        owner.acquire(track) {}
+        drain()
+        api.renewResponse = { ClaimResponse.Unreachable }
+
+        now = 60L * 60 * 1000
+        owner.tick()
+        drain()
+        assertTrue("an hour without the server, it still sounds", owner.maySound())
+
+        api.renewResponse = { ClaimResponse.Conflict }
+        now += PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertFalse("another device plays now", owner.maySound())
+        assertEquals(ClaimEvent.Lost, events.last())
+    }
+
+    @Test
+    fun aStartTheServerDidNotAnswerSoundsAtOnceAndHoldsTheClaimOnceAnswered() {
+        var started = 0
+        owner.onStartedWithoutServer = { started += 1 }
+        api.acquireResponse = { ClaimResponse.Unreachable }
+        owner.acquire(track) {}
+        drain()
+        assertTrue("it plays on what it has", owner.maySound())
+        assertEquals(1, started)
+
+        now = PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertEquals("told once", 1, started)
+        api.acquireResponse = { ClaimResponse.Granted("token-late") }
+        now = 2 * PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertEquals("token-late", owner.heldToken)
+        assertTrue(owner.maySound())
+    }
+
+    @Test
+    fun aStartTheServerDidNotAnswerStopsOnceAnotherDevicePlayedMeanwhile() {
+        api.acquireResponse = { ClaimResponse.Unreachable }
+        owner.acquire(track) {}
+        drain()
+        assertTrue(owner.maySound())
+
+        api.acquireResponse = { ClaimResponse.Conflict }
+        now = PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertFalse(owner.maySound())
+        assertEquals("it stops, as a lost claim does", ClaimEvent.Lost, events.last())
+    }
+
+    @Test
+    fun aClaimGivenBackMayNotSound() {
+        owner.acquire(track) {}
+        drain()
+        owner.release()
+        assertFalse(owner.maySound())
     }
 }

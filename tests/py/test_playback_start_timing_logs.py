@@ -122,7 +122,8 @@ def test_a_first_claim_logs_its_time_and_a_fast_heartbeat_logs_nothing(playback_
         assert status == 200
 
     [line] = control_lines(caplog, "claim")
-    assert re.fullmatch(r"Playback claim timing status=200 elapsed_ms=\d+ renew=False scrobbling_ms=\d+", line)
+    # A start does not wait for the Last.fm lookup: the renewal says it.
+    assert re.fullmatch(r"Playback claim timing status=200 elapsed_ms=\d+ renew=False scrobbling_ms=-", line)
     assert "c" * 43 not in caplog.text and "p" * 43 not in caplog.text
     assert "opaque-reference" not in caplog.text
 

@@ -1,6 +1,7 @@
 function getPlayerElements() {
   return {
     player: document.querySelector('.global-player'),
+    elsewhere: document.querySelector('[data-player-elsewhere]'),
     coverButton: document.getElementById('player-cover-button'),
     play: document.getElementById('player-play'),
     title: document.getElementById('player-title'),
@@ -233,7 +234,9 @@ async function updateWaveformAppearance(forceReload = false) {
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
-  const path = String(state.player.current?.path || '');
+  // The waveform follows the sound, not the press, with the title.
+  const shown = resolveShownPlayerTrack(playback);
+  const path = String(shown?.track?.path || '');
   const isWaveform = state.player.loopActive || state.player.appearance.seekbarMode === 'waveform';
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
@@ -241,7 +244,10 @@ async function updateWaveformAppearance(forceReload = false) {
     els.waveformCanvas.hidden = false;
   }
   if (!isWaveform || !els.waveformCanvas || !path) {
-    if (!path) clearWaveformCanvas();
+    if (!path) {
+      state.player.waveform.shown = null;
+      clearWaveformCanvas();
+    }
     return;
   }
   const renderToken = forceReload ? state.player.waveform.renderToken + 1 : state.player.waveform.renderToken;
@@ -249,32 +255,23 @@ async function updateWaveformAppearance(forceReload = false) {
   if (forceReload) {
     clearWaveformCanvas();
   }
-  const generation = Number(playback.generation ?? state.player.streaming?.generation) || 0;
+  // The peaks belong to the song, not to one stream of it: a restart of the same song (a seek past
+  // the received audio in an outage) keeps its waveform, so a seek always has it to aim at.
+  // A pressed song's peaks can load before it sounds: the shown song keeps the ones last drawn.
   const active = state.player.waveform.compactPeaks;
-  const waveform = active?.path === path && active.generation === generation
-    ? active.data
-    : null;
+  const drawn = state.player.waveform.shown;
+  const waveform = active?.path === path ? active.data : drawn?.path === path ? drawn.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;
-  const duration = Number(playback.duration) || 0;
-  const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
+  const progressRatio = shown.duration > 0 ? shown.currentTime / shown.duration : 0;
+  state.player.waveform.shown = waveform ? { path, data: waveform, progressRatio } : null;
   drawWaveformOnCanvas(els.waveformCanvas, waveform, progressRatio);
 }
 
 async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
-  const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-  const playback = getPlayerPlaybackSnapshot();
-  if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
-      || String(state.player.current?.path || '') !== currentPath) return;
-  const activePeaks = state.player.waveform.compactPeaks;
-  if (activePeaks?.path !== currentPath || activePeaks.generation !== generation
-      || activePeaks.data !== currentPeaks) {
-    state.player.waveform.compactPeaks = { path: currentPath, generation, data: currentPeaks };
-    await updateWaveformAppearance();
-  }
-  if (continuityPath
+  const currentPeaks = await loadPlayingWaveformPeaks(event.currentPath, generation);
+  if (currentPeaks && continuityPath
       && Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) === generation) {
     await loadWaveformPeaks(continuityPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   }

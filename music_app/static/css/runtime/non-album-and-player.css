@@ -933,6 +933,41 @@ pointer-events: none;
 opacity: 0;
 pointer-events: none;
 }
+/* Playback on another device (mockup playback-elsewhere-status v003): the idle label's text over
+   the whole player, the dimming deepest behind it and spreading to every side. Only Play stays
+   above it: pressable where it takes playback over here, disabled where it cannot. */
+.player-elsewhere-overlay {
+position: absolute;
+inset: 0;
+z-index: 5;
+display: grid;
+place-items: center;
+background: radial-gradient(ellipse 70% 150% at 50% 50%, rgba(3, 9, 12, 0.95) 0%, rgba(3, 9, 12, 0.85) 35%, rgba(3, 9, 12, 0.6) 70%, rgba(3, 9, 12, 0.5) 100%);
+}
+.player-elsewhere-overlay[hidden],
+.global-player.is-compact .player-elsewhere-overlay {
+display: none;
+}
+/* Golden like "Nothing is playing", and larger. The idle label keeps this
+   ink under every player palette (the appearance rule's `:is()` cannot match its ::after), so this
+   label takes no palette ink either, so it keeps its golden tint. */
+.player-elsewhere-label {
+color: #d9f99d;
+font-size: 0.95rem;
+font-weight: 900;
+letter-spacing: 0.12em;
+text-transform: uppercase;
+white-space: nowrap;
+}
+.global-player.is-playing-elsewhere:not(.is-compact) #player-play {
+position: relative;
+z-index: 6;
+}
+/* At phone width the cluster holding Play is its own stacking layer: it rises above the overlay too. */
+.global-player.is-playing-elsewhere:not(.is-compact) .player-play-cluster {
+position: relative;
+z-index: 6;
+}
 .player-timeline-wrap.is-idle :is(.player-waveform-canvas) {
 opacity: 0;
 }

@@ -243,6 +243,20 @@ function getAlbumRequestKey(album) {
   return String(album?.album_ref || album?.key || '').trim() || getAlbumPathSignature(album);
 }
 
+// What history and addresses may keep of an album: its reference or key, else its id, never its file paths
+// (the path signature names an album only in memory). Empty when it has none of those.
+function getAlbumHistoryKey(album) {
+  const named = String(album?.album_ref || album?.key || '').trim();
+  if (named) return named;
+  const id = Number(album?.album_id);
+  return Number.isInteger(id) && id > 0 ? `id:${id}` : '';
+}
+
+// A path signature kept by an earlier build: one or more track paths.
+function isPathLikeAlbumKey(value) {
+  return /\.(?:mp3|flac|m4a|mp4|ogg|oga|opus|wav|aac|wma|ape|aiff?|alac|dsf|wv)(?:\||$)/i.test(String(value || ''));
+}
+
 function getAlbumIdentity(album) {
   return getAlbumPathSignature(album) || getAlbumRequestKey(album);
 }
@@ -253,9 +267,11 @@ function indexGalleryAlbums(groupsList, albumIndex) {
       const key = getAlbumIdentity(album);
       const requestKey = getAlbumRequestKey(album);
       const versionKey = getAlbumCardVersionKey(album);
+      const historyKey = getAlbumHistoryKey(album);
       if (key) albumIndex.set(key, album);
       if (requestKey) albumIndex.set(requestKey, album);
       if (versionKey) albumIndex.set(versionKey, album);
+      if (historyKey) albumIndex.set(historyKey, album);
     });
   });
   return albumIndex;
@@ -2985,6 +3001,9 @@ function renderArtistGroups(options = {}) {
   ) {
     rebuildAlbumIndex([]);
     virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+  } else if (state.ui?.galleryUnreachable && virtualGrid.containerEl) {
+    rebuildAlbumIndex([]);
+    virtualGrid.containerEl.innerHTML = buildGalleryUnreachableHtml(state.ui.galleryUnreachable);
   }
   if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }

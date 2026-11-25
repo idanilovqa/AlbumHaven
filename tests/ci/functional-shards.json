@@ -535,6 +535,90 @@
               "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
               "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W01 a browser loads the library from the server and keeps a copy without file paths",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W05 offline, the saved library appears at once, read-only, and recovers without a reload",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W09 after the first visit, a new tab opened offline shows the saved library, never a connection error",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W10 offline, reloading an artist opened online shows that artist's kept albums, and an artist never opened names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W11 a slow connection that is still online never shows the Offline notice while the library loads",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W14 a navigation with no answer shows the saved library with the Offline line after 10 s, never sooner, and goes live in place when the answer comes",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+              "case": "FTC-IAR-W15 offline, album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the network returning, without a reload",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+              "case": "FTC-IAR-W16 with the server down behind its tunnel (502), album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the server answering, without a reload",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
+              "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnSignIn.spec.js",
+              "case": "FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library, and more albums show 'Offline. Can't load more albums, check your network or try again later'",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnOfflineData.spec.js",
+              "case": "FTC-IAR-W20 after browsing online, an offline reload still opens every artist and album already seen, by the tree and by scrolling, and their details",
+              "area": "gallery-search"
             }
           ]
         }
@@ -822,6 +906,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/playbackStartLatency.spec.js",
+              "case": "FTC-PLAYER-026 the first song after the page opens and a switch to another song both sound within a second while the CPU is busy",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
               "case": "FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submit after recovery",
               "area": "playback"
@@ -1056,6 +1147,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek",
+              "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-025 the first song played right after sign-in draws its own waveform about a second after it starts",
+              "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
               "case": "FTC-NON-ALBUM-012 renders exception groups as the approved compact track table",
               "area": "album-details"
@@ -1101,6 +1206,41 @@
               "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
               "case": "FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back each show their place, never reset to the start, never stop or disable Play, and the last one plays",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+              "case": "FTC-PLAYER-028 A press on the next track of the playing album starts it as soon as the server confirms the press",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playAfterPause.spec.js",
+              "case": "FTC-PLAYER-030 Pressing Play after Pause asks the server and plays the paused song on from its place, on a normal and a 4x slower processor",
+              "area": "playback"
             }
           ]
         },
@@ -1246,6 +1386,41 @@
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
               "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received audio falls silent at once and stays playing, and after the network returns one press plays the current or another song",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-005 owner round 7 with the server answering 530 for a minute after Wi-Fi returns: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+              "area": "playback"
             }
           ]
         },
@@ -1376,6 +1551,48 @@
               "project": "functional",
               "test": "tests/e2e/specs/playerArtworkSearchContext.spec.js",
               "case": "FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received audio in an outage shows its place at once with one click and keeps the waveform, playback goes on by itself when the network returns, and one press plays another song",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+              "case": "FTC-PLAYER-029 The playing song keeps sounding through a press until the pressed song starts",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
               "area": "playback"
             }
           ]

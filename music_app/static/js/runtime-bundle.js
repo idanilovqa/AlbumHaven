@@ -1799,6 +1799,13 @@ function findRememberedRuntimeAlbumCoverAuthority(album) {
 }
 
 function applyViewPayload(payload, options = {}) {
+  // Any applied view replaces one the server could not be reached for (applyUnreachableView),
+  // and the end of a gallery that could not load more (setGalleryEndOffline).
+  if (state.ui?.galleryUnreachable) {
+    state.ui.galleryUnreachable = null;
+    if (typeof document !== 'undefined') document.body?.toggleAttribute?.('data-gallery-view-unreachable', false);
+  }
+  if (typeof setGalleryEndOffline === 'function') setGalleryEndOffline('');
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }
@@ -2097,14 +2104,209 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 
 // BEGIN js/runtime/pending-projection-fetch.js
 
+// A gateway answering for a server it cannot reach (a tunnel without its server answers 502,
+// 504 or 520-530 with its own page). The app's own 503 means "not ready yet", never unreachable.
+const isGatewayFailureStatus = status => status === 502 || status === 504 || (status >= 520 && status <= 530);
+
+// What a surface that needs the server says while the server cannot be reached, the device
+// offline or the server down alike: [subject] names what could not load.
+// The detail stands under an "Offline" title where the message is centered (v004).
+const SERVER_UNREACHABLE_TITLE = 'Offline';
+function serverUnreachableDetail(subject) {
+  return `Can't load ${subject}, check your network or try again later`;
+}
+function serverUnreachableMessage(subject) {
+  return `${SERVER_UNREACHABLE_TITLE}. ${serverUnreachableDetail(subject)}`;
+}
+
+// Reachability, so Offline does not outlast an outage after the network returns. Once a
+// request finds the server unreachable, it is probed every few seconds, each probe given up after a
+// few more so a tunnel holding requests cannot stall it, and at once on the browser's `online`
+// event; the first answer, or any answered request, tells every surface showing Offline to load
+// again (onServerReachableAgain).
+const REACHABILITY_PROBE_INTERVAL_MS = 2500;
+const REACHABILITY_PROBE_TIMEOUT_MS = 4000;
+const serverReachability = {
+  unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set(),
+  // Some answer while unreachable came from the device copy, so its views refresh on recovery.
+  copyServed: false,
+};
+
+// The device copy's worker answered in the server's place (app-copy-worker.js marks such answers).
+const isDeviceCopyAnswer = response => response?.headers?.get?.('X-Album-Haven-App-Copy') === 'cache';
+
+function onServerReachableAgain(listener) {
+  serverReachability.listeners.add(listener);
+  return () => serverReachability.listeners.delete(listener);
+}
+
+function isServerUnreachable() {
+  return serverReachability.unreachable;
+}
+
+// The page says Offline: the runtime found the server unreachable, or the page runs from its device
+// copy without an answer yet (app-copy.js). A failure then is explained by that line, not an alert.
+function isOfflineShown() {
+  if (serverReachability.unreachable) return true;
+  const notice = typeof document !== 'undefined' ? document.getElementById('app-copy-offline-notice') : null;
+  return Boolean(notice && !notice.hidden);
+}
+
+// The page's Offline line and read-only follow this state in every tab (app-copy.js).
+function tellAppCopyReachability(unreachable) {
+  if (typeof window !== 'undefined') window.AlbumHavenAppCopy?.setServerUnreachable?.(unreachable);
+}
+
+function noteServerReachable() {
+  if (!serverReachability.unreachable) return;
+  serverReachability.unreachable = false;
+  tellAppCopyReachability(false);
+  // Scripts outside the runtime (settings sync, client-device-preferences.js) retry on it.
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('album-haven:server-reachable'));
+  }
+  clearTimeout(serverReachability.timer);
+  serverReachability.timer = 0;
+  const recovery = { copyServed: serverReachability.copyServed };
+  serverReachability.copyServed = false;
+  serverReachability.listeners.forEach((listener) => {
+    try {
+      listener(recovery);
+    } catch (error) {
+      console.error('[AlbumHaven][Reachability] A surface failed to load again.', error);
+    }
+  });
+}
+
+function noteServerUnreachable() {
+  if (!serverReachability.listening && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    serverReachability.listening = true;
+    window.addEventListener('online', () => {
+      if (serverReachability.unreachable) void probeServerReachability();
+    });
+  }
+  if (serverReachability.unreachable) return;
+  serverReachability.unreachable = true;
+  tellAppCopyReachability(true);
+  scheduleReachabilityProbe();
+}
+
+// The device going offline is known at once: the open page says so without waiting for a request.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('offline', () => noteServerUnreachable());
+}
+
+function scheduleReachabilityProbe() {
+  clearTimeout(serverReachability.timer);
+  serverReachability.timer = setTimeout(() => { void probeServerReachability(); }, REACHABILITY_PROBE_INTERVAL_MS);
+}
+
+// Whether the server's health check answers within a few seconds.
+async function serverAnswersHealthCheck() {
+  const controller = new AbortController();
+  const giveUp = setTimeout(() => controller.abort(), REACHABILITY_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch('/health', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
+    return response.status < 500;
+  } catch (_error) {
+    return false;
+  } finally {
+    clearTimeout(giveUp);
+  }
+}
+
+async function probeServerReachability() {
+  if (!serverReachability.unreachable || serverReachability.probing) return;
+  serverReachability.probing = true;
+  clearTimeout(serverReachability.timer);
+  let answered = false;
+  try {
+    answered = await serverAnswersHealthCheck();
+  } finally {
+    serverReachability.probing = false;
+  }
+  if (answered) noteServerReachable();
+  else if (serverReachability.unreachable) scheduleReachabilityProbe();
+}
+
+// A dead network often fails no request at all (a laptop whose VPN or virtual adapter stays up never
+// reports `offline`): the request just hangs until the system gives up, a minute or more. So a request
+// still unanswered after a few seconds checks the server: no answer to that either (or the server
+// already known unreachable) gives the request up as unreachable at once. A slow server that answers
+// its health check is waited on as long as it takes.
+async function fetchGivingUpWhenUnreachable(url, init) {
+  // Without abortable requests (a bare script host) the request is simply waited on.
+  if (typeof AbortController !== 'function' || typeof AbortSignal === 'undefined'
+      || typeof AbortSignal.timeout !== 'function') return fetch(url, init);
+  const own = new AbortController();
+  const callerSignal = init?.signal;
+  const forward = () => own.abort();
+  if (callerSignal?.aborted) own.abort();
+  else callerSignal?.addEventListener('abort', forward, { once: true });
+  let settled = false;
+  let givenUp = false;
+  const checkDue = AbortSignal.timeout(REACHABILITY_PROBE_TIMEOUT_MS);
+  const check = async () => {
+    if (settled || (!serverReachability.unreachable && await serverAnswersHealthCheck()) || settled) return;
+    givenUp = true;
+    own.abort();
+  };
+  checkDue.addEventListener('abort', check, { once: true });
+  try {
+    return await fetch(url, { ...init, signal: own.signal });
+  } catch (error) {
+    if (givenUp) throw new TypeError('Album Haven did not answer.');
+    throw error;
+  } finally {
+    settled = true;
+    checkDue.removeEventListener('abort', check);
+    callerSignal?.removeEventListener('abort', forward);
+  }
+}
+
+// Once the server is known unreachable, a request says so to the device copy's worker, which then
+// answers kept data at once instead of first waiting to tell a busy server from a cut network
+// (app-copy-worker.js): a kept gallery scrolls page by page without seconds per page.
+function withKnownUnreachable(init) {
+  if (!serverReachability.unreachable || typeof Headers !== 'function') return init;
+  const headers = new Headers(init?.headers);
+  headers.set('X-Album-Haven-Unreachable', '1');
+  return { ...init, headers };
+}
+
 // While the server publishes the library, projection-backed requests answer 503
 // with a pending code. The same request repeats once per second for up to 60 s;
-// aborting init.signal cancels the wait without another request.
+// aborting init.signal cancels the wait without another request. No answer at all,
+// or a gateway's, rejects with `serverUnreachable` set.
 async function fetchRetryingPendingProjection(url, init) {
   const signal = init?.signal;
   const deadline = Date.now() + 60000;
   while (true) {
-    const response = await fetch(url, init);
+    let response;
+    try {
+      response = await fetchGivingUpWhenUnreachable(url, withKnownUnreachable(init));
+    } catch (error) {
+      // fetch rejects with a TypeError when no answer arrives; an abort is the caller's own.
+      if (error?.name === 'TypeError') {
+        error.serverUnreachable = true;
+        noteServerUnreachable();
+      }
+      throw error;
+    }
+    if (isGatewayFailureStatus(response.status)) {
+      noteServerUnreachable();
+      throw Object.assign(new Error(`Album Haven could not be reached (${response.status}).`), {
+        status: response.status, serverUnreachable: true,
+      });
+    }
+    // An answer from the device copy means the server was not reached: shown as kept data, and the
+    // server still probed until it answers.
+    if (isDeviceCopyAnswer(response)) {
+      noteServerUnreachable();
+      serverReachability.copyServed = true;
+      return response;
+    }
+    noteServerReachable();
     if (response.status !== 503) return response;
     const pending = await response.clone().json().catch(() => null);
     if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
@@ -2568,6 +2770,12 @@ function dropViewFromHistoryState() {
 // END js/runtime/discovery-center-navigation.js
 
 // BEGIN js/runtime/browser-storage-helpers.js
+
+// The signed-in account this page was rendered for: what it saves for that account is read back only for it.
+function pageAccountKey() {
+  if (typeof document === 'undefined') return '';
+  return document.querySelector?.('meta[name="album-haven-account"]')?.getAttribute('content') || '';
+}
 
 function getBrowserLocalStorage() {
   try {
@@ -4662,6 +4870,33 @@ if (typeof module !== 'undefined' && module.exports) {
 
 // END js/runtime/alert-components.js
 
+// BEGIN js/runtime/offline-notice.js
+
+// OfflineNotice (approved v004, unreachable server state): plain text with a muted crossed-out
+// cloud, no box, border or tint. `line` is one line with the small cloud before it, both on one
+// centerline and centred as a group (the end of a kept gallery, the kept-library notice). `message` is centered: the small
+// cloud and a bold, larger title on one centerline, then the detail in muted text (Album Details and
+// a gallery view that cannot load). The Jinja renderer is components/offline-notice.html; both share
+// css/runtime/offline-notice.css.
+const OFFLINE_NOTICE_VARIANTS = new Set(['line', 'message']);
+
+function buildOfflineCloudHtml() {
+  return '<svg viewBox="0 0 96 96" aria-hidden="true"><path d="M30 66h38a14 14 0 0 0 2-27.9A20 20 0 0 0 31.4 36 15 15 0 0 0 30 66Z"></path><path d="M22 22 74 74"></path></svg>';
+}
+
+// [message] is the line, or the detail under [title] for `message`.
+function buildOfflineNoticeHtml(config = {}) {
+  const variant = OFFLINE_NOTICE_VARIANTS.has(config.variant) ? config.variant : 'line';
+  const cloud = `<span class="offline-notice__cloud">${buildOfflineCloudHtml()}</span>`;
+  const text = `<p class="offline-notice__text">${escapeHtml(String(config.message || ''))}</p>`;
+  const body = variant === 'message'
+    ? `<p class="offline-notice__title">${cloud}${escapeHtml(String(config.title || ''))}</p>${text}`
+    : `${cloud}${text}`;
+  return `<div class="offline-notice offline-notice--${variant}" role="status" data-offline-notice="${variant}">${body}</div>`;
+}
+
+// END js/runtime/offline-notice.js
+
 // BEGIN js/runtime/album-artbox.js
 
 function buildMissingAlbumMarkHtml() {
@@ -4679,14 +4914,17 @@ function buildMissingAlbumMarkHtml() {
 
 function buildAlbumArtboxHtml(config = {}) {
   const requestedState = String(config.state || '').trim().toLowerCase();
-  const state = ['ready', 'loading', 'empty', 'missing'].includes(requestedState)
+  const state = ['ready', 'loading', 'empty', 'missing', 'offline'].includes(requestedState)
     ? requestedState
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
   const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
-  const content = state === 'missing' || state === 'empty'
+  // offline: the OfflineNotice cloud, for art the server could not be reached for.
+  const content = state === 'offline'
+    ? `<span class="album-artbox__offline-mark">${buildOfflineCloudHtml()}</span>`
+    : state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || (state === 'loading'
       ? '<span class="album-artbox__placeholder" role="status">Loading cover art...</span>'
@@ -5017,6 +5255,12 @@ function buildArtistFamilyPanelHtml(config = {}) {
 
 function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
+}
+
+// A view the server could not be reached for: the centered OfflineNotice message in place of its
+// albums, [detail] under the "Offline" title.
+function buildGalleryUnreachableHtml(detail) {
+  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOfflineNoticeHtml({ variant: 'message', title: SERVER_UNREACHABLE_TITLE, message: detail })}</div>`;
 }
 
 function buildGalleryDividerHtml(config = {}) {
@@ -5929,6 +6173,8 @@ const state = {
   },
   player: {
     selectedTrack: null,
+    // What the player shows: the current song once it sounds (resolveShownPlayerTrack).
+    shown: null,
     streaming: {
       mode: 'stopped',
       generation: 0,
@@ -6075,7 +6321,7 @@ const state = {
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';
-const PLAYER_STATE_STORAGE_KEY = 'albumhaven.playerState.v1';
+const PLAYER_STATE_STORAGE_KEY = 'albumhaven.playerState.v2';
 
 
 function getDetectedBrowserTimeZone() {
@@ -7774,6 +8020,15 @@ function renderGalleryMainContext(bar, context) {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  // A view the server could not be reached for has no counts to give, only its name.
+  if (state.ui?.galleryUnreachable) {
+    summary.hidden = true;
+    summary.textContent = '';
+    if (inlineTotal) {
+      inlineTotal.hidden = true;
+      inlineTotal.textContent = '';
+    }
+  }
   positionGalleryFamilyPanel(bar);
 }
 
@@ -8290,10 +8545,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
 
 // Every client decodes with these pinned builds, never a browser or system decoder.
 const STREAMING_DECODER_BASE_URL = '/static/vendor/wasm-audio-decoders/';
+// Each build decodes in a Worker of its own (its `workerClassName`), so a song decoding never holds
+// the page: on the page's thread a press waited behind about 0.7 s of decoding a second at 4x CPU
+// (a press is instant even at 100% CPU). A browser that cannot start one
+// decodes on the page's thread instead.
 const STREAMING_DECODER_BUILDS = {
-  mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder' },
-  flac: { file: 'flac-decoder.min.js', global: 'flac-decoder', className: 'FLACDecoder' },
+  mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder', workerClassName: 'MPEGDecoderWebWorker' },
+  flac: { file: 'flac-decoder.min.js', global: 'flac-decoder', className: 'FLACDecoder', workerClassName: 'FLACDecoderWebWorker' },
 };
+// Decoders kept ready, reset, per codec: a stream takes one instead of starting a Worker.
+const STREAMING_DECODER_POOL_SIZE = 2;
 const STREAMING_DECODER_SELF_CHECK_TOLERANCE = 0.01;
 const STREAMING_DECODER_SELF_CHECK_CLIPS = {
   "mp3": {
@@ -8320,15 +8581,45 @@ function loadStreamingDecoderScript(file) {
   });
 }
 
-function createStreamingDecoder(codec) {
-  const { global, className } = STREAMING_DECODER_BUILDS[codec];
-  return new window[global][className]();
+// The class each codec decodes with, once its self-check passed: the Worker one where it works.
+const streamingDecoderClassNames = {};
+const streamingDecoderPool = {};
+
+function newStreamingDecoder(codec, className = streamingDecoderClassNames[codec]) {
+  const { global } = STREAMING_DECODER_BUILDS[codec];
+  return new window[global][className || STREAMING_DECODER_BUILDS[codec].className]();
 }
 
-async function streamingDecoderPassesSelfCheck(codec) {
+function createStreamingDecoder(codec) {
+  const pooled = streamingDecoderPool[codec]?.pop();
+  if (!pooled) return newStreamingDecoder(codec);
+  // The next stream (a switch's, while this one still plays) finds one started too.
+  if (!streamingDecoderPool[codec].length) {
+    setTimeout(() => {
+      if (!streamingDecoderPool[codec].length) releaseStreamingDecoder(codec, newStreamingDecoder(codec));
+    }, 0);
+  }
+  return pooled;
+}
+
+// A stream's decoder goes back to the pool, reset, while the pool has room; otherwise it ends.
+function releaseStreamingDecoder(codec, decoder) {
+  const pool = (streamingDecoderPool[codec] ??= []);
+  if (pool.length >= STREAMING_DECODER_POOL_SIZE || typeof decoder.reset !== 'function') {
+    void Promise.resolve(decoder.ready).then(() => decoder.free()).catch(() => {});
+    return;
+  }
+  pool.push(decoder);
+  void Promise.resolve(decoder.ready).then(() => decoder.reset()).catch(() => {
+    pool.splice(pool.indexOf(decoder) >>> 0, 1);
+    try { decoder.free(); } catch (_error) { /* already gone */ }
+  });
+}
+
+async function streamingDecoderPassesSelfCheck(codec, className) {
   const clip = STREAMING_DECODER_SELF_CHECK_CLIPS[codec];
   const bytes = Uint8Array.from(atob(clip.bytes), (char) => char.charCodeAt(0));
-  const decoder = createStreamingDecoder(codec);
+  const decoder = newStreamingDecoder(codec, className);
   await decoder.ready;
   try {
     const decoded = await decoder.decode(bytes);
@@ -8345,13 +8636,33 @@ async function streamingDecoderPassesSelfCheck(codec) {
   }
 }
 
+async function verifiedStreamingDecoderClass(codec) {
+  const build = STREAMING_DECODER_BUILDS[codec];
+  for (const className of [build.workerClassName, build.className]) {
+    if (!className || typeof window[build.global]?.[className] !== 'function') continue;
+    try {
+      if (await streamingDecoderPassesSelfCheck(codec, className)) return className;
+    } catch (_error) {
+      // A Worker that cannot start leaves the page's thread to decode.
+    }
+  }
+  return null;
+}
+
 async function detectVerifiedStreamingCodecs() {
   const codecs = [];
   for (const [codec, build] of Object.entries(STREAMING_DECODER_BUILDS)) {
     try {
       await loadStreamingDecoderScript(build.file);
-      if (await streamingDecoderPassesSelfCheck(codec)) codecs.push(codec);
-      else console.warn(`[AlbumHaven][Playback] The ${codec} decoder failed its self-check.`);
+      const className = await verifiedStreamingDecoderClass(codec);
+      if (!className) {
+        console.warn(`[AlbumHaven][Playback] The ${codec} decoder failed its self-check.`);
+        continue;
+      }
+      streamingDecoderClassNames[codec] = className;
+      codecs.push(codec);
+      // A first song finds its decoder started.
+      releaseStreamingDecoder(codec, newStreamingDecoder(codec));
     } catch (error) {
       console.warn(`[AlbumHaven][Playback] The ${codec} decoder is unavailable.`, error);
     }
@@ -8479,16 +8790,74 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
-const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
+// A lost socket is replaced at once, then after each of these delays, then every last one, each retry
+// first asking over HTTP whether the server is back (streamingServerIsDown), so a server back after an
+// outage (a tunnel's minute of 502s) is found within a second (up to 2 s of this wait used to stack
+// with the claim's).
+const STREAMING_RECONNECT_DELAYS_MS = [500, 1000];
+// The server sends a heartbeat this often (`/playback/pcm?heartbeat=`), however long its answers
+// take: a socket is judged by what it hears, never by how fast it is answered, because a busy
+// server answers slowly, as with the CPU at 100%.
+const STREAMING_HEARTBEAT_MS = 250;
+// A socket that heard nothing at all for this long died without closing; on a slow mobile network
+// one 16 KB frame of audio, and the heartbeats queued behind it, can take a few seconds to arrive.
+const STREAMING_SILENT_SOCKET_MS = 5000;
+// ...or for this long while a seek past the received audio waits on it: it is found sooner.
+const STREAMING_SEEK_ANSWER_MS = 750;
+// How often a socket's silence is checked, whether or not audio plays.
+const STREAMING_LIVENESS_CHECK_MS = 500;
+// A page running more than a heartbeat behind may hold one unread: before a seek's silence counts
+// there, the page gets this long to read its socket. A page that keeps up waits for nothing.
+const STREAMING_LATE_PAGE_READ_MS = 100;
+// A press still silent after this says so in the timing lines, once.
+const STREAMING_PRESS_WAIT_REPORT_MS = 15000;
+// A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
+// Each attempt given up so allows the next one twice as long, up to 16 s: on a loaded machine a
+// connection that is only slow to open must open at last, CPU at 100% included.
+const STREAMING_CONNECT_DEADLINE_MS = 4000;
+const STREAMING_CONNECT_DEADLINE_DOUBLINGS = 2;
+// While a reconnect attempt hangs, the server is asked this often whether it answers again. Once it
+// does, the hanging attempt (begun on the network that went) is replaced at once with the short
+// deadline: a network that froze and came back gives no other sign (playback resumed 19.6 s after the
+// network was back while a 16 s attempt hung). It is
+// asked again as soon as an answer settles, at most every 0.4 s, so the first good answer after a
+// run of tunnel 530s replaces the attempt within about half a second, so the app notices at once that
+// the network is back.
+const STREAMING_REACHABILITY_TICK_MS = 400;
+// How long one question waits for its answer.
+const STREAMING_REACHABILITY_PROBE_MS = 1500;
+// Only an attempt hung this long is replaced: through a tunnel, on a loaded machine, a healthy connect
+// takes up to about 3 s, and replacing it would start over again and again.
+const STREAMING_REACHABILITY_MIN_HANG_MS = 3000;
+// The server's own refusals: another socket would be refused too.
+const STREAMING_REFUSED_CLOSE_CODES = new Set([4400, 4401, 4403, 4404, 4408, 4409, 4429]);
+const STREAMING_SILENCE_ACK_MS = 1000;
+// For a browser that does not report its output latency; the context asks for large playback buffers.
+const STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS = 0.2;
+const STREAMING_OUTPUT_DRAIN_MARGIN_MS = 20;
+// Play here in another tab of this browser must silence this one even while its main thread is busy
+// (never both at once): a Worker hears that tab and holds a port to the audio thread.
+// It acts only on a takeover that names this tab's client, which the server gives only to its account.
+const STREAMING_SILENCE_RELAY_SOURCE = `let clientId = '';
+let port = null;
+let channel = null;
+onmessage = ({ data }) => {
+  clientId = data.clientId;
+  if (data.port) port = data.port;
+  if (channel) return;
+  channel = new BroadcastChannel(data.channel);
+  channel.onmessage = (event) => {
+    const message = event.data || {};
+    if (port && clientId && message.type === 'taken-over' && message.clientId === clientId) port.postMessage('silence');
+  };
+};`;
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
 const STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS = 1;
 const STREAMING_SEEK_PREPARE_SECONDS = 0.25;
-const STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1;
 const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEMENT_PREPARE_SECONDS;
 const STREAMING_WAVEFORM_READY_SECONDS = 1;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
-const STREAMING_REPLACEMENT_CUSHION_WAIT_MS = 1000;
 // A kept track only saves a server stream; a slow or stuck browser cache must not hold the start.
 const STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS = 500;
 const STREAMING_MAX_KNOWN_TRACK_RATES = 512;
@@ -8497,6 +8866,17 @@ const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
 const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
 const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
+// The most encoded bytes one decode call takes. A local seek or a kept track queues the rest of the
+// song as one chunk; decoded whole, it held the page for seconds before the playhead could move
+// to its new place.
+const STREAMING_ENCODED_DECODE_SLICE_BYTES = 16 * 1024;
+// Several credits stay in flight, so a start's cushion does not wait one round trip per credit.
+const STREAMING_ENCODED_CREDIT_WINDOW_BYTES = 4 * STREAMING_ENCODED_CREDIT_BYTES;
+// A start opens at the rate already playing, else the last one this browser played, instead of
+// asking first; the server answers a wrong guess with the track's rate and the start runs again at
+// it. A browser with neither asks first. The idle graph is built at this rate when nothing is known.
+const STREAMING_GUESSED_SAMPLE_RATE = 44_100;
+const STREAMING_SAMPLE_RATE_STORAGE_KEY = 'albumhaven.playbackSampleRate.v1';
 // The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
 const STREAMING_KEPT_INITIAL_BYTES = 256 * 1024;
 const STREAMING_KEPT_MAX_BYTES = 64 * 1024 * 1024;
@@ -8516,11 +8896,24 @@ function streamingFrames(seconds) {
   return Math.round(seconds * streamingEngineState().sampleRate);
 }
 
+// The engine's snapshot, on the page for diagnosis, written at most once per frame. Written on every
+// call (each decoded chunk among them), the JSON and the root attribute change held a loaded page for
+// seconds: at 4x CPU a press on another song went unanswered for 15 s.
+let streamingDiagnosticsFrame = 0;
 function publishStreamingDiagnostics() {
-  if (typeof document === 'undefined') return;
-  const root = document.documentElement;
-  if (!root) return;
-  root.setAttribute(
+  if (typeof document === 'undefined' || streamingDiagnosticsFrame) return;
+  if (typeof requestAnimationFrame !== 'function') {
+    writeStreamingDiagnostics();
+    return;
+  }
+  streamingDiagnosticsFrame = requestAnimationFrame(() => {
+    streamingDiagnosticsFrame = 0;
+    writeStreamingDiagnostics();
+  });
+}
+
+function writeStreamingDiagnostics() {
+  document.documentElement?.setAttribute(
     'data-streaming-diagnostics',
     JSON.stringify(getStreamingPlaybackSnapshot()),
   );
@@ -8725,6 +9118,17 @@ function recordStreamingRenderedPcmEvidence(roleState, message) {
     if (Number.isFinite(sample)) evidence.samples.push(sample);
   }
   if (message.audible === true) engine.audibleStreamId = roleState.streamId;
+  const resumeSound = engine.resumeSound;
+  if (resumeSound && resumeSound.streamId === roleState.streamId && roleState.role === 'current'
+      && message.frames > 0 && message.nonZeroSamples > 0) {
+    engine.resumeSound = null;
+    resumeSound.onFirstSound();
+  }
+  // The first non-silent frames of the current song rendered after a resume, on the page clock.
+  if (engine.diagnostics.resumedAtMs > 0 && !engine.diagnostics.resumeFirstFrameAtMs
+      && roleState.role === 'current' && message.frames > 0 && message.nonZeroSamples > 0) {
+    engine.diagnostics.resumeFirstFrameAtMs = performance.now();
+  }
   if (roleState.streamId === engine.audibleStreamId || message.audible === true) {
     engine.diagnostics.renderedPcmEvidence = evidence;
   }
@@ -8868,40 +9272,25 @@ function refreshPlayerAfterStreamingTransportChange() {
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
 }
 
-async function recoverUnexpectedStreamingSocketClose(socket, event) {
+// Stops the engine after its transport was lost, keeping the error for the player.
+async function stopStreamingForLostTransport(message, { socketAlreadyClosed = false } = {}) {
   const engine = streamingEngineState();
-  if (engine.socket !== socket) return;
-  const current = engine.roles.current;
-  const startRequestId = engine.startRequestId;
-  const recovery = current ? {
-    track: current.track,
-    startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
-    attempt: Math.max(0, Number(current.transportRecoveryAttempt) || 0),
-  } : null;
-  const wasPlaying = Boolean(current && !engine.snapshot.paused && !engine.snapshot.ended);
-  const detail = [event?.code, event?.reason]
-    .filter((value) => value !== undefined && value !== '')
-    .join(' ');
-  setStreamingError('socket', { message: detail || 'Playback socket closed unexpectedly' });
-
-  let cleanupError = null;
+  setStreamingError('socket', { message });
   try {
-    await beginStreamingCleanup('socket-closed', {
-      preserveError: true,
-      socketAlreadyClosed: true,
-    });
+    await beginStreamingCleanup('socket-closed', { preserveError: true, socketAlreadyClosed });
+    return null;
   } catch (error) {
-    cleanupError = error;
     engine.diagnostics.lastCleanupError = {
       name: error?.name || 'Error',
       message: error?.message || String(error),
     };
+    return error;
   }
+}
 
-  if (!recovery || engine.startRequestId !== startRequestId) {
-    refreshPlayerAfterStreamingTransportChange();
-    return;
-  }
+// Keeps the place a lost transport stopped at: the next play starts there.
+function holdStreamingTransportRecovery(recovery) {
+  const engine = streamingEngineState();
   engine.pendingTransportRecovery = recovery;
   Object.assign(engine.snapshot, {
     currentTime: recovery.startSeconds,
@@ -8911,37 +9300,555 @@ async function recoverUnexpectedStreamingSocketClose(socket, event) {
     src: String(recovery.track?.src || ''),
     readyState: 0,
   });
-  if (cleanupError
-      || !wasPlaying
-      || recovery.attempt >= STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS) {
-    engine.mode = 'error';
-    refreshPlayerAfterStreamingTransportChange();
+}
+
+async function recoverUnexpectedStreamingSocketClose(socket, event) {
+  const engine = streamingEngineState();
+  if (engine.socket !== socket) return;
+  if (engine.detached) {
+    loseStreamingReconnectSocket(event?.code);
     return;
   }
-
-  engine.pendingTransportRecovery = null;
-  delete engine.diagnostics.lastError;
-  try {
-    const recovered = await startStreamingTrack(recovery.track, {
-      startSeconds: recovery.startSeconds,
-      autoplay: true,
-      transportRecoveryAttempt: recovery.attempt + 1,
-    });
-    if (recovered) {
-      engine.diagnostics.transportReconnects =
-        (Number(engine.diagnostics.transportReconnects) || 0) + 1;
-    }
-  } catch (error) {
-    engine.pendingTransportRecovery = recovery;
-    setStreamingError('socket', error);
-    engine.snapshot.paused = true;
+  if (detachStreamingTransport(event?.code)) return;
+  if (detachAtStreamingPlace(event?.code)) return;
+  // Refused, failed, or past the song's end: playback stops, and the next Play starts again at the
+  // place it stopped.
+  const current = engine.roles.current;
+  const startRequestId = engine.startRequestId;
+  const recovery = current ? {
+    track: current.track,
+    startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
+  } : engine.pendingTransportRecovery;
+  const detail = [event?.code, event?.reason]
+    .filter((value) => value !== undefined && value !== '')
+    .join(' ');
+  await stopStreamingForLostTransport(detail || 'Playback socket closed unexpectedly', { socketAlreadyClosed: true });
+  if (recovery && engine.startRequestId === startRequestId) {
+    holdStreamingTransportRecovery(recovery);
+    engine.mode = 'error';
   }
   refreshPlayerAfterStreamingTransportChange();
+}
+
+// ---- Network switches (NativePcmEngine.detach / resume) ----
+// A lost socket is not the end of playback: the audio already here keeps playing while the next
+// socket connects. `engine.detached` holds that state:
+// - 'offline': all of the current song is here; the next socket only prepares what follows it.
+// - 'splice': the current stream was cut at `spliceFrame`, a frame its received bytes decode
+//   whole; a stream of the same track from that frame joins it gaplessly on the next socket.
+// - 'reopen': an offline seek past the received audio restarted the track there; its open waits
+//   for the next socket.
+
+function streamingTransportState(engine) {
+  if (!engine.detached) return 'connected';
+  return { offline: 'detached-offline', splice: 'detached-splice', reopen: 'detached-seek' }[engine.detached.kind];
+}
+
+// The track frame up to which a role's audio left its decoder.
+function streamingDecodedThroughFrame(encoded) {
+  const { wire } = encoded;
+  return wire.streamStart + wire.initialTotal - encoded.remainingFrames;
+}
+
+// Ends a role's audio at track frame `frame`, as the server's end of stream would; decoded audio
+// past it that the worklet has not taken yet is dropped.
+function endStreamingEncodedRoleAt(roleState, frame) {
+  const encoded = roleState.encoded;
+  let excessFrames = streamingDecodedThroughFrame(encoded) - frame;
+  encoded.remainingFrames = Math.max(0, -excessFrames);
+  encoded.decodedFrames -= Math.max(0, excessFrames);
+  while (excessFrames > 0) {
+    const tail = encoded.decodedPcm.at(-1);
+    const tailFrames = tail.length / 2;
+    if (tailFrames <= excessFrames) encoded.decodedPcm.pop();
+    else encoded.decodedPcm[encoded.decodedPcm.length - 1] = tail.subarray(0, (tailFrames - excessFrames) * 2);
+    excessFrames -= tailFrames;
+  }
+  encoded.eos = {
+    type: 'eos',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    role: roleState.role,
+    emittedFrames: 0,
+    authoritativeTotalFrames: frame,
+  };
+  roleState.spliceFrame = frame;
+  void pumpStreamingEncodedRole(roleState);
+}
+
+// The socket closed under a playing stream. Returns false when nothing can play on, and the
+// engine restarts from the heard position as before.
+function detachStreamingTransport(code) {
+  const engine = streamingEngineState();
+  const current = engine.roles.current;
+  const encoded = current?.encoded;
+  const wire = encoded?.wire;
+  // A start on its way replaces this song: its received audio is not kept for a splice, which the
+  // next socket would reopen before the pressed song (hosted FTC-PLAYBACK-OFFLINE-002).
+  if (!wire || engine.pendingStart || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error'
+      || engine.snapshot.ended || engine.pendingSeek
+      || engine.pendingBufferedSeek || engine.loopContinuity || current.spliceFrame !== undefined) return false;
+  const whole = Boolean(wire.serverless || wire.eos);
+  const spliceFrame = whole ? null : wire.table && wholeThroughStreamingSeekTable(wire.table, {
+    initialSkip: wire.initialSkip,
+    initialTotal: wire.initialTotal,
+    streamStart: wire.streamStart,
+    receivedBytes: wire.receivedBytes,
+  });
+  const deliveredThrough = streamingDecodedThroughFrame(encoded) - encoded.decodedFrames;
+  if (!whole && !(spliceFrame > deliveredThrough)) return false;
+
+  wire.lost = true;
+  forgetLostStreamingSocket();
+  const heldSeekSeconds = engine.pendingPromotion?.requestedSeekSeconds;
+  engine.pendingPromotion = null;
+  engine.detached = {
+    kind: whole ? 'offline' : 'splice',
+    spliceFrame,
+    failures: 0,
+    timer: 0,
+    // A paused player keeps what it received too, and tries the network again once played.
+    paused: Boolean(engine.snapshot.paused),
+  };
+  // A successor still streaming died with the socket; it is prepared again on the next one. A
+  // splice needs the successor's place, so there it always waits.
+  const continuity = engine.roles.continuity;
+  const continuityHere = continuity?.cachedTrack || continuity?.encoded?.wire.serverless
+    || continuity?.encoded?.wire.eos;
+  if (continuity && (!whole || !continuityHere)) {
+    closeStreamingContinuityRole('socket-lost');
+    engine.pendingContinuityTrack = continuity.track;
+    engine.pendingContinuityOptions = continuity.continuityOptions;
+  } else if (continuity) {
+    continuity.local = true;
+  }
+  if (!whole) {
+    endStreamingEncodedRoleAt(current, spliceFrame);
+    engine.diagnostics.lastSpliceFrame = spliceFrame;
+    // The cut stream's end waits for the rest of the track, whose timeline goes on from there.
+    engine.node.port.postMessage({
+      type: 'expect-continuity', generation: engine.generation, active: true, timelineStartFrame: spliceFrame,
+    });
+  } else if (engine.pendingContinuityTrack) {
+    // The song's end waits for its successor instead of ending the queue.
+    engine.node.port.postMessage({ type: 'expect-continuity', generation: engine.generation, active: true });
+  }
+  engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
+  if (!engine.detached.paused) connectStreamingSocket();
+  if (Number.isFinite(heldSeekSeconds)) void seekStreamingPlayback(heldSeekSeconds);
+  publishStreamingDiagnostics();
+  return true;
+}
+
+// Nothing may name the lost socket's streams on the next one.
+function forgetLostStreamingSocket() {
+  const engine = streamingEngineState();
+  engine.lostStreamIds ??= new Set();
+  for (const roleState of [engine.roles.current, engine.roles.continuity]) {
+    if (!roleState) continue;
+    engine.lostStreamIds.add(roleState.streamId);
+    if (roleState.encoded?.wire.streamId) engine.lostStreamIds.add(roleState.encoded.wire.streamId);
+  }
+  engine.socket = null;
+  engine.pendingControls = [];
+}
+
+// The socket was lost under a stream whose received audio cannot play on: a seek or a song start
+// still waiting for the server, or audio with no seek table to splice at. The head stays at the
+// place (a seek's or start's target) and waits there, silent, in the state the listener chose, and
+// the song opens there on the next socket, however long the server takes to answer again, as an
+// offline seek past the received audio does. The head never resets to the start, and the song goes
+// on when the network is back. Stopping, with one retry while the network was still gone, lost the
+// place and the play.
+function detachAtStreamingPlace(code) {
+  const engine = streamingEngineState();
+  const seek = engine.pendingSeek;
+  const track = (seek?.kind === 'replacement' ? engine.roles.continuity?.track : null) || engine.roles.current?.track;
+  if (!track || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error' || engine.snapshot.ended) return false;
+  const startSeconds = seek
+    ? seek.startFrame / engine.sampleRate
+    : Math.max(0, Number(engine.snapshot.currentTime) || 0);
+  // A start on its way to playing is playing, though its snapshot says paused until it plays.
+  const starting = engine.mode === 'starting' && engine.roles.current?.autoplay === true;
+  // Another song's prepared start is restarted on the next socket; its press settles with that.
+  const press = seek?.kind === 'replacement' && !seek.supersededByPress
+    ? { resolve: seek.resolve, reject: seek.reject }
+    : null;
+  if (press) Object.assign(seek, { resolve: null, reject: null });
+  // A start still on its way opens its song on the next socket itself: restarting the old song here
+  // would supersede it (hosted FTC-PLAYBACK-OFFLINE-002).
+  const inFlight = !press && engine.pendingStart;
+  forgetLostStreamingSocket();
+  giveUpStreamingCutoverToPress();
+  engine.pendingPromotion = null;
+  engine.detached = {
+    kind: 'reopen',
+    spliceFrame: null,
+    failures: 0,
+    timer: 0,
+    paused: inFlight ? !inFlight.autoplay : Boolean(engine.snapshot.paused) && !starting,
+  };
+  engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
+  // Connected first: the restart then asks this socket instead of opening one of its own.
+  if (!engine.detached.paused) connectStreamingSocket();
+  if (inFlight) {
+    publishStreamingDiagnostics();
+    return true;
+  }
+  const restart = jumpWhileDetached(track, startSeconds);
+  if (press) void restart.then(press.resolve, press.reject);
+  publishStreamingDiagnostics();
+  return true;
+}
+
+function stopStreamingReconnectTimers(detached) {
+  window.clearTimeout(detached.timer);
+  detached.timer = 0;
+}
+
+function endStreamingDetach({ resumed = false } = {}) {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached) return;
+  stopStreamingReconnectTimers(detached);
+  engine.detached = null;
+  if (resumed) engine.diagnostics.transportResumes = (Number(engine.diagnostics.transportResumes) || 0) + 1;
+  publishStreamingDiagnostics();
+}
+
+function reconnectStreamingTransport() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached || detached.paused || engine.socket) return;
+  window.clearTimeout(detached.timer);
+  detached.timer = 0;
+  connectStreamingSocket();
+}
+
+function scheduleStreamingReconnect() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached || detached.paused || engine.socket || detached.timer) return;
+  const delays = STREAMING_RECONNECT_DELAYS_MS;
+  const delay = delays[Math.min(detached.failures, delays.length) - 1];
+  const timer = window.setTimeout(async () => {
+    const down = await streamingServerIsDown();
+    if (detached.timer !== timer || engine.detached !== detached) return;
+    detached.timer = 0;
+    if (down) scheduleStreamingReconnect();
+    else reconnectStreamingTransport();
+  }, delay);
+  detached.timer = timer;
+}
+
+// Whether a retry would only fail again: the browser is offline, or the server's tunnel answers
+// without it (502/530). Such a retry is skipped, not tried. Chromium delays every socket a page
+// opens by 1-5 s once most of its recent handshakes failed (a failed or given-up handshake counts
+// for two minutes), so a tunnel's minute of 530 handshakes made the sockets after it wait longer
+// than their 4 s deadline, and one press played nothing for 8 s after the server answered. A
+// question over HTTP is not delayed. A question nothing answers is no reason to skip: a frozen or
+// overloaded network still gets its attempt.
+async function streamingServerIsDown() {
+  if (window.navigator?.onLine === false) return true;
+  if (typeof fetch !== 'function') return false;
+  const response = await askStreamingServer();
+  return response?.status >= 500;
+}
+
+// A socket opened while detached closed again.
+function loseStreamingReconnectSocket(code) {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  engine.socket = null;
+  if (STREAMING_REFUSED_CLOSE_CODES.has(code)) {
+    void failDetachedStreamingTransport();
+    return;
+  }
+  // An offline seek's open waits for the next socket; anything else queued named this one.
+  if (detached.kind !== 'reopen') engine.pendingControls = [];
+  const continuity = engine.roles.continuity;
+  if (continuity && !continuity.local) {
+    engine.lostStreamIds.add(continuity.streamId);
+    // The splice stream died with this socket; the cut stream still waits for its successor.
+    closeStreamingContinuityRole('socket-lost', { releaseWorklet: false });
+    engine.node.port.postMessage({
+      type: 'drop-continuity', generation: continuity.generation, streamId: continuity.streamId,
+    });
+  }
+  // A socket that opened and dropped again is a new loss: the next one is tried at once.
+  if (detached.connected) {
+    detached.connected = false;
+    reconnectStreamingTransport();
+    return;
+  }
+  detached.failures += 1;
+  scheduleStreamingReconnect();
+}
+
+// The next socket is open.
+function resumeStreamingTransport() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached) return;
+  detached.failures = 0;
+  detached.connected = true;
+  // The server answers again: a claim waiting out its retry asks now, not on its timer.
+  if (typeof retryUnansweredPlaybackClaimNow === 'function') retryUnansweredPlaybackClaimNow();
+  if (detached.kind === 'splice') {
+    maybeOpenStreamingSplice();
+    return;
+  }
+  endStreamingDetach({ resumed: true });
+  maybeSchedulePendingStreamingContinuity();
+}
+
+// Opens the rest of a cut track from its splice frame once the role it needs is free.
+function maybeOpenStreamingSplice() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  const current = engine.roles.current;
+  if (detached?.kind !== 'splice' || !current || engine.roles.continuity || engine.pendingSeek
+      || engine.pendingPromotion || engine.socket?.readyState !== WebSocket.OPEN) return false;
+  const startSeconds = detached.spliceFrame / engine.sampleRate;
+  const splice = openStreamingRole('continuity', current.track, detached.spliceFrame, {
+    kind: 'splice', startSeconds, endSeconds: startSeconds,
+  });
+  if (!splice) return false;
+  splice.measuredListenSession = current.measuredListenSession;
+  return true;
+}
+
+// The worklet plays the splice stream from the cut stream's last frame on: the same song goes on.
+function joinStreamingSplice(current, continuity, message) {
+  const engine = streamingEngineState();
+  continuity.boundaryNotified = true;
+  takeOverStreamingCurrentRole(current, continuity, Number(message.renderedFrame) || 0);
+  engine.diagnostics.boundaryCapture = message.capture || null;
+  Object.assign(engine.snapshot, {
+    currentTime: message.timelineFrame / engine.sampleRate,
+    renderedFrame: message.timelineFrame,
+    ended: false,
+  });
+  refreshStreamingActiveRoles();
+  engine.pendingPromotion = { generation: message.generation, streamId: continuity.streamId };
+  promoteStreamingContinuityStream(continuity, current, message.generation);
+  endStreamingDetach({ resumed: true });
+}
+
+// The received audio ran out while the network is still gone: the player waits silently where it
+// is, however long, and plays on from there once the next socket opens.
+function waitForStreamingTransport() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached || detached.paused) return;
+  engine.mode = 'buffering';
+  publishStreamingDiagnostics();
+}
+
+async function failDetachedStreamingTransport() {
+  const engine = streamingEngineState();
+  const track = engine.roles.current?.track;
+  const startSeconds = Math.max(0, Number(engine.snapshot.currentTime) || 0);
+  endStreamingDetach();
+  await stopStreamingForLostTransport('Playback connection lost');
+  if (!track) return;
+  holdStreamingTransportRecovery({ track, startSeconds });
+  engine.mode = 'error';
+  refreshPlayerAfterStreamingTransportChange();
+}
+
+function pauseStreamingReconnect() {
+  const detached = streamingEngineState().detached;
+  if (!detached) return;
+  detached.paused = true;
+  stopStreamingReconnectTimers(detached);
+}
+
+// A press, ignored or not, is a fresh reason to try: an attempt begun before it may hang on the
+// network that went (a song pressed after a 10 s outage played 8.4 s later).
+function retryStreamingConnection() {
+  const engine = streamingEngineState();
+  if (!engine.detached || engine.socket?.readyState === WebSocket.OPEN) return;
+  if (streamingSocketConnecting(engine.socket)) abandonStreamingConnectingSocket(engine.socket);
+  resumeStreamingReconnect();
+  reconnectStreamingTransport();
+}
+
+function resumeStreamingReconnect() {
+  const detached = streamingEngineState().detached;
+  if (!detached?.paused) return;
+  detached.paused = false;
+  reconnectStreamingTransport();
+}
+
+// While detached, a seek inside the audio here plays at once; past it, the track restarts there
+// and its open waits for the next socket (jump, and wait at the target). A
+// paused player stays paused there.
+function seekStreamingAudioHere(detached, startFrame) {
+  return detached.kind !== 'reopen'
+    && (detached.spliceFrame === null || startFrame < detached.spliceFrame);
+}
+
+// A click shows its place at once and the first click moves the head there, CPU at 100% included.
+// The restart that opens the song at the place can
+// take a while on a loaded machine, so the head shows the place and the old audio stops at once,
+// and the old audio's last reports do not move the head until the restart replaces it.
+function jumpWhileDetached(track, startSeconds) {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  stopStreamingReconnectTimers(detached);
+  detached.kind = 'reopen';
+  detached.spliceFrame = null;
+  engine.headHeldGeneration = engine.generation;
+  engine.node?.port.postMessage({ type: 'pause', generation: engine.generation });
+  Object.assign(engine.snapshot, {
+    currentTime: startSeconds,
+    requestedStartFrame: streamingFrames(startSeconds),
+  });
+  waitForStreamingTransport();
+  refreshPlayerAfterStreamingTransportChange();
+  return startStreamingTrack(track, { startSeconds, autoplay: !detached.paused, keepDetached: true });
+}
+
+/** The head was put at a place the old audio no longer reports: its reports do not move it. */
+function streamingHeadHeld() {
+  const engine = streamingEngineState();
+  return engine.headHeldGeneration === engine.generation;
+}
+
+function streamingSocketConnecting(socket) {
+  return socket?.readyState === (Number.isInteger(WebSocket.CONNECTING) ? WebSocket.CONNECTING : 0);
+}
+
+// Closes a socket presumed dead and handles it as lost now, instead of waiting for its close.
+function giveUpStreamingSocket(socket, reason) {
+  streamingEngineState().expectedSocketClose = socket;
+  socket.close();
+  void recoverUnexpectedStreamingSocketClose(socket, { code: 1006, reason });
+}
+
+// Gives up a reconnect attempt that has not opened: it counts as a lost reconnect.
+function abandonStreamingConnectingSocket(socket, { timedOut = false } = {}) {
+  const engine = streamingEngineState();
+  if (!engine.detached || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+  if (timedOut) engine.detached.abandonedConnects = (Number(engine.detached.abandonedConnects) || 0) + 1;
+  giveUpStreamingSocket(socket, 'connect timeout');
+}
+
+// After a network change, a socket that has heard nothing for a moment is presumed lost: it is
+// replaced rather than waited on until TCP gives up. Only Chromium reports a connection change;
+// elsewhere the socket's own silence finds it.
+function handleStreamingNetworkChange() {
+  const engine = streamingEngineState();
+  if (engine.detached) {
+    // An attempt begun on the previous network is replaced by one on this network.
+    abandonStreamingConnectingSocket(engine.socket);
+    reconnectStreamingTransport();
+    return;
+  }
+  const socket = engine.socket;
+  if (socket?.readyState === WebSocket.OPEN
+      && performance.now() - socket.lastHeardMs > STREAMING_SEEK_ANSWER_MS) replaceSilentStreamingSocket(socket);
+}
+
+// A laptop that keeps another network interface (a VPN or
+// a virtual adapter) never reports `offline` when its Wi-Fi goes, and its socket stays open but
+// silent. A socket that hears nothing, not even the server's heartbeat, is gone: it is replaced at
+// once instead of waited on until the keepalive, so the received audio plays on, a seek past it
+// waits silently at its target, and the next socket is tried at once. A seek past the received
+// audio finds it sooner. Checked as audio renders and every half second.
+function checkStreamingSocketLiveness({ readLate = false } = {}) {
+  const engine = streamingEngineState();
+  const socket = engine.socket;
+  if (engine.detached || socket?.readyState !== WebSocket.OPEN) return;
+  const silentMs = performance.now() - socket.lastHeardMs;
+  const seek = engine.pendingSeek;
+  const seekRole = seek && engine.roles.continuity?.streamId === seek.streamId ? engine.roles.continuity : null;
+  // A switch is no seek past the received audio: the old song plays on while its open is answered.
+  const seekWaits = Boolean(seekRole && seek.kind !== 'replacement'
+    && !seekRole.local && !seekRole.metadataAccepted);
+  if (silentMs <= (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) {
+    engine.socketReadDeadline = null;
+    return;
+  }
+  // A late page gets a moment to read its socket; until then neither the late message nor the backlog
+  // of audio messages after it decides. The next check after that moment, an audio position or the
+  // half-second interval, decides as on any page.
+  if (seekWaits && readLate && engine.socketReadDeadline?.socket !== socket) {
+    engine.socketReadDeadline = { socket, atMs: performance.now() + STREAMING_LATE_PAGE_READ_MS };
+  }
+  const deadline = engine.socketReadDeadline;
+  if (seekWaits && deadline?.socket === socket && performance.now() < deadline.atMs) return;
+  engine.socketReadDeadline = null;
+  // Not even the heartbeat for 5 s: the server cannot be reached, said until a probe is answered.
+  if (!seekWaits && typeof noteServerUnreachable === 'function') noteServerUnreachable();
+  replaceSilentStreamingSocket(socket);
+}
+
+// How far the page is behind the audio thread whose message it reads.
+function streamingPageReadsLate(message) {
+  const behindSeconds = Number(streamingEngineState().context?.currentTime) - Number(message.contextTime);
+  return behindSeconds * 1000 > STREAMING_HEARTBEAT_MS;
+}
+
+// Audio from a silent socket detaches as from any lost socket; with none, or with only a song's
+// rate still asked of it, a new socket simply takes over and the question goes again on it. An
+// open still unanswered (a seek past the received audio, a start) does not go again by itself, so
+// the socket is then given up as lost and the seek or start restarts at its place.
+function replaceSilentStreamingSocket(socket) {
+  const engine = streamingEngineState();
+  const openWaits = [engine.roles.current, engine.roles.continuity]
+    .some((roleState) => roleState && !roleState.local && !roleState.metadataAccepted);
+  if (engine.roles.current && (openWaits || !engine.sampleRateProbes?.size)) {
+    giveUpStreamingSocket(socket, 'socket silent');
+    return;
+  }
+  forgetLostStreamingSocket();
+  engine.expectedSocketClose = socket;
+  socket.close();
+  connectStreamingSocket();
+}
+
+function watchStreamingSocketLiveness(socket) {
+  let checkedAtMs = performance.now();
+  const timer = setInterval(() => {
+    if (streamingEngineState().socket !== socket || socket.readyState !== WebSocket.OPEN) {
+      clearInterval(timer);
+      return;
+    }
+    reportLongWaitingStreamingPress();
+    // A check that ran late found a page too busy to have read what arrived: it decides nothing.
+    const now = performance.now();
+    const sinceLastMs = now - checkedAtMs;
+    const late = sinceLastMs > 2 * STREAMING_LIVENESS_CHECK_MS;
+    checkedAtMs = now;
+    if (!late) {
+      checkStreamingSocketLiveness({ readLate: sinceLastMs > STREAMING_LIVENESS_CHECK_MS + STREAMING_HEARTBEAT_MS });
+    }
+  }, STREAMING_LIVENESS_CHECK_MS);
+}
+
+// Offline, the open socket can deliver nothing, but with Wi-Fi off it may stay open and silent
+// until the keepalive gives up on it. It is given up at once, so the received audio plays on and a
+// seek past it waits silently at its target until the network is back.
+function handleStreamingOffline() {
+  const socket = streamingEngineState().socket;
+  if (socket?.readyState === WebSocket.OPEN) giveUpStreamingSocket(socket, 'offline');
+}
+
+function watchStreamingNetwork() {
+  const engine = streamingEngineState();
+  if (engine.networkWatched) return;
+  engine.networkWatched = true;
+  window.addEventListener?.('offline', handleStreamingOffline);
+  window.addEventListener?.('online', handleStreamingNetworkChange);
+  window.navigator?.connection?.addEventListener?.('change', handleStreamingNetworkChange);
 }
 
 function observeStreamingFacadeCallback(result, source) {
   if (!result || typeof result.then !== 'function') return;
   void result.catch((error) => {
+    if (error?.cancelledPress) return;
     failStreamingEngine('facade', error, source);
   });
 }
@@ -8988,6 +9895,7 @@ function protectedQueuedContinuityReady(engine, current, options) {
 
 function maybeSchedulePendingStreamingContinuity() {
   const engine = streamingEngineState();
+  if (engine.detached) return maybeOpenStreamingSplice();
   const current = engine.roles.current;
   const track = engine.pendingContinuityTrack;
   if (!current || !track || engine.pendingPromotion
@@ -9006,12 +9914,15 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   if (!closeStreamingRoleStream(continuity, reason)) return false;
   const options = continuity.continuityOptions;
   if (releaseWorklet && engine.node) {
-    if (options?.kind === 'queued-next') {
+    // A cut-over not made yet gives up its frames and its reservation, as a successor does.
+    if (['queued-next', 'splice', 'seek'].includes(options?.kind)) {
       engine.node.port.postMessage({
         type: 'drop-continuity',
         generation: continuity.generation,
         streamId: continuity.streamId,
       });
+    }
+    if (options?.kind === 'queued-next' || options?.kind === 'splice') {
       engine.node.port.postMessage({
         type: 'expect-continuity',
         generation: continuity.generation,
@@ -9040,11 +9951,137 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   return true;
 }
 
+// Which client this socket plays for, so Play here elsewhere can ask it, and that it answers a yield
+// (`yields=1`: paused, whether nothing of it sounds), as parameters after the socket's own. Never an
+// engine's with its own claim: in the app that client's socket is the native player's, and only it
+// can answer.
+function streamingSocketClientQuery() {
+  if (typeof currentPlaybackEngine === 'function' && currentPlaybackEngine().holdsOwnClaim) return '';
+  const clientId = typeof getPlaybackOwnershipTabId === 'function' ? getPlaybackOwnershipTabId() : '';
+  return clientId ? `&client_id=${encodeURIComponent(clientId)}&yields=1` : '';
+}
+
+// What sounds: the current role, which stays the old song until a switch cuts over. Its place is the
+// seek's target once seeked, and the start's place before any audio.
+function getSoundingStreamingPlayback() {
+  const engine = streamingEngineState();
+  const track = engine.roles.current?.track;
+  if (!track) return null;
+  return {
+    track,
+    seconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
+    durationSeconds: Number(engine.snapshot.duration) || Number(track.durationSeconds) || 0,
+  };
+}
+
+// Play here elsewhere may start only after this tab is silent, so two tabs never play at the same
+// time. Resolves once nothing more is rendered, to a function that resolves once what was
+// rendered has left the output, true if it is still silent then. Null when the audio thread never said so.
+async function silenceStreamingPlaybackForHandover() {
+  const engine = streamingEngineState();
+  // A start or resume on its way may not sound after this.
+  engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
+  const { context, node } = engine;
+  if (!node || context?.state !== 'running') return async () => engine.snapshot.paused !== false;
+  if (!engine.pendingSilence) {
+    const pending = {};
+    pending.promise = new Promise((resolve) => {
+      const timer = setTimeout(() => pending.settle(false), STREAMING_SILENCE_ACK_MS);
+      pending.settle = (silent) => {
+        clearTimeout(timer);
+        engine.pendingSilence = null;
+        resolve(silent);
+      };
+    });
+    engine.pendingSilence = pending;
+    node.port.postMessage({ type: 'silence' });
+  }
+  if (!await engine.pendingSilence.promise) return null;
+  return async () => {
+    await waitOutStreamingOutputLatency(context);
+    return engine.snapshot.paused !== false;
+  };
+}
+
+// Tells the audio thread how long it may sound: not at all without a grant (a stream still loads), and
+// never past the time allowed without the server.
+function syncStreamingSoundPermission(node = streamingEngineState().node) {
+  if (!node || typeof playbackSoundPermission !== 'function') return;
+  node.port.postMessage({ type: 'may-sound', ...playbackSoundPermission() });
+}
+
+// What was rendered is heard only after the output's latency: "I am silent" waits that long.
+function waitOutStreamingOutputLatency(context) {
+  const latencySeconds = (Number(context.baseLatency) || 0)
+    + (Number(context.outputLatency) || STREAMING_UNKNOWN_OUTPUT_LATENCY_SECONDS);
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.ceil(latencySeconds * 1000) + STREAMING_OUTPUT_DRAIN_MARGIN_MS);
+  });
+}
+
+// For output that already ended: a suspended context has nothing left to play out.
+async function drainStreamingOutput() {
+  const { context } = streamingEngineState();
+  if (context?.state === 'running') await waitOutStreamingOutputLatency(context);
+}
+
+// Tells the relay which client this tab is now and, given a new [node], hands it a port to that node.
+function connectStreamingSilenceRelay(node = null) {
+  const engine = streamingEngineState();
+  if (typeof Worker !== 'function' || typeof MessageChannel !== 'function'
+      || typeof PLAYBACK_OWNERSHIP_CHANNEL_NAME !== 'string'
+      || typeof getPlaybackOwnershipTabId !== 'function') return;
+  if (!node && !engine.silenceRelay) return;
+  try {
+    if (!engine.silenceRelay) {
+      const url = URL.createObjectURL(new Blob([STREAMING_SILENCE_RELAY_SOURCE], { type: 'text/javascript' }));
+      engine.silenceRelay = new Worker(url);
+      URL.revokeObjectURL(url);
+    }
+    const message = { channel: PLAYBACK_OWNERSHIP_CHANNEL_NAME, clientId: getPlaybackOwnershipTabId() };
+    if (!node) {
+      engine.silenceRelay.postMessage(message);
+      return;
+    }
+    const link = new MessageChannel();
+    node.port.postMessage({ type: 'silence-port', port: link.port1 }, [link.port1]);
+    engine.silenceRelay.postMessage({ ...message, port: link.port2 }, [link.port2]);
+  } catch (error) {
+    // Without it the page's own thread still silences this tab; playback never depends on the relay.
+    engine.diagnostics.silenceRelayError = String(error?.message || error);
+  }
+}
+
+// An answer that cannot be sent never fails playback.
+function sendStreamingHandoverAnswer(message) {
+  const { socket } = streamingEngineState();
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(message));
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function sendStreamingControl(message) {
   const engine = streamingEngineState();
+  // A lost socket's streams died with it: no control names them on another socket.
+  if (engine.lostStreamIds?.has(message.streamId)) return true;
   const socket = engine.socket;
-  if (!socket) return false;
+  if (!socket) {
+    // An offline seek's stream opens on whichever socket connects next.
+    if (engine.detached?.kind !== 'reopen') return false;
+    engine.pendingControls.push(message);
+    return true;
+  }
   if (socket.readyState === WebSocket.OPEN) {
+    // The server knows only the streams opened on this socket: a control naming another one (a
+    // stream closed before its open ever left this page) is refused with 4400 and stops
+    // the player. Such a stream needs nothing.
+    socket.openedStreamIds ??= new Set();
+    if (message.type === 'open') socket.openedStreamIds.add(message.streamId);
+    else if (message.streamId !== undefined && !socket.openedStreamIds.has(message.streamId)) return true;
     try {
       socket.send(JSON.stringify(message));
       return true;
@@ -9168,69 +10205,42 @@ function refillStreamingRoleCredit(roleState, missingFrames) {
 
 function continuityCreditNeedsOutgoingRenderCushion(roleState) {
   const engine = streamingEngineState();
-  const pendingReplacement = engine.pendingSeek;
-  const current = engine.roles.current;
-  const queuedNextNeedsCushion = roleState?.role === 'continuity'
+  return roleState?.role === 'continuity'
     && roleState.continuityOptions?.kind === 'queued-next'
-    && !current?.eosReceived
+    && !engine.roles.current?.eosReceived
     && engine.diagnostics.bufferedFrames.current < streamingFrames(1);
-  const replacementNeedsCushion = roleState?.role === 'continuity'
-    && roleState.continuityOptions?.kind === 'seek'
-    && pendingReplacement?.kind === 'replacement'
-    && pendingReplacement.generation === engine.generation
-    && pendingReplacement.streamId === roleState.streamId
-    && pendingReplacement.currentStreamId === current?.streamId
-    && !current.eosReceived
-    && engine.diagnostics.bufferedFrames.current < streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
-  return queuedNextNeedsCushion || replacementNeedsCushion;
 }
 
-function settleStreamingReplacementCushionWaiter(ready) {
-  const engine = streamingEngineState();
-  const waiter = engine.replacementCushionWaiter;
-  if (!waiter) return false;
-  engine.replacementCushionWaiter = null;
-  if (waiter.timeoutId) window.clearTimeout(waiter.timeoutId);
-  waiter.resolve(Boolean(ready));
-  return true;
-}
-
-function replacementOutgoingCushionReady(engine, current) {
+// The playing song has audio to keep through a switch; one out of it, waiting to refill, has none.
+function streamingOutgoingAudioPlays(engine, current) {
   return current?.eosReceived === true
-    || engine.diagnostics.bufferedFrames.current
-      >= streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
+    || (engine.diagnostics.bufferedFrames.current > 0 && !engine.diagnostics.buffering);
 }
 
-function maybeResolveStreamingReplacementCushion() {
-  const engine = streamingEngineState();
-  const waiter = engine.replacementCushionWaiter;
-  if (!waiter) return false;
-  const current = engine.roles.current;
-  if (engine.generation !== waiter.generation
-      || current?.streamId !== waiter.currentStreamId) {
-    return settleStreamingReplacementCushionWaiter(false);
-  }
-  if (!replacementOutgoingCushionReady(engine, current)) return false;
-  return settleStreamingReplacementCushionWaiter(true);
-}
-
-function waitForStreamingReplacementCushion(engine, current) {
-  if (replacementOutgoingCushionReady(engine, current)) return Promise.resolve(true);
-  settleStreamingReplacementCushionWaiter(false);
-  return new Promise((resolve) => {
-    const waiter = {
-      generation: engine.generation,
-      currentStreamId: current.streamId,
-      resolve,
-      timeoutId: 0,
+// A cut-over handed to the worklet cannot be taken back: resolves whether it was made. The press
+// waiting on it is from then on the start on its way, whatever ends the cut-over.
+function streamingCutoverSettled(pending) {
+  pending.supersededByPress = true;
+  return new Promise((settled) => {
+    const { resolve, reject } = pending;
+    pending.resolve = (roleState) => {
+      resolve?.(roleState);
+      settled(Boolean(roleState));
     };
-    engine.replacementCushionWaiter = waiter;
-    waiter.timeoutId = window.setTimeout(() => {
-      if (engine.replacementCushionWaiter === waiter) {
-        settleStreamingReplacementCushionWaiter(false);
-      }
-    }, STREAMING_REPLACEMENT_CUSHION_WAIT_MS);
+    pending.reject = (error) => {
+      reject?.(error);
+      settled(false);
+    };
   });
+}
+
+// What ends a cut-over a newer press waits on leaves that press to start its song afresh.
+function giveUpStreamingCutoverToPress() {
+  const engine = streamingEngineState();
+  if (!engine.pendingSeek?.supersededByPress) return false;
+  settlePendingStreamingCutover();
+  engine.pendingSeek = null;
+  return true;
 }
 
 function grantStreamingInitialCredit(roleState) {
@@ -9270,12 +10280,45 @@ function validateStreamingMetadata(message, roleState) {
 
 function handleStreamingControl(message) {
   const engine = streamingEngineState();
-  if (!message || typeof message !== 'object') return;
+  // A heartbeat says only that the socket lives, which its arrival already recorded.
+  if (!message || typeof message !== 'object' || message.type === 'heartbeat') return;
   if (message.type === 'probe-result') {
     settleStreamingSampleRateProbe(message.requestId, Number(message.sampleRate) || 0, {
       fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
       sizeBytes: Number(message.sizeBytes) || 0,
     });
+    return;
+  }
+  if (message.type === 'handover') {
+    // It stops for nothing yet: the question may have waited behind audio until the press was over.
+    sendStreamingHandoverAnswer({ type: 'handover-wanted', requestId: message.requestId });
+    return;
+  }
+  if (message.type === 'handover-stop') {
+    if (typeof answerPlaybackHandover === 'function') {
+      void Promise.resolve(answerPlaybackHandover(message.requestId)).catch((error) => {
+        console.warn('[AlbumHaven][Playback] Play here elsewhere was not answered.', error);
+      });
+    }
+    return;
+  }
+  if (message.type === 'handover-done') {
+    if (typeof settlePlaybackHandover === 'function') void settlePlaybackHandover();
+    return;
+  }
+  // Another client of this account took playback: what plays is read now, not at the next heartbeat.
+  if (message.type === 'playback-claimed') {
+    if (typeof handlePlaybackOwnershipEvent === 'function') void handlePlaybackOwnershipEvent();
+    return;
+  }
+  if (message.type === 'handover-yield') {
+    if (typeof yieldPausedPlaybackClaim === 'function') {
+      void Promise.resolve(yieldPausedPlaybackClaim(message.requestId)).catch((error) => {
+        console.warn('[AlbumHaven][Playback] A press elsewhere was not answered.', error);
+      });
+    } else {
+      sendStreamingHandoverAnswer({ type: 'handover-declined', requestId: message.requestId });
+    }
     return;
   }
   const roleState = streamingRoleForId(message.streamId);
@@ -9307,6 +10350,12 @@ function handleStreamingControl(message) {
       return;
     }
     roleState.metadataAccepted = true;
+    // A kept track's metadata is the page's own and says nothing for the server.
+    if (!roleState.local) {
+      engine.timingRequested = message.timing === true;
+      engine.unheardRequested = message.timingUnheard === true;
+    }
+    markStreamingPress('metadataMs', roleState);
     if (message.codec) {
       createStreamingEncodedRole(roleState, message);
       refillStreamingEncodedBytes(roleState);
@@ -9328,6 +10377,9 @@ function handleStreamingControl(message) {
       );
     }
     if (roleState.role === 'current') {
+      if (typeof setLocalStorageItem === 'function') {
+        setLocalStorageItem(STREAMING_SAMPLE_RATE_STORAGE_KEY, String(message.sampleRate));
+      }
       Object.assign(engine.snapshot, {
         sampleRate: message.sampleRate,
         requestedStartFrame: message.requestedStartFrame,
@@ -9386,7 +10438,7 @@ function handleStreamingControl(message) {
     roleState.eosReceived = true;
     roleState.closed = true;
     engine.diagnostics.inFlightFrames[roleState.role] = 0;
-    if (roleState.role === 'current' && !roleState.seekTarget) {
+    if (roleState.role === 'current' && !roleState.seekTarget && roleState.spliceFrame === undefined) {
       engine.snapshot.duration = message.authoritativeTotalFrames / engine.sampleRate;
     }
     engine.node.port.postMessage({
@@ -9398,7 +10450,6 @@ function handleStreamingControl(message) {
       authoritativeTotalFrames: message.authoritativeTotalFrames,
     });
     if (roleState.role === 'current') {
-      maybeResolveStreamingReplacementCushion();
       maybeGrantDeferredReplacementCredit();
       maybeSchedulePendingStreamingContinuity();
     }
@@ -9432,6 +10483,22 @@ function leaveStreamingTrackForRateChange(track) {
   });
 }
 
+// The server opened nothing for a start at a guessed rate; once that start has returned, the
+// same track starts again at the rate the server reported.
+function restartStreamingStartAtTrackRate(roleState) {
+  const engine = streamingEngineState();
+  const { startSeconds, autoplay } = roleState.guessedStart;
+  void Promise.resolve(engine.startInFlight).catch(() => {}).then(() => {
+    if (engine.roles.current !== roleState) return null;
+    engine.roles.current = null;
+    refreshStreamingActiveRoles();
+    return startStreamingTrack(roleState.track, {
+      startSeconds,
+      autoplay: autoplay && engine.mode !== 'paused',
+    });
+  }).catch((error) => failStreamingEngine('socket', error, 'rate-mismatch'));
+}
+
 function handleStreamingRateMismatch(roleState, message) {
   const engine = streamingEngineState();
   rememberStreamingTrackFormat(String(roleState.track?.path || ''), message.sampleRate, {
@@ -9447,6 +10514,10 @@ function handleStreamingRateMismatch(roleState, message) {
       .then(replacement.resolve, replacement.reject);
     return;
   }
+  if (roleState.role === 'current' && roleState.guessedStart && engine.roles.current === roleState) {
+    restartStreamingStartAtTrackRate(roleState);
+    return;
+  }
   if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
     failStreamingEngine('socket', { message: 'The track sample rate changed' }, 'rate-mismatch');
     return;
@@ -9457,6 +10528,110 @@ function handleStreamingRateMismatch(roleState, message) {
   engine.diagnostics.inFlightFrames.continuity = 0;
   refreshStreamingActiveRoles();
   leaveStreamingTrackForRateChange(roleState.track);
+}
+
+// Where a press waited, reported once it sounds to a server that asks (`timing` in its metadata).
+// A press keeps its track and a few numbers until then; only the numbers are ever sent.
+function noteStreamingPress(track) {
+  const engine = streamingEngineState();
+  const path = String(track?.path || '');
+  const last = engine.startTiming;
+  // A start of the song whose start still waits (timed out, or not from its row) is one more press of it.
+  const waiting = last?.path === path
+    && [state.player.selectedTrack?.path, state.player.current?.path].includes(path);
+  if (last && !waiting) reportUnheardStreamingPress('replaced');
+  const pressedAtMs = performance.now();
+  engine.startTiming = {
+    path,
+    presses: waiting ? last.presses + 1 : 1,
+    firstPressedAtMs: waiting ? last.firstPressedAtMs : pressedAtMs,
+    pressedAtMs,
+    pressedAtEpochMs: Math.round(Date.now()),
+    streamId: null,
+    prepared: false,
+    marks: {},
+  };
+}
+
+// An ignored press starts nothing, so every time stays from the press that did.
+function countIgnoredStreamingPress(path) {
+  const timing = streamingEngineState().startTiming;
+  if (timing?.path === path) timing.presses += 1;
+}
+
+// When the page sent a control, for a server that times them.
+function streamingClientSendTime() {
+  return streamingEngineState().timingRequested ? { clientSentAtEpochMs: Math.round(Date.now()) } : {};
+}
+
+// How a press that has not sounded ended, or that it still waits: numbers and one word from this list
+// (replaced, paused, seek, stopped, waiting), to a server that asks (`timingUnheard`).
+function reportUnheardStreamingPress(outcome) {
+  const engine = streamingEngineState();
+  const timing = engine.startTiming;
+  if (!timing) return;
+  if (outcome !== 'waiting') engine.startTiming = null;
+  if (!engine.unheardRequested || engine.socket?.readyState !== WebSocket.OPEN) return;
+  const now = performance.now();
+  sendStreamingControl({
+    type: 'unheard-report',
+    outcome,
+    prepared: timing.prepared,
+    pressedStreamId: timing.streamId,
+    presses: timing.presses,
+    pressedAtEpochMs: timing.pressedAtEpochMs,
+    firstPressMs: Math.max(0, Math.round(now - timing.firstPressedAtMs)),
+    openMs: timing.marks.openMs ?? null,
+    metadataMs: timing.marks.metadataMs ?? null,
+    firstBytesMs: timing.marks.firstBytesMs ?? null,
+    decodedMs: timing.marks.decodedMs ?? null,
+    prepareMs: timing.marks.prepareMs ?? null,
+    endedMs: Math.max(0, Math.round(now - timing.pressedAtMs)),
+  });
+}
+
+function reportLongWaitingStreamingPress() {
+  const timing = streamingEngineState().startTiming;
+  if (!timing || timing.waitReported
+      || performance.now() - timing.firstPressedAtMs < STREAMING_PRESS_WAIT_REPORT_MS) return;
+  timing.waitReported = true;
+  reportUnheardStreamingPress('waiting');
+}
+
+function followStreamingPress(roleState, prepared = false) {
+  const timing = streamingEngineState().startTiming;
+  if (!timing || timing.path !== String(roleState.track?.path || '')) return;
+  if (!prepared && roleState.continuityOptions?.kind === 'queued-next') return;
+  timing.streamId = roleState.streamId;
+  timing.prepared = prepared;
+  markStreamingPress('openMs', roleState);
+}
+
+function markStreamingPress(mark, roleState) {
+  const timing = streamingEngineState().startTiming;
+  if (!timing || timing.streamId !== roleState?.streamId) return;
+  // A prepared track's bytes and frames were there before the press.
+  if (timing.prepared && (mark === 'firstBytesMs' || mark === 'decodedMs')) return;
+  timing.marks[mark] ??= Math.max(0, Math.round(performance.now() - timing.pressedAtMs));
+  if (mark !== 'audibleMs') return;
+  const engine = streamingEngineState();
+  engine.startTiming = null;
+  // Only over an open socket: a control that cannot be sent fails the engine, and this one only logs.
+  if (!engine.timingRequested || engine.socket?.readyState !== WebSocket.OPEN) return;
+  sendStreamingControl({
+    type: 'start-report',
+    generation: roleState.generation,
+    audibleStreamId: roleState.streamId,
+    prepared: timing.prepared,
+    presses: timing.presses,
+    pressedAtEpochMs: timing.pressedAtEpochMs,
+    firstPressMs: Math.max(0, Math.round(performance.now() - timing.firstPressedAtMs)),
+    openMs: timing.marks.openMs ?? null,
+    metadataMs: timing.marks.metadataMs ?? null,
+    firstBytesMs: timing.marks.firstBytesMs ?? null,
+    decodedMs: timing.marks.decodedMs ?? null,
+    audibleMs: timing.marks.audibleMs,
+  });
 }
 
 function reportStreamingAudioOutput() {
@@ -9497,13 +10672,39 @@ function maybePrepareStreamingSeek(roleState) {
       || (!roleState.eosReceived
         && engine.diagnostics.bufferedFrames.continuity < roleState.targetBufferFrames)) return;
   pendingSeek.prepareSent = true;
+  // With the answer's time, this tells a late answer from a cut-over that was not made.
+  markStreamingPress('prepareMs', roleState);
   engine.node.port.postMessage({
     type: 'prepare-seek',
     generation: roleState.generation,
     streamId: roleState.streamId,
     timelineStartFrame: pendingSeek.startFrame,
+    // A switched-to track is buffered to its prepare target; it should not wait for more.
+    ...(pendingSeek.kind === 'replacement' ? { primed: true } : {}),
   });
   publishStreamingDiagnostics();
+}
+
+/**
+ * A press on the song still sounding gives up the switch waiting for the pressed one, as a seek does: its
+ * start ends, its prepared stream goes, and the sounding song plays on with no gap. False once the cut-over
+ * has been sent to the audio thread, which may already be making it.
+ */
+function cancelStreamingSwitch() {
+  const engine = streamingEngineState();
+  const pending = engine.pendingSeek;
+  if (pending?.kind === 'replacement' && pending.prepareSent) return false;
+  engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
+  if (pending?.kind !== 'replacement') return true;
+  if (engine.roles.continuity?.streamId === pending.streamId
+      && !closeStreamingContinuityRole('switch-given-up')) return false;
+  settlePendingStreamingCutover(Object.assign(
+    new Error('Prepared track replacement was given up by a press on the playing song'), { cancelledPress: true },
+  ));
+  engine.pendingSeek = null;
+  engine.waveformReadyIdentity = null;
+  publishStreamingDiagnostics();
+  return true;
 }
 
 function settlePendingStreamingCutover(error = null, roleState = null) {
@@ -9554,6 +10755,9 @@ function discardSupersededBufferedSeek() {
 
 function acceptStreamingPcm(roleState, frameCount, pcm) {
   const engine = streamingEngineState();
+  // Uncompressed audio has no arrival of its own before this.
+  if (!roleState.encoded) markStreamingPress('firstBytesMs', roleState);
+  markStreamingPress('decodedMs', roleState);
   const role = roleState.role;
   const capacityFrames = streamingRoleCapacityFrames(roleState);
   const sequence = roleState.nextSequence;
@@ -9562,7 +10766,6 @@ function acceptStreamingPcm(roleState, frameCount, pcm) {
   engine.diagnostics.inFlightFrames[role] -= frameCount;
   engine.diagnostics.bufferedFrames[role] += frameCount;
   if (role === 'current') {
-    maybeResolveStreamingReplacementCushion();
     maybeGrantDeferredReplacementCredit();
     maybeSchedulePendingStreamingContinuity();
   }
@@ -9593,7 +10796,8 @@ function sweepStreamingEncodedDecoders() {
   for (const encoded of [...(engine.encodedStreams || [])]) {
     if (live.includes(encoded) || encoded.pumping) continue;
     engine.encodedStreams.delete(encoded);
-    void encoded.decoder.ready.then(() => encoded.decoder.free()).catch(() => {});
+    if (typeof releaseStreamingDecoder === 'function') releaseStreamingDecoder(encoded.codec, encoded.decoder);
+    else void encoded.decoder.ready.then(() => encoded.decoder.free()).catch(() => {});
   }
 }
 
@@ -9611,6 +10815,8 @@ function createStreamingWire(roleState, message) {
     nextSequence: 0,
     creditedBytes: Number(message.initialCreditBytes) || 0,
     lastArrivalMs: 0,
+    // Counted apart from `size`, which stops at the kept-bytes limit.
+    receivedBytes: 0,
     bytes: new Uint8Array(STREAMING_KEPT_INITIAL_BYTES),
     size: 0,
     table: roleState.pendingSeekTable || null,
@@ -9661,6 +10867,15 @@ function lookupStreamingSeekTable(table, { initialSkip, initialTotal, streamStar
     skipFrames: kept - table.samples[entry],
     totalFrames: initialTotal - offsetInStream,
   };
+}
+
+// `playback_seek_table.whole_through`: the track frame up to which `receivedBytes` decode whole, a
+// full seek stride short of the last received seek point; null when none lies inside the stream.
+function wholeThroughStreamingSeekTable(table, { initialSkip, initialTotal, streamStart, receivedBytes }) {
+  const spare = upperBoundStreamingSample(table.offsets, receivedBytes) - 2;
+  if (spare < 0) return null;
+  const kept = table.samples[spare] - initialSkip;
+  return kept > 0 ? streamStart + Math.min(kept, initialTotal) : null;
 }
 
 function parseStreamingSeekTable(message) {
@@ -9734,17 +10949,17 @@ function refillStreamingEncodedBytes(roleState) {
   if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
   const { wire } = encoded;
   if (wire.eos) return;
-  const missingBytes = streamingEncodedBufferBytes(roleState)
-    - encoded.queuedBytes - wire.creditedBytes;
-  if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES
-      || wire.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
   const frames = STREAMING_ENCODED_CREDIT_BYTES;
-  if (sendStreamingControl({
-    type: 'credit',
-    generation: roleState.generation,
-    streamId: wire.streamId,
-    frames,
-  })) wire.creditedBytes += frames;
+  while (streamingEncodedBufferBytes(roleState) - encoded.queuedBytes - wire.creditedBytes >= frames
+      && wire.creditedBytes + frames <= STREAMING_ENCODED_CREDIT_WINDOW_BYTES) {
+    if (!sendStreamingControl({
+      type: 'credit',
+      generation: roleState.generation,
+      streamId: wire.streamId,
+      frames,
+    })) return;
+    wire.creditedBytes += frames;
+  }
 }
 
 function appendStreamingDecodedAudio(encoded, decoded) {
@@ -9783,6 +10998,14 @@ function streamingRoleIsLive(roleState) {
     && streamingRoleForId(roleState.streamId) === roleState;
 }
 
+// The next bytes to decode, at most one slice, so the decoder only runs as far as the credit asks.
+function takeStreamingEncodedSlice(queue) {
+  const head = queue[0];
+  if (head.length <= STREAMING_ENCODED_DECODE_SLICE_BYTES) return queue.shift();
+  queue[0] = head.subarray(STREAMING_ENCODED_DECODE_SLICE_BYTES);
+  return head.subarray(0, STREAMING_ENCODED_DECODE_SLICE_BYTES);
+}
+
 async function pumpStreamingEncodedRole(roleState) {
   const encoded = roleState.encoded;
   if (!encoded?.ready || encoded.pumping || !streamingRoleIsLive(roleState)) return;
@@ -9796,7 +11019,7 @@ async function pumpStreamingEncodedRole(roleState) {
         acceptStreamingPcm(roleState, frameCount, takeStreamingDecodedPcm(encoded, frameCount));
       } else if ((encoded.localCreditFrames > 0 || !encoded.remainingFrames)
           && encoded.queue.length) {
-        const bytes = encoded.queue.shift();
+        const bytes = takeStreamingEncodedSlice(encoded.queue);
         encoded.queuedBytes -= bytes.length;
         appendStreamingDecodedAudio(encoded, await encoded.decoder.decode(bytes));
       } else if (encoded.eos && !encoded.flushed && !encoded.queue.length) {
@@ -9856,6 +11079,7 @@ function failStreamingEncodedRole(roleState, reason) {
     maybeSchedulePendingStreamingContinuity();
     return;
   }
+  if (giveUpStreamingCutoverToPress()) return;
   const replay = startStreamingTrack(track, {
     startSeconds: roleState.role === 'continuity'
       ? continuityOptions.startSeconds
@@ -9895,7 +11119,9 @@ function handleStreamingEncodedBytes(view, buffer, failProtocol) {
       engine.transferMs /= 2;
     }
   }
+  markStreamingPress('firstBytesMs', roleState);
   wire.nextSequence += 1;
+  wire.receivedBytes += byteCount;
   wire.creditedBytes -= byteCount;
   wire.lastArrivalMs = wire.creditedBytes > 0 ? now : 0;
   const chunk = new Uint8Array(buffer, 24, byteCount);
@@ -9989,8 +11215,36 @@ function handleStreamingPcm(buffer) {
   }
 }
 
+// Makes `continuity` the current role in the engine's books once the worklet plays it.
+function takeOverStreamingCurrentRole(current, continuity, renderedFrameBase) {
+  const engine = streamingEngineState();
+  swapStreamingBackingCapacities(current, continuity);
+  continuity.role = 'current';
+  continuity.targetBufferFrames = streamingRoleCapacityFrames(continuity);
+  continuity.acceptsPromotedContinuityWireRole = true;
+  continuity.renderedFrameBase = renderedFrameBase;
+  engine.roles.current = continuity;
+  engine.roles.continuity = null;
+  keepHeardStreamingWire(continuity);
+  if (continuity.encoded) refillStreamingEncodedBytes(continuity);
+  promoteStreamingPcmEvidence(continuity);
+  engine.pcmEvidenceByStream?.delete(current.streamId);
+  engine.renderedPcmEvidenceByStream?.delete(current.streamId);
+  engine.diagnostics.bufferedFrames.current = engine.diagnostics.bufferedFrames.continuity;
+  engine.diagnostics.inFlightFrames.current = engine.diagnostics.inFlightFrames.continuity;
+  engine.diagnostics.bufferedFrames.continuity = 0;
+  engine.diagnostics.inFlightFrames.continuity = 0;
+  engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
+  engine.deferredCreditFrames.current = engine.deferredCreditFrames.continuity;
+  engine.deferredCreditFrames.continuity = 0;
+}
+
 function handleStreamingWorkletMessage(message) {
   const engine = streamingEngineState();
+  if (message?.type === 'silenced') {
+    engine.pendingSilence?.settle(true);
+    return;
+  }
   if (!message || message.generation !== engine.generation) {
     engine.diagnostics.staleMessages += 1;
     return;
@@ -10113,27 +11367,10 @@ function handleStreamingWorkletMessage(message) {
     }
     const wasPaused = engine.snapshot.paused;
     engine.diagnostics.cutoverPreparedFrames = engine.diagnostics.bufferedFrames.continuity;
-    swapStreamingBackingCapacities(current, continuity);
     continuity.boundaryNotified = true;
-    continuity.role = 'current';
-    continuity.acceptsPromotedContinuityWireRole = true;
-    continuity.renderedFrameBase = Number(message.renderedFrame) || 0;
-    continuity.targetBufferFrames = streamingRoleCapacityFrames(continuity);
     continuity.seekTarget = true;
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
-    engine.roles.current = continuity;
-    engine.roles.continuity = null;
-    keepHeardStreamingWire(continuity);
-    if (continuity.encoded) refillStreamingEncodedBytes(continuity);
-    promoteStreamingPcmEvidence(continuity);
-    engine.pcmEvidenceByStream?.delete(current.streamId);
-    engine.renderedPcmEvidenceByStream?.delete(current.streamId);
-    engine.diagnostics.bufferedFrames.current = engine.diagnostics.bufferedFrames.continuity;
-    engine.diagnostics.inFlightFrames.current = engine.diagnostics.inFlightFrames.continuity;
-    engine.diagnostics.bufferedFrames.continuity = 0;
-    engine.diagnostics.inFlightFrames.continuity = 0;
-    engine.deferredCreditFrames.current = engine.deferredCreditFrames.continuity;
-    engine.deferredCreditFrames.continuity = 0;
+    takeOverStreamingCurrentRole(current, continuity, Number(message.renderedFrame) || 0);
     engine.diagnostics.seekCapture = message.capture || null;
     engine.diagnostics.seekSilentFrames = Number(message.silentFrames) || 0;
     engine.diagnostics.seekCommittedAtMs = performance.now();
@@ -10157,19 +11394,20 @@ function handleStreamingWorkletMessage(message) {
       streamId: continuity.streamId,
       kind: pendingSeek.kind || 'seek',
     };
+    // A cut stream still waits for the rest of its track at the splice frame.
+    const spliceFrame = engine.detached?.kind === 'splice' ? engine.detached.spliceFrame : null;
     engine.node.port.postMessage({
       type: 'expect-continuity',
       generation: message.generation,
-      active: Boolean(engine.pendingContinuityTrack),
+      active: spliceFrame !== null || Boolean(engine.pendingContinuityTrack),
+      ...(spliceFrame !== null ? { timelineStartFrame: spliceFrame } : {}),
     });
     refreshStreamingActiveRoles();
     const promoted = promoteStreamingContinuityStream(continuity, current, message.generation);
     if (promoted && !continuity.eosReceived) {
       grantStreamingCredit(continuity, streamingRoleCapacityFrames(continuity));
     }
-    if (pendingSeek.kind === 'replacement') {
-      pendingSeek.resolve?.(continuity);
-    }
+    pendingSeek.resolve?.(continuity);
     publishStreamingDiagnostics();
     return;
   }
@@ -10199,6 +11437,10 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
+    if (continuity.continuityOptions?.kind === 'splice') {
+      joinStreamingSplice(current, continuity, message);
+      return;
+    }
     continuity.boundaryNotified = true;
     const outgoingTrackPath = String(current.track?.path || '');
     const incomingTrackPath = String(continuity.track?.path || '');
@@ -10225,26 +11467,8 @@ function handleStreamingWorkletMessage(message) {
       src: String(current.track?.src || engine.snapshot.src || ''),
     };
     engine.diagnostics.boundaryCapture = message.capture || null;
-    swapStreamingBackingCapacities(current, continuity);
-    engine.roles.current = continuity;
-    engine.roles.current.role = 'current';
-    engine.roles.current.targetBufferFrames = streamingRoleCapacityFrames(engine.roles.current);
-    engine.roles.current.acceptsPromotedContinuityWireRole = true;
-    engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
-    engine.roles.continuity = null;
-    keepHeardStreamingWire(continuity);
-    if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
-    promoteStreamingPcmEvidence(continuity);
-    engine.pcmEvidenceByStream?.delete(current.streamId);
-    engine.renderedPcmEvidenceByStream?.delete(current.streamId);
+    takeOverStreamingCurrentRole(current, continuity, boundaryRenderedFrame);
     engine.waveformReadyIdentity = null;
-    engine.diagnostics.bufferedFrames.current = engine.diagnostics.bufferedFrames.continuity;
-    engine.diagnostics.inFlightFrames.current = engine.diagnostics.inFlightFrames.continuity;
-    engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
-    engine.deferredCreditFrames.current = engine.deferredCreditFrames.continuity;
-    engine.deferredCreditFrames.continuity = 0;
-    engine.diagnostics.bufferedFrames.continuity = 0;
-    engine.diagnostics.inFlightFrames.continuity = 0;
     const promotedLoop = continuity.continuityOptions;
     const incomingBoundaryFrames = Number(message.capture?.incoming?.frames) || 0;
     const timelineFrame = Number.isInteger(message.timelineFrame) && message.timelineFrame >= 0
@@ -10305,7 +11529,9 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
-    if (engine.pendingSeek?.currentStreamId === current.streamId) return;
+    checkStreamingSocketLiveness({ readLate: streamingPageReadsLate(message) });
+    if (engine.roles.current !== current) return;
+    if (engine.pendingSeek?.currentStreamId === current.streamId || streamingHeadHeld()) return;
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const monotonicTimelineFrame = Math.max(
       timelineFrame,
@@ -10346,11 +11572,13 @@ function handleStreamingWorkletMessage(message) {
         && pendingReplacement.currentStreamId === current.streamId
         && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
       if (!engine.snapshot.paused) {
+        syncStreamingSoundPermission();
         engine.node.port.postMessage({ type: 'play', generation: engine.generation });
       }
       return;
     }
     current.endedNotified = true;
+    endStreamingDetach();
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const currentTime = timelineFrame / engine.sampleRate;
     Object.assign(engine.snapshot, {
@@ -10391,7 +11619,8 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     roleState.firstFrameNotified = true;
-    if (roleState.role === 'current') roleState.transportRecoveryAttempt = 0;
+    markStreamingPress('audibleMs', roleState);
+    if (roleState.role === 'current') engine.pendingTransportRecovery = null;
     if (!engine.diagnostics.firstFrameAtMs) {
       engine.diagnostics.firstFrameAtMs = performance.now();
     }
@@ -10453,6 +11682,7 @@ function handleStreamingWorkletMessage(message) {
   }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
+    if (roleState.role === 'current') waitForStreamingTransport();
     if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
     return;
   }
@@ -10474,7 +11704,7 @@ function handleStreamingWorkletMessage(message) {
       Math.max(0, reconciledBufferedFrames),
       capacityFrames,
     );
-    if (roleState.role === 'current') {
+    if (roleState.role === 'current' && !streamingHeadHeld()) {
       engine.snapshot.currentTime = Math.max(
         0,
         (Number(engine.snapshot.currentTime) || 0) + (message.frames / engine.sampleRate),
@@ -10538,6 +11768,32 @@ function chooseStreamingQuality(track) {
     : 'original';
 }
 
+// A FLAC choosing its quality from the measured connection needs its size, which the probe reads.
+function streamingQualityNeedsTrackSize(track) {
+  const engine = streamingEngineState();
+  const path = String(track?.path || '');
+  return path.toLowerCase().endsWith('.flac')
+    && Boolean(engine.encodedCodecs?.includes('mp3'))
+    && engine.qualityPreference !== 'original' && engine.qualityPreference !== '320'
+    && Number(engine.transferMs) > 0 && Number(track.durationSeconds) > 0
+    && !(Number(engine.trackFormats?.get(path)?.sizeBytes) > 0);
+}
+
+// The rate of the song loaded now, else the last one this browser played; 0 when it has played
+// none. An idle graph's rate is no evidence: it was itself built on a guess.
+function rememberedStreamingSampleRate() {
+  const engine = streamingEngineState();
+  if (engine.roles.current && engine.sampleRate) return engine.sampleRate;
+  const remembered = typeof getLocalStorageItem === 'function'
+    ? Number(getLocalStorageItem(STREAMING_SAMPLE_RATE_STORAGE_KEY))
+    : 0;
+  return Number.isInteger(remembered) && remembered >= 8_000 && remembered <= 192_000 ? remembered : 0;
+}
+
+function guessedStreamingSampleRate() {
+  return rememberedStreamingSampleRate() || STREAMING_GUESSED_SAMPLE_RATE;
+}
+
 function streamingPlaybackRate(track) {
   const engine = streamingEngineState();
   const nativeRate = knownStreamingSampleRate(track);
@@ -10559,6 +11815,13 @@ function rememberStreamingTrackFormat(path, sampleRate, format) {
 
 function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
   const engine = streamingEngineState();
+  if (engine.authorityCheck?.requestId === requestId) {
+    const { prepared } = engine.authorityCheck;
+    engine.authorityCheck = null;
+    markStreamingPress('metadataMs', prepared);
+    cutOverToAuthorizedStreamingTrack(prepared);
+    return;
+  }
   const probe = engine.sampleRateProbes?.get(requestId);
   if (!probe) return;
   engine.sampleRateProbes.delete(requestId);
@@ -10574,11 +11837,24 @@ function requestStreamingSampleRate(track) {
   engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
   const requestId = engine.nextSampleRateProbeId;
   return new Promise((resolve) => {
-    engine.sampleRateProbes.set(requestId, { path: String(track?.path || ''), resolve });
-    if (!sendStreamingControl({ type: 'probe', requestId, path: track.path })) {
-      settleStreamingSampleRateProbe(requestId, 0);
-    }
+    const probe = { path: String(track?.path || ''), resolve, socket: null };
+    engine.sampleRateProbes.set(requestId, probe);
+    if (!sendStreamingProbe(requestId, probe)) settleStreamingSampleRateProbe(requestId, 0);
   });
+}
+
+// A probe sent to a socket that died without closing (a press on another song after the
+// network returned waited forever) goes again on the socket that replaces it.
+function sendStreamingProbe(requestId, probe) {
+  probe.socket = streamingEngineState().socket;
+  return sendStreamingControl({ type: 'probe', requestId, path: probe.path });
+}
+
+/** Probes still waiting that went to another socket go again on [socket], now open. */
+function resendStreamingProbes(socket) {
+  for (const [requestId, probe] of streamingEngineState().sampleRateProbes || []) {
+    if (probe.socket !== socket) sendStreamingProbe(requestId, probe);
+  }
 }
 
 async function retireStreamingAudioGraph() {
@@ -10592,6 +11868,119 @@ async function retireStreamingAudioGraph() {
     node.disconnect();
   }
   await context?.close();
+}
+
+// Asks the server, every STREAMING_REACHABILITY_TICK_MS while [socket] still tries to connect,
+// whether it answers. An answer (not a tunnel's 5xx) replaces the attempt with a fresh one on the
+// short deadline.
+function probeStreamingReachability(socket) {
+  if (typeof fetch !== 'function') return 0;
+  let asking = false;
+  const timer = setInterval(async () => {
+    const engine = streamingEngineState();
+    if (engine.socket !== socket || !streamingSocketConnecting(socket) || !engine.detached) {
+      clearInterval(timer);
+      return;
+    }
+    if (asking || performance.now() - socket.connectStartedMs < STREAMING_REACHABILITY_MIN_HANG_MS) return;
+    asking = true;
+    try {
+      const response = await askStreamingServer();
+      // Nothing answered, or a tunnel without its server did (502/530): not reachable yet.
+      if (!response || response.status >= 500 || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+      clearInterval(timer);
+      engine.detached.abandonedConnects = 0;
+      abandonStreamingConnectingSocket(socket);
+      // The next attempt is on the network that answers: it is left to connect.
+      engine.detached.probedReconnect = true;
+      reconnectStreamingTransport();
+    } finally {
+      asking = false;
+    }
+  }, STREAMING_REACHABILITY_TICK_MS);
+  return timer;
+}
+
+// Asks the server for the playback state: its response, or null when nothing answered in time.
+async function askStreamingServer() {
+  const abort = typeof AbortController === 'function' ? new AbortController() : null;
+  const deadline = window.setTimeout(() => abort?.abort(), STREAMING_REACHABILITY_PROBE_MS);
+  try {
+    return await fetch('/playback/state', { cache: 'no-store', credentials: 'same-origin', signal: abort?.signal });
+  } catch (_error) {
+    return null;
+  } finally {
+    window.clearTimeout(deadline);
+  }
+}
+
+// Opens the engine's playback socket; queued controls wait for it to open.
+function connectStreamingSocket() {
+  const engine = streamingEngineState();
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm?heartbeat=${STREAMING_HEARTBEAT_MS}${streamingSocketClientQuery()}`);
+  socket.binaryType = 'arraybuffer';
+  const probed = Boolean(engine.detached?.probedReconnect);
+  // An attempt begun once the server answered gets the longest deadline: Chromium delays a page's
+  // sockets by seconds after its failed handshakes, and giving such a delayed attempt up counts as
+  // one more failure, so short deadlines kept every attempt failing for as long as 16 s after the
+  // network was back (and the queue's next song never came).
+  const doublings = probed ? STREAMING_CONNECT_DEADLINE_DOUBLINGS
+    : Math.min(Number(engine.detached?.abandonedConnects) || 0, STREAMING_CONNECT_DEADLINE_DOUBLINGS);
+  const connectDeadline = engine.detached
+    ? window.setTimeout(() => abandonStreamingConnectingSocket(socket, { timedOut: true }),
+      STREAMING_CONNECT_DEADLINE_MS * 2 ** doublings)
+    : 0;
+  socket.connectStartedMs = performance.now();
+  if (engine.detached) engine.detached.probedReconnect = false;
+  const reachabilityProbe = engine.detached && !probed ? probeStreamingReachability(socket) : 0;
+  socket.onopen = () => {
+    window.clearTimeout(connectDeadline);
+    clearInterval(reachabilityProbe);
+    socket.lastHeardMs = performance.now();
+    watchStreamingSocketLiveness(socket);
+    flushStreamingControls();
+    resendStreamingProbes(socket);
+    keepStreamingSocketAlive(socket);
+    if (engine.socket === socket) resumeStreamingTransport();
+  };
+  socket.onerror = (event) => {
+    if (engine.socket !== socket) return;
+    const detail = event?.error?.message || event?.message || 'Playback socket error';
+    engine.diagnostics.lastSocketError = {
+      message: String(detail),
+      atMs: performance.now(),
+    };
+    publishStreamingDiagnostics();
+  };
+  socket.onclose = (event) => {
+    window.clearTimeout(connectDeadline);
+    clearInterval(reachabilityProbe);
+    if (engine.expectedSocketClose === socket) {
+      engine.expectedSocketClose = null;
+      return;
+    }
+    if (engine.socket !== socket) return;
+    void recoverUnexpectedStreamingSocketClose(socket, event)
+      .catch((error) => console.error('Streaming socket recovery failed', error));
+  };
+  socket.onmessage = ({ data }) => {
+    socket.lastHeardMs = performance.now();
+    if (data instanceof ArrayBuffer) {
+      handleStreamingPcm(data);
+      return;
+    }
+    if (typeof data !== 'string') return;
+    try {
+      handleStreamingControl(JSON.parse(data));
+    } catch (error) {
+      failStreamingEngine('socket', error, 'json-protocol-error');
+    }
+  };
+  engine.socket = socket;
+  engine.pendingControls ??= [];
+  watchStreamingNetwork();
+  return socket;
 }
 
 async function prepareStreamingPlaybackEngine(sampleRate = 0) {
@@ -10609,6 +11998,12 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
     let node = null;
     let socket = null;
     try {
+      // The socket connects while the audio graph is built.
+      if (!engine.socket) {
+        socket = connectStreamingSocket();
+        engine.pendingControls = [];
+        engine.nextStreamId ??= 1;
+      }
       if (!audioGraphReady) {
         await retireStreamingAudioGraph();
         // 'playback' asks for large output buffers; the default suits games and calls.
@@ -10623,9 +12018,13 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
           numberOfInputs: 0,
           numberOfOutputs: 1,
           outputChannelCount: [2],
+          ...(typeof playbackSoundPermission === 'function'
+            ? { processorOptions: { awaitsPermission: true } } : {}),
         });
         node.connect(context.destination);
         node.port.onmessage = ({ data }) => handleStreamingWorkletMessage(data);
+        connectStreamingSilenceRelay(node);
+        syncStreamingSoundPermission(node);
         node.onprocessorerror = (event) => {
           if (engine.node !== node) return;
           failStreamingEngine('processor', event, 'processor-error');
@@ -10633,48 +12032,7 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
         engine.node = node;
         engine.backingCapacityFrames = initialStreamingBackingCapacities();
       }
-      if (engine.socket) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
-      socket.binaryType = 'arraybuffer';
-      socket.onopen = () => {
-        flushStreamingControls();
-        keepStreamingSocketAlive(socket);
-      };
-      socket.onerror = (event) => {
-        if (engine.socket !== socket) return;
-        const detail = event?.error?.message || event?.message || 'Playback socket error';
-        engine.diagnostics.lastSocketError = {
-          message: String(detail),
-          atMs: performance.now(),
-        };
-        publishStreamingDiagnostics();
-      };
-      socket.onclose = (event) => {
-        if (engine.expectedSocketClose === socket) {
-          engine.expectedSocketClose = null;
-          return;
-        }
-        if (engine.socket !== socket) return;
-        void recoverUnexpectedStreamingSocketClose(socket, event)
-          .catch((error) => console.error('Streaming socket recovery failed', error));
-      };
-      socket.onmessage = ({ data }) => {
-        if (data instanceof ArrayBuffer) {
-          handleStreamingPcm(data);
-          return;
-        }
-        if (typeof data !== 'string') return;
-        try {
-          handleStreamingControl(JSON.parse(data));
-        } catch (error) {
-          failStreamingEngine('socket', error, 'json-protocol-error');
-        }
-      };
-      engine.socket = socket;
-      engine.pendingControls = [];
-      engine.nextStreamId ??= 1;
-      engine.mode = 'prepared';
+      if (socket) engine.mode = 'prepared';
     } catch (error) {
       if (engine.socket === socket) engine.socket = null;
       if (engine.node === node) engine.node = null;
@@ -10718,6 +12076,25 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
   }
 }
 
+// The page's idle moment readies what a first press needs: verified decoders (so the first song
+// streams compressed), the socket, and an audio graph at the likely rate (so its open goes out at
+// the press). The graph stays suspended, rendering nothing, until a press resumes it. Inside the
+// APK the native engine plays, so only the socket is readied there.
+async function prepareIdleStreamingPlayback() {
+  const engine = streamingEngineState();
+  if (typeof isInsideAndroidShell === 'function' && isInsideAndroidShell()) {
+    await prepareStreamingPlaybackEngine();
+    return;
+  }
+  if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
+  const startRequestId = engine.startRequestId;
+  await prepareStreamingPlaybackEngine(guessedStreamingSampleRate());
+  if (engine.startRequestId === startRequestId && !engine.pendingStart && !engine.roles.current
+      && engine.context?.state === 'running') {
+    await engine.context.suspend();
+  }
+}
+
 function openStreamingRole(role, track, startFrame = 0, continuityOptions = null) {
   const engine = streamingEngineState();
   const roleState = {
@@ -10757,6 +12134,7 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
   engine.diagnostics.inFlightFrames[role] = 0;
   refreshStreamingActiveRoles();
   roleState.openedAtMs = performance.now();
+  followStreamingPress(roleState);
   const cached = takePrimedStreamingTrack(roleState);
   if (cached) {
     // A kept track plays with no server stream; its metadata follows as the server's would.
@@ -10777,6 +12155,7 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     durationSeconds: Number(track.durationSeconds) || 0,
     ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs, seekTable: true } : {}),
     ...(roleState.quality === '320' ? { quality: '320' } : {}),
+    ...streamingClientSendTime(),
   });
   if (!accepted) {
     if (engine.roles[role] === roleState) engine.roles[role] = null;
@@ -10893,6 +12272,7 @@ function deliverCachedStreamingRole(roleState) {
     nextSequence: 0,
     creditedBytes: 0,
     lastArrivalMs: 0,
+    receivedBytes: entry.bytes.length,
     bytes: entry.bytes,
     size: entry.bytes.length,
     table: entry.table,
@@ -10928,7 +12308,13 @@ function deliverCachedStreamingRole(roleState) {
 function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
   const engine = streamingEngineState();
   const wire = current.encoded?.wire;
-  if (!wire?.bytes || !wire.table || engine.pendingSeek) return null;
+  // A seek still waiting gives way to this one. A cut-over already handed to the audio thread can't,
+  // and a seek that gives a switch up asks the server as before.
+  const pending = engine.pendingSeek;
+  if (pending && (pending.prepareSent || pending.kind === 'replacement')) return null;
+  // A lost stream's bytes end at its splice: only a detached player, which splices there, reads them.
+  if (!wire?.bytes || !wire.table
+      || (wire.lost && !wire.eos && !engine.detached)) return null;
   const window = lookupStreamingSeekTable(wire.table, {
     initialSkip: wire.initialSkip,
     initialTotal: wire.initialTotal,
@@ -10984,53 +12370,133 @@ function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
   return roleState;
 }
 
-function probeStreamingTrackWaveform(track) {
-  if (typeof probeCachedWaveformPeaks !== 'function') return;
+// The waveform is part of starting a song, so it is asked for when its stream opens.
+function loadStreamingTrackWaveform(track) {
+  if (typeof loadPlayingWaveformPeaks !== 'function') return;
   try {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
+    const playingWaveform = loadPlayingWaveformPeaks(
       String(track?.path || ''),
       streamingEngineState().generation,
     );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   } catch (_error) {
-    // Cached waveform probing is optional and must never interrupt playback.
+    // Waveform loading is optional and must never interrupt playback.
   }
 }
 
-async function startBrowserStreamingTrack(track, {
+// The pressed track already decoded to follow the playing one. A kept track opens as ever.
+function preparedStreamingSuccessor(track, startSeconds) {
+  const engine = streamingEngineState();
+  const prepared = engine.roles.continuity;
+  return !engine.pendingSeek
+    && !(startSeconds > 0)
+    && prepared?.continuityOptions?.kind === 'queued-next'
+    && prepared.metadataAccepted
+    && !prepared.local
+    && prepared.startFrame === 0
+    && prepared.track?.path === track.path
+    && prepared.quality === chooseStreamingQuality(track)
+    ? prepared
+    : null;
+}
+
+// A press refreshes the listener's authority, as the open it saves would have. Until the server
+// answers, the track stays the queued successor, which nothing cuts over to, behind a reservation
+// that also keeps it from following the old song's end. A refusal closes the socket, as an open's.
+function requestPreparedStreamingAuthority(prepared) {
+  const engine = streamingEngineState();
+  engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
+  const requestId = engine.nextSampleRateProbeId;
+  engine.authorityCheck = { requestId, prepared };
+  followStreamingPress(prepared, true);
+  return sendStreamingControl({
+    type: 'probe', requestId, path: String(prepared.track.path), authorityOnly: true, ...streamingClientSendTime(),
+  });
+}
+
+function cutOverToAuthorizedStreamingTrack(prepared) {
+  const engine = streamingEngineState();
+  const pending = engine.pendingSeek;
+  // A later press, a pause or a seek took the switch over.
+  if (pending?.kind !== 'replacement' || pending.streamId !== prepared.streamId) return;
+  if (engine.roles.continuity !== prepared) {
+    engine.pendingSeek = null;
+    // Already playing: the old song reached its end before the press reached the worklet.
+    if (engine.roles.current === prepared) pending.resolve?.(prepared);
+    // Its stream went while the server answered.
+    else void startStreamingTrack(prepared.track).then(pending.resolve, pending.reject);
+    return;
+  }
+  prepared.continuityOptions = { kind: 'seek', startSeconds: 0, endSeconds: 0 };
+  prepared.continuityIdentity = streamingContinuityIdentity(prepared.track, prepared.continuityOptions);
+  const prepareSeconds = prepared.encoded
+    ? STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS
+    : STREAMING_REPLACEMENT_PREPARE_SECONDS;
+  prepared.targetBufferFrames = Math.min(prepared.targetBufferFrames, streamingFrames(prepareSeconds));
+  maybeGrantDeferredReplacementCredit();
+  maybePrepareStreamingSeek(prepared);
+}
+
+// A start until its song's role opens: a socket lost meanwhile leaves the start to open it there.
+// It names its song from the press on, while the song's rate is still asked too.
+function startBrowserStreamingTrack(track, options = {}) {
+  const engine = streamingEngineState();
+  const pending = { autoplay: options.autoplay !== false, track };
+  engine.pendingStart = pending;
+  const start = openBrowserStreamingTrack(track, options, pending).finally(() => {
+    if (engine.pendingStart === pending) engine.pendingStart = null;
+  });
+  // A start refused for its guessed rate runs again only once this one has settled.
+  engine.startInFlight = start;
+  return start;
+}
+
+async function openBrowserStreamingTrack(track, {
   startSeconds = 0,
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
-  transportRecoveryAttempt = null,
-} = {}) {
+  keepTransportRecovery = false,
+  keepDetached = false,
+} = {}, pending = null) {
   const engine = streamingEngineState();
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
-  if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
+  if (!keepTransportRecovery) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
-  settleStreamingReplacementCushionWaiter(false);
+  // A start while the network is still gone (or the server not yet back) waits for the next socket
+  // as an offline seek past the received audio does: it opens on whichever socket connects next,
+  // with no second press. Any other start leaves the lost socket's audio behind.
+  const detached = engine.detached;
+  if (detached && !keepDetached && engine.socket?.readyState !== WebSocket.OPEN) {
+    detached.kind = 'reopen';
+    detached.spliceFrame = null;
+    if (autoplay) retryStreamingConnection();
+  } else if (!keepDetached) {
+    endStreamingDetach();
+  }
   if (mayPrimeStreamingCachedTrack()) {
     await primeStreamingCachedTrack(track);
     if (engine.startRequestId !== startRequestId) return null;
   }
   const canPrepareReplacement = () => {
+    const current = engine.roles.current;
     const pendingPromotion = engine.pendingPromotion;
+    // Promoted audio sounds from its boundary, before its first-frame report and the server's answer.
     const promotionAllowsReplacement = !pendingPromotion
-      || (pendingPromotion.kind === 'replacement'
-        && pendingPromotion.generation === engine.generation
-        && pendingPromotion.streamId === engine.roles.current?.streamId
-        && engine.roles.current?.firstFrameNotified === true);
+      || (pendingPromotion.generation === engine.generation
+        && pendingPromotion.streamId === current?.streamId);
     return autoplay
-      && engine.roles.current
-      && engine.diagnostics.firstFrameAtMs > 0
+      && current
+      && (engine.diagnostics.firstFrameAtMs > 0 || current.boundaryNotified === true)
       && engine.node
+      // Detached, a press waits silent at its place for the next socket.
+      && !engine.detached
       && engine.socket?.readyState === WebSocket.OPEN
       && !engine.snapshot.paused
-      && promotionAllowsReplacement
-      && !engine.pendingSeek;
+      && promotionAllowsReplacement;
   };
   // A switch to a track's start can open at this rate; the server refuses a wrong one.
   if (canPrepareReplacement() && !knownStreamingSampleRate(track)
@@ -11039,37 +12505,47 @@ async function startBrowserStreamingTrack(track, {
     if (engine.startRequestId !== startRequestId) return null;
   }
   preparedReplacement: {
+    // The playing song sounds until the pressed one does, however little of it is left, and a
+    // press during a switch or seek takes over its cut-over.
     if (!canPrepareReplacement()
         || (knownStreamingSampleRate(track)
           && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
+    while (engine.pendingSeek?.prepareSent) {
+      const made = await streamingCutoverSettled(engine.pendingSeek);
+      if (engine.startRequestId !== startRequestId) return null;
+      // Given up, it may still have reached the worklet: only a fresh start is sure of what sounds.
+      if (!made) break preparedReplacement;
+    }
+    if (!canPrepareReplacement()
+        || !streamingOutgoingAudioPlays(engine, engine.roles.current)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
-    if (engine.roles.continuity
+    const prepared = preparedStreamingSuccessor(track, startSeconds);
+    if (prepared) {
+      if (!requestPreparedStreamingAuthority(prepared)) return null;
+      // Until then it follows nothing: not the old song's end, not as an album's next track.
+      engine.node.port.postMessage({ type: 'expect-continuity', generation: engine.generation, active: false });
+    } else if (engine.roles.continuity
         && !closeStreamingContinuityRole('replacement-target')) return null;
+    settlePendingStreamingCutover(new Error('Prepared track replacement was superseded'));
+    engine.pendingSeek = null;
+    // A seek held for the promotion's answer belonged to the song this press leaves.
+    if (engine.pendingPromotion) engine.pendingPromotion.requestedSeekSeconds = null;
     engine.pendingContinuityTrack = null;
     engine.pendingContinuityOptions = null;
     engine.loopContinuity = null;
     engine.waveformReadyIdentity = null;
-    const replacementGeneration = engine.generation;
-    const outgoingStreamId = engine.roles.current.streamId;
-    if (!replacementOutgoingCushionReady(engine, engine.roles.current)) {
-      const cushionReady = await waitForStreamingReplacementCushion(engine, engine.roles.current);
-      if (engine.startRequestId !== startRequestId
-          || engine.generation !== replacementGeneration
-          || engine.roles.current?.streamId !== outgoingStreamId
-          || !engine.node
-          || engine.socket?.readyState !== WebSocket.OPEN) return null;
-      if (!cushionReady) break preparedReplacement;
-    }
     const startFrame = streamingFrames(Math.max(0, startSeconds));
-    const replacement = openStreamingRole('continuity', track, startFrame, {
+    const replacement = prepared || openStreamingRole('continuity', track, startFrame, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
     });
     if (!replacement) return null;
-    probeStreamingTrackWaveform(track);
-    replacement.targetBufferFrames = Math.min(
-      streamingRoleCapacityFrames(replacement),
-      streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
-    );
+    loadStreamingTrackWaveform(track);
+    if (!prepared) {
+      replacement.targetBufferFrames = Math.min(
+        streamingRoleCapacityFrames(replacement),
+        streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
+      );
+    }
     const completion = new Promise((resolve, reject) => {
       engine.pendingSeek = {
         generation: engine.generation,
@@ -11106,11 +12582,22 @@ async function startBrowserStreamingTrack(track, {
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
   let sampleRate = 0;
+  // Only a start that is to sound guesses, and only from a rate this browser has played: nobody
+  // waits on a paused one (a restore), whose refused guess would leave a second generation that
+  // never draws its waveform while paused; and a blind guess would cost its own refused open.
+  const guessedSampleRate = autoplay && !knownStreamingSampleRate(track)
+    && chooseStreamingQuality(track) === 'original' && !streamingQualityNeedsTrackSize(track)
+    ? rememberedStreamingSampleRate()
+    : 0;
   try {
-    await prepareStreamingPlaybackEngine();
     if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
-    await requestStreamingSampleRate(track);
-    sampleRate = streamingPlaybackRate(track);
+    if (guessedSampleRate) {
+      sampleRate = guessedSampleRate;
+    } else {
+      await prepareStreamingPlaybackEngine();
+      await requestStreamingSampleRate(track);
+      sampleRate = streamingPlaybackRate(track);
+    }
     if (engine.startRequestId === startRequestId && !sampleRate) {
       throw new Error('The track sample rate could not be read');
     }
@@ -11136,7 +12623,11 @@ async function startBrowserStreamingTrack(track, {
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
   engine.mode = 'starting';
+  engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
+  // A resume's marks exist only once a song resumes: the diagnostics written with every position stay small.
+  delete engine.diagnostics.resumedAtMs;
+  delete engine.diagnostics.resumeFirstFrameAtMs;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
@@ -11162,10 +12653,18 @@ async function startBrowserStreamingTrack(track, {
     requestedStartFrame: startFrame,
     timelineStartFrame: startFrame,
   });
+  // A socket lost while this start was on its way left the old song's splice behind: this song
+  // opens whole, on whichever socket connects next.
+  if (engine.detached && !keepDetached) {
+    engine.detached.kind = 'reopen';
+    engine.detached.spliceFrame = null;
+  }
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
-  current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
-  probeStreamingTrackWaveform(track);
+  current.autoplay = autoplay;
+  if (engine.pendingStart === pending) engine.pendingStart = null;
+  if (guessedSampleRate) current.guessedStart = { startSeconds: Math.max(0, startSeconds), autoplay };
+  loadStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
     generation: engine.generation,
@@ -11257,10 +12756,13 @@ async function startBrowserStreamingTrack(track, {
 
 async function pauseBrowserStreaming() {
   const engine = streamingEngineState();
+  reportUnheardStreamingPress('paused');
   const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
+  engine.resumeSound = null;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   engine.snapshot.paused = true;
+  pauseStreamingReconnect();
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
   if (engine.pendingSeek?.kind === 'replacement') {
     const currentTrack = engine.roles.current?.track;
@@ -11274,23 +12776,26 @@ async function pauseBrowserStreaming() {
   if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
 
+/** [onFirstSound]: called once, on the resumed song's first audible rendered frame; a pause, seek, start or
+ * cleanup before then drops it. */
 async function resumeBrowserStreaming(
   expectedStartRequestId = null,
   onPlaybackStarted = null,
   expectedCurrentRole = null,
+  onFirstSound = null,
 ) {
   const engine = streamingEngineState();
   const startRequestId = expectedStartRequestId
     ?? (Number(engine.startRequestId) || 0);
   const pendingRecovery = engine.pendingTransportRecovery;
   if (pendingRecovery && !engine.context && !engine.roles.current) {
-    engine.pendingTransportRecovery = null;
+    // Held until the restart plays: one lost before it opens keeps the place.
     delete engine.diagnostics.lastError;
     const recovered = await startStreamingTrack(pendingRecovery.track, {
       startSeconds: pendingRecovery.startSeconds,
       autoplay: true,
       onAutoplayStarted: onPlaybackStarted,
-      transportRecoveryAttempt: 0,
+      keepTransportRecovery: true,
     });
     return Boolean(recovered && !engine.snapshot.paused);
   }
@@ -11314,8 +12819,20 @@ async function resumeBrowserStreaming(
   if (expectedStartRequestId === null) {
     engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   }
+  syncStreamingSoundPermission(node);
+  // Diagnostics: a resume's first audible frame is stamped when the processor reports it
+  // ([recordStreamingRenderedPcmEvidence]). A start's autoplay posts its play here too, before its song ever
+  // sounded: only a song that already sounded resumes.
+  if (engine.roles.current?.firstFrameNotified) {
+    engine.diagnostics.resumedAtMs = performance.now();
+    engine.diagnostics.resumeFirstFrameAtMs = 0;
+  }
+  engine.resumeSound = typeof onFirstSound === 'function' && engine.roles.current
+    ? { streamId: engine.roles.current.streamId, onFirstSound }
+    : null;
   node.port.postMessage({ type: 'play', generation });
   engine.snapshot.paused = false;
+  resumeStreamingReconnect();
   maybeGrantDeferredReplacementCredit();
   maybeSchedulePendingStreamingContinuity();
   engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
@@ -11336,10 +12853,20 @@ async function resumeBrowserStreaming(
 async function seekBrowserStreaming(seconds) {
   const engine = streamingEngineState();
   engine.diagnostics.seekRequestedAtMs = performance.now();
+  // Stopped by a lost connection: the seek moves the place the next play starts at.
+  const held = engine.pendingTransportRecovery;
+  if (held && !engine.roles.current) {
+    held.startSeconds = Math.max(0, Number(seconds) || 0);
+    engine.snapshot.currentTime = held.startSeconds;
+    publishStreamingDiagnostics();
+    return null;
+  }
   const currentTrack = engine.roles.current?.track;
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;
   if (!current) return null;
+  reportUnheardStreamingPress('seek');
+  engine.resumeSound = null;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (engine.pendingPromotion) {
     const pendingPromotion = engine.pendingPromotion;
@@ -11352,11 +12879,19 @@ async function seekBrowserStreaming(seconds) {
   }
   const startSeconds = Math.max(0, Number(seconds) || 0);
   const startFrame = streamingFrames(startSeconds);
+  const detached = engine.detached;
+  const offline = Boolean(detached) && engine.socket?.readyState !== WebSocket.OPEN;
+  if (offline && !seekStreamingAudioHere(detached, startFrame)) {
+    return jumpWhileDetached(currentTrack, startSeconds);
+  }
+  // The next socket is open: the seek asks it, and no splice is needed any more.
+  if (detached && !offline) endStreamingDetach();
   const currentFrame = Math.round(
     Math.max(0, Number(engine.snapshot.currentTime) || 0) * engine.sampleRate,
   );
   const queuedContinuity = engine.roles.continuity;
-  const bufferedSeekEligible = queuedContinuity?.continuityOptions?.kind === 'queued-next'
+  const bufferedSeekEligible = !offline
+    && queuedContinuity?.continuityOptions?.kind === 'queued-next'
     && engine.diagnostics.bufferedFrames.continuity > 0
     && !engine.snapshot.paused
     && !engine.loopContinuity
@@ -11434,8 +12969,14 @@ async function seekBrowserStreaming(seconds) {
   engine.waveformReadyIdentity = null;
   const seekOptions = { kind: 'seek', startSeconds, endSeconds: startSeconds };
   const replacement = openLocalStreamingSeekRole(current, startFrame, seekOptions)
-    || openStreamingRole('continuity', currentTrack, startFrame, seekOptions);
-  if (!replacement) return null;
+    || (offline ? null : openStreamingRole('continuity', currentTrack, startFrame, seekOptions));
+  if (!replacement) return offline ? jumpWhileDetached(currentTrack, startSeconds) : null;
+  // Audio read from a cut stream ends where the stream from the next socket will join it.
+  if (offline && detached.spliceFrame !== null) endStreamingEncodedRoleAt(replacement, detached.spliceFrame);
+  // A seek gives up the switch it interrupts: that press is cancelled, which is no playback failure.
+  settlePendingStreamingCutover(Object.assign(
+    new Error('Prepared track replacement was superseded by a seek'), { cancelledPress: true },
+  ));
   engine.pendingSeek = {
     generation: engine.generation,
     currentStreamId: current.streamId,
@@ -11495,9 +13036,13 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
     }
     return prepared;
   }
-  if (engine.pendingPromotion) {
+  if (engine.pendingPromotion || engine.detached) {
     engine.pendingContinuityTrack = track;
     engine.pendingContinuityOptions = normalized;
+    // Offline, the song's end waits for its successor; a splice keeps its own expectation.
+    if (engine.detached?.kind === 'offline' && normalized.kind === 'queued-next') {
+      engine.node.port.postMessage({ type: 'expect-continuity', generation: engine.generation, active: true });
+    }
     return null;
   }
   if (!protectedQueuedContinuityReady(engine, engine.roles.current, normalized)) {
@@ -11592,10 +13137,10 @@ async function cleanupStreamingResources(reason, {
   const node = engine.node;
   const socket = engine.socket;
   const context = engine.context;
+  reportUnheardStreamingPress('stopped');
   if (roles.length || engine.waveformReadyIdentity) {
     cancelStreamingWaveformGeneration(engine.generation);
   }
-  settleStreamingReplacementCushionWaiter(false);
   settlePendingBufferedSeek('superseded');
   discardSupersededBufferedSeek();
   settlePendingStreamingCutover(new Error(`Prepared track replacement stopped: ${reason}`));
@@ -11612,17 +13157,23 @@ async function cleanupStreamingResources(reason, {
   engine.pendingContinuityOptions = null;
   engine.pendingPromotion = null;
   engine.pendingSeek = null;
-  engine.replacementCushionWaiter = null;
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
   engine.pendingControls = [];
   engine.deferredCreditFrames = { current: 0, continuity: 0 };
+  endStreamingDetach();
+  const lostStreamIds = engine.lostStreamIds;
+  engine.lostStreamIds = null;
   sweepStreamingEncodedDecoders();
   if (!preserveError) {
     engine.mode = 'stopped';
     delete engine.diagnostics.lastError;
   }
+  engine.resumeSound = null;
   engine.diagnostics.firstFrameAtMs = 0;
+  // A resume's marks exist only once a song resumes: the diagnostics written with every position stay small.
+  delete engine.diagnostics.resumedAtMs;
+  delete engine.diagnostics.resumeFirstFrameAtMs;
   engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
@@ -11639,6 +13190,7 @@ async function cleanupStreamingResources(reason, {
   const cleanupErrors = [];
   if (socket && !socketAlreadyClosed && socket.readyState === WebSocket.OPEN) {
     for (const roleState of roles) {
+      if (lostStreamIds?.has(roleState.streamId)) continue;
       try {
         socket.send(JSON.stringify({
           type: 'close',
@@ -11750,6 +13302,7 @@ function getBrowserStreamingSnapshot() {
       continuityEosReceived: Boolean(engine.roles.continuity?.eosReceived),
       continuityTargetBufferFrames: Number(engine.roles.continuity?.targetBufferFrames || 0),
       contextState: String(engine.context?.state || ''),
+      transportState: streamingTransportState(engine),
     },
   };
 }
@@ -12944,6 +14497,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.media_session.v1": "optional",
     "playback.resumption.v1": "optional",
     "playback.album_details.v1": "optional",
+    "playback.takeover.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
     "updates.choose.v1": "optional",
@@ -13209,11 +14763,14 @@ const ANDROID_NATIVE_REFERENCE_CACHE_LIMIT = 512;
 const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
 // The shell keeps playback in a media session that outlives the document (playback.media_session.v1).
 const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
-const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
+const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v2';
 // The shell persists each item's path-free resume token, so its media card can resume playback
 // after the session, the process or the device restarted (playback.resumption.v1).
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
 const ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY = 'playback.album_details.v1';
+// `loadQueue` may carry `takeover`. A shell without it refuses that key, so its page never takes
+// playback over: it fails closed before anything is asked of the server.
+const ANDROID_NATIVE_TAKEOVER_CAPABILITY = 'playback.takeover.v1';
 const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
 // How long a seek outlasts positions Android sent before it took the seek, and how near the
@@ -13346,6 +14903,8 @@ async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
   const expiresAtMs = Date.parse(result.expiresAt);
   missing.forEach(({ index, path }, position) => {
     refs[index] = issuedRefs[position];
+    // The kept queue and player name songs by resume token (player-saved-tokens.js).
+    if (typeof rememberPlaybackResumeToken === 'function') rememberPlaybackResumeToken(path, issuedRefs[position].resumeToken);
     if (!(expiresAtMs > Date.now())) return;
     const cache = androidNativePlayback.refs;
     cache.delete(path);
@@ -13424,7 +14983,7 @@ function androidNativeCurrentRole() {
 }
 
 async function startAndroidNativePlaybackTrack(track, {
-  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false,
+  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false, takeover = false,
 } = {}) {
   const native = androidNativePlayback;
   const revision = ++native.revision;
@@ -13441,6 +15000,8 @@ async function startAndroidNativePlaybackTrack(track, {
     // A pause or play while the references were fetched decides whether the kept item plays.
     if (keepCurrent) autoplay = !native.snapshot.paused;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    // Play while another client plays: Android's claim replaces that client's (playback.claim.takeover).
+    if (takeover && autoplay && hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY)) payload.takeover = true;
     native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {
@@ -13494,17 +15055,27 @@ function androidNativeStoredTrack(track) {
 
 // The queue this document handed Android, kept beside the persisted player state so the next
 // document of this origin can name the tracks Android is still playing.
+// Each track is kept by its resume token, never its path; a queue with a track whose token is
+// unknown is not kept, and no older queue stays in its place.
 function saveAndroidNativeAttachment(revision, items) {
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  const tracks = items.map(androidNativeStoredTrack).map(savedPlayerTrack);
+  if (!tracks.every(Boolean)) {
+    if (typeof removeLocalStorageItem === 'function') removeLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY);
+    return;
+  }
+  const account = typeof pageAccountKey === 'function' ? pageAccountKey() : '';
   setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
+    ...(account ? { account } : {}),
     clientId: getAndroidNativePlaybackClientId(),
     queueRevision: revision,
-    tracks: items.map(androidNativeStoredTrack),
+    tracks,
   }));
 }
 
-// Only the exact native client and revision that queue was applied as can be adopted.
-function readAndroidNativeAttachment(live) {
+// Only the exact native client and revision that queue was applied as can be adopted; its tracks'
+// paths come from the server (player-saved-tokens.js).
+async function readAndroidNativeAttachment(live) {
   if (typeof getLocalStorageItem !== 'function') return null;
   let record = null;
   try {
@@ -13512,11 +15083,13 @@ function readAndroidNativeAttachment(live) {
   } catch (_error) {
     return null;
   }
+  // Another account's queue is never adopted.
+  if ((record?.account || '') !== (typeof pageAccountKey === 'function' ? pageAccountKey() : '')) return null;
   const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
   if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
-  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
-      || !tracks.every(track => track?.path && track.src)) return null;
-  return tracks;
+  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]) return null;
+  const inMemory = await playerTracksFromDevice(tracks).catch(() => null);
+  return inMemory?.every(Boolean) ? inMemory : null;
 }
 
 // Null outside the APK, so ordinary browsers restore exactly as before.
@@ -13527,13 +15100,14 @@ function attachAndroidNativePlayback(persistedState = null) {
 
 // A reloaded document of the same origin takes over the queue Android kept playing instead of
 // restarting it: the same tracks, item, position and revision. Android's listen continues.
-function adoptAndroidNativePlayback(persistedState) {
+async function adoptAndroidNativePlayback(persistedState) {
   const native = androidNativePlayback;
   const live = androidBridge.info?.playback;
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || native.revision !== 0
       || !ANDROID_NATIVE_ATTACHABLE_STATES.has(live?.state)) return false;
-  const tracks = readAndroidNativeAttachment(live);
-  if (!tracks) return false;
+  const tracks = await readAndroidNativeAttachment(live);
+  // A queue this document started while the paths were asked for wins.
+  if (!tracks || native.revision !== 0) return false;
   const track = tracks[live.currentIndex];
   const playing = live.state !== 'paused';
   native.revision = live.queueRevision;
@@ -13567,6 +15141,7 @@ function adoptAndroidNativePlayback(persistedState) {
     const album = resolveAlbumForPlayerTrack(track);
     if (album) setAlbumPlaybackQueue(album, track.path);
   }
+  if (!playing && typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
   if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
   // A reload restores loops inactive, so Android's loop ends with the old document.
   clearAndroidNativeLoop();
@@ -13598,6 +15173,7 @@ function pauseAndroidNativePlayback() {
   native.ownerIntent = false;
   native.snapshot.paused = true;
   if (native.mode !== 'error') native.mode = 'paused';
+  if (native.followingSystemPause) return Promise.resolve();
   return sendAndroidNativeTransport('playback.pause').then(() => undefined);
 }
 
@@ -13795,7 +15371,14 @@ function followAndroidNativeSystemState(payload) {
   const active = payload.state === 'playing' || payload.state === 'buffering' || payload.state === 'loading';
   if (payload.state === 'paused' && !snapshot.paused && typeof pausePlayerPlaybackForHandoff === 'function') {
     snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
-    void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    // Android paused already, so no pause goes back: a pause from the page counts as the user's and
+    // drops the resume Android holds for the end of a call.
+    androidNativePlayback.followingSystemPause = true;
+    try {
+      void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    } finally {
+      androidNativePlayback.followingSystemPause = false;
+    }
   } else if (active && snapshot.paused && typeof togglePlayerPlayback === 'function') {
     togglePlayerPlayback({ focusTimelineOnResume: false });
   }
@@ -13845,9 +15428,23 @@ function androidNativeReportedSeconds(payload) {
   return hold.seconds;
 }
 
+// Android moved to another item of the applied queue without the page hearing it (an advance
+// reported while the page could not read it): the page selects the item Android plays. A song the
+// page selected itself (pressed, or a queue Android has not applied yet) is left alone.
+function catchUpAndroidNativeItem(payload) {
+  const native = androidNativePlayback;
+  const shown = String(state.player.current?.path || '');
+  if (!Number.isInteger(payload.currentIndex) || payload.currentIndex === native.index
+      || payload.queueRevision !== native.appliedRevision || native.revision !== native.appliedRevision
+      || !shown || shown !== String(native.items[native.index]?.path || '')) return false;
+  followAndroidNativeSystemStep(payload);
+  return true;
+}
+
 function handleAndroidNativeState(payload) {
   const native = androidNativePlayback;
   const snapshot = native.snapshot;
+  catchUpAndroidNativeItem(payload);
   if (payload.initiator === 'system') followAndroidNativeSystemState(payload);
   const trackPath = String(native.items[native.index]?.path || '');
   const nativeState = payload.state;
@@ -13911,8 +15508,13 @@ function handleAndroidNativeCurrentItem(payload) {
     followAndroidNativeSystemStep(payload);
     return;
   }
-  // The web's own loads name items it already selected; only a natural advance is new.
-  if (payload.reason !== 'advance' || payload.currentIndex !== native.index + 1) return;
+  // The web's own loads name items it already selected; only a natural advance is new. An advance
+  // past the next item means the page missed one: it catches up to the item Android plays.
+  if (payload.reason !== 'advance') return;
+  if (payload.currentIndex !== native.index + 1) {
+    catchUpAndroidNativeItem(payload);
+    return;
+  }
   const outgoing = native.items[native.index];
   const incoming = native.items[payload.currentIndex];
   if (!outgoing || !incoming) return;
@@ -14040,8 +15642,8 @@ const BROWSER_PLAYBACK_ENGINE = Object.freeze({
   adopt: () => null,
   start: (track, options) => startBrowserStreamingTrack(track, options),
   pause: () => pauseBrowserStreaming(),
-  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole) =>
-    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole),
+  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound) =>
+    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound),
   seek: seconds => seekBrowserStreaming(seconds),
   continuity: (track, options) => scheduleBrowserStreamingContinuity(track, options),
   setLoop: (active, startSeconds, endSeconds) => setBrowserStreamingLoop(active, startSeconds, endSeconds),
@@ -14055,10 +15657,11 @@ const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
   holdsOwnClaim: true,
   recordsListens: true,
   claimClientId: () => getAndroidNativePlaybackClientId(),
+  takesOver: () => hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY),
   ownsPlayback: () => isAndroidNativePlaybackOwner(),
   adopt: persistedState => attachAndroidNativePlayback(persistedState),
-  start: (track, { startSeconds = 0, autoplay = true } = {}) =>
-    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay }),
+  start: (track, { startSeconds = 0, autoplay = true, takeover = false } = {}) =>
+    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay, takeover }),
   pause: () => pauseAndroidNativePlayback(),
   resume: (_expectedStartRequestId, onPlaybackStarted) => resumeAndroidNativePlayback(onPlaybackStarted),
   seek: seconds => seekAndroidNativePlayback(seconds),
@@ -14101,8 +15704,11 @@ function pauseStreamingPlayback() {
   return currentPlaybackEngine().pause();
 }
 
-function resumeStreamingPlayback(expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null) {
-  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole);
+// [onFirstSound]: the browser engine calls it once, on the resumed song's first audible frame.
+function resumeStreamingPlayback(
+  expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null, onFirstSound = null,
+) {
+  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole, onFirstSound);
 }
 
 function seekStreamingPlayback(seconds) {
@@ -14135,9 +15741,30 @@ function failStreamingEngine(source, event, reason) {
 
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
+// A playing tab renews this often: its listen writes need a live lease. A missed renewal frees nothing by
+// itself: a press elsewhere asks this tab, and only its word that it plays keeps the claim.
+const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
+// Renewal ticks after which a tab that is not playing gives back a claim it holds (a start that failed,
+// autoplay the browser held back: no lease frees it), and an asked tab that never heard the press was over
+// looks for itself. A pause drains its listen writes, and a press is over, well before.
+const PLAYBACK_OWNERSHIP_SILENT_TICKS = 3;
+// How long this tab may sound on its claim or, with no network, on its own: until the server says another
+// device plays. A device the server cannot reach is not waited for: a press elsewhere asks it and starts
+// when it says nothing, and this tab stops once the server answers that another device took over.
+const PLAYBACK_SOUND_WITHOUT_SERVER_MS = 24 * 60 * 60 * 1000;
+// A start nobody answered is asked again this often, with no second press.
+const PLAYBACK_OWNERSHIP_RETRY_MS = 2000;
+// A burst of seeks (a held arrow key) tells the claim its first place at once and its last when it settles.
+const PLAYBACK_POSITION_PUBLISH_MS = 200;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
+// This tab's playback identity, kept when a page unloads so the next page of the same tab renews the
+// same claim instead of being refused while the old page's lease runs (Play after a page load gave 409
+// and no sound; the unload beacon can always be dropped). Written only at unload
+// and taken at load, so a duplicated tab never shares a live tab's identity.
+const PLAYBACK_SAME_TAB_STORAGE_KEY = 'albumhaven.playbackSameTab.v1';
+let sameTabPlaybackClaim = takeSameTabPlaybackClaim();
 let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
 let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
   ? createPlaybackOwnershipToken() : '';
@@ -14176,6 +15803,38 @@ function takePlaybackOwnershipHandoffEnvelope() {
   catch (_error) { return { found: true, handoff: null }; }
 }
 
+function takeSameTabPlaybackClaim() {
+  if (typeof getSessionStorageItem !== 'function') return null;
+  const raw = getSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
+  try {
+    const { clientId, claimToken } = JSON.parse(raw || 'null') || {};
+    if (/^[0-9a-f-]{36}$/i.test(String(clientId || '')) && /^[A-Za-z0-9_-]{43}$/.test(String(claimToken || ''))) {
+      return { clientId: String(clientId), claimToken: String(claimToken) };
+    }
+  } catch (_error) {
+    // A damaged record is no identity.
+  }
+  return null;
+}
+
+/** At unload: the claim this page holds goes to the next page of the same tab. */
+function keepPlaybackClaimForThisTab() {
+  const ownership = getPlaybackOwnershipState();
+  const claim = ownership.activeClaim || ownership.unreleasedClaim || ownership.handedOver?.claim;
+  const claimToken = claim?.claimToken;
+  // Playing, the leaving beacon says it; not playing, the page says now that it is silent.
+  if (claimToken && !isPlaybackClaimRenewable()) {
+    ownership.activeClaim = null;
+    ownership.unreleasedClaim = claim;
+    updatePlaybackSoundPermission();
+    void deletePlaybackClaim(claim).catch(() => {});
+  }
+  if (!claimToken || !ownership.tabId || typeof setSessionStorageItem !== 'function') return false;
+  return setSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY,
+    JSON.stringify({ clientId: ownership.tabId, claimToken }));
+}
+
 function createPlaybackOwnershipHandoff() {
   const id = createPlaybackOwnershipTabId();
   const token = createPlaybackOwnershipToken();
@@ -14208,7 +15867,28 @@ function getPlaybackOwnershipTabId() {
   const engineClientId = playingEngine()?.claimClientId() || '';
   if (engineClientId) return engineClientId;
   const ownership = getPlaybackOwnershipState();
-  return ownership.tabId ||= createPlaybackOwnershipTabId();
+  return ownership.tabId ||= sameTabPlaybackClaim?.clientId || createPlaybackOwnershipTabId();
+}
+
+// The previous page of this tab held playback: its claim is renewed under the same identity. A
+// refusal (another client played since) leaves this page a new client.
+async function renewSameTabPlaybackClaim(prepared, track) {
+  const inherited = sameTabPlaybackClaim;
+  const ownership = getPlaybackOwnershipState();
+  if (!inherited || getPlaybackOwnershipTabId() !== inherited.clientId) return null;
+  try {
+    const result = await requestPlaybackClaim({ protocol: 1, clientId: inherited.clientId,
+      clientSurface: 'private_web', claimToken: inherited.claimToken, state: 'playing',
+      track: prepared.track, ...positionField(track) });
+    sameTabPlaybackClaim = null;
+    return result;
+  } catch (error) {
+    // Nobody answered: the next attempt asks again with the same identity.
+    if (error?.unanswered) throw error;
+    sameTabPlaybackClaim = null;
+    ownership.tabId = createPlaybackOwnershipTabId();
+    return null;
+  }
 }
 
 function normalizePlaybackOwnershipTrack(track) {
@@ -14223,14 +15903,27 @@ async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBA
   try {
     const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
       signal: controller.signal,
-      ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
+      // A closing page still delivers "I am silent": without it nobody can play.
+      ...(method === 'DELETE' ? { keepalive: true } : {}),
+      ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) })
+      .catch(markUnanswered);
     if (!response.ok) {
       const error = new Error('Playback ownership is unavailable.');
       error.status = response.status;
+      // An overloaded server's answer says no more than no answer does.
+      error.unanswered = response.status >= 500 || response.status === 429;
+      // A refusal that names when to ask again ends by itself: a leaving page's output still drains.
+      const retryAfterSeconds = Number(response.headers?.get?.('Retry-After'));
+      if (retryAfterSeconds > 0) error.retryAfterMs = retryAfterSeconds * 1000;
       throw error;
     }
-    return await response.json();
+    return await response.json().catch(markUnanswered);
   } finally { clearTimeout(timeout); }
+}
+
+function markUnanswered(error) {
+  throw Object.assign(new Error(`Playback ownership request was not answered: ${error?.message || error}`),
+    { unanswered: true });
 }
 
 function isShellPlaybackUnavailable() {
@@ -14266,7 +15959,10 @@ function stopPlaybackOwnershipHeartbeat() {
 function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   const ownership = getPlaybackOwnershipState();
   ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  endClaimWait();
   ownership.activeClaim = null;
+  ownership.withoutServer = null;
+  updatePlaybackSoundPermission();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.lockStatus = 'locked';
   ownership.blockedReason = 'playback_unavailable';
@@ -14276,15 +15972,114 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   if (!state.player.listenSession?.paused_at_unix_ms && typeof markListenSessionPaused === 'function') {
     markListenSessionPaused(offset);
   }
-  if (typeof stopStreamingPlayback === 'function') {
-    void Promise.resolve(stopStreamingPlayback(reason, { preserveSnapshot: true })).catch(() => {});
+  let stopped = Promise.resolve();
+  if (reason === 'ownership-handover') {
+    // Asked by Play here elsewhere it only falls silent: stopping would close the socket it answers on.
+    stopped = Promise.resolve(pauseStreamingPlayback());
+  } else if (typeof stopStreamingPlayback === 'function') {
+    stopped = Promise.resolve(stopStreamingPlayback(reason, { preserveSnapshot: true }));
   }
+  void stopped.catch(() => {});
   if (updateUi && typeof updatePlayerUi === 'function') updatePlayerUi();
+  return stopped;
+}
+
+// A claim dropped for a failure is still the server's holder, and nobody starts over a quiet holder:
+// once this tab's audio has stopped, it says so.
+function giveBackLostClaim(claim, stopped) {
+  const ownership = getPlaybackOwnershipState();
+  void stopped.then(() => {
+    if (ownership.activeClaim) return;
+    ownership.unreleasedClaim = claim;
+    retryPlaybackRelease();
+  }, () => {});
+}
+
+/**
+ * How long this page may sound: not before its grant, or before a start the server could not be asked about.
+ * Both clocks, as the audio thread checks both.
+ */
+function playbackSoundPermission() {
+  const ownership = getPlaybackOwnershipState();
+  const claim = ownership.activeClaim;
+  if (playingEngine()?.holdsOwnClaim) return { untilMs: 0, forMs: 0 };
+  if (ownership.withoutServer) return ownership.withoutServer.permission;
+  if (!holdsPlaybackClaim() || !claim.soundUntilWallMs) return { untilMs: 0, forMs: 0 };
+  return { untilMs: claim.soundUntilWallMs, forMs: Math.max(0, claim.soundDeadline - performance.now()) };
+}
+
+function updatePlaybackSoundPermission() {
+  if (typeof syncStreamingSoundPermission === 'function') syncStreamingSoundPermission();
+}
+
+/** Whether a press may load its stream while it asks: only where the audio thread holds it until the grant. */
+function loadsSilentlyWhileAsking() {
+  // Inside the APK the handshake may name Android's player, whose sound this page cannot hold.
+  return !playingEngine()?.holdsOwnClaim && !playingEngineHandshake();
+}
+
+// An outage start waits and then starts by itself, with no second press. A newer press, a pause or a
+// takeover ends the wait.
+function waitToAskAgain(delayMs = PLAYBACK_OWNERSHIP_RETRY_MS) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    getPlaybackOwnershipState().wakeClaimWait = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+  });
+}
+
+function endClaimWait() {
+  const ownership = getPlaybackOwnershipState();
+  ownership.wakeClaimWait?.();
+  ownership.wakeClaimWait = null;
+}
+
+// Sent until answered, as nothing else frees the claim: a give-back nobody answered, or the claim this
+// tab's previous page left while this page is not playing. A press never waits for it: a new claim is a new
+// token, which a late give-back cannot delete. Only the inherited token, which a press may renew, is in turn.
+function retryPlaybackRelease() {
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.activeClaim || ownership.releasing) return;
+  let claim = ownership.unreleasedClaim;
+  if (!claim && sameTabPlaybackClaim?.clientId === ownership.tabId
+      && !pendingPlaybackOwnershipHandoff?.handoff && !isPlaybackClaimRenewable()) {
+    claim = sameTabPlaybackClaim;
+  }
+  if (!claim) return;
+  const version = ownership.requestVersion || 0;
+  const previousOperation = ownership.pendingOperation;
+  ownership.releasing = true;
+  const operation = (async () => {
+    await previousOperation;
+    if (ownership.activeClaim || version !== (ownership.requestVersion || 0)) return false;
+    try {
+      await deletePlaybackClaim(claim);
+    } catch (error) {
+      if (error?.unanswered) return false;
+    }
+    if (ownership.unreleasedClaim === claim) ownership.unreleasedClaim = null;
+    if (sameTabPlaybackClaim === claim) sameTabPlaybackClaim = null;
+    announcePlaybackOwnership();
+    return true;
+  })().finally(() => { ownership.releasing = false; });
+  if (claim === sameTabPlaybackClaim) ownership.pendingOperation = operation;
+}
+
+// The pause ends any start still waiting on the browser, and is what makes this tab silent.
+async function giveBackSilentClaim() {
+  const ownership = getPlaybackOwnershipState();
+  const claim = ownership.activeClaim;
+  if (typeof pauseStreamingPlayback === 'function') await pauseStreamingPlayback();
+  if (ownership.activeClaim === claim && !isPlaybackClaimRenewable()) await releasePlaybackOwnership();
 }
 
 function syncMirroredPlaybackState(snapshot) {
   const ownership = getPlaybackOwnershipState();
   const previousPresentation = playbackOwnershipPresentation();
+  // Playing without the server, its own claim request decides: it asks the holder, which may be gone.
+  if (snapshot?.is_playing_elsewhere && ownership.withoutServer) return;
   if (snapshot?.is_playing_elsewhere) {
     if (ownership.blockedReason !== 'playing_in_another_tab') losePlaybackOwnership('ownership-takeover', false);
     ownership.lockStatus = 'locked';
@@ -14306,14 +16101,37 @@ async function handlePlaybackOwnershipEvent() {
     if (handshake) await handshake;
     const snapshot = await playbackOwnershipRequest('GET',
       `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}`);
-    if (version === (ownership.requestVersion || 0)) syncMirroredPlaybackState(snapshot);
+    if (version !== (ownership.requestVersion || 0)) return null;
+    syncMirroredPlaybackState(snapshot);
+    return snapshot;
   } catch (_error) {
     // A failed read never grants playback; acquisition still requires PUT.
+    return null;
   }
 }
 
-function announcePlaybackOwnership() {
-  getPlaybackOwnershipState().channel?.postMessage({ type: 'changed' });
+function announcePlaybackOwnership(type = 'changed', clientId = '') {
+  getPlaybackOwnershipState().channel?.postMessage(clientId ? { type, clientId } : { type });
+}
+
+/**
+ * Another tab of this browser says ownership changed, or that it took over a client: that one stops at
+ * once. The server names that client only to a taker of its own account.
+ */
+function receivePlaybackOwnershipMessage(event) {
+  const ownership = getPlaybackOwnershipState();
+  if (event?.data?.type === 'taken-over' && ownership.activeClaim
+      && event.data.clientId === getPlaybackOwnershipTabId()) {
+    losePlaybackOwnership('ownership-takeover', false);
+    ownership.blockedReason = 'playing_in_another_tab';
+  }
+  // Another tab of this browser plays without the server: this one stops, as it can hear that much.
+  if (event?.data?.type === 'playing-without-server' && event.data.clientId !== getPlaybackOwnershipTabId()
+      && (ownership.activeClaim || ownership.withoutServer)) {
+    losePlaybackOwnership('ownership-takeover', false);
+    ownership.blockedReason = 'playing_in_another_tab';
+  }
+  return handlePlaybackOwnershipEvent();
 }
 
 function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = null) {
@@ -14321,9 +16139,20 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
   const claim = ownership.activeClaim;
   const playback = playbackSnapshot
     || (typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null);
+  // Paused on a claim its pause has not given back yet, a leaving page hands nothing on and nothing of it
+  // sounds: it gives the claim back as it goes (one release, kept alive past the page).
+  if (playback?.paused && claim?.claimToken && !ownership.handoffAttempted) {
+    ownership.handoffAttempted = true;
+    ownership.activeClaim = null;
+    ownership.releasedClaim = claim;
+    updatePlaybackSoundPermission();
+    void deletePlaybackClaim(claim).catch(() => {});
+    return false;
+  }
   if (ownership.handoffAttempted || !claim?.claimToken || playback?.paused || playback?.ended
       || typeof navigator?.sendBeacon !== 'function') return false;
   ownership.handoffAttempted = true;
+  updatePlaybackSoundPermission();
   const handoff = createPlaybackOwnershipHandoff();
   if (!handoff || typeof setSessionStorageItem !== 'function'
       || !setSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY, JSON.stringify(handoff))) return false;
@@ -14351,16 +16180,53 @@ function isPlaybackClaimRenewable() {
   return !playback?.paused && !playback?.ended;
 }
 
+// Play here starts where the claim says the song is, so a seek and a song's first frame say so now,
+// not at the next renewal. A claim request on its way carries the older place: this follows it.
+function publishPlaybackPositionSoon() {
+  const ownership = getPlaybackOwnershipState();
+  const inBurst = Boolean(ownership.positionTimer);
+  clearTimeout(ownership.positionTimer);
+  ownership.positionTimer = setTimeout(() => {
+    ownership.positionTimer = 0;
+    return inBurst ? publishPlaybackPositionNow() : undefined;
+  }, PLAYBACK_POSITION_PUBLISH_MS);
+  if (!inBurst) void publishPlaybackPositionNow();
+}
+
+async function publishPlaybackPositionNow() {
+  const ownership = getPlaybackOwnershipState();
+  await ownership.pendingOperation;
+  // A renewal that took this turn read the place before this one did: it is waited for, not joined.
+  while (ownership.renewing) await ownership.pendingOperation;
+  if (ownership.activeClaim && isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
+}
+
 function startPlaybackOwnershipHeartbeat() {
   const ownership = getPlaybackOwnershipState();
   if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
+  let checkedAt = Number.NEGATIVE_INFINITY;
+  let silentTicks = 0;
   ownership.heartbeatTimer = setInterval(() => {
     if (ownership.recoveryPromise) return;
-    if (ownership.activeClaim) {
-      if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) {
+      silentTicks = 0;
+      void refreshPlaybackOwnershipClaim();
+      return;
     }
-    else void handlePlaybackOwnershipEvent();
-  }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+    const waits = ownership.activeClaim ? !state.player.selectedTrack : Boolean(ownership.handedOver);
+    silentTicks = waits ? silentTicks + 1 : 0;
+    if (silentTicks >= PLAYBACK_OWNERSHIP_SILENT_TICKS) {
+      silentTicks = 0;
+      void Promise.resolve(ownership.activeClaim ? giveBackSilentClaim() : settlePlaybackHandover()).catch(() => {});
+    }
+    if (ownership.activeClaim) return;
+    retryPlaybackRelease();
+    // Without a claim, what another client plays is read every heartbeat, not every renewal tick.
+    const now = performance.now();
+    if (now - checkedAt < PLAYBACK_OWNERSHIP_HEARTBEAT_MS - 100) return;
+    checkedAt = now;
+    void handlePlaybackOwnershipEvent();
+  }, PLAYBACK_OWNERSHIP_RENEW_MS);
 }
 
 function recoverPlaybackOwnership(callback) {
@@ -14386,9 +16252,23 @@ async function playbackOwnershipTrack(track, previous = null) {
     }
     playbackRef = refs.tracks[0].playbackRef;
     previous = { referenceExpiresAt: refs.expiresAt };
+    // The saved player names this song by its resume token (player-saved-tokens.js).
+    if (typeof rememberPlaybackResumeToken === 'function') rememberPlaybackResumeToken(track.path, refs.tracks[0].resumeToken);
   }
   return { path: track.path, referenceExpiresAt: previous.referenceExpiresAt,
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
+}
+
+// A start is one request (the shortened wait): with no reference kept, the claim names the
+// song by its path and the same answer brings the reference.
+function claimedPlaybackTrack(track, previous = null) {
+  if (!track?.path) throw new Error('Playback track is unavailable.');
+  const named = { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null };
+  const playbackRef = previous?.path === track.path ? previous.track?.playbackRef : null;
+  if (playbackRef && Date.parse(previous.referenceExpiresAt || '') > Date.now()) {
+    return { path: track.path, referenceExpiresAt: previous.referenceExpiresAt, track: { ...named, playbackRef } };
+  }
+  return { path: track.path, track: { ...named, path: track.path } };
 }
 
 async function deletePlaybackClaim(claim) {
@@ -14402,7 +16282,36 @@ async function requestPlaybackClaim(payload, timeoutMs) {
   // The answer's expiresAt is on the server's clock, so this document times the lease on its own
   // monotonic clock, from before the request: the server starts the lease before it answers.
   const sentAt = performance.now();
-  return { ...await playbackOwnershipRequest('PUT', '/playback/state', payload, timeoutMs), sentAt };
+  const sentWallMs = Date.now();
+  return { ...await playbackOwnershipRequest('PUT', '/playback/state', payload, timeoutMs), sentAt, sentWallMs };
+}
+
+// One retry of an unanswered claim waits at a time; a newer one replaces it.
+function scheduleUnansweredPlaybackClaimRetry(retry) {
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
+  const run = () => {
+    ownership.retryTimer = 0;
+    ownership.retryNow = null;
+    retry();
+  };
+  ownership.retryNow = run;
+  ownership.retryTimer = setTimeout(run, PLAYBACK_OWNERSHIP_RETRY_MS);
+}
+
+/**
+ * The server answers again (the playback socket reopened): a waiting renewal, or a start waiting to ask
+ * again, asks at once.
+ */
+function retryUnansweredPlaybackClaimNow() {
+  const ownership = getPlaybackOwnershipState();
+  const run = ownership.retryNow;
+  const waiting = Boolean(ownership.wakeClaimWait);
+  if (waiting) endClaimWait();
+  if (!run) return waiting;
+  clearTimeout(ownership.retryTimer);
+  run();
+  return true;
 }
 
 function acceptPlaybackClaim(result, prepared) {
@@ -14414,8 +16323,30 @@ function acceptPlaybackClaim(result, prepared) {
   // Every acquire and heartbeat says afresh whether listen writes can reach Last.fm; null when it does not say.
   const scrobblingAvailable = typeof result.scrobbling?.available === 'boolean' ? result.scrobbling.available : null;
   const leaseDeadline = result.sentAt + result.leaseMs;
-  const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
+  let claimed = prepared;
+  if (result.playbackRef) {
+    const { path: _named, ...track } = prepared.track;
+    claimed = { path: prepared.path, referenceExpiresAt: result.referenceExpiresAt,
+      track: { ...track, playbackRef: result.playbackRef } };
+  }
+  const claim = { ...claimed, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable,
+    soundDeadline: result.sentAt + PLAYBACK_SOUND_WITHOUT_SERVER_MS,
+    soundUntilWallMs: result.sentWallMs + PLAYBACK_SOUND_WITHOUT_SERVER_MS };
+  // A switch claims the pressed song while the one before still sounds: a handover names that one.
+  if (ownership.activeClaim?.path && ownership.activeClaim.path !== claim.path) {
+    ownership.previousClaim = ownership.activeClaim;
+  }
+  ownership.releasedClaim = null;
+  ownership.handedOver = null;
+  ownership.unreleasedClaim = null;
+  ownership.withoutServer = null;
+  ownership.claimInDoubt = false;
+  // This tab's own claim now: the one its previous page left is void.
+  sameTabPlaybackClaim = null;
   ownership.activeClaim = claim;
+  updatePlaybackSoundPermission();
+  // A page that was refused its previous page's claim is a new client.
+  if (typeof connectStreamingSilenceRelay === 'function') connectStreamingSilenceRelay();
   const previousPresentation = playbackOwnershipPresentation();
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
@@ -14434,9 +16365,20 @@ async function expirePlaybackClaim(claim) {
   await ownership.pendingOperation;
   if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return;
   // A jump in this document's clock can reach this deadline while the server's lease still runs,
-  // so a playing claim asks the server once; the renewal drops it on refusal or failure.
+  // so a playing claim asks the server once; only its answer can drop it.
   if (isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
-  else losePlaybackOwnership();
+  else giveBackLostClaim(claim, losePlaybackOwnership());
+}
+
+// A renewal the server did not answer keeps the claim, which plays on, and is asked again in 2 s rather
+// than at the next heartbeat; only an answer drops it.
+function keepUnansweredPlaybackClaim(claim, error) {
+  if (!error?.unanswered) return false;
+  const ownership = getPlaybackOwnershipState();
+  scheduleUnansweredPlaybackClaimRetry(() => {
+    if (ownership.activeClaim === claim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+  });
+  return true;
 }
 
 async function refreshPlaybackOwnershipClaim(track = null) {
@@ -14451,16 +16393,30 @@ async function refreshPlaybackOwnershipClaim(track = null) {
     const claim = ownership.activeClaim;
     if (!claim) return false;
     try {
-      const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
+      // While a switch is pending the claim is the pressed song's: the current one is the song it replaces.
+      const claimed = track || state.player.selectedTrack || state.player.current;
+      const prepared = claimedPlaybackTrack(claimed, claim);
       if (version !== (ownership.requestVersion || 0)) return false;
       const result = await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: 'playing', track: prepared.track });
+        state: 'playing', track: prepared.track, ...positionField(claimed) });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
-      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+    } catch (error) {
+      // No answer is not a refusal: it plays on, and is asked again in 2 s.
+      if (error?.unanswered) {
+        if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) {
+          keepUnansweredPlaybackClaim(claim, error);
+        }
+        return false;
+      }
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) {
+        const stopped = losePlaybackOwnership();
+        // Taken over: show which client plays now, as "Playing in another tab".
+        if (error?.status === 409) await handlePlaybackOwnershipEvent();
+        else giveBackLostClaim(claim, stopped);
+      }
       return false;
     }
   })().finally(() => { ownership.renewing = false; });
@@ -14492,6 +16448,8 @@ async function acquirePlaybackOwnershipHandoff(prepared, handoff) {
 async function claimPlaybackOwnership(track, options = {}) {
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  endClaimWait();
+  updatePlaybackSoundPermission();
   const previousOperation = ownership.pendingOperation;
   const handoff = options.handoff || null;
   const operation = (async () => {
@@ -14500,35 +16458,97 @@ async function claimPlaybackOwnership(track, options = {}) {
     const handshake = playingEngineHandshake();
     if (handshake) await handshake;
     if (version !== ownership.requestVersion) return false;
-    const claim = ownership.activeClaim;
-    // An engine that holds its own claim acquires, heartbeats and releases it before any output.
-    if (playingEngine()?.holdsOwnClaim) return true;
-    try {
-      if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
-      const prepared = await playbackOwnershipTrack(track, claim);
-      if (version !== ownership.requestVersion) return false;
-      const result = handoff
-        ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
-        : await requestPlaybackClaim({ protocol: 1,
-          clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
-          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
-      if (version !== ownership.requestVersion) {
-        if (!claim) await deletePlaybackClaim(result).catch(() => {});
-        return false;
-      }
-      acceptPlaybackClaim(result, prepared);
-      return true;
-    } catch (_error) {
-      if (version === ownership.requestVersion) {
-        losePlaybackOwnership();
+    if (playingEngine()?.holdsOwnClaim) return mayEngineStart(options, version);
+    for (;;) {
+      const claim = ownership.activeClaim;
+      try {
+        if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
+        const prepared = claimedPlaybackTrack(track, claim || ownership.releasedClaim);
+        const inherited = !claim && !options.takeover && sameTabPlaybackClaim
+          ? await renewSameTabPlaybackClaim(prepared, track)
+          : null;
+        const result = inherited || (handoff
+          ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
+          : await requestPlaybackClaim({ protocol: 1,
+            clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
+            claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track,
+            ...(options.takeover && !claim ? { takeover: true } : {}),
+            ...positionField(track) }));
+        if (version !== ownership.requestVersion) {
+          if (!claim) await discardPlaybackClaim(result);
+          return false;
+        }
+        acceptPlaybackClaim(result, prepared);
+        return true;
+      } catch (error) {
+        if (version !== ownership.requestVersion) return false;
+        if (error?.unanswered && !handoff) {
+          // A held claim plays on. Without one, no network is no reason to wait: it plays on what it has.
+          if (claim && holdsPlaybackClaim()) return keepUnansweredPlaybackClaim(claim, error);
+          playWithoutServer(version);
+          return true;
+        }
+        // The page that played said it is leaving: it is silent once its output drains, and the one
+        // press starts then. The server names the wait only while it drains.
+        if (error?.status === 409 && error.retryAfterMs && !claim && !handoff) {
+          await waitToAskAgain(error.retryAfterMs);
+          if (version !== ownership.requestVersion) return false;
+          continue;
+        }
+        const stopped = losePlaybackOwnership();
+        if (claim && error?.status !== 409) giveBackLostClaim(claim, stopped);
         await handlePlaybackOwnershipEvent();
         if (options.showBlockedToast !== false) notifyBlockedPlaybackStart();
+        return false;
       }
-      return false;
     }
   })();
   ownership.pendingOperation = operation;
   return operation;
+}
+
+/** A grant this tab will not use: given back, and again until the server answers. */
+async function discardPlaybackClaim(result) {
+  await deletePlaybackClaim(result).catch((error) => {
+    if (error?.unanswered) getPlaybackOwnershipState().unreleasedClaim = result;
+  });
+}
+
+/**
+ * An engine with its own claim (Android's) sounds while it asks for one, and installed apps cannot be
+ * changed from here: without a claim of its own it is let start only once the server says nobody plays.
+ */
+async function mayEngineStart(options, version) {
+  if (playingEngine().ownsPlayback()) return true;
+  const ownership = getPlaybackOwnershipState();
+  for (;;) {
+    try {
+      const snapshot = await playbackOwnershipRequest('GET',
+        `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}`);
+      if (version !== ownership.requestVersion) return false;
+      if (!snapshot.is_playing_elsewhere) return true;
+      syncMirroredPlaybackState(snapshot);
+      break;
+    } catch (error) {
+      if (version !== ownership.requestVersion) return false;
+      // No network is no reason to wait: it plays on what it has, and its own claim asks until answered.
+      if (error?.unanswered) return true;
+      break;
+    }
+  }
+  if (options.showBlockedToast !== false) notifyBlockedPlaybackStart();
+  return false;
+}
+
+/**
+ * Only then may this client sound before the server answers: nobody else can have started. A page that
+ * said it was leaving, or is back from the page cache and has not asked yet, may already have been replaced.
+ */
+function holdsPlaybackClaim() {
+  const engine = playingEngine();
+  if (engine?.holdsOwnClaim) return Boolean(engine.ownsPlayback());
+  const ownership = getPlaybackOwnershipState();
+  return Boolean(ownership.activeClaim?.claimToken) && !ownership.handoffAttempted && !ownership.claimInDoubt;
 }
 
 async function releasePlaybackOwnership() {
@@ -14536,7 +16556,14 @@ async function releasePlaybackOwnership() {
   if (playingEngine()?.holdsOwnClaim) return false;
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  endClaimWait();
   const claim = ownership.activeClaim;
+  // From here a Play asks the server: the claim may be gone before it could sound on it.
+  if (claim) claim.givingBack = true;
+  if (ownership.withoutServer) {
+    ownership.withoutServer = null;
+    updatePlaybackSoundPermission();
+  }
   if (claim && typeof drainPlaybackSessionRequests === 'function') {
     await drainPlaybackSessionRequests(claim.claimToken);
   }
@@ -14546,9 +16573,12 @@ async function releasePlaybackOwnership() {
     await previousOperation;
     if (version !== ownership.requestVersion) return false;
     ownership.activeClaim = null;
+    updatePlaybackSoundPermission();
+    // Play here elsewhere can still ask the tab that just paused.
+    if (claim) ownership.releasedClaim = claim;
     if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
     clearBlockedPlaybackState();
-    await deletePlaybackClaim(claim).catch(() => {});
+    if (claim) await discardPlaybackClaim(claim);
     announcePlaybackOwnership();
     return Boolean(claim);
   })();
@@ -14563,6 +16593,14 @@ function notifyBlockedPlaybackStart() {
   }
 }
 
+/**
+ * A loaded page resumes by itself only what this tab was playing: its last page handed
+ * on moments ago. A new tab, a restarted browser and a hand-over that was lost open paused.
+ */
+function canThisTabResumePlayback() {
+  return Boolean(pendingPlaybackOwnershipHandoff?.handoff);
+}
+
 function canRestoreActivePlayback(parsedState) {
   const stored = pendingPlaybackOwnershipHandoff;
   pendingPlaybackOwnershipHandoff = null;
@@ -14575,7 +16613,11 @@ function canRestoreActivePlayback(parsedState) {
 
 function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   const ownership = getPlaybackOwnershipState();
+  // Back from the page cache, this page is the tab's live holder again: nothing is handed on.
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
   ownership.handoffAttempted = false;
+  ownership.claimInDoubt = Boolean(ownership.activeClaim);
+  updatePlaybackSoundPermission();
   const stored = takePlaybackOwnershipHandoffEnvelope();
   const handoff = stored.handoff;
   if (!handoff) {
@@ -14593,12 +16635,289 @@ function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
     ownership.tabId = runtimeClientId;
     playbackOwnershipRuntimeClaimToken = runtimeClaimToken;
     ownership.activeClaim = null;
+    updatePlaybackSoundPermission();
     if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
     return claimPlaybackOwnership(state.player.current, { showBlockedToast: false, handoff });
   });
 }
 
-function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track); }
+function canStartPlaybackInThisTab(track, options = {}) {
+  return claimPlaybackOwnership(track, { takeover: options.takeover === true });
+}
+
+/**
+ * A start the server did not answer plays at once on what this device has, as no network is no reason to
+ * wait. The tabs of this browser that play stop, as they hear without a network. It asks again until the
+ * server answers: then it holds the claim, or, as another device played meanwhile, it stops and says so.
+ */
+function playWithoutServer(version) {
+  const ownership = getPlaybackOwnershipState();
+  const marker = { version, permission: { untilMs: Date.now() + PLAYBACK_SOUND_WITHOUT_SERVER_MS,
+    forMs: PLAYBACK_SOUND_WITHOUT_SERVER_MS } };
+  ownership.withoutServer = marker;
+  updatePlaybackSoundPermission();
+  announcePlaybackOwnership('playing-without-server', getPlaybackOwnershipTabId());
+  const current = () => ownership.withoutServer === marker && version === ownership.requestVersion;
+  const askAgain = () => scheduleUnansweredPlaybackClaimRetry(async () => {
+    if (!current()) return;
+    const playing = state.player.selectedTrack || state.player.current;
+    let prepared;
+    let result;
+    try {
+      prepared = claimedPlaybackTrack(playing, null);
+      result = await requestPlaybackClaim({ protocol: 1, clientId: getPlaybackOwnershipTabId(),
+        clientSurface: 'private_web', claimToken: null, state: 'playing', track: prepared.track,
+        ...positionField(playing) });
+    } catch (error) {
+      if (!current()) return;
+      if (error?.unanswered) {
+        askAgain();
+        return;
+      }
+      // Another device played meanwhile: this one stops, and shows what plays there.
+      losePlaybackOwnership('ownership-takeover', false);
+      await handlePlaybackOwnershipEvent();
+      return;
+    }
+    if (!current()) {
+      await discardPlaybackClaim(result);
+      return;
+    }
+    acceptPlaybackClaim(result, prepared);
+  });
+  askAgain();
+}
+
+/**
+ * A press on another device asks this paused tab whether nothing of it sounds. Only from its output's real
+ * state, as for Play here: once what it rendered has left the output, and only if it still is the paused
+ * holder, it drops its claim and says so, so its own next Play asks the server. A Play here meanwhile, or a
+ * tab that plays or starts, declines, and that press is refused.
+ */
+async function yieldPausedPlaybackClaim(requestId) {
+  const ownership = getPlaybackOwnershipState();
+  const paused = () => Boolean(ownership.activeClaim)
+    && !state.player.selectedTrack && !isPlaybackClaimRenewable();
+  const decline = () => sendStreamingHandoverAnswer({ type: 'handover-declined', requestId });
+  if (!paused()) return decline();
+  const { claimToken } = ownership.activeClaim;
+  if (typeof drainStreamingOutput === 'function') await drainStreamingOutput();
+  // The pause's own renewal may land meanwhile: the claim is the same while its token is.
+  if (!paused() || ownership.activeClaim.claimToken !== claimToken) return decline();
+  const claim = ownership.activeClaim;
+  ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  endClaimWait();
+  ownership.activeClaim = null;
+  // Play here elsewhere can still ask it what it paused at.
+  ownership.releasedClaim = claim;
+  if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
+  updatePlaybackSoundPermission();
+  return sendStreamingHandoverAnswer({ type: 'handover-silent', requestId });
+}
+
+function playbackToHandOver(starting) {
+  const sounding = typeof getSoundingStreamingPlayback === 'function' && getSoundingStreamingPlayback();
+  if (sounding) return sounding;
+  // With no stream yet, a stopped player is at its place and a first start at the place it starts from.
+  if (!state.player.current) return starting;
+  const snapshot = getPlayerPlaybackSnapshot();
+  return { track: state.player.current, seconds: snapshot.currentTime, durationSeconds: snapshot.duration };
+}
+
+/**
+ * Play here elsewhere still wants this tab to stop: it stops and, once its output is
+ * silent, answers the song that sounded and where, with its claim's token. No path crosses the socket.
+ */
+function answerPlaybackHandover(requestId) {
+  const ownership = getPlaybackOwnershipState();
+  const answering = fallSilentAndAnswer(requestId);
+  ownership.answering = answering;
+  return answering;
+}
+
+async function fallSilentAndAnswer(requestId) {
+  const ownership = getPlaybackOwnershipState();
+  // A start's first claim may still be on its way.
+  if (!ownership.activeClaim && !ownership.releasedClaim) await ownership.pendingOperation;
+  const claim = ownership.activeClaim || ownership.handedOver?.claim || ownership.releasedClaim;
+  const answerSilent = () => sendStreamingHandoverAnswer({ type: 'handover-silent', requestId });
+  // A first start has no stream yet: read it before the press is cancelled.
+  const starting = { track: state.player.selectedTrack, seconds: state.player.selectedStartSeconds,
+    durationSeconds: state.player.selectedTrack?.durationSeconds };
+  if (!claim?.claimToken || !playbackToHandOver(starting).track?.path) {
+    // Nothing to hand on (a page just reloaded): with nothing sounding or starting it says so, once what
+    // it last rendered left the output.
+    if (starting.track || isPlaybackClaimRenewable()) return;
+    if (typeof drainStreamingOutput === 'function') await drainStreamingOutput();
+    if (!isPlaybackClaimRenewable()) answerSilent();
+    return;
+  }
+  const wasPlaying = ownership.handedOver?.wasPlaying || Boolean(starting.track) || isPlaybackClaimRenewable();
+  if (typeof cancelPendingPlayerSelection === 'function') cancelPendingPlayerSelection();
+  const drained = typeof silenceStreamingPlaybackForHandover === 'function'
+    ? await silenceStreamingPlaybackForHandover()
+    : async () => true;
+  // Read only now: what was rendered until the silence is what was heard.
+  const sounding = playbackToHandOver(starting);
+  const { track } = sounding;
+  const known = [claim, ownership.previousClaim].find((held) => held?.path === track.path) || null;
+  // As a claim taken over: no save and no release follows it with the token it hands on.
+  losePlaybackOwnership('ownership-handover', false);
+  ownership.handedOver = { claim, wasPlaying,
+    starting: starting.track ? starting : ownership.handedOver?.starting };
+  ownership.blockedReason = 'playing_in_another_tab';
+  ownership.mirroredTrack = normalizePlaybackOwnershipTrack(track);
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  // Without proof of silence there is no answer.
+  if (!drained) return;
+  const [silent, prepared] = await Promise.all([drained(),
+    playbackOwnershipTrack(track, known).catch(() => null)]);
+  if (!silent) return;
+  if (!prepared) {
+    answerSilent();
+    return;
+  }
+  const durationMs = Math.round((Number(sounding.durationSeconds) || 0) * 1000);
+  const ms = Math.max(0, Math.round((Number(sounding.seconds) || 0) * 1000));
+  sendStreamingHandoverAnswer({
+    type: 'handover-answer',
+    requestId,
+    claimToken: claim.claimToken,
+    track: prepared.track,
+    position: durationMs > 0 ? { ms: Math.min(ms, durationMs), durationMs } : null,
+  });
+}
+
+/**
+ * The press that asked this tab is over: it shows who plays now and, if nobody took over, plays on. It
+ * plays on as a new claim, which voids the answer it gave: a taker still on its way is refused, not doubled.
+ */
+async function settlePlaybackHandover() {
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.answering) await Promise.resolve(ownership.answering).catch(() => {});
+  const snapshot = await handlePlaybackOwnershipEvent();
+  const handedOver = ownership.handedOver;
+  // No answer says nothing: the heartbeat asks again.
+  if (!handedOver || !snapshot) return;
+  ownership.handedOver = null;
+  if (!snapshot.is_playing_here) return;
+  if (isPlaybackClaimRenewable()) return;
+  // The server still holds it for this tab: given back, unless the new claim replaces it.
+  ownership.unreleasedClaim = handedOver.claim;
+  const { starting } = handedOver;
+  if (!handedOver.wasPlaying) retryPlaybackRelease();
+  else if (starting && typeof playTrackFromPayload === 'function') {
+    await playTrackFromPayload(starting.track, { startSeconds: Number(starting.seconds) || 0 });
+  } else if (typeof togglePlayerPlayback === 'function') {
+    togglePlayerPlayback({ focusTimelineOnResume: false });
+  }
+}
+
+/**
+ * Play while another client plays (playback.claim.takeover): that client's
+ * song continues here from where it last said it was, and this claim replaces its claim.
+ */
+function takeOverPlaybackHere() {
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.takingOver) return ownership.takingOver;
+  ownership.takingOver = takeOverPlayback().finally(() => { ownership.takingOver = null; });
+  return ownership.takingOver;
+}
+
+async function takeOverPlayback() {
+  // Inside the APK only the handshake says whether Android plays natively, and whether it can take over.
+  const handshake = playingEngineHandshake();
+  if (handshake) await handshake;
+  // Decided before any request: the confirmed one stops the other device, whatever happens here after it.
+  if (!canTakePlaybackOverHere()) {
+    notifyBlockedPlaybackStart();
+    return false;
+  }
+  return takeOverAtConfirmedPlace();
+}
+
+/**
+ * One request: the server asks the playing client, which stops and says what
+ * sounds and where, and moves the claim here with that answer. Without its word it refuses.
+ */
+async function takeOverAtConfirmedPlace() {
+  const ownership = getPlaybackOwnershipState();
+  const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  const native = Boolean(playingEngine()?.holdsOwnClaim);
+  let result;
+  try {
+    result = await requestPlaybackClaim({ protocol: 1, state: 'playing', clientId: getPlaybackOwnershipTabId(),
+      clientSurface: native ? 'mobile' : 'private_web', takeover: true, confirm: true });
+  } catch (error) {
+    if (version === ownership.requestVersion) {
+      // Without the server nothing moves here, and the other tab plays on: the network is what failed.
+      if (error?.unanswered && typeof showToast === 'function') {
+        showToast('Can’t move playback here without a network connection.', 'error', 2800);
+      } else if (error?.status !== 422) notifyBlockedPlaybackStart();
+      else if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
+      void handlePlaybackOwnershipEvent();
+    }
+    return false;
+  }
+  if (version !== ownership.requestVersion) {
+    // A later press here decides what plays.
+    if (result.claimToken) await discardPlaybackClaim(result);
+    return false;
+  }
+  if (!result.claimToken) {
+    // It stopped meanwhile: the player shows what holds now, and the next Play starts here.
+    syncMirroredPlaybackState(result);
+    return false;
+  }
+  const payload = takenOverTrack(result);
+  const startSeconds = result.position ? result.position.ms / 1000 : 0;
+  state.player.playbackQueue = null;
+  // An engine with its own claim (Android's) starts there by a takeover of the claim now under its client.
+  if (native) {
+    let started = false;
+    try {
+      started = await playTrackFromPayload(payload, { startSeconds, takeover: true });
+      return started;
+    } finally {
+      // The engine never had this token: left behind, it would refuse this device's own next Play until stale.
+      if (!started) await discardPlaybackClaim(result);
+    }
+  }
+  // The reference is renewed with the first heartbeat: its expiry was never told here.
+  acceptPlaybackClaim(result, { path: result.path, track: result.track,
+    referenceExpiresAt: new Date(0).toISOString() });
+  // Before this tab sounds, and without the server: for a tab of this browser that could not be asked.
+  if (result.previousClientId) announcePlaybackOwnership('taken-over', result.previousClientId);
+  return playTrackFromPayload(payload, { startSeconds, ownershipClaimed: true });
+}
+
+function takenOverTrack({ path, track, position }) {
+  const song = normalizePlaybackOwnershipTrack(track);
+  return {
+    src: `/track?path=${encodeURIComponent(path)}`,
+    path,
+    title: song.title || 'Track',
+    artist: song.artist,
+    albumArtist: '',
+    album: song.album,
+    coverRef: '',
+    durationSeconds: position ? position.durationMs / 1000 : 0,
+  };
+}
+
+/**
+ * Where [track] is, so another client can continue it there: `{ position }`, or nothing while the
+ * player still holds another song (a start claims before its song loads) or its length is unknown.
+ */
+function positionField(track) {
+  if (typeof getPlayerPlaybackSnapshot !== 'function') return {};
+  const playback = getPlayerPlaybackSnapshot();
+  if (track?.src && playback.src && playback.src !== track.src) return {};
+  const durationMs = Math.round((Number(playback.duration) || 0) * 1000);
+  if (durationMs < 1) return {};
+  const ms = Math.min(durationMs, Math.max(0, Math.round((Number(playback.currentTime) || 0) * 1000)));
+  return { position: { ms, durationMs } };
+}
 
 function isActivePlaybackOwner() {
   const claim = getPlaybackOwnershipState().activeClaim;
@@ -14622,6 +16941,21 @@ function getPlaybackClaimContext() {
 }
 
 function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
+/**
+ * Whether this client could play what it took over. An engine with its own claim must say it takes over
+ * and name its client; an installed app from before that fails closed and offers no Play here.
+ */
+function canTakePlaybackOverHere() {
+  if (isShellPlaybackUnavailable()) return false;
+  const engine = playingEngine();
+  return !engine?.holdsOwnClaim || Boolean(engine.takesOver?.() && engine.claimClientId());
+}
+/** Another client of this account plays now and this one may take playback over. */
+function isPlaybackPlayingElsewhere() {
+  const ownership = getPlaybackOwnershipState();
+  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab'
+    && canTakePlaybackOverHere();
+}
 function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 
 function initPlaybackOwnershipCoordinator() {
@@ -14632,9 +16966,13 @@ function initPlaybackOwnershipCoordinator() {
   getPlaybackOwnershipTabId();
   if (typeof BroadcastChannel === 'function') {
     ownership.channel = new BroadcastChannel(PLAYBACK_OWNERSHIP_CHANNEL_NAME);
-    ownership.channel.addEventListener('message', handlePlaybackOwnershipEvent);
+    ownership.channel.addEventListener('message', receivePlaybackOwnershipMessage);
   }
   startPlaybackOwnershipHeartbeat();
+  // Back online, a claim kept through the outage renews at once instead of at its next retry.
+  window.addEventListener?.('online', () => {
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+  });
   void handlePlaybackOwnershipEvent();
 }
 
@@ -16284,6 +18622,39 @@ function renderTrackModalLoadingState(album) {
   }
 }
 
+// The open album's details could not be loaded because the server cannot be reached: the artbox
+// shows the offline cloud and the loading rows give way to the OfflineNotice line; nothing spins.
+// The album Album Details shows as unreachable, loaded again once the server answers.
+let trackModalUnreachableAlbum = null;
+
+function renderTrackModalUnreachableState(album) {
+  const els = getTrackModalElements();
+  if (!els.overlay || !album) return;
+  trackModalUnreachableAlbum = album;
+  const detail = serverUnreachableDetail('the details');
+  els.subtitle.textContent = '';
+  els.cover.innerHTML = `
+    <div class="track-modal-cover-shell">
+      ${buildAlbumArtboxHtml({ state: 'offline', label: 'Cover art unavailable' })}
+    </div>
+  `;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'message', title: SERVER_UNREACHABLE_TITLE, message: detail })}</li>`;
+}
+
+// The server answers again (onServerReachableAgain): Album Details still showing Offline for the
+// album it is open on loads that album.
+function reloadTrackModalAfterServerReachable() {
+  const els = getTrackModalElements();
+  const shown = state.modalReleases?.[state.modalReleaseIndex];
+  const album = trackModalUnreachableAlbum || (shown?.fromDeviceCopy ? shown : null);
+  trackModalUnreachableAlbum = null;
+  if (!album || !els.overlay || els.overlay.hidden || !shown) return;
+  if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
+  // Details shown from the device copy are loaded again from the server, never kept as loaded.
+  openTrackModal({ ...album, preview_only: true, fromDeviceCopy: false });
+}
+if (typeof onServerReachableAgain === 'function') onServerReachableAgain(reloadTrackModalAfterServerReachable);
+
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
@@ -16674,6 +19045,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
       payload = null;
     }
   }
+  if (response.ok && payload?.ok && payload?.album && isDeviceCopyAnswer(response)) {
+    return { ...payload.album, fromDeviceCopy: true };
+  }
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
     error.status = response.status;
@@ -16733,6 +19107,9 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
         return loadTrackModalAlbumDetails(normalizedAlbumKey,
           promotedToForeground ? { ...options, speculative: false } : options);
       }
+      // Details from the device copy stand in until the server answers; they are never kept as
+      // loaded, so the next open asks the server again.
+      if (album?.fromDeviceCopy) return album;
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);
@@ -16930,6 +19307,8 @@ function openTrackModal(album, options = {}) {
     const loadToken = invalidatePendingTrackModalLoad();
     state.ui.pendingTrackModalLoadAlbumKey = albumKey;
     openTrackModalShell(albumWithPlaybackContext, options.releaseSet);
+    // Already offline: Offline at once instead of loading rows; an answer still replaces it.
+    if (isOfflineShown()) renderTrackModalUnreachableState(albumWithPlaybackContext);
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
       albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
@@ -16943,6 +19322,7 @@ function openTrackModal(album, options = {}) {
         : refreshedAlbum;
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
+      trackModalUnreachableAlbum = null;
       invalidatePendingTrackModalLoad();
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch(async (error) => {
@@ -16960,6 +19340,10 @@ function openTrackModal(album, options = {}) {
             console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);
           });
         }
+        return;
+      }
+      if (error?.serverUnreachable) {
+        renderTrackModalUnreachableState(albumWithPlaybackContext);
         return;
       }
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
@@ -17472,12 +19856,35 @@ const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 8
 // long as a caller still shows that loop.
 const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
-const playerWaveformPeakProbes = new Map();
+// Pending peak requests: whether each is for the playing song, and how to stop it.
+const playerWaveformPeakRequests = new WeakMap();
 const savedLoopWaveformPeakCache = new Map();
 let playerWaveformPeakGeneration = null;
 let playerWaveformPeakController = null;
 let playerWaveformPeakCurrentIdentity = null;
 let playerWaveformForegroundSuspensionDepth = 0;
+// The waveform request sent when Play was pressed, until the playing generation takes it.
+let playerWaveformStartRequest = null;
+// The track the page opened with, until another song sounds. Like a playing song's, its
+// waveform is never low priority; its one request outlives its stream opening,
+// failing or starting to play.
+let playerWaveformRestingTrack = null;
+
+// Which player asks, so a press stops only this player's previous build. Kept for the page's life:
+// a claim that changes the tab's identity later does not change whose builds these are.
+let playerWaveformClientId = '';
+function getPlayerWaveformClientId() {
+  if (!playerWaveformClientId && typeof getPlaybackOwnershipTabId === 'function') {
+    playerWaveformClientId = String(getPlaybackOwnershipTabId() || '');
+  }
+  return playerWaveformClientId;
+}
+
+// The generation of the engine that plays: in the Android app the browser engine's never moves.
+function playerWaveformGeneration() {
+  const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
+  return Number(playback?.generation ?? state.player?.streaming?.generation) || 0;
+}
 
 function trimWaveformPeakCache() {
   while (playerWaveformPeakCache.size > 2) {
@@ -17495,9 +19902,6 @@ function cancelWaveformPeakLoads(generation) {
   const prefix = `${generation}\u0000`;
   for (const identity of playerWaveformPeakCache.keys()) {
     if (identity.startsWith(prefix)) playerWaveformPeakCache.delete(identity);
-  }
-  for (const identity of playerWaveformPeakProbes.keys()) {
-    if (identity.startsWith(prefix)) playerWaveformPeakProbes.delete(identity);
   }
   if (playerWaveformPeakCurrentIdentity?.startsWith(prefix)) {
     playerWaveformPeakCurrentIdentity = null;
@@ -17517,9 +19921,10 @@ function validateWaveformPeakPayload(payload, sampleCount) {
 
 function suspendPlayerWaveformPeakLoadsForForegroundView() {
   playerWaveformForegroundSuspensionDepth += 1;
-  const generation = Number(state.player?.streaming?.generation) || 0;
+  const generation = playerWaveformGeneration();
   if (String(state.player?.current?.path || '')) {
     cancelWaveformPeakLoads(generation);
+    stopRestingTrackWaveformRequest();
   }
   return { generation };
 }
@@ -17528,22 +19933,9 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   if (!suspension || playerWaveformForegroundSuspensionDepth < 1) return null;
   playerWaveformForegroundSuspensionDepth -= 1;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
-
-  const generation = Number(state.player?.streaming?.generation) || 0;
-  const path = String(state.player?.current?.path || '');
-  if (!path || generation !== Number(suspension.generation || 0)) return null;
-
-  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-  if (!peaks || playerWaveformForegroundSuspensionDepth > 0
-      || Number(state.player?.streaming?.generation) !== generation
-      || String(state.player?.current?.path || '') !== path) return null;
-  state.player.waveform.compactPeaks = { path, generation, data: peaks };
-  try {
-    await updateWaveformAppearance();
-  } catch (_error) {
-    // Optional waveform rendering must not interrupt foreground navigation.
-  }
-  return peaks;
+  // A stream that opened during the view load found loading suspended, so whichever track the
+  // player shows by now is asked for.
+  return loadPlayingWaveformPeaks(state.player?.current?.path);
 }
 
 function retainSavedLoopWaveformPeaks(loopIds) {
@@ -17612,7 +20004,168 @@ async function loadSavedLoopWaveformPeaks(loopId, isWanted = null) {
   return entry.promise;
 }
 
-async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT, generation = 0) {
+// A building waveform streams as NDJSON: partial peaks, then the complete ones. A cached
+// or finished one answers as plain JSON.
+async function readWaveformPeakResponse(response, sampleCount, onPartial) {
+  if (!String(response.headers?.get?.('content-type') || '').includes('ndjson')) {
+    return { peaks: validateWaveformPeakPayload(await response.json(), sampleCount) };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffered.split('\n');
+    buffered = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const payload = JSON.parse(line);
+      if (payload.error) return { busy: true };
+      const peaks = validateWaveformPeakPayload(payload, sampleCount);
+      if (!peaks || payload.complete) return { peaks };
+      onPartial?.(peaks);
+    }
+    if (done) return { broken: true };
+  }
+}
+
+// Draws the playing song's waveform as far as it is built, never over a finished one.
+function showPartialWaveformPeaks(path, generation, peaks) {
+  const shown = state.player.waveform.compactPeaks;
+  if (String(state.player.current?.path || '') !== path
+      || playerWaveformGeneration() !== generation
+      || (shown?.path === path && !shown.partial)) return;
+  state.player.waveform.compactPeaks = { path, generation, data: peaks, partial: true };
+  if (typeof updateWaveformAppearance === 'function') {
+    void Promise.resolve(updateWaveformAppearance()).catch(() => {});
+  }
+}
+
+// Asks for one waveform, retrying while the server is busy building others first.
+async function fetchWaveformPeaks(rawPath, sampleCount, { current, signal, onPartial, stillWanted }) {
+  const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
+  if (current) {
+    query.set('priority', 'current');
+    query.set('progressive', '1');
+    const clientId = getPlayerWaveformClientId();
+    if (clientId) query.set('client_id', clientId);
+  }
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(`/playback/waveform?${query}`, { signal });
+    // 503 is a server that is not ready yet, so it is asked again as a busy one is.
+    const outcome = response.status === 429 || response.status === 503
+      ? { busy: true }
+      : response.ok
+        ? await readWaveformPeakResponse(response, sampleCount, onPartial).catch((error) => {
+          if (error?.name === 'TypeError') return { broken: true };
+          throw error;
+        })
+        : null;
+    // A build cut off mid-answer is asked again a few times, so a file that cannot be decoded
+    // stops being asked for.
+    if (outcome?.busy || (outcome?.broken && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length)) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
+          ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
+      });
+      if (signal.aborted || !stillWanted()) return null;
+      continue;
+    }
+    return outcome?.peaks || null;
+  }
+}
+
+// The page opened with this track in the player.
+function restTrackWaveform(path) {
+  stopRestingTrackWaveformRequest();
+  playerWaveformRestingTrack = { path: String(path || ''), controller: null, promise: null, waitingFor: null };
+}
+
+function stopRestingTrackWaveformRequest() {
+  const resting = playerWaveformRestingTrack;
+  if (!resting) return;
+  resting.controller?.abort();
+  resting.controller = null;
+  resting.promise = null;
+}
+
+function endTrackWaveformRest() {
+  stopRestingTrackWaveformRequest();
+  playerWaveformRestingTrack = null;
+}
+
+// Until the pressed song sounds, the resting track's waveform is the old one the player keeps,
+// but it never slows the pressed song's: that builds alone, and the resting one
+// loads again once it is built or the switch ends without it.
+function endTrackWaveformRestOnSound(path) {
+  if (playerWaveformRestingTrack && playerWaveformRestingTrack.path !== String(path || '')) endTrackWaveformRest();
+}
+
+function resumeRestingTrackWaveform() {
+  const resting = playerWaveformRestingTrack;
+  if (!resting?.waitingFor) return;
+  resting.waitingFor = null;
+  if (String(state.player.current?.path || '') === resting.path) void loadPlayingWaveformPeaks(resting.path);
+}
+
+function loadRestingTrackWaveform(resting) {
+  if (resting.promise || resting.waitingFor || playerWaveformForegroundSuspensionDepth > 0) return resting.promise;
+  const controller = new AbortController();
+  resting.controller = controller;
+  resting.promise = fetchWaveformPeaks(resting.path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
+    current: true,
+    signal: controller.signal,
+    onPartial: (partial) => showPartialWaveformPeaks(resting.path, playerWaveformGeneration(), partial),
+    stillWanted: () => playerWaveformRestingTrack === resting,
+  }).catch(() => null).then((peaks) => {
+    if (resting.controller !== controller) return null;
+    if (!peaks) resting.promise = null;
+    return peaks;
+  });
+  return resting.promise;
+}
+
+// Play was pressed: the song's waveform starts building while its stream opens, and the
+// playing generation takes over this request instead of asking again.
+function startSelectedTrackWaveformPeaks(path) {
+  const rawPath = String(path || '');
+  if (playerWaveformStartRequest?.path === rawPath) return;
+  playerWaveformStartRequest?.controller.abort();
+  playerWaveformStartRequest = null;
+  const shown = state.player.waveform.compactPeaks;
+  if (!rawPath || playerWaveformForegroundSuspensionDepth > 0
+      || (shown?.path === rawPath && shown.data && !shown.partial)) return;
+  const resting = playerWaveformRestingTrack;
+  if (resting?.path === rawPath) {
+    resting.waitingFor = null;
+    void loadRestingTrackWaveform(resting);
+    return;
+  }
+  stopRestingTrackWaveformRequest();
+  const controller = new AbortController();
+  const promise = fetchWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
+    current: true,
+    signal: controller.signal,
+    onPartial: (partial) => showPartialWaveformPeaks(rawPath, playerWaveformGeneration(), partial),
+    stillWanted: () => true,
+  }).catch(() => null);
+  playerWaveformStartRequest = { path: rawPath, controller, promise };
+  if (!resting) return;
+  resting.waitingFor = promise;
+  void promise.then((peaks) => {
+    if (peaks && resting.waitingFor === promise) resumeRestingTrackWaveform();
+  });
+}
+
+// The playing song's peaks are asked for with `current`, so the server builds them first at
+// playback priority; any other load is a prefetch that yields to it.
+async function loadWaveformPeaks(
+  path,
+  sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
+  generation = 0,
+  { current = false } = {},
+) {
   const rawPath = String(path || '');
   if (!rawPath || ![PLAYER_WAVEFORM_PEAK_COUNT, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT].includes(sampleCount)) return null;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
@@ -17627,123 +20180,86 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
   const identity = `${generation}\u0000${sampleCount}\u0000${rawPath}`;
   if (playerWaveformPeakCache.has(identity)) {
     const cached = playerWaveformPeakCache.get(identity);
+    const pending = playerWaveformPeakRequests.get(cached);
     playerWaveformPeakCache.delete(identity);
-    playerWaveformPeakCache.set(identity, cached);
-    return cached;
-  }
-  const pendingProbe = playerWaveformPeakProbes.get(identity);
-  if (pendingProbe) {
-    let probed = null;
-    try {
-      probed = await pendingProbe;
-    } catch (_error) {
-      probed = null;
+    if (!current || !pending || pending.current) {
+      playerWaveformPeakCache.set(identity, cached);
+      return cached;
     }
-    if (probed) return probed;
-    if (playerWaveformPeakController?.signal.aborted
-        || state.player.streaming.generation !== generation) return null;
+    // This song is playing now: stop its prefetch and ask again at the playing song's priority.
+    pending.controller.abort();
   }
-  const controller = playerWaveformPeakController;
+  const started = current && sampleCount === PLAYER_WAVEFORM_DETAIL_PEAK_COUNT
+      && playerWaveformStartRequest?.path === rawPath
+    ? playerWaveformStartRequest
+    : null;
+  if (started) playerWaveformStartRequest = null;
+  const generationSignal = playerWaveformPeakController.signal;
+  const controller = started?.controller || new AbortController();
+  const abortWithGeneration = () => controller.abort();
+  generationSignal.addEventListener('abort', abortWithGeneration, { once: true });
+  const stillWanted = () => playerWaveformGeneration() === generation;
   let request;
   request = (async () => {
     let retained = false;
     try {
-      const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
-      for (let attempt = 0; ; attempt += 1) {
-        const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (response.status === 429) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
-              ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
-          });
-          if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
-          continue;
-        }
-        if (!response.ok) return null;
-        const peaks = validateWaveformPeakPayload(await response.json(), sampleCount);
-        if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
-        if (!peaks) return null;
-        retained = true;
-        return peaks;
-      }
+      const peaks = started
+        ? await started.promise
+        : await fetchWaveformPeaks(rawPath, sampleCount, {
+          current,
+          signal: controller.signal,
+          onPartial: current
+            ? (partial) => showPartialWaveformPeaks(rawPath, generation, partial)
+            : null,
+          stillWanted,
+        });
+      if (controller.signal.aborted || !stillWanted() || !peaks) return null;
+      retained = true;
+      return peaks;
     } catch (_error) {
       return null;
     } finally {
+      generationSignal.removeEventListener('abort', abortWithGeneration);
+      playerWaveformPeakRequests.delete(request);
       if (!retained && playerWaveformPeakCache.get(identity) === request) {
         playerWaveformPeakCache.delete(identity);
       }
     }
   })();
+  playerWaveformPeakRequests.set(request, { current, controller });
   playerWaveformPeakCache.set(identity, request);
   trimWaveformPeakCache();
   return request;
 }
 
-async function probeCachedWaveformPeaks(path, generation = 0) {
+// Starting a song asks for its waveform with the stream: the server answers a cached one at
+// once and otherwise builds it while playback starts, drawing it as it builds. A resting track
+// shares its one request instead, whichever generation asks.
+async function loadPlayingWaveformPeaks(path, generation = playerWaveformGeneration()) {
   const rawPath = String(path || '');
-  if (!rawPath) return null;
-  if (playerWaveformPeakGeneration !== generation) {
-    playerWaveformPeakController?.abort();
-    playerWaveformPeakController = new AbortController();
-    playerWaveformPeakGeneration = generation;
-    playerWaveformPeakCurrentIdentity = null;
-  } else if (!playerWaveformPeakController) {
-    playerWaveformPeakController = new AbortController();
+  if (!rawPath) {
+    endTrackWaveformRest();
+    return null;
   }
-  const identity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
-  let peaks = null;
-  if (playerWaveformPeakCache.has(identity)) {
-    const cached = playerWaveformPeakCache.get(identity);
-    playerWaveformPeakCache.delete(identity);
-    playerWaveformPeakCache.set(identity, cached);
-    try {
-      peaks = await cached;
-    } catch (_error) {
-      return null;
-    }
-  } else if (playerWaveformPeakProbes.has(identity)) {
-    try {
-      peaks = await playerWaveformPeakProbes.get(identity);
-    } catch (_error) {
-      return null;
-    }
-  } else {
-    const controller = playerWaveformPeakController;
-    let probe;
-    try {
-      probe = (async () => {
-        const query = new URLSearchParams({
-          path: rawPath,
-          bins: String(PLAYER_WAVEFORM_DETAIL_PEAK_COUNT),
-          cachedOnly: '1',
-        });
-        const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (!response.ok || response.status !== 200) return null;
-        const cachedPeaks = validateWaveformPeakPayload(
-          await response.json(),
-          PLAYER_WAVEFORM_DETAIL_PEAK_COUNT,
-        );
-        if (!cachedPeaks || controller.signal.aborted
-            || state.player.streaming.generation !== generation) return null;
-        return cachedPeaks;
-      })();
-      playerWaveformPeakProbes.set(identity, probe);
-      peaks = await probe;
-      if (!peaks) return null;
-      playerWaveformPeakCache.delete(identity);
-      playerWaveformPeakCache.set(identity, Promise.resolve(peaks));
-      trimWaveformPeakCache();
-    } catch (_error) {
-      return null;
-    } finally {
-      if (playerWaveformPeakProbes.get(identity) === probe) {
-        playerWaveformPeakProbes.delete(identity);
-      }
-    }
-  }
-  if (!peaks || state.player.streaming.generation !== generation
-      || String(state.player.current?.path || '') !== rawPath) return null;
-  playerWaveformPeakCurrentIdentity = identity;
+  const resting = playerWaveformRestingTrack?.path === rawPath ? playerWaveformRestingTrack : null;
+  // With another song current, the resting one's answer could not be shown; it only takes a slot.
+  if (!resting && String(state.player.current?.path || '') === rawPath) stopRestingTrackWaveformRequest();
+  const shown = state.player.waveform.compactPeaks;
+  // A seek or replay of the same song keeps its finished peaks.
+  const peaks = shown?.path === rawPath && shown.data && !shown.partial
+    ? shown.data
+    : resting
+      ? await loadRestingTrackWaveform(resting)
+      : await loadWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
+        current: true,
+      });
+  if (!peaks || String(state.player.current?.path || '') !== rawPath) return null;
+  // A resting track's peaks belong to the track, not to the stream that was opening meanwhile.
+  if (resting) generation = playerWaveformGeneration();
+  else if (playerWaveformGeneration() !== generation) return null;
+  const active = state.player.waveform.compactPeaks;
+  if (active?.path === rawPath && active.generation === generation && active.data === peaks) return peaks;
+  playerWaveformPeakCurrentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
   trimWaveformPeakCache();
   state.player.waveform.compactPeaks = { path: rawPath, generation, data: peaks };
   try {
@@ -17757,13 +20273,14 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
 async function promoteWaveformPeaks(completedPath, currentPath, generation) {
   const completedIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(completedPath || '')}`;
   const currentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(currentPath || '')}`;
-  let cached = playerWaveformPeakCache.get(currentIdentity);
-  let peaks = cached ? await cached : null;
-  if (!peaks && state.player.streaming.generation === generation) {
-    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-    cached = playerWaveformPeakCache.get(currentIdentity);
-    peaks = cached ? await cached : null;
+  if (playerWaveformGeneration() === generation) {
+    // The promoted song plays now, so a prefetch still building for it is upgraded.
+    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
+      current: true,
+    });
   }
+  const cached = playerWaveformPeakCache.get(currentIdentity);
+  const peaks = cached ? await cached : null;
   if (completedIdentity !== currentIdentity) {
     playerWaveformPeakCache.delete(completedIdentity);
   }
@@ -18506,6 +21023,7 @@ const loopEditSessionExpiryController = createLoopEditSessionExpiryController({
 function getPlayerElements() {
   return {
     player: document.querySelector('.global-player'),
+    elsewhere: document.querySelector('[data-player-elsewhere]'),
     coverButton: document.getElementById('player-cover-button'),
     play: document.getElementById('player-play'),
     title: document.getElementById('player-title'),
@@ -18738,7 +21256,9 @@ async function updateWaveformAppearance(forceReload = false) {
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
-  const path = String(state.player.current?.path || '');
+  // The waveform follows the sound, not the press, with the title.
+  const shown = resolveShownPlayerTrack(playback);
+  const path = String(shown?.track?.path || '');
   const isWaveform = state.player.loopActive || state.player.appearance.seekbarMode === 'waveform';
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
@@ -18746,7 +21266,10 @@ async function updateWaveformAppearance(forceReload = false) {
     els.waveformCanvas.hidden = false;
   }
   if (!isWaveform || !els.waveformCanvas || !path) {
-    if (!path) clearWaveformCanvas();
+    if (!path) {
+      state.player.waveform.shown = null;
+      clearWaveformCanvas();
+    }
     return;
   }
   const renderToken = forceReload ? state.player.waveform.renderToken + 1 : state.player.waveform.renderToken;
@@ -18754,32 +21277,23 @@ async function updateWaveformAppearance(forceReload = false) {
   if (forceReload) {
     clearWaveformCanvas();
   }
-  const generation = Number(playback.generation ?? state.player.streaming?.generation) || 0;
+  // The peaks belong to the song, not to one stream of it: a restart of the same song (a seek past
+  // the received audio in an outage) keeps its waveform, so a seek always has it to aim at.
+  // A pressed song's peaks can load before it sounds: the shown song keeps the ones last drawn.
   const active = state.player.waveform.compactPeaks;
-  const waveform = active?.path === path && active.generation === generation
-    ? active.data
-    : null;
+  const drawn = state.player.waveform.shown;
+  const waveform = active?.path === path ? active.data : drawn?.path === path ? drawn.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;
-  const duration = Number(playback.duration) || 0;
-  const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
+  const progressRatio = shown.duration > 0 ? shown.currentTime / shown.duration : 0;
+  state.player.waveform.shown = waveform ? { path, data: waveform, progressRatio } : null;
   drawWaveformOnCanvas(els.waveformCanvas, waveform, progressRatio);
 }
 
 async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
-  const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
-  const playback = getPlayerPlaybackSnapshot();
-  if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
-      || String(state.player.current?.path || '') !== currentPath) return;
-  const activePeaks = state.player.waveform.compactPeaks;
-  if (activePeaks?.path !== currentPath || activePeaks.generation !== generation
-      || activePeaks.data !== currentPeaks) {
-    state.player.waveform.compactPeaks = { path: currentPath, generation, data: currentPeaks };
-    await updateWaveformAppearance();
-  }
-  if (continuityPath
+  const currentPeaks = await loadPlayingWaveformPeaks(event.currentPath, generation);
+  if (currentPeaks && continuityPath
       && Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) === generation) {
     await loadWaveformPeaks(continuityPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   }
@@ -19169,6 +21683,7 @@ async function loadNextRootGalleryPage() {
     const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
     const data = await readGalleryResponse(response, ownsDataResponse);
     if (!ownsDataResponse()) return false;
+    setGalleryEndOffline('');
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
@@ -19218,9 +21733,10 @@ async function loadNextRootGalleryPage() {
     scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
     return true;
   } catch (error) {
-    if (ownsResponse() && error?.name !== 'AbortError') {
-      showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
-    }
+    if (!ownsResponse() || error?.name === 'AbortError') return false;
+    // The end of the kept gallery says why nothing more loads, and stays until something does.
+    if (error?.serverUnreachable || isOfflineShown()) setGalleryEndOffline(serverUnreachableMessage('more albums'));
+    else showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
     return false;
   } finally {
     if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
@@ -19299,7 +21815,8 @@ async function loadPreviousRootGalleryPage() {
     });
     return true;
   } catch (error) {
-    if (error?.name !== 'AbortError') {
+    // While the page says Offline, that line explains it: no error alert.
+    if (error?.name !== 'AbortError' && !error?.serverUnreachable && !isOfflineShown()) {
       showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
@@ -20010,6 +22527,33 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+// The OfflineNotice line at the end of the gallery: [message] shows it, '' hides it.
+function setGalleryEndOffline(message) {
+  const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
+  if (!notice) return;
+  const text = notice.querySelector?.('.offline-notice__text');
+  if (text && message) text.textContent = message;
+  // Written only when it changes: every applied view clears it (applyViewPayload).
+  if (notice.hidden !== !message) notice.hidden = !message;
+}
+
+// The server answers again (onServerReachableAgain): the view that could not load loads, a view
+// shown from the device copy is brought up to date in place, and a gallery that could not load
+// more continues where it stopped.
+function resumeGalleryAfterServerReachable({ copyServed = false } = {}) {
+  const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
+  const endWasOffline = Boolean(notice && !notice.hidden);
+  setGalleryEndOffline('');
+  if (state.ui?.galleryUnreachable) {
+    void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+  } else if (copyServed) {
+    void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true }).catch(() => {});
+  } else if (endWasOffline) {
+    void loadNextRootGalleryPage();
+  }
+}
+if (typeof onServerReachableAgain === 'function') onServerReachableAgain(resumeGalleryAfterServerReachable);
+
 function fetchGalleryViewResponse(url, signal) {
   return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
@@ -20116,6 +22660,35 @@ async function recoverRootGalleryWindow(
     return { response: currentResponse, url: currentUrl };
   }
   throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+}
+
+// [url]'s view with no albums: its name in the bar and, in place of the albums, why they cannot
+// be shown. The next view the server answers replaces it.
+function applyUnreachableView(url) {
+  const requested = parseBrowserUrlState(url);
+  const subject = requested.selected_artist
+    || (requested.query ? `results for "${requested.query}"` : 'the library');
+  applyViewPayload({
+    ...state.view,
+    selected_artist: requested.selected_artist,
+    all_artists_active: requested.all_artists_active,
+    query: requested.query,
+    related_artists: [],
+    primary_artist_groups: [],
+    family_artist_groups: [],
+    artist_groups: [],
+    artist_count: 0,
+    album_count: 0,
+    gallery_page: null,
+  }, { trackSidebarReveal: false });
+  state.ui.galleryUnreachable = serverUnreachableDetail(subject);
+  if (typeof document !== 'undefined') document.body?.toggleAttribute?.('data-gallery-view-unreachable', true);
+}
+
+function showUnreachableView(apiUrl, push) {
+  applyUnreachableView(apiUrl);
+  renderView({ resetScrollForUserArtistSelection: true });
+  if (push) pushBrowserViewState(state.view);
 }
 
 async function fetchAndRender(url, push = true, options = {}) {
@@ -20627,6 +23200,12 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (typeof clearPendingSidebarSelection === 'function') {
       clearPendingSidebarSelection();
       renderSidebar();
+    }
+    // A view opened while the server cannot be reached names what was asked for and why it is
+    // empty, rather than leaving the previous view on screen as if nothing happened.
+    if (error?.serverUnreachable && !requestOptions.preserveScroll && !requestOptions.startupRefresh) {
+      showUnreachableView(apiUrl, push);
+      return false;
     }
     throw error;
   } finally {
@@ -40302,6 +42881,131 @@ async function confirmProblemSuggestions() {
 
 // END js/runtime/tag-editor-and-optimistic-updates.js
 
+// BEGIN js/runtime/player-saved-tokens.js
+
+// The saved player never keeps a music file's path on the device. The player names songs by path in
+// memory; what is written to storage names each song by its resume token instead (signed by the
+// server, account-bound, path-free) beside what the player shows, and the paths come back from the
+// server when the page restores it (`/playback/refs/resume` with `includePath`).
+//
+// Tokens come from `/playback/refs` answers. A song saved before its token arrived is asked for in
+// one batch (`prepare: false`, so the server reads no audio for it), and the player is saved again
+// once the tokens are in; until then the last saved player stays as it was.
+const playbackResumeTokens = new Map();
+// The saved player and app queue of earlier versions named paths: they are not kept.
+try {
+  for (const key of ['albumhaven.playerState.v1', 'albumhaven.androidNativeQueue.v1']) window.localStorage?.removeItem(key);
+} catch (_error) {
+  // Storage is switched off.
+}
+const playbackResumeTokenFailures = new Set();
+let playbackResumeTokenRequest = null;
+
+function rememberPlaybackResumeToken(path, token) {
+  const key = String(path || '');
+  if (key && typeof token === 'string' && token) playbackResumeTokens.set(key, token);
+}
+
+function requestPlaybackResumeTokens(paths) {
+  const missing = [...new Set(paths.map(value => String(value || '')))]
+    .filter(path => path && !playbackResumeTokens.has(path) && !playbackResumeTokenFailures.has(path))
+    .slice(0, 100);
+  if (!missing.length || playbackResumeTokenRequest || typeof fetch !== 'function') return;
+  playbackResumeTokenRequest = fetch('/playback/refs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ protocol: 1, prepare: false,
+      tracks: missing.map((path, index) => ({ clientKey: String(index), path })) }),
+  })
+    .then(response => (response.ok ? response.json() : null))
+    .catch(() => null)
+    .then((answer) => {
+      for (const issued of Array.isArray(answer?.tracks) ? answer.tracks : []) {
+        rememberPlaybackResumeToken(missing[Number(issued?.clientKey)], issued?.resumeToken);
+      }
+      // A batch the server refused (a song no longer in the library) is not asked for again.
+      for (const path of missing) if (!playbackResumeTokens.has(path)) playbackResumeTokenFailures.add(path);
+    })
+    .finally(() => {
+      playbackResumeTokenRequest = null;
+      if (typeof persistPlayerState === 'function') persistPlayerState();
+    });
+}
+
+function savedPlayerTrack(track) {
+  const resumeToken = playbackResumeTokens.get(String(track?.path || ''));
+  if (!resumeToken) return null;
+  const { src: _src, path: _path, ...shown } = track;
+  return { ...shown, resumeToken };
+}
+
+// Saved songs as the player keeps them in memory, each with its path from the server; null in place
+// of a song no longer in the library. Null when any song names a path (saved before this rule) or
+// the server refuses the tokens; a network failure rejects, so the caller can ask again later.
+async function playerTracksFromDevice(saved) {
+  if (!saved.every(track => typeof track?.resumeToken === 'string' && track.resumeToken && !('path' in track))) return null;
+  const response = await fetch('/playback/refs/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ protocol: 1, includePath: true,
+      tracks: saved.map((track, index) => ({ clientKey: String(index), resumeToken: track.resumeToken })) }),
+  });
+  if (!response.ok) return null;
+  const answer = await response.json();
+  const paths = new Map((answer?.tracks || []).map(item => [Number(item?.clientKey), item?.path]));
+  return saved.map((track, index) => {
+    const path = paths.get(index);
+    if (typeof path !== 'string' || !path) return null;
+    rememberPlaybackResumeToken(path, track.resumeToken);
+    const { resumeToken: _token, ...shown } = track;
+    return { ...shown, src: `/track?path=${encodeURIComponent(path)}`, path };
+  });
+}
+
+// [payload] (buildPersistedPlayerState) as the device keeps it, or null while the current song's
+// token is still on its way.
+function playerStateForDevice(payload) {
+  const queue = payload.playbackQueue;
+  requestPlaybackResumeTokens([payload.track?.path, ...(queue?.tracks || []).map(track => track?.path)]);
+  const track = savedPlayerTrack(payload.track);
+  if (!track) return null;
+  let playbackQueue = null;
+  if (queue) {
+    const current = queue.tracks[queue.currentIndex];
+    const kept = queue.tracks.map(item => ({ item, saved: savedPlayerTrack(item) })).filter(entry => entry.saved);
+    const currentIndex = kept.findIndex(entry => entry.item === current);
+    const albumRef = String(queue.albumRef || '');
+    if (currentIndex >= 0) {
+      playbackQueue = {
+        tracks: kept.map(entry => entry.saved),
+        currentIndex,
+        // An album named by its folder or files is not kept; the restored song finds its album again.
+        ...(albumRef && !/[\\/]/.test(albumRef)
+          && !(typeof isPathLikeAlbumKey === 'function' && isPathLikeAlbumKey(albumRef)) ? { albumRef } : {}),
+      };
+    }
+  }
+  return { ...payload, track, playbackQueue };
+}
+
+// A saved player as the player keeps it in memory: each song's path from the server, songs no longer
+// in the library left out. Null when the current song is gone or the server cannot be asked; a record
+// that names paths (saved before this rule) is never used.
+async function playerStateFromDevice(record) {
+  const queueTracks = Array.isArray(record?.playbackQueue?.tracks) ? record.playbackQueue.tracks : [];
+  const all = await playerTracksFromDevice([record?.track, ...queueTracks]);
+  const track = all?.[0];
+  if (!track) return null;
+  const restored = all.slice(1);
+  const currentIndex = restored.slice(0, record.playbackQueue?.currentIndex + 1).filter(Boolean).length - 1;
+  const tracks = restored.filter(Boolean);
+  const playbackQueue = tracks[currentIndex]?.path === track.path
+    ? { ...record.playbackQueue, tracks, currentIndex } : null;
+  return { ...record, track, playbackQueue };
+}
+
+// END js/runtime/player-saved-tokens.js
+
 // BEGIN js/runtime/player-state-persistence-helpers.js
 
 function buildPersistedPlaybackQueue(currentTrackPath) {
@@ -40492,12 +43196,35 @@ let playerUnloadWasPlaying = null;
 let playerUnloadStatePersisted = false;
 let playerUnloadPlaybackSnapshot = null;
 
+// What this tab played when its page left, for that tab's next page alone: the saved state above is every
+// tab's, and a tab resumes only what that same tab was playing.
+const PLAYER_TAB_STATE_STORAGE_KEY = 'albumhaven.playerTabState.v1';
+
+function takeTabPlayerState() {
+  if (typeof getSessionStorageItem !== 'function') return null;
+  const raw = getSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY);
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return null;
+  }
+}
+
 function resetPlayerUnloadPersistence() {
+  // Back from the page cache this page goes on itself.
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY);
   const playbackSnapshot = playerUnloadPlaybackSnapshot;
   playerUnloadWasPlaying = null;
   playerUnloadStatePersisted = false;
   playerUnloadPlaybackSnapshot = null;
   return playbackSnapshot;
+}
+
+// The signed-in account the saved player belongs to; '' where the page names none.
+function pagePlaybackAccount() {
+  return typeof pageAccountKey === 'function' ? pageAccountKey() : '';
 }
 
 function persistPlayerState(force = false, options = {}) {
@@ -40510,9 +43237,17 @@ function persistPlayerState(force = false, options = {}) {
       state.player.lastPersistedSnapshot = '';
       return;
     }
-    snapshot = JSON.stringify(payload);
+    // The device keeps resume tokens, never paths (player-saved-tokens.js); until the current song's
+    // token arrives the last saved player stays.
+    const record = typeof playerStateForDevice === 'function' ? playerStateForDevice(payload) : payload;
+    if (!record) return;
+    const account = pagePlaybackAccount();
+    snapshot = JSON.stringify(account ? { ...record, account } : record);
     if (!force && snapshot === state.player.lastPersistedSnapshot) return;
     setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
+    if (options.allowAfterUnload && typeof setSessionStorageItem === 'function') {
+      setSessionStorageItem(PLAYER_TAB_STATE_STORAGE_KEY, snapshot);
+    }
     state.player.lastPersistedSnapshot = snapshot;
   } catch (_error) {
     // Ignore storage errors so playback never breaks.
@@ -40526,7 +43261,9 @@ function persistPlayerStateForUnload(reason) {
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  // Let the lease expire: an unload release could overtake the final beacon.
+  // A playing page releases by its final beacon alone, which a release could overtake; one that is not
+  // playing releases now, as no lease frees it. The next page of this tab knows the claim either way.
+  if (typeof keepPlaybackClaimForThisTab === 'function') keepPlaybackClaimForThisTab();
   flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {
     preservePlayingState: true,
@@ -40542,20 +43279,62 @@ function restorePlayerState() {
     && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   if (state.player.restoredFromStorage) return;
   state.player.restoredFromStorage = true;
-  const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
-  if (!raw) return;
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (_error) {
+  const tabState = takeTabPlayerState();
+  const resumesThisTab = Boolean(tabState)
+    && typeof canThisTabResumePlayback === 'function' && canThisTabResumePlayback();
+  let parsed = resumesThisTab ? tabState : null;
+  if (!parsed) {
+    const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+    if (!raw) return;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (_error) {
+      return;
+    }
+  }
+  // Another account's player, or one saved before players named their account, is never shown.
+  if ((parsed?.account || '') !== pagePlaybackAccount()) {
+    if (!resumesThisTab) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
     return;
   }
+  if (typeof playerStateFromDevice !== 'function') {
+    restoreSavedPlayer(parsed, resumesThisTab, null);
+    return;
+  }
+  // Registered before the paths are asked for: a playing tab goes on at the page's pageshow, which
+  // may come before the server answers.
+  const pageShown = typeof window !== 'undefined' && typeof window.addEventListener === 'function'
+    ? new Promise(resolve => window.addEventListener('pageshow', resolve, { once: true }))
+    : null;
+  const restoreFromDevice = () => playerStateFromDevice(parsed).then((inMemory) => {
+    // A record that names paths, another key's tokens, or a song no longer in the library.
+    if (!inMemory) {
+      removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+      return;
+    }
+    // A song chosen meanwhile wins over the saved one.
+    if (state.player.current) return;
+    restoreSavedPlayer(inMemory, resumesThisTab, pageShown);
+  }, () => {
+    // No answer: the saved player comes back once the server does.
+    if (typeof onServerReachableAgain !== 'function') return;
+    const stop = onServerReachableAgain(() => {
+      stop();
+      void restoreFromDevice();
+    });
+  });
+  void restoreFromDevice();
+}
+
+// [pageShown] resolves at the page's pageshow when the player was restored after it was registered.
+function restoreSavedPlayer(parsed, resumesThisTab, pageShown) {
   const track = parsed?.track;
   if (!track || !track.src) return;
   const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
-  const savedPaused = typeof parsed.paused === 'boolean'
+  // Only this tab's own playing goes on by itself: anything else opens paused and claims nothing.
+  const savedPaused = !resumesThisTab || (typeof parsed.paused === 'boolean'
     ? parsed.paused
-    : !Boolean(parsed.wasPlaying);
+    : !Boolean(parsed.wasPlaying));
   const ownershipResult = !savedPaused
     && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
@@ -40625,9 +43404,12 @@ function restorePlayerState() {
       } : {}),
       });
     };
+    if (typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
     const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
       ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
-    const restoredRolePromise = !savedPaused
+    const restoredRolePromise = !savedPaused && pageShown
+      ? pageShown.then(startRestoredRole)
+      : !savedPaused
       && typeof window !== 'undefined'
       && typeof window.addEventListener === 'function'
       ? new Promise((resolve, reject) => {
@@ -41197,7 +43979,9 @@ function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) 
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
-    return false;
+    // A lapsed lease saves no listen, but the claim still holds until this page says it is leaving.
+    return typeof stagePlaybackOwnershipHandoff === 'function'
+      ? stagePlaybackOwnershipHandoff(null, snapshot) : false;
   }
   if (typeof stagePlaybackOwnershipHandoff !== 'function') {
     session.completionState = 'done';
@@ -41247,8 +44031,8 @@ const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
-// Stored covers carry no file path: the key is the opaque key the app-copy worker uses (the
-// SHA-256 of the cover URL without its version), and the version it answers is the URL's `v`.
+// Stored covers carry no file path: the key is an opaque key (the SHA-256 of the cover URL without
+// its version), and the version it answers is the URL's `v`.
 const GALLERY_COVER_VERSION_HEADER = 'X-Album-Haven-Cover-Version';
 const GALLERY_COVER_KEY_PREFIX = '/__album-haven-cover/';
 const MAX_REMEMBERED_COVER_KEYS = 4096;
@@ -41263,8 +44047,7 @@ const GALLERY_COVER_SHA256_K = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
-// SHA-256 of [text] as UTF-8, hex. Synchronous, for short cover URLs; the app-copy worker computes
-// the same digest with crypto.subtle.
+// SHA-256 of [text] as UTF-8, hex. Synchronous, for short cover URLs.
 // Resolves in a new task (not a microtask), so work after it does not join the current task.
 function galleryCoverYield() {
   if (typeof globalThis.MessageChannel !== 'function') return new Promise(resolve => globalThis.setTimeout(resolve, 0));
@@ -41497,8 +44280,8 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  // [productionUrl]'s stored key, the same key as app-copy-worker.js coverKey (the SHA-256 of the
-  // URL without its version; one per cover and size), and the version it answers, the URL's `v`
+  // [productionUrl]'s stored key (the SHA-256 of the URL without its version; one per cover and
+  // size), and the version it answers, the URL's `v`
   // (a revision, never a file). Each cover is hashed once: a new version of a cover (a save, a
   // revision bump across the gallery) reuses its key without hashing again.
   coverKeysFor(productionUrl) {
@@ -43047,6 +45830,20 @@ function getAlbumRequestKey(album) {
   return String(album?.album_ref || album?.key || '').trim() || getAlbumPathSignature(album);
 }
 
+// What history and addresses may keep of an album: its reference or key, else its id, never its file paths
+// (the path signature names an album only in memory). Empty when it has none of those.
+function getAlbumHistoryKey(album) {
+  const named = String(album?.album_ref || album?.key || '').trim();
+  if (named) return named;
+  const id = Number(album?.album_id);
+  return Number.isInteger(id) && id > 0 ? `id:${id}` : '';
+}
+
+// A path signature kept by an earlier build: one or more track paths.
+function isPathLikeAlbumKey(value) {
+  return /\.(?:mp3|flac|m4a|mp4|ogg|oga|opus|wav|aac|wma|ape|aiff?|alac|dsf|wv)(?:\||$)/i.test(String(value || ''));
+}
+
 function getAlbumIdentity(album) {
   return getAlbumPathSignature(album) || getAlbumRequestKey(album);
 }
@@ -43057,9 +45854,11 @@ function indexGalleryAlbums(groupsList, albumIndex) {
       const key = getAlbumIdentity(album);
       const requestKey = getAlbumRequestKey(album);
       const versionKey = getAlbumCardVersionKey(album);
+      const historyKey = getAlbumHistoryKey(album);
       if (key) albumIndex.set(key, album);
       if (requestKey) albumIndex.set(requestKey, album);
       if (versionKey) albumIndex.set(versionKey, album);
+      if (historyKey) albumIndex.set(historyKey, album);
     });
   });
   return albumIndex;
@@ -45789,6 +48588,9 @@ function renderArtistGroups(options = {}) {
   ) {
     rebuildAlbumIndex([]);
     virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+  } else if (state.ui?.galleryUnreachable && virtualGrid.containerEl) {
+    rebuildAlbumIndex([]);
+    virtualGrid.containerEl.innerHTML = buildGalleryUnreachableHtml(state.ui.galleryUnreachable);
   }
   if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }
@@ -45952,6 +48754,47 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
+// The player shows the song that sounds: pressing another song while one plays keeps the player's
+// title, time, cover and waveform until the pressed song sounds, then they change together. The
+// pressed row shows the press at once; rows read the selection, not this.
+function playerTrackKey(track) {
+  return String(track?.path || track?.src || '');
+}
+
+// The snapshot is the playing engine's: in the Android app the web engine's mode never moves.
+function currentTrackAwaitsSound(playback, track) {
+  if ((playback.mode ?? state.player.streaming?.mode) === 'starting') return true;
+  return Boolean(playback.src && track.src && playback.src !== track.src);
+}
+
+// The current song once it sounds. Until then the song shown before it, at the time it last showed,
+// or running on while it still sounds (a switch that hands over at a boundary).
+function resolveShownPlayerTrack(playback) {
+  const current = state.player.current || null;
+  const shown = state.player.shown || null;
+  const track = shown && current && playerTrackKey(shown.track) !== playerTrackKey(current)
+    && currentTrackAwaitsSound(playback, current) ? shown.track : current;
+  if (!track) {
+    state.player.shown = null;
+    return null;
+  }
+  const sounds = !playback.src || !track.src || playback.src === track.src;
+  const live = sounds && track === current;
+  if (sounds) {
+    state.player.shown = {
+      track,
+      live,
+      currentTime: Number(playback.currentTime) || 0,
+      duration: Number(playback.duration) || Number(track.durationSeconds) || 0,
+    };
+  } else if (shown && playerTrackKey(shown.track) === playerTrackKey(track)) {
+    state.player.shown = { ...shown, track, live: false };
+  } else {
+    state.player.shown = { track, live: false, currentTime: 0, duration: Number(track.durationSeconds) || 0 };
+  }
+  return state.player.shown;
+}
+
 function resolvePlayerUiStatus(playback) {
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
@@ -45959,21 +48802,32 @@ function resolvePlayerUiStatus(playback) {
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
-  const displayTrack = mirroredTrack || state.player.current;
+  const shownTrack = resolveShownPlayerTrack(playback)?.track || null;
+  const displayTrack = mirroredTrack || shownTrack;
+  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable;
   return {
     lockedByAnotherTab,
     playbackUnavailable,
+    // The overlay dims the other device's song under its status, whether or not it can be taken over.
+    playingElsewhere,
+    // Only where it can be taken over is Play pressable above the overlay.
+    canPlayHere: playingElsewhere && (typeof canTakePlaybackOverHere !== 'function' || canTakePlaybackOverHere()),
     blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
     displayTrack,
+    shownTrack,
     hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
   };
 }
 
 // The seek position and its time label: all that a timeline drag preview changes.
-function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, blockedLabel }) {
-  const duration = getPlayerDuration();
+function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, playingElsewhere, blockedLabel }) {
+  // A song shown while another starts keeps its own time and length with its title: never the started
+  // song's clock under it.
+  const shown = resolveShownPlayerTrack(playback);
+  const held = !lockedByAnotherTab && shown && !shown.live ? shown : null;
+  const duration = held ? held.duration : getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
-  const current = state.player.timelineDragging && Number.isFinite(dragPreview)
+  const current = held ? held.currentTime : state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
     : Number(playback.currentTime) || 0;
   if (els.timeline) {
@@ -45983,7 +48837,7 @@ function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnother
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
-    els.time.hidden = !hasTrack;
+    els.time.hidden = !hasTrack || playingElsewhere;
     els.time.textContent = lockedByAnotherTab
       ? blockedLabel
       : state.player.loopActive
@@ -45997,7 +48851,9 @@ function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
   const status = resolvePlayerUiStatus(playback);
-  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, hasTrack } = status;
+  const { lockedByAnotherTab, playbackUnavailable, playingElsewhere, canPlayHere, blockedLabel, displayTrack, shownTrack, hasTrack } = status;
+  els.player?.classList?.toggle('is-playing-elsewhere', playingElsewhere);
+  if (els.elsewhere) els.elsewhere.hidden = !playingElsewhere;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   els.player?.classList?.toggle('is-empty', !hasTrack);
   const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
@@ -46012,10 +48868,11 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab
-      ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
+    els.play.setAttribute('aria-label', canPlayHere ? 'Play here'
+      : lockedByAnotherTab ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
       : (playback.paused ? 'Play' : 'Pause'));
-    els.play.disabled = lockedByAnotherTab || !hasTrack;
+    els.play.title = canPlayHere ? 'Play in this tab instead' : '';
+    els.play.disabled = (lockedByAnotherTab && !canPlayHere) || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
@@ -46029,6 +48886,7 @@ function updatePlayerUi() {
   const loopRangeSurface = els.loopRange?.querySelector('[data-loop-range-surface]');
   if (loopRangeSurface) loopRangeSurface.hidden = !state.player.loopActive;
   renderGlobalPlayerMetadata(els, displayTrack);
+  renderGlobalPlayerCover(els, shownTrack);
   updateLoopInputsFromState();
   updateWaveformAppearance();
   const compactPeaks = state.player.waveform?.compactPeaks?.data;
@@ -46042,7 +48900,6 @@ function updatePlayerUi() {
 }
 
 function setCurrentPlayerTrack(track, options = {}) {
-  const els = getPlayerElements();
   const previousTrack = state.player.current;
   const previousTrackId = getTrackIdentity(previousTrack);
   const nextTrackId = getTrackIdentity(track);
@@ -46062,56 +48919,60 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.current = track;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
-      String(track?.path || ''),
-      Number(state.player.streaming?.generation) || 0,
-    );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+  if (typeof loadPlayingWaveformPeaks === 'function') {
+    const playingWaveform = loadPlayingWaveformPeaks(String(track?.path || ''));
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   }
   state.player.waveform.renderToken += 1;
-  clearWaveformCanvas();
+  if (!track) {
+    state.player.waveform.shown = null;
+    clearWaveformCanvas();
+  }
   loopEditSessionExpiryController.stop('global-player');
   state.player.loopActive = false;
   state.player.loopStart = 0;
   state.player.loopEnd = 30;
   state.player.loopEditDurationSeconds = 0;
-  renderGlobalPlayerMetadata(els, track);
-  if (els.coverButton) {
-    const coverRef = track?.coverRef || '';
-    const loadId = (state.player.coverLoadId || 0) + 1;
-    state.player.coverLoadId = loadId;
-    els.coverButton.hidden = false;
-    els.coverButton.classList.toggle('is-idle-placeholder', !track);
-    els.coverButton.style.backgroundImage = '';
-    els.coverButton.textContent = '';
-    if (!track) {
-      els.coverButton.textContent = '';
-    } else if (coverRef) {
-      const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
-      const probe = new Image();
-      probe.onload = () => {
-        if (state.player.coverLoadId !== loadId) return;
-        els.coverButton.classList.remove('is-idle-placeholder');
-        els.coverButton.style.backgroundImage = `url("${coverSrc}")`;
-        els.coverButton.hidden = false;
-      };
-      probe.onerror = () => {
-        if (state.player.coverLoadId !== loadId) return;
-        els.coverButton.style.backgroundImage = '';
-        els.coverButton.hidden = false;
-        els.coverButton.classList.remove('is-idle-placeholder');
-      };
-      probe.src = coverSrc;
-    } else {
-      els.coverButton.classList.remove('is-idle-placeholder');
-    }
-  }
+  // The player draws what it shows: the new song only once it sounds.
   updatePlayerUi();
   if (options.persist !== false) {
     persistPlayerState(true);
+  }
+}
+
+// Loads a cover only when the shown song or its artwork changes: redraws while it plays reuse it.
+function renderGlobalPlayerCover(els, track) {
+  if (!els.coverButton) return;
+  const coverRef = track?.coverRef || '';
+  const coverKey = track ? `${playerTrackKey(track)}\n${coverRef}` : '';
+  if (state.player.coverKey === coverKey) return;
+  state.player.coverKey = coverKey;
+  const loadId = (state.player.coverLoadId || 0) + 1;
+  state.player.coverLoadId = loadId;
+  els.coverButton.hidden = false;
+  els.coverButton.classList.toggle('is-idle-placeholder', !track);
+  els.coverButton.style.backgroundImage = '';
+  els.coverButton.textContent = '';
+  if (track && coverRef) {
+    const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
+    const probe = new Image();
+    probe.onload = () => {
+      if (state.player.coverLoadId !== loadId) return;
+      els.coverButton.classList.remove('is-idle-placeholder');
+      els.coverButton.style.backgroundImage = `url("${coverSrc}")`;
+      els.coverButton.hidden = false;
+    };
+    probe.onerror = () => {
+      if (state.player.coverLoadId !== loadId) return;
+      els.coverButton.style.backgroundImage = '';
+      els.coverButton.hidden = false;
+      els.coverButton.classList.remove('is-idle-placeholder');
+    };
+    probe.src = coverSrc;
+  } else if (track) {
+    els.coverButton.classList.remove('is-idle-placeholder');
   }
 }
 
@@ -46127,49 +48988,119 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 }
 
 let playerTrackSelectionToken = 0;
+// As long as the app's bridge waits for an answer: a start with no sound by then has timed out.
+const PLAYER_START_TIMEOUT_MS = 15000;
+let pendingPlayerStart = null;
 
-// A switch takes a moment to reach the listener; the click should not.
-function renderSelectedTrackState(track) {
-  if (track && typeof getPlayerElements === 'function') {
-    renderGlobalPlayerMetadata(getPlayerElements(), track);
-  }
+// From the press until the song sounds, its start fails or times out, or a later action replaces it.
+function isPlayerStartPending(path) {
+  const start = pendingPlayerStart;
+  if (!start || start.path !== path || start.selectionToken !== playerTrackSelectionToken
+      || performance.now() - start.pressedAtMs >= PLAYER_START_TIMEOUT_MS) return false;
+  if (!start.settled) return true;
+  const playback = getPlayerPlaybackSnapshot();
+  return !playback.paused && !playback.ended && ['starting', 'buffering'].includes(playback.mode);
+}
+
+// A switch takes a moment to reach the listener; the click should not. The rows show the press at
+// once; the player stays on the sounding song.
+function renderSelectedTrackState() {
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }
 
-function showSelectedTrackImmediately(track, shouldAutoplay) {
+function showSelectedTrackImmediately(track, shouldAutoplay, startSeconds) {
   if (!shouldAutoplay) return;
+  state.player.selectedStartSeconds = startSeconds;
   state.player.selectedTrack = track;
-  renderSelectedTrackState(track);
+  renderSelectedTrackState();
 }
 
 function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
-  renderSelectedTrackState(state.player.current);
+  if (typeof resumeRestingTrackWaveform === 'function') {
+    // Once the switch has settled: a song that started is the current one by then.
+    void Promise.resolve().then(resumeRestingTrackWaveform);
+  }
+  renderSelectedTrackState();
+}
+
+// Settles once the next frame has painted; at once where no frame comes (a hidden tab).
+function afterNextPlayerPaint() {
+  if (typeof requestAnimationFrame !== 'function' || typeof document === 'undefined' || document.hidden) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const fallback = setTimeout(resolve, 100);
+    requestAnimationFrame(() => setTimeout(() => {
+      clearTimeout(fallback);
+      resolve();
+    }, 0));
+  });
+}
+
+// A handover stops this tab: a press still waiting for its stream never starts it afterwards.
+function cancelPendingPlayerSelection() {
+  playerTrackSelectionToken += 1;
+  clearSelectedTrack();
+}
+
+function mayStartBeforeTheAnswer() {
+  return typeof loadsSilentlyWhileAsking !== 'function' || loadsSilentlyWhileAsking()
+    || (typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim());
 }
 
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
+  if (shouldAutoplay && typeof noteStreamingPress === 'function') noteStreamingPress(track);
   const requestedTrackPath = String(track?.path || '');
-  const currentTrackPath = String(state.player.current?.path || '');
-  if (shouldAutoplay && requestedTrackPath && currentTrackPath
-      && requestedTrackPath !== currentTrackPath
+  const previousTrack = state.player.current || null;
+  const currentTrackPath = String(previousTrack?.path || '');
+  // Replaced by this press: the current song, and one pressed before it that has yet to sound.
+  const replacesSong = [currentTrackPath, String(state.player.selectedTrack?.path || '')]
+    .some((replaced) => replaced && replaced !== requestedTrackPath);
+  if (shouldAutoplay && requestedTrackPath && replacesSong
       && typeof cancelStreamingWaveformGeneration === 'function') {
-    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+    cancelStreamingWaveformGeneration(
+      Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) || 0,
+    );
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
-  // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
-  // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
+  // A press paints and loads at once, also where the first press lets the browser start audio, and is
+  // heard only once granted: the audio thread holds it, as nothing starts without an answer (the
+  // shortened wait). It waits before loading where nothing can hold the sound (the app's
+  // own player, unless it already owns playback), and where another client is known to play: then it
+  // paints nothing either and the overlay offers Play here.
+  const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
+    && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
-    ? canStartPlaybackInThisTab(track)
+    ? canStartPlaybackInThisTab(track, { takeover: options.takeover === true })
     : true;
-  if (pendingClaim === false) return false;
+  // A press that goes no further also ends the switch it superseded.
+  const refused = () => {
+    if (selectionToken === playerTrackSelectionToken) clearSelectedTrack();
+    return false;
+  };
+  if (pendingClaim === false) return refused();
+  const asksBeforeLoading = pendingClaim !== true && (knownElsewhere || !mayStartBeforeTheAnswer());
+  if (asksBeforeLoading) {
+    if (!knownElsewhere && options.takeover !== true && track?.path) {
+      showSelectedTrackImmediately(track, shouldAutoplay, Math.max(0, Number(options.startSeconds) || 0));
+    }
+    const granted = await pendingClaim;
+    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (!granted) return refused();
+  }
+  if (shouldAutoplay && typeof startSelectedTrackWaveformPeaks === 'function') {
+    // The waveform builds while the stream opens, not after it.
+    startSelectedTrackWaveformPeaks(requestedTrackPath);
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
-  if (!track?.path) return false;
+  if (!track?.path) return refused();
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   const requestedStartSeconds = Number(options.startSeconds);
@@ -46179,29 +49110,52 @@ async function playTrackFromPayload(track, options = {}) {
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  showSelectedTrackImmediately(track, shouldAutoplay);
+  showSelectedTrackImmediately(track, shouldAutoplay, startSeconds);
+  const pendingStart = shouldAutoplay
+    ? { path: requestedTrackPath, selectionToken, pressedAtMs: performance.now(), settled: false }
+    : null;
+  pendingPlayerStart = pendingStart;
+  // The pressed song paints before its stream starts: the start's own work never holds the frame
+  // that shows the press, which is instant even at 100% CPU. Audio that is not yet running (the first
+  // press after load) starts in the press itself, where every browser lets the press start sound.
+  if (shouldAutoplay && state.player.streaming?.context?.state === 'running') await afterNextPlayerPaint();
+  if (selectionToken !== playerTrackSelectionToken) return false;
+  // Loading while it waits for the server, a stream may die with the network that keeps the answer away.
+  const waitsForGrant = pendingClaim !== true && !asksBeforeLoading
+    && !(typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim());
+  const start = () => startStreamingTrack(track, {
+    startSeconds,
+    autoplay: shouldAutoplay,
+    allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
+    takeover: options.takeover === true,
+  });
   let startedRole;
+  let diedWaiting = false;
   try {
-    startedRole = await startStreamingTrack(track, {
-      startSeconds,
-      autoplay: shouldAutoplay,
-      allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
-    });
+    startedRole = await start();
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
-    clearSelectedTrack();
-    throw error;
+    if (!waitsForGrant) {
+      pendingPlayerStart = null;
+      clearSelectedTrack();
+      throw error;
+    }
+    diedWaiting = true;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
-  clearSelectedTrack();
-  if (startedRole === null) {
-    throw new Error('Streaming playback did not start');
-  }
   const startedTrackPath = String(startedRole?.track?.path || '');
-  if (startedTrackPath && startedTrackPath !== String(track.path)) {
-    throw new Error('Streaming playback started an unexpected track identity');
+  if (!diedWaiting && (startedRole === null || (startedTrackPath && startedTrackPath !== String(track.path)))) {
+    pendingPlayerStart = null;
+    clearSelectedTrack();
+    throw new Error(startedRole === null
+      ? 'Streaming playback did not start'
+      : 'Streaming playback started an unexpected track identity');
   }
+  if (pendingStart) pendingStart.settled = true;
+  // The pressed song becomes the current one before the pending choice clears, so the player never
+  // shows the song it replaced in between.
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
+  clearSelectedTrack();
   if (pendingClaim !== true && !await pendingClaim) {
     if (selectionToken === playerTrackSelectionToken) {
       pauseStreamingPlayback();
@@ -46210,6 +49164,26 @@ async function playTrackFromPayload(track, options = {}) {
     return false;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
+  if (waitsForGrant && (diedWaiting || getPlayerPlaybackSnapshot().mode === 'error')) {
+    // Answered, it starts by itself, with no second press.
+    let retryError = null;
+    try {
+      startedRole = await start();
+    } catch (error) {
+      retryError = error;
+    }
+    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (retryError || startedRole === null) {
+      // As any failed start: the song it replaced stays the player's, with its waveform.
+      pendingPlayerStart = null;
+      setCurrentPlayerTrack(previousTrack, { previousPlaybackSnapshot });
+      if (previousTrack?.path && typeof loadPlayingWaveformPeaks === 'function') {
+        void loadPlayingWaveformPeaks(previousTrack.path).catch(() => {});
+      }
+      updatePlayerUi();
+      throw retryError || new Error('Streaming playback did not start');
+    }
+  }
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
       generation: startedRole.generation,
@@ -46264,6 +49238,8 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  if (pendingPlayerStart?.path === selectedTrackPath) pendingPlayerStart = null;
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(selectedTrackPath);
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -46273,6 +49249,9 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  // It sounds: the player's title, time, cover and waveform change to it together, now.
+  if (typeof getPlayerElements === 'function') updatePlayerUi();
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
@@ -46344,16 +49323,21 @@ async function handleStreamingPlaybackEnded(event = {}) {
       finishedFully: true,
     });
   }
-  if (typeof releasePlaybackOwnership === 'function'
-      && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
-    await releasePlaybackOwnership('stopped', track);
+  const isStillThisEnd = () => ownershipVersion === null
+    || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0);
+  // The engine names a queued successor it could not continue into: a new sample rate, or a
+  // native queue that ended its window. It starts on the claim still held, with no wait for a new one.
+  const continues = Boolean(event.startNextTrackPath)
+    && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath;
+  if (!continues && typeof releasePlaybackOwnership === 'function' && isStillThisEnd()) {
+    // Released is what lets another client sound: the last rendered audio leaves the output first.
+    if (typeof drainStreamingOutput === 'function') await drainStreamingOutput();
+    if (isStillThisEnd()) await releasePlaybackOwnership('stopped', track);
   }
   updatePlayerUi();
-  // The engine names a queued successor it could not continue into: a new sample rate, or a
-  // native queue that ended its window.
-  if (event.startNextTrackPath
-      && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath) {
-    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+  if (continues) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it. A successor that
+    // does not start leaves the claim to the heartbeat, which gives a silent tab's back.
     await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
   }
 }
@@ -46422,6 +49406,9 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
+  // A gapless move sounds at the boundary itself.
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(promotedTrack.path);
   if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
@@ -46650,6 +49637,7 @@ function setLoopPlaybackHead(value) {
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 
@@ -46671,6 +49659,7 @@ function setPlayerPlaybackHead(value, options = {}) {
     void seek.catch(() => {});
   }
   if (shouldResumeSegment) void resumeListenSessionPlayback(state.player.current, next);
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 
@@ -46731,6 +49720,13 @@ function isPlayerSurfaceVisible() {
 
 function togglePlayerPlayback(options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
+  // Play while another client plays moves its song here (playback.claim.takeover).
+  if (typeof isPlaybackPlayingElsewhere === 'function' && isPlaybackPlayingElsewhere()) {
+    void Promise.resolve(takeOverPlaybackHere()).catch((error) => {
+      console.warn('[AlbumHaven][Playback] Taking playback over failed.', error);
+    });
+    return true;
+  }
   const playback = getPlayerPlaybackSnapshot();
   if (!(playback.src || state.player.current?.src)) return false;
   if (typeof resumeStreamingPlayback !== 'function'
@@ -46738,11 +49734,13 @@ function togglePlayerPlayback(options = {}) {
   if (playback.paused) {
     const track = state.player.current;
     const selectionToken = ++playerTrackSelectionToken;
+    clearSelectedTrack();
     Promise.resolve().then(async () => {
       if (selectionToken !== playerTrackSelectionToken) return false;
       const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
-      // Instant resume: the paused stream sounds while the claim is asked for; a refusal pauses it again.
-      const early = claim !== true && playback.mode !== 'stopped' && !playback.ended
+      // The audio starts inside the press and is held until the grant; a refusal pauses it again.
+      const early = claim !== true && mayStartBeforeTheAnswer()
+        && playback.mode !== 'stopped' && !playback.ended
         ? resumeStreamingPlayback()
         : null;
       // The controls follow the sound as soon as it resumes, not after the claim's round trip.
@@ -46758,7 +49756,12 @@ function togglePlayerPlayback(options = {}) {
       }
       if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
       pendingPlayerPlaybackHandoff = null;
-      if (early) return early;
+      if (early) {
+        const held = getPlayerPlaybackSnapshot();
+        if (held.mode !== 'error') return early;
+        // The stream died while it waited for the server: answered, it starts by itself at its place.
+        return Boolean(await startStreamingTrack(track, { startSeconds: Number(held.currentTime) || 0 }));
+      }
       if (playback.mode === 'stopped') {
         return Boolean(await startStreamingTrack(track, {
           startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),
@@ -46766,7 +49769,12 @@ function togglePlayerPlayback(options = {}) {
       }
       if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
       if (selectionToken !== playerTrackSelectionToken) return false;
-      return resumeStreamingPlayback();
+      // Resumed on the claim its pause kept: only once its first frame sounds does it tell the server it
+      // plays again, so other devices see it within a round trip and the request never delays the sound.
+      const sayItPlays = claim === true && typeof publishPlaybackPositionSoon === 'function'
+        ? () => { publishPlaybackPositionSoon(); }
+        : null;
+      return resumeStreamingPlayback(null, null, null, sayItPlays);
     }).then((resumed) => {
       if (resumed === false || selectionToken !== playerTrackSelectionToken) return;
       beginStreamingPlayerListenSession(
@@ -46789,6 +49797,8 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
   pendingPlayerPlaybackHandoffSelectionToken = ++playerTrackSelectionToken;
   const selectionToken = playerTrackSelectionToken;
+  // The switch it supersedes never finishes: nothing may go on naming its song.
+  clearSelectedTrack();
   const track = state.player.current;
   const session = state.player.listenSession;
   const ownership = typeof getPlaybackOwnershipState === 'function' ? getPlaybackOwnershipState() : null;
@@ -46798,6 +49808,8 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
+    // The button shows Play at once; what follows may wait on a network that is gone.
+    updatePlayerUi();
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {
@@ -46808,16 +49820,16 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     if (typeof persistPausedListenSession === 'function') {
       try {
         await persistPausedListenSession(session);
-      } catch (_error) {
+      } catch (error) {
         if (!isCurrentPause()) return false;
         saved = false;
-        showToast('Listening history could not be saved.', 'error', 4200);
+        // Offline the listen stays open and the next checkpoint saves it; only an answer is a failure.
+        if (error?.status) showToast('Listening history could not be saved.', 'error', 4200);
       }
     }
     if (!isCurrentPause()) return saved;
-    if (typeof releasePlaybackOwnership === 'function') {
-      await releasePlaybackOwnership('paused', track);
-    }
+    // Paused, it gives its claim back: another device may start, and its own next Play asks the server.
+    if (typeof releasePlaybackOwnership === 'function') await releasePlaybackOwnership('paused', track);
     updatePlayerUi();
     return saved;
   });
@@ -46967,10 +49979,26 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     triggerAlbumTrackPlayActivation(btn);
   }
   const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
+  if (isPlayerStartPending(trackPath)) {
+    // A press on a song still starting is ignored. Its one start keeps the wait it began with, double
+    // tap or not.
+    if (typeof countIgnoredStreamingPress === 'function') countIgnoredStreamingPress(trackPath);
+    if (typeof retryStreamingConnection === 'function') retryStreamingConnection();
+    return;
+  }
   const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
   const playback = getPlayerPlaybackSnapshot();
   const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
   if (isLoadedCurrentTrack && !restart) {
+    // The song still sounding, pressed while another starts: the switch is given up and it plays on.
+    const switching = String(state.player.selectedTrack?.path || trackPath) !== String(trackPath);
+    if (switching && !playback.paused && typeof cancelStreamingSwitch === 'function' && cancelStreamingSwitch()) {
+      pendingPlayerStart = null;
+      cancelPendingPlayerSelection();
+      if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
+      updatePlayerUi();
+      return;
+    }
     togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
     updatePlayerUi();
     return;
@@ -47572,9 +50600,11 @@ function syncCompactPlayerUi(snapshot = {}) {
     els.cover.setAttribute('aria-label', openLabel);
   }
   if (els.play) {
+    // Playing on another device, Play takes playback over here, as on the expanded player.
+    const elsewhere = typeof isPlaybackPlayingElsewhere === 'function' && isPlaybackPlayingElsewhere();
     els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', playback.paused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
-    els.play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
-    els.play.disabled = !hasTrack || locked;
+    els.play.setAttribute('aria-label', elsewhere ? 'Play here' : playback.paused ? 'Play' : 'Pause');
+    els.play.disabled = !hasTrack || (locked && !elsewhere);
   }
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });
@@ -52210,6 +55240,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// Back and Forward show the search of the address they reach at once, not once its view has loaded.
+function showHistoryStepSearch(href) {
+  const input = typeof document === 'undefined' ? null : document.getElementById?.('search-input');
+  if (!input) return;
+  const query = String(parseBrowserUrlState(href).query || '');
+  if (input.value === query) return;
+  input.value = query;
+  updateGallerySearchDraftQuery(query);
+  if (typeof updateSearchClearAction === 'function') updateSearchClearAction(input);
+}
+
 // A history step onto the address of the view already shown (a duplicate history entry) keeps
 // that view: reloading it is navigation that changes nothing (owner, 11-18).
 function historyStepShowsCurrentView(href) {
@@ -52222,6 +55263,7 @@ function historyStepShowsCurrentView(href) {
 function handleGalleryBootstrapPopState(options = {}) {
   if (!options.parentViewUrl && !options.galleryAnchorArtist && historyStepShowsCurrentView(getBrowserLocationHref())) return;
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
+  showHistoryStepSearch(parentViewUrl);
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist
     ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })
@@ -52245,11 +55287,28 @@ function isMobileClient() {
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
-  const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
+  const albumKey = album ? mobileHistoryAlbumKey(album) : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
+// An entry an earlier build wrote may name an album by its track paths: the one being loaded is rewritten
+// without them, in its address and its state. Other entries already in the browser's history cannot be.
+function forgetPathLikeAlbumKeys(url) {
+  if (!window.history?.replaceState) return;
+  const kept = window.history.state || {};
+  const pages = Array.isArray(kept.mobilePages) ? kept.mobilePages : [];
+  const pathLike = (page) => pathLikeAlbumKey(page?.albumKey) || pathLikeAlbumKey(page?.parentScrollAnchor?.albumKey);
+  const inAddress = pathLikeAlbumKey(url.searchParams.get('mobile_album'));
+  if (!inAddress && !pages.some(pathLike)) return;
+  if (inAddress) {
+    ['mobile_page', 'mobile_album'].forEach(key => url.searchParams.delete(key));
+  }
+  const cleaned = pages.filter(page => !pathLikeAlbumKey(page?.albumKey)).map((page) => (
+    pathLikeAlbumKey(page?.parentScrollAnchor?.albumKey) ? { ...page, parentScrollAnchor: null } : page));
+  window.history.replaceState({ ...kept, mobilePages: cleaned }, '', url.toString());
+}
+
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
   const active = mobile ? mobilePageState.pages.at(-1) : null;
@@ -52510,14 +55569,14 @@ function presentMobilePage(descriptor) {
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
     mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
-  descriptor.parentScrollAnchor = resolveMobileParentScrollAnchor(
+  descriptor.parentScrollAnchor = historySafeScrollAnchor(resolveMobileParentScrollAnchor(
     descriptor,
     previous,
     window.history.state || {},
     mobilePageState.pages.length || typeof virtualGrid === 'undefined'
       ? null
       : virtualGrid?.captureScrollAnchor?.(),
-  );
+  ));
   descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
     mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
   descriptor.parentGalleryAnchorArtist = resolveMobileParentGalleryAnchorArtist(
@@ -52635,9 +55694,27 @@ function navigateMobileBack() {
   else if (active.kind === 'non-album') closeNonAlbumModal();
   else closeCoverLookupModal();
 }
+function mobileHistoryAlbumKey(album) {
+  return typeof getAlbumHistoryKey === 'function' ? getAlbumHistoryKey(album) : String(getAlbumRequestKey(album) || '');
+}
+
+function pathLikeAlbumKey(value) {
+  return typeof isPathLikeAlbumKey === 'function' && isPathLikeAlbumKey(value);
+}
+
+// The anchor goes into history: the album at the top names itself as history may keep it, never by its paths.
+function historySafeScrollAnchor(anchor) {
+  if (!anchor?.albumKey || !pathLikeAlbumKey(anchor.albumKey)) return anchor;
+  const album = getIndexedAlbum(anchor.albumKey);
+  return { ...anchor, albumKey: album ? mobileHistoryAlbumKey(album) : '' };
+}
+
 function restoreMobilePage(descriptor) {
   if (!descriptor || !Object.hasOwn(MOBILE_PAGE_KINDS, descriptor.kind)) return;
-  const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey) || { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true }) : null;
+  // An album kept by its id opens only once it is loaded: there is no key to ask for it by.
+  const byId = String(descriptor.albumKey || '').startsWith('id:');
+  const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey)
+    || (byId ? null : { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true })) : null;
   if (descriptor.kind === 'non-album') openNonAlbumModal();
   else if (descriptor.kind === 'album' && album) openTrackModal(album);
   else if (descriptor.kind === 'utilities') {
@@ -52980,6 +56057,7 @@ function initMobileNavigation() {
     status.textContent = 'Settings have not synced. They will retry when you reconnect.';
   });
   const url = new URL(window.location.href);
+  forgetPathLikeAlbumKeys(url);
   if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
     mobilePageState.restoring = true;
     try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
@@ -53258,6 +56336,313 @@ function syncMobileUtilityDetail() {
 
 // END js/runtime/mobile-navigation.js
 
+// BEGIN js/runtime/gallery-return-place.js
+
+// The gallery's side of returning to a place after Back or Forward: what is taken as the place, and
+// the way back to it through the gallery's own paging and scroll anchors. What is kept, and for whom,
+// is return-place.js's.
+
+const RETURN_SETTLE_LIMIT_MS = 10000;
+// The pages read beside an anchored window to reach an album of the artist it is around.
+const RETURN_PAGE_LIMIT = 7;
+const RETURN_ALIGN_FRAMES = 90;
+const RETURN_STABLE_FRAMES = 6;
+const RETURN_INTERRUPTING_EVENTS = ['wheel', 'touchstart', 'keydown', 'pointerdown'];
+
+let returnAttempt = null;
+// The place before the action that may push a history entry: by then the next view has rendered.
+let placeBeforeNavigation = null;
+
+function getReturnPlaceOwner() {
+  return window.AlbumHavenReturnPlace || null;
+}
+
+let returnPlaceKey = getReturnPlaceOwner()?.currentKey?.() || '';
+
+function returnAlbumId(album) {
+  const id = Number(album?.album_id || album?.id || 0);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function returnAlbumRef(album) {
+  return album ? { id: returnAlbumId(album), key: String(album.album_ref || album.key || '') } : null;
+}
+
+// The album [ref] names among those loaded, and its group.
+function findReturnAlbum(ref, preferredArtist = '') {
+  if (!ref) return null;
+  let found = null;
+  for (const groups of [state.view?.artist_groups, state.view?.primary_artist_groups, state.view?.family_artist_groups]) {
+    for (const group of groups || []) {
+      for (const album of group.albums || []) {
+        const matches = ref.id ? returnAlbumId(album) === ref.id : Boolean(ref.key) && getAlbumRequestKey(album) === ref.key;
+        if (!matches) continue;
+        // An album can stand under more than one artist: the one it was left under first.
+        if (!preferredArtist || group.artist === preferredArtist) return { album, group };
+        found = found || { album, group };
+      }
+    }
+  }
+  return found;
+}
+
+function captureOpenAlbumPlace() {
+  const els = getTrackModalElements();
+  if (!els.overlay || els.overlay.hidden) return null;
+  const pendingKey = String(state.ui.pendingTrackModalLoadAlbumKey || '');
+  const album = getCurrentTrackModalAlbum() || (pendingKey ? getIndexedAlbum(pendingKey) : null);
+  if (!album) return null;
+  const outlet = document.getElementById('mobile-page-outlet');
+  const scroller = outlet && !outlet.hidden ? outlet : els.overlay;
+  return { ...returnAlbumRef(album), top: Number(els.list?.scrollTop || 0), page: Number(scroller.scrollTop || 0) };
+}
+
+function captureGalleryPlace() {
+  const scroll = document.getElementById('albums-scroll');
+  if (!scroll) return null;
+  const place = { top: Number(scroll.scrollTop || 0) };
+  if (place.top > 0 && typeof virtualGrid !== 'undefined' && virtualGrid) {
+    const anchor = virtualGrid.captureScrollAnchor?.();
+    if (anchor?.albumKey) {
+      const album = getIndexedAlbum(anchor.albumKey);
+      const section = virtualGrid.sectionByRenderedKey?.get(anchor.sectionOccurrenceKey);
+      place.offset = Math.round(Number(anchor.offsetTop || 0));
+      place.artist = String(section?.group?.artist || album?.artist || album?.album_artist || '');
+      place.album = returnAlbumRef(album);
+    }
+  }
+  const open = captureOpenAlbumPlace();
+  if (open) place.open = open;
+  return place;
+}
+
+function saveCurrentPlace(key = returnPlaceKey) {
+  const owner = getReturnPlaceOwner();
+  // Until the page is back at the place, that place is still the entry's.
+  if (!owner || returnAttempt || owner.returning?.()) return;
+  const place = captureGalleryPlace();
+  if (place) owner.save(key, place);
+}
+
+function notePlaceBeforeNavigation() {
+  if (getReturnPlaceOwner() && !returnAttempt) placeBeforeNavigation = captureGalleryPlace();
+}
+
+function handleReturnEntryChange(event) {
+  const owner = getReturnPlaceOwner();
+  if (!owner) return;
+  const from = event.from?.key || '';
+  if (event.navigationType === 'push' && placeBeforeNavigation) {
+    owner.save(from, placeBeforeNavigation);
+  } else if (event.navigationType === 'traverse') {
+    // popstate follows: the view left is still the one on screen.
+    saveCurrentPlace(from);
+  } else if (event.navigationType !== 'push') {
+    return; // the same entry: the action under way may still push one
+  }
+  placeBeforeNavigation = null;
+  returnPlaceKey = owner.currentKey();
+}
+
+function waitForReturnFrame() {
+  return new Promise(resolve => scheduleBrowserAnimationFrame(resolve));
+}
+
+async function waitWhileReturning(attempt, unsettled) {
+  const until = Date.now() + RETURN_SETTLE_LIMIT_MS;
+  while (attempt.active && unsettled() && Date.now() < until) await waitForReturnFrame();
+  return attempt.active;
+}
+
+const isReturnViewLoading = () => Boolean(state.busy || state.awaitingInitialDataRefresh);
+
+// The grid's own section holding the album: loaded albums can wait a moment to be laid out.
+function findReturnSection(found) {
+  const key = getAlbumRequestKey(found.album);
+  const holding = (virtualGrid.sections || []).filter(section => (
+    section.kind === 'artist' && section.group?.albums?.some(album => getAlbumRequestKey(album) === key)
+  ));
+  return holding.find(section => section.group.artist === found.group.artist) || holding[0] || null;
+}
+
+async function alignReturnAlbum(attempt, place, found) {
+  if (typeof virtualGrid === 'undefined' || !virtualGrid) return;
+  const scroll = document.getElementById('albums-scroll');
+  // The artist tree's own jump first: it cancels the reset to the top a render leaves for the next
+  // frame, which would start loading the pages above, one after another. Then the album's anchor.
+  virtualGrid.scrollToArtist?.(found.group.artist);
+  let section = findReturnSection(found);
+  if (!section) {
+    // An anchor the grid has not laid out would land on whatever is at that offset instead.
+    await waitWhileReturning(attempt, () => !(section = findReturnSection(found)));
+    if (!section || !attempt.active) return;
+    virtualGrid.scrollToArtist?.(section.group.artist);
+  }
+  const anchor = {
+    scrollLeft: 0,
+    scrollTop: Math.max(1, Number(place.top || 0)),
+    albumKey: getAlbumRequestKey(found.album),
+    albumName: String(found.album.name || ''),
+    albumYear: String(found.album.year ?? ''),
+    anchorBox: 'card',
+    sectionOccurrenceKey: virtualGrid.getRenderedSectionKey(section),
+    offsetTop: Number(place.offset || 0),
+  };
+  // The first step lands by the grid's model; the row it mounts then corrects it.
+  let previousTop = null;
+  let stable = 0;
+  for (let frame = 0; frame < RETURN_ALIGN_FRAMES && stable < RETURN_STABLE_FRAMES; frame += 1) {
+    if (!attempt.active) return;
+    virtualGrid.restoreOwnedScrollAnchor(anchor);
+    virtualGrid.render();
+    stable = previousTop === scroll.scrollTop ? stable + 1 : 0;
+    previousTop = scroll.scrollTop;
+    await waitForReturnFrame();
+  }
+}
+
+// All artists; offline, also when the copy standing in for this address has none of its albums: the
+// window around the artist may still be kept.
+function canLoadReturnArtist(artist) {
+  const unreachableRoot = Boolean(state.ui.galleryUnreachable)
+    && !state.view?.selected_artist && !state.view?.query;
+  if (!artist || !(unreachableRoot || isPagedRootGallery())) return false;
+  const sidebar = state.view?.artists_sidebar;
+  return !sidebar?.length || sidebar.some(item => item.artist === artist);
+}
+
+async function returnToGalleryPlace(attempt, place) {
+  if (!(place.top > 0)) return;
+  let found = findReturnAlbum(place.album, place.artist);
+  if (!found) {
+    if (!await waitWhileReturning(attempt, isReturnViewLoading)) return;
+    found = findReturnAlbum(place.album, place.artist);
+  }
+  if (!found && place.album && canLoadReturnArtist(place.artist)) {
+    // One window around its artist, as the artist tree's own jump asks for.
+    await fetchAndRender(
+      buildApiUrl(state.view, { galleryAnchorArtist: place.artist, omitSidebar: true }),
+      false,
+      { preserveScroll: false },
+    );
+    if (!await waitWhileReturning(attempt, isReturnViewLoading)) return;
+    found = findReturnAlbum(place.album, place.artist);
+    if (!found && typeof virtualGrid !== 'undefined') virtualGrid?.scrollToArtist?.(place.artist);
+    const scroll = document.getElementById('albums-scroll');
+    for (let page = 0; !found && page < RETURN_PAGE_LIMIT; page += 1) {
+      if (!await waitWhileReturning(attempt, isRootGalleryPageRequestLoading)) return;
+      found = findReturnAlbum(place.album, place.artist);
+      if (found) break;
+      // Only while that artist may go on past the window: kept pages (offline) can start inside it.
+      const groups = state.view?.artist_groups || [];
+      const gallery = state.view?.gallery_page;
+      const before = Boolean(gallery?.has_previous) && groups[0]?.artist === place.artist;
+      const after = Boolean(gallery?.has_more) && groups[groups.length - 1]?.artist === place.artist;
+      if (!before && !after) break;
+      // Either loads only near that end of what is loaded.
+      scroll.scrollTop = before ? 0 : scroll.scrollHeight;
+      const loaded = await (before ? loadPreviousRootGalleryPage() : loadNextRootGalleryPage());
+      if (!loaded && !isRootGalleryPageRequestLoading()) break;
+      found = findReturnAlbum(place.album, place.artist);
+    }
+    if (!found && attempt.active && typeof virtualGrid !== 'undefined') virtualGrid?.scrollToArtist?.(place.artist);
+  } else if (!found) {
+    const scroll = document.getElementById('albums-scroll');
+    if (scroll && attempt.active) scroll.scrollTop = place.top;
+  }
+  if (!found || !attempt.active) return;
+  await alignReturnAlbum(attempt, place, found);
+  if (attempt.active && isReturnViewLoading()) {
+    if (!await waitWhileReturning(attempt, isReturnViewLoading)) return;
+    found = findReturnAlbum(place.album, place.artist);
+    if (found) await alignReturnAlbum(attempt, place, found);
+  }
+  // The anchor's own scrolling is not the user's, so it starts no paging by itself.
+  if (attempt.active && isPagedRootGallery()) void loadNextRootGalleryPage();
+}
+
+function reopenReturnAlbum(open) {
+  const els = getTrackModalElements();
+  if (!els.overlay || !els.overlay.hidden) return;
+  const album = findReturnAlbum(open)?.album
+    || (open.key ? { key: open.key, album_id: open.id, name: 'Album' } : null);
+  if (album) openTrackModal({ ...album, preview_only: true });
+}
+
+async function returnToAlbumScroll(attempt, open) {
+  const els = getTrackModalElements();
+  if (!els.overlay || els.overlay.hidden || !(open.top > 0 || open.page > 0)) return;
+  const loading = () => !els.overlay.hidden && Boolean(els.list?.querySelector?.('.track-modal-loading-row'));
+  if (!await waitWhileReturning(attempt, loading)) return;
+  await waitForReturnFrame();
+  if (!attempt.active || els.overlay.hidden) return;
+  if (els.list) els.list.scrollTop = Number(open.top || 0);
+  const outlet = document.getElementById('mobile-page-outlet');
+  (outlet && !outlet.hidden ? outlet : els.overlay).scrollTop = Number(open.page || 0);
+}
+
+async function returnToPlace(place, { afterPopState = false } = {}) {
+  if (returnAttempt) returnAttempt.active = false;
+  const attempt = { active: true };
+  returnAttempt = attempt;
+  const takeOver = () => {
+    attempt.active = false;
+    getReturnPlaceOwner()?.done();
+  };
+  for (const type of RETURN_INTERRUPTING_EVENTS) window.addEventListener(type, takeOver, { capture: true, passive: true });
+  try {
+    // After popstate the albums on screen are still the view that was left.
+    if (afterPopState) {
+      if (!await waitWhileReturning(attempt, isReturnViewLoading)) return;
+      // Within the frame that rendered it, so its top is never painted.
+      if (place.top > 0) getReturnPlaceOwner()?.hide?.();
+    }
+    if (place.open) reopenReturnAlbum(place.open);
+    await returnToGalleryPlace(attempt, place);
+    if (place.open && attempt.active) {
+      reopenReturnAlbum(place.open);
+      getReturnPlaceOwner()?.done();
+      await returnToAlbumScroll(attempt, place.open);
+    }
+  } finally {
+    for (const type of RETURN_INTERRUPTING_EVENTS) window.removeEventListener(type, takeOver, { capture: true });
+    if (returnAttempt === attempt) {
+      returnAttempt = null;
+      getReturnPlaceOwner()?.done();
+    }
+  }
+}
+
+function initReturnPlace() {
+  const place = getReturnPlaceOwner()?.returning?.();
+  return place ? returnToPlace(place) : Promise.resolve();
+}
+
+// Back or Forward within the page: the gallery's place only. Albums and their editors close and open by
+// their own history entries; reopening one here could reopen what was just closed.
+function restoreTraversedPlace() {
+  const owner = getReturnPlaceOwner();
+  if (!owner) return;
+  const place = owner.placeFor(owner.currentKey());
+  if (place && place.top > 0) void returnToPlace({ ...place, open: null }, { afterPopState: true });
+  else if (returnAttempt) returnAttempt.active = false;
+}
+
+window.addEventListener?.('pagehide', () => saveCurrentPlace());
+document.addEventListener?.('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveCurrentPlace();
+});
+// What can push an entry starts with one of these.
+document.addEventListener?.('click', notePlaceBeforeNavigation, true);
+document.addEventListener?.('submit', notePlaceBeforeNavigation, true);
+// Search pushes as it is typed. Any other focus can follow the render of the view being pushed.
+document.addEventListener?.('focusin', (event) => {
+  if (event.target?.id === 'search-input') notePlaceBeforeNavigation();
+}, true);
+window.navigation?.addEventListener?.('currententrychange', handleReturnEntryChange);
+
+// END js/runtime/gallery-return-place.js
+
 // BEGIN js/runtime/in-page-tabs.js
 
 /* Lightweight, keyboard-operable tabs. Tokens come from the containing surface. */
@@ -53511,8 +56896,10 @@ searchInput?.addEventListener('input', () => {
 
 window.addEventListener('popstate', () => {
   if (typeof handleImageLightboxPopState === 'function' && handleImageLightboxPopState()) return;
+  // A phone-width page's own Back restores its parent's exact anchor: the saved place would land beside it.
   if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
   handleGalleryBootstrapPopState();
+  if (typeof restoreTraversedPlace === 'function') restoreTraversedPlace();
 });
 
 // END js/runtime/bootstrap-event-handlers.js
@@ -53543,11 +56930,11 @@ if (typeof initPlaybackOwnershipCoordinator === 'function') {
   if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
-if (typeof prepareStreamingPlaybackEngine === 'function'
+if (typeof prepareIdleStreamingPlayback === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   const prepareIdlePlayback = () => {
     if (idlePlaybackPreparationCancelled) return;
-    void prepareStreamingPlaybackEngine().catch((error) => {
+    void prepareIdleStreamingPlayback().catch((error) => {
       console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
     });
   };
@@ -53574,6 +56961,9 @@ const resolvedBootstrapView = resolveGalleryDisplayPreferenceViewState(
   galleryDisplayPreferenceResolutionOptions,
 );
 applyViewPayload(resolvedBootstrapView, { trackSidebarReveal: false });
+// The server was unreachable and this address was never kept: the kept page standing in for it
+// shows this address's view, named and saying why it cannot load, until the server answers.
+if (window.AlbumHavenAppCopy?.viewMissing) applyUnreachableView(window.location.href);
 if (typeof appBootstrap?.releasePayloadViewState === 'function') {
   appBootstrap.releasePayloadViewState();
 }
@@ -53627,7 +57017,10 @@ const shellMainContentKind = String(
   state.view?.shell_layout?.slots?.main_content?.content_kind || '',
 ).trim();
 const hasPagedRootInitialView = typeof isPagedRootGallery === 'function' && isPagedRootGallery();
+// A view standing in while the server is unreachable is refreshed once the server answers
+// (onServerAnswer below), never by a startup request that can only fail.
 const shouldStartImmediateHydration = hasPagedRootInitialView || shellMainContentKind === 'discovery_center_page'
+  || state.ui.galleryUnreachable
   ? false
   : shouldRunImmediateStartupHydration(state.view, bootstrap);
 let embeddedStartupViewPatch = startupHydration?.embeddedViewPatch && typeof startupHydration.embeddedViewPatch === 'object'
@@ -53853,6 +57246,12 @@ if (shouldStartImmediateHydration) {
 window.AlbumHavenAppCopy?.onServerAnswer(() => {
   void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
 });
+// A view whose page was never kept may still have its data on the device (an artist opened
+// online, app-copy-worker.js): asked for once, it replaces the Offline message when the worker
+// answers from what it kept, and the message stays when nothing was kept.
+if (window.AlbumHavenAppCopy?.viewMissing) {
+  void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+}
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
@@ -54022,6 +57421,7 @@ window.addEventListener('scroll', () => {
 if (typeof syncArtistsDrawerVisibility === 'function') {
   syncArtistsDrawerVisibility();
 }
+if (typeof initReturnPlace === 'function') void initReturnPlace();
 
 const tagEditorFooter = document.getElementById('tag-editor-footer');
 if (tagEditorFooter) {

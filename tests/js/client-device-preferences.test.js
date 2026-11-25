@@ -65,6 +65,33 @@ test('an unsuccessful save remains unsaved and can be retried without losing the
   assert.equal(store.syncState, 'saved');
 });
 
+// The phone kept its network while the server was down: `online` never fired, and "Settings have not
+// synced" stayed after the server was back.
+test('unsaved settings are saved, and the notice goes, once the page hears from the server again', async () => {
+  let fail = true;
+  const listeners = new Map();
+  const window = { innerWidth: 390, navigator: {}, setTimeout: () => 1, clearTimeout() {},
+    addEventListener: (name, listener) => listeners.set(name, listener) };
+  const store = createStore({ window, fetch: async () => ({ ok: !fail }),
+    bootstrap: { account_id: 12, load_failed: true, profiles: {} } });
+  assert.equal(store.syncState, 'unavailable');
+  store.write('mobileGridColumns', 3);
+  await store.flush();
+  assert.equal(store.syncState, 'unsaved');
+
+  fail = false;
+  listeners.get('album-haven:server-reachable')();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(store.syncState, 'saved');
+
+  // Settings that could not be loaded say so only until the server answers.
+  const loadFailed = createStore({ window, fetch: async () => ({ ok: true }),
+    bootstrap: { account_id: 12, load_failed: true, profiles: {} } });
+  listeners.get('album-haven:server-reachable')();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(loadFailed.syncState, 'saved');
+});
+
 test('anonymous contexts never claim an account preference namespace', () => {
   const store = createStore({ bootstrap: {}, window: { innerWidth: 390, navigator: {} } });
   assert.equal(store.handles('albumhaven.albumOpenMode.v1'), false);

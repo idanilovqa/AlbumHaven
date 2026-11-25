@@ -110,6 +110,125 @@ test('updateWaveformAppearance publishes the effective seekbar presentation', as
   assert.equal(wrapClasses.has('is-waveform'), true);
 });
 
+// The playing song's waveform never disappears for a moment at a switch: it stays until the new song
+// plays.
+test('a pressed song that has not sounded yet leaves the playing song its waveform', async () => {
+  const canvas = { hidden: false };
+  const { context } = loadRuntime();
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.setPlayerSeekbarPresentation = () => {};
+  const drawn = [];
+  context.drawWaveformOnCanvas = (_canvas, waveform) => drawn.push(waveform);
+  const peaks = { left: [0.5], right: [0.5] };
+  Object.assign(context.state.player, {
+    current: { path: 'old.flac' }, selectedTrack: { path: 'new.flac' },
+  });
+  context.state.player.appearance.seekbarMode = 'waveform';
+  context.state.player.waveform.compactPeaks = { path: 'old.flac', data: peaks };
+
+  await context.updateWaveformAppearance();
+
+  assert.deepEqual(drawn, [peaks]);
+});
+
+function waveformSwitch() {
+  const { context } = loadRuntime();
+  const old = { src: 'old', path: 'old.flac', title: 'Old' };
+  const next = { src: 'new', path: 'new.flac', title: 'New' };
+  const oldPeaks = { left: [0.2], right: [0.2] };
+  const newPeaks = { left: [0.9], right: [0.9] };
+  const canvas = {};
+  const shows = [];
+  const snapshot = { src: 'old', currentTime: 100, duration: 200, generation: 1 };
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.getPlayerPlaybackSnapshot = () => ({ ...snapshot });
+  context.setPlayerSeekbarPresentation = () => {};
+  context.renderGlobalPlayerMetadata = () => {};
+  context.clearWaveformCanvas = () => shows.push({ data: null });
+  context.drawWaveformOnCanvas = (_canvas, data, progress) => shows.push({ data: data || null, progress });
+  context.updatePlayerUi = () => { void context.updateWaveformAppearance(); };
+  context.state.player.current = old;
+  context.state.player.streaming = { mode: 'playing' };
+  context.state.player.waveform.compactPeaks = { path: old.path, generation: 1, data: oldPeaks };
+  return { context, old, next, oldPeaks, newPeaks, shows, snapshot };
+}
+
+// The playing song's waveform never disappears for a moment: it stays until the new song is playing.
+test('a switch keeps the old waveform, never blank, until the pressed song sounds, then shows its own', async () => {
+  const { context, next, oldPeaks, newPeaks, shows, snapshot } = waveformSwitch();
+  await context.updateWaveformAppearance();
+  shows.length = 0;
+
+  // The press: title and time switch, the old song still sounds.
+  context.state.player.selectedTrack = next;
+  await context.updateWaveformAppearance();
+  // Its peaks arrive before its sound.
+  context.state.player.waveform.compactPeaks = { path: next.path, generation: 2, data: newPeaks };
+  await context.updateWaveformAppearance();
+  // The stream starts over: a new generation, the clock at the new start, no audio yet.
+  Object.assign(snapshot, { src: 'new', currentTime: 0, duration: 180, generation: 2 });
+  context.state.player.streaming.mode = 'starting';
+  await context.updateWaveformAppearance();
+  // The start returns, still before any sound.
+  context.setCurrentPlayerTrack(next, { persist: false });
+  context.state.player.selectedTrack = null;
+  await context.updateWaveformAppearance();
+  // A repaint (palette, resize) meanwhile.
+  await context.updateWaveformAppearance(true);
+
+  assert.ok(shows.at(-1).data === oldPeaks, 'the old song\u2019s waveform is still up');
+  assert.deepEqual(shows.filter((shown) => shown.data && shown.data !== oldPeaks), [], 'not the new one before it sounds');
+  assert.deepEqual([...new Set(shows.filter((shown) => shown.data).map((shown) => shown.progress))], [0.5],
+    'where it was, never jumped to the new start');
+  const blanks = shows.map((shown, index) => ({ shown, index }))
+    .filter(({ shown, index }) => !shown.data && !shows[index + 1]?.data);
+  assert.deepEqual(blanks, [], 'no blank is left on screen');
+
+  shows.length = 0;
+  context.state.player.streaming.mode = 'playing';
+  await context.updateWaveformAppearance();
+  assert.ok(shows.at(-1).data === newPeaks, 'the new one once it sounds');
+});
+
+test('in the Android app, where only the engine snapshot says starting, the old waveform stays until sound', async () => {
+  const { context, next, oldPeaks, newPeaks, shows, snapshot } = waveformSwitch();
+  // The native engine never moves the web engine's mode.
+  context.state.player.streaming.mode = 'stopped';
+  snapshot.mode = 'playing';
+  await context.updateWaveformAppearance();
+  shows.length = 0;
+
+  context.state.player.selectedTrack = next;
+  await context.updateWaveformAppearance();
+  context.state.player.waveform.compactPeaks = { path: next.path, generation: 2, data: newPeaks };
+  Object.assign(snapshot, { src: 'new', currentTime: 0, duration: 180, generation: 2, mode: 'starting' });
+  context.setCurrentPlayerTrack(next, { persist: false });
+  context.state.player.selectedTrack = null;
+  await context.updateWaveformAppearance();
+  assert.ok(shows.at(-1).data === oldPeaks, 'the old song\u2019s, until it sounds');
+
+  snapshot.mode = 'playing';
+  await context.updateWaveformAppearance();
+  assert.ok(shows.at(-1).data === newPeaks, 'the new one once it sounds');
+});
+
+test('with nothing to play the kept waveform goes', async () => {
+  const { context, shows } = waveformSwitch();
+  await context.updateWaveformAppearance();
+  context.setCurrentPlayerTrack(null, { persist: false });
+  await context.updateWaveformAppearance();
+  assert.equal(shows.at(-1).data, null);
+});
+
+test('a song that sounds with no peaks yet never keeps the previous song\u2019s waveform', async () => {
+  const { context, next, shows, snapshot } = waveformSwitch();
+  await context.updateWaveformAppearance();
+  Object.assign(snapshot, { src: 'new', currentTime: 1, duration: 180, generation: 2 });
+  context.setCurrentPlayerTrack(next, { persist: false });
+  await context.updateWaveformAppearance();
+  assert.equal(shows.at(-1).data, null);
+});
+
 test('saved-loop waveform settings refresh even without a main-player track', async () => {
   const modes = [];
   const { context } = loadRuntime();
@@ -162,6 +281,38 @@ test('loaded track uses its resolved album cover when the track payload omits ar
     `url("/cover/${encodeURIComponent(album.cover_ref)}")`,
   );
   assert.equal(coverButton.hidden, false);
+});
+
+// Pressing another song while one plays keeps the player's title, time, cover and waveform until the
+// pressed song sounds, then they change together.
+test('a pressed song whose peaks load before it sounds leaves the playing song its waveform until then', async () => {
+  const canvas = { hidden: false };
+  const { context } = loadRuntime();
+  const old = { src: 'old', path: 'old.flac' };
+  const next = { src: 'new', path: 'new.flac' };
+  const oldPeaks = { left: [0.2], right: [0.2] };
+  const newPeaks = { left: [0.9], right: [0.9] };
+  const snapshot = { src: 'old', currentTime: 100, duration: 200, mode: 'playing' };
+  const drawn = [];
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.getPlayerPlaybackSnapshot = () => ({ ...snapshot });
+  context.setPlayerSeekbarPresentation = () => {};
+  context.drawWaveformOnCanvas = (_canvas, data, progress) => drawn.push({ data, progress });
+  context.state.player.appearance.seekbarMode = 'waveform';
+  context.state.player.current = old;
+  context.state.player.waveform.compactPeaks = { path: old.path, data: oldPeaks };
+  await context.updateWaveformAppearance();
+
+  context.state.player.current = next;
+  context.state.player.waveform.compactPeaks = { path: next.path, data: newPeaks };
+  Object.assign(snapshot, { src: 'new', currentTime: 0, duration: 180, mode: 'starting' });
+  await context.updateWaveformAppearance();
+  assert.deepEqual(drawn.slice(1), [{ data: oldPeaks, progress: 0.5 }],
+    'the playing song\'s, where it was');
+
+  snapshot.mode = 'playing';
+  await context.updateWaveformAppearance();
+  assert.deepEqual(drawn.at(-1), { data: newPeaks, progress: 0 }, 'the pressed song\'s once it sounds');
 });
 
 function loadRuntime(overrides = {}) {
@@ -298,8 +449,10 @@ async function run() {
 
     context.setCurrentPlayerTrack(track);
 
-    assert.equal(requests.length, 1, 'track selection probes Postgres waveform cache immediately');
-    assert.match(requests[0].url, /(?:\?|&)cachedOnly=1(?:&|$)/);
+    assert.equal(requests.length, 1, 'track selection asks for the playing song waveform at once');
+    assert.match(requests[0].url, /(?:\?|&)priority=current(?:&|$)/);
+    assert.match(requests[0].url, /(?:\?|&)progressive=1(?:&|$)/);
+    assert.doesNotMatch(requests[0].url, /cachedOnly/);
     const readiness = context.handleStreamingPlaybackWaveformReady({
       generation: 7,
       currentPath: track.path,
@@ -308,7 +461,7 @@ async function run() {
     assert.equal(
       requests.length,
       1,
-      'audio readiness must await the in-flight cache-only probe instead of starting a duplicate build request',
+      'audio readiness joins the request already in flight instead of asking again',
     );
     cachedHit.resolve({ ok: true, status: 200, json: async () => peakPayload(0.75) });
     await readiness;
@@ -325,16 +478,13 @@ async function run() {
     const requests = [];
     const { context } = loadWaveformSelectionRuntime(async (url) => {
       requests.push(String(url));
-      if (requests.length === 1) return { ok: false, status: 204 };
       return { ok: true, status: 200, json: async () => peakPayload(0.5) };
     });
     const track = { path: 'C:/Music/uncached.flac', title: 'Uncached' };
 
     context.setCurrentPlayerTrack(track);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(context.state.player.waveform.compactPeaks, null);
-    assert.equal(requests.length, 1, 'a cache miss does not start waveform generation during selection');
-    assert.match(requests[0], /(?:\?|&)cachedOnly=1(?:&|$)/);
+    assert.equal(requests.length, 1, 'an uncached song starts building as it starts playing');
+    assert.match(requests[0], /(?:\?|&)priority=current(?:&|$)/, 'the playing song builds first');
 
     await context.handleStreamingPlaybackWaveformReady({
       generation: 7,
@@ -342,8 +492,7 @@ async function run() {
       continuityPath: '',
     });
 
-    assert.equal(requests.length, 2, 'audio readiness retains the existing waveform build fallback');
-    assert.doesNotMatch(requests[1], /(?:\?|&)cachedOnly=1(?:&|$)/);
+    assert.equal(requests.length, 1, 'audio readiness never asks for the playing song twice');
     assert.equal(context.state.player.waveform.compactPeaks.data.left[0], 0.5);
   }
 
@@ -364,7 +513,46 @@ async function run() {
 
     assert.equal(requests.length, 1);
     assert.equal(context.state.player.waveform.compactPeaks, null,
-      'a stale cache-only response never publishes into a newer path or generation');
+      'a stale response never publishes into a newer path or generation');
+  }
+
+  {
+    const requests = [];
+    const { context } = loadWaveformSelectionRuntime(async (url) => {
+      requests.push(String(url));
+      return { ok: true, status: 200, json: async () => peakPayload(0.5) };
+    });
+    let waveformRenders = 0;
+    context.updateWaveformAppearance = async () => { waveformRenders += 1; };
+    const track = { path: 'C:/Music/seeked.flac', title: 'Seeked' };
+    context.state.player.current = track;
+    const shown = { left: [0.5], right: [0.25], sampleCount: 1 };
+    context.state.player.waveform.compactPeaks = { path: track.path, generation: 7, data: shown };
+    context.state.player.streaming.generation = 8;
+
+    await context.handleStreamingPlaybackWaveformReady({
+      generation: 8,
+      currentPath: track.path,
+      continuityPath: '',
+    });
+
+    assert.deepEqual(requests, [], 'a seek within the same song must not ask for its peaks again');
+    assert.equal(context.state.player.waveform.compactPeaks.generation, 8);
+    assert.equal(context.state.player.waveform.compactPeaks.data, shown,
+      'the waveform drawn before the seek stays on screen');
+    assert.equal(waveformRenders, 1);
+
+    context.state.player.waveform.compactPeaks = {
+      path: track.path, generation: 8, data: shown, partial: true,
+    };
+    context.state.player.streaming.generation = 9;
+    await context.handleStreamingPlaybackWaveformReady({
+      generation: 9,
+      currentPath: track.path,
+      continuityPath: '',
+    });
+    assert.equal(requests.length, 1, 'a waveform still streaming in is asked for again in full');
+    assert.equal(context.state.player.waveform.compactPeaks.partial, undefined);
   }
 
   {

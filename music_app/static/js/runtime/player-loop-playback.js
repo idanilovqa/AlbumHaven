@@ -153,6 +153,47 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
+// The player shows the song that sounds: pressing another song while one plays keeps the player's
+// title, time, cover and waveform until the pressed song sounds, then they change together. The
+// pressed row shows the press at once; rows read the selection, not this.
+function playerTrackKey(track) {
+  return String(track?.path || track?.src || '');
+}
+
+// The snapshot is the playing engine's: in the Android app the web engine's mode never moves.
+function currentTrackAwaitsSound(playback, track) {
+  if ((playback.mode ?? state.player.streaming?.mode) === 'starting') return true;
+  return Boolean(playback.src && track.src && playback.src !== track.src);
+}
+
+// The current song once it sounds. Until then the song shown before it, at the time it last showed,
+// or running on while it still sounds (a switch that hands over at a boundary).
+function resolveShownPlayerTrack(playback) {
+  const current = state.player.current || null;
+  const shown = state.player.shown || null;
+  const track = shown && current && playerTrackKey(shown.track) !== playerTrackKey(current)
+    && currentTrackAwaitsSound(playback, current) ? shown.track : current;
+  if (!track) {
+    state.player.shown = null;
+    return null;
+  }
+  const sounds = !playback.src || !track.src || playback.src === track.src;
+  const live = sounds && track === current;
+  if (sounds) {
+    state.player.shown = {
+      track,
+      live,
+      currentTime: Number(playback.currentTime) || 0,
+      duration: Number(playback.duration) || Number(track.durationSeconds) || 0,
+    };
+  } else if (shown && playerTrackKey(shown.track) === playerTrackKey(track)) {
+    state.player.shown = { ...shown, track, live: false };
+  } else {
+    state.player.shown = { track, live: false, currentTime: 0, duration: Number(track.durationSeconds) || 0 };
+  }
+  return state.player.shown;
+}
+
 function resolvePlayerUiStatus(playback) {
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
@@ -160,21 +201,32 @@ function resolvePlayerUiStatus(playback) {
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
-  const displayTrack = mirroredTrack || state.player.current;
+  const shownTrack = resolveShownPlayerTrack(playback)?.track || null;
+  const displayTrack = mirroredTrack || shownTrack;
+  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable;
   return {
     lockedByAnotherTab,
     playbackUnavailable,
+    // The overlay dims the other device's song under its status, whether or not it can be taken over.
+    playingElsewhere,
+    // Only where it can be taken over is Play pressable above the overlay.
+    canPlayHere: playingElsewhere && (typeof canTakePlaybackOverHere !== 'function' || canTakePlaybackOverHere()),
     blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
     displayTrack,
+    shownTrack,
     hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
   };
 }
 
 // The seek position and its time label: all that a timeline drag preview changes.
-function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, blockedLabel }) {
-  const duration = getPlayerDuration();
+function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, playingElsewhere, blockedLabel }) {
+  // A song shown while another starts keeps its own time and length with its title: never the started
+  // song's clock under it.
+  const shown = resolveShownPlayerTrack(playback);
+  const held = !lockedByAnotherTab && shown && !shown.live ? shown : null;
+  const duration = held ? held.duration : getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
-  const current = state.player.timelineDragging && Number.isFinite(dragPreview)
+  const current = held ? held.currentTime : state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
     : Number(playback.currentTime) || 0;
   if (els.timeline) {
@@ -184,7 +236,7 @@ function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnother
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
-    els.time.hidden = !hasTrack;
+    els.time.hidden = !hasTrack || playingElsewhere;
     els.time.textContent = lockedByAnotherTab
       ? blockedLabel
       : state.player.loopActive
@@ -198,7 +250,9 @@ function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
   const status = resolvePlayerUiStatus(playback);
-  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, hasTrack } = status;
+  const { lockedByAnotherTab, playbackUnavailable, playingElsewhere, canPlayHere, blockedLabel, displayTrack, shownTrack, hasTrack } = status;
+  els.player?.classList?.toggle('is-playing-elsewhere', playingElsewhere);
+  if (els.elsewhere) els.elsewhere.hidden = !playingElsewhere;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   els.player?.classList?.toggle('is-empty', !hasTrack);
   const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
@@ -213,10 +267,11 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab
-      ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
+    els.play.setAttribute('aria-label', canPlayHere ? 'Play here'
+      : lockedByAnotherTab ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
       : (playback.paused ? 'Play' : 'Pause'));
-    els.play.disabled = lockedByAnotherTab || !hasTrack;
+    els.play.title = canPlayHere ? 'Play in this tab instead' : '';
+    els.play.disabled = (lockedByAnotherTab && !canPlayHere) || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
@@ -230,6 +285,7 @@ function updatePlayerUi() {
   const loopRangeSurface = els.loopRange?.querySelector('[data-loop-range-surface]');
   if (loopRangeSurface) loopRangeSurface.hidden = !state.player.loopActive;
   renderGlobalPlayerMetadata(els, displayTrack);
+  renderGlobalPlayerCover(els, shownTrack);
   updateLoopInputsFromState();
   updateWaveformAppearance();
   const compactPeaks = state.player.waveform?.compactPeaks?.data;
@@ -243,7 +299,6 @@ function updatePlayerUi() {
 }
 
 function setCurrentPlayerTrack(track, options = {}) {
-  const els = getPlayerElements();
   const previousTrack = state.player.current;
   const previousTrackId = getTrackIdentity(previousTrack);
   const nextTrackId = getTrackIdentity(track);
@@ -263,56 +318,60 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.current = track;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
-      String(track?.path || ''),
-      Number(state.player.streaming?.generation) || 0,
-    );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+  if (typeof loadPlayingWaveformPeaks === 'function') {
+    const playingWaveform = loadPlayingWaveformPeaks(String(track?.path || ''));
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   }
   state.player.waveform.renderToken += 1;
-  clearWaveformCanvas();
+  if (!track) {
+    state.player.waveform.shown = null;
+    clearWaveformCanvas();
+  }
   loopEditSessionExpiryController.stop('global-player');
   state.player.loopActive = false;
   state.player.loopStart = 0;
   state.player.loopEnd = 30;
   state.player.loopEditDurationSeconds = 0;
-  renderGlobalPlayerMetadata(els, track);
-  if (els.coverButton) {
-    const coverRef = track?.coverRef || '';
-    const loadId = (state.player.coverLoadId || 0) + 1;
-    state.player.coverLoadId = loadId;
-    els.coverButton.hidden = false;
-    els.coverButton.classList.toggle('is-idle-placeholder', !track);
-    els.coverButton.style.backgroundImage = '';
-    els.coverButton.textContent = '';
-    if (!track) {
-      els.coverButton.textContent = '';
-    } else if (coverRef) {
-      const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
-      const probe = new Image();
-      probe.onload = () => {
-        if (state.player.coverLoadId !== loadId) return;
-        els.coverButton.classList.remove('is-idle-placeholder');
-        els.coverButton.style.backgroundImage = `url("${coverSrc}")`;
-        els.coverButton.hidden = false;
-      };
-      probe.onerror = () => {
-        if (state.player.coverLoadId !== loadId) return;
-        els.coverButton.style.backgroundImage = '';
-        els.coverButton.hidden = false;
-        els.coverButton.classList.remove('is-idle-placeholder');
-      };
-      probe.src = coverSrc;
-    } else {
-      els.coverButton.classList.remove('is-idle-placeholder');
-    }
-  }
+  // The player draws what it shows: the new song only once it sounds.
   updatePlayerUi();
   if (options.persist !== false) {
     persistPlayerState(true);
+  }
+}
+
+// Loads a cover only when the shown song or its artwork changes: redraws while it plays reuse it.
+function renderGlobalPlayerCover(els, track) {
+  if (!els.coverButton) return;
+  const coverRef = track?.coverRef || '';
+  const coverKey = track ? `${playerTrackKey(track)}\n${coverRef}` : '';
+  if (state.player.coverKey === coverKey) return;
+  state.player.coverKey = coverKey;
+  const loadId = (state.player.coverLoadId || 0) + 1;
+  state.player.coverLoadId = loadId;
+  els.coverButton.hidden = false;
+  els.coverButton.classList.toggle('is-idle-placeholder', !track);
+  els.coverButton.style.backgroundImage = '';
+  els.coverButton.textContent = '';
+  if (track && coverRef) {
+    const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
+    const probe = new Image();
+    probe.onload = () => {
+      if (state.player.coverLoadId !== loadId) return;
+      els.coverButton.classList.remove('is-idle-placeholder');
+      els.coverButton.style.backgroundImage = `url("${coverSrc}")`;
+      els.coverButton.hidden = false;
+    };
+    probe.onerror = () => {
+      if (state.player.coverLoadId !== loadId) return;
+      els.coverButton.style.backgroundImage = '';
+      els.coverButton.hidden = false;
+      els.coverButton.classList.remove('is-idle-placeholder');
+    };
+    probe.src = coverSrc;
+  } else if (track) {
+    els.coverButton.classList.remove('is-idle-placeholder');
   }
 }
 
@@ -328,49 +387,119 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 }
 
 let playerTrackSelectionToken = 0;
+// As long as the app's bridge waits for an answer: a start with no sound by then has timed out.
+const PLAYER_START_TIMEOUT_MS = 15000;
+let pendingPlayerStart = null;
 
-// A switch takes a moment to reach the listener; the click should not.
-function renderSelectedTrackState(track) {
-  if (track && typeof getPlayerElements === 'function') {
-    renderGlobalPlayerMetadata(getPlayerElements(), track);
-  }
+// From the press until the song sounds, its start fails or times out, or a later action replaces it.
+function isPlayerStartPending(path) {
+  const start = pendingPlayerStart;
+  if (!start || start.path !== path || start.selectionToken !== playerTrackSelectionToken
+      || performance.now() - start.pressedAtMs >= PLAYER_START_TIMEOUT_MS) return false;
+  if (!start.settled) return true;
+  const playback = getPlayerPlaybackSnapshot();
+  return !playback.paused && !playback.ended && ['starting', 'buffering'].includes(playback.mode);
+}
+
+// A switch takes a moment to reach the listener; the click should not. The rows show the press at
+// once; the player stays on the sounding song.
+function renderSelectedTrackState() {
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }
 
-function showSelectedTrackImmediately(track, shouldAutoplay) {
+function showSelectedTrackImmediately(track, shouldAutoplay, startSeconds) {
   if (!shouldAutoplay) return;
+  state.player.selectedStartSeconds = startSeconds;
   state.player.selectedTrack = track;
-  renderSelectedTrackState(track);
+  renderSelectedTrackState();
 }
 
 function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
-  renderSelectedTrackState(state.player.current);
+  if (typeof resumeRestingTrackWaveform === 'function') {
+    // Once the switch has settled: a song that started is the current one by then.
+    void Promise.resolve().then(resumeRestingTrackWaveform);
+  }
+  renderSelectedTrackState();
+}
+
+// Settles once the next frame has painted; at once where no frame comes (a hidden tab).
+function afterNextPlayerPaint() {
+  if (typeof requestAnimationFrame !== 'function' || typeof document === 'undefined' || document.hidden) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const fallback = setTimeout(resolve, 100);
+    requestAnimationFrame(() => setTimeout(() => {
+      clearTimeout(fallback);
+      resolve();
+    }, 0));
+  });
+}
+
+// A handover stops this tab: a press still waiting for its stream never starts it afterwards.
+function cancelPendingPlayerSelection() {
+  playerTrackSelectionToken += 1;
+  clearSelectedTrack();
+}
+
+function mayStartBeforeTheAnswer() {
+  return typeof loadsSilentlyWhileAsking !== 'function' || loadsSilentlyWhileAsking()
+    || (typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim());
 }
 
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
+  if (shouldAutoplay && typeof noteStreamingPress === 'function') noteStreamingPress(track);
   const requestedTrackPath = String(track?.path || '');
-  const currentTrackPath = String(state.player.current?.path || '');
-  if (shouldAutoplay && requestedTrackPath && currentTrackPath
-      && requestedTrackPath !== currentTrackPath
+  const previousTrack = state.player.current || null;
+  const currentTrackPath = String(previousTrack?.path || '');
+  // Replaced by this press: the current song, and one pressed before it that has yet to sound.
+  const replacesSong = [currentTrackPath, String(state.player.selectedTrack?.path || '')]
+    .some((replaced) => replaced && replaced !== requestedTrackPath);
+  if (shouldAutoplay && requestedTrackPath && replacesSong
       && typeof cancelStreamingWaveformGeneration === 'function') {
-    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+    cancelStreamingWaveformGeneration(
+      Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) || 0,
+    );
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
-  // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
-  // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
+  // A press paints and loads at once, also where the first press lets the browser start audio, and is
+  // heard only once granted: the audio thread holds it, as nothing starts without an answer (the
+  // shortened wait). It waits before loading where nothing can hold the sound (the app's
+  // own player, unless it already owns playback), and where another client is known to play: then it
+  // paints nothing either and the overlay offers Play here.
+  const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
+    && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
-    ? canStartPlaybackInThisTab(track)
+    ? canStartPlaybackInThisTab(track, { takeover: options.takeover === true })
     : true;
-  if (pendingClaim === false) return false;
+  // A press that goes no further also ends the switch it superseded.
+  const refused = () => {
+    if (selectionToken === playerTrackSelectionToken) clearSelectedTrack();
+    return false;
+  };
+  if (pendingClaim === false) return refused();
+  const asksBeforeLoading = pendingClaim !== true && (knownElsewhere || !mayStartBeforeTheAnswer());
+  if (asksBeforeLoading) {
+    if (!knownElsewhere && options.takeover !== true && track?.path) {
+      showSelectedTrackImmediately(track, shouldAutoplay, Math.max(0, Number(options.startSeconds) || 0));
+    }
+    const granted = await pendingClaim;
+    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (!granted) return refused();
+  }
+  if (shouldAutoplay && typeof startSelectedTrackWaveformPeaks === 'function') {
+    // The waveform builds while the stream opens, not after it.
+    startSelectedTrackWaveformPeaks(requestedTrackPath);
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
-  if (!track?.path) return false;
+  if (!track?.path) return refused();
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   const requestedStartSeconds = Number(options.startSeconds);
@@ -380,29 +509,52 @@ async function playTrackFromPayload(track, options = {}) {
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  showSelectedTrackImmediately(track, shouldAutoplay);
+  showSelectedTrackImmediately(track, shouldAutoplay, startSeconds);
+  const pendingStart = shouldAutoplay
+    ? { path: requestedTrackPath, selectionToken, pressedAtMs: performance.now(), settled: false }
+    : null;
+  pendingPlayerStart = pendingStart;
+  // The pressed song paints before its stream starts: the start's own work never holds the frame
+  // that shows the press, which is instant even at 100% CPU. Audio that is not yet running (the first
+  // press after load) starts in the press itself, where every browser lets the press start sound.
+  if (shouldAutoplay && state.player.streaming?.context?.state === 'running') await afterNextPlayerPaint();
+  if (selectionToken !== playerTrackSelectionToken) return false;
+  // Loading while it waits for the server, a stream may die with the network that keeps the answer away.
+  const waitsForGrant = pendingClaim !== true && !asksBeforeLoading
+    && !(typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim());
+  const start = () => startStreamingTrack(track, {
+    startSeconds,
+    autoplay: shouldAutoplay,
+    allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
+    takeover: options.takeover === true,
+  });
   let startedRole;
+  let diedWaiting = false;
   try {
-    startedRole = await startStreamingTrack(track, {
-      startSeconds,
-      autoplay: shouldAutoplay,
-      allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
-    });
+    startedRole = await start();
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
-    clearSelectedTrack();
-    throw error;
+    if (!waitsForGrant) {
+      pendingPlayerStart = null;
+      clearSelectedTrack();
+      throw error;
+    }
+    diedWaiting = true;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
-  clearSelectedTrack();
-  if (startedRole === null) {
-    throw new Error('Streaming playback did not start');
-  }
   const startedTrackPath = String(startedRole?.track?.path || '');
-  if (startedTrackPath && startedTrackPath !== String(track.path)) {
-    throw new Error('Streaming playback started an unexpected track identity');
+  if (!diedWaiting && (startedRole === null || (startedTrackPath && startedTrackPath !== String(track.path)))) {
+    pendingPlayerStart = null;
+    clearSelectedTrack();
+    throw new Error(startedRole === null
+      ? 'Streaming playback did not start'
+      : 'Streaming playback started an unexpected track identity');
   }
+  if (pendingStart) pendingStart.settled = true;
+  // The pressed song becomes the current one before the pending choice clears, so the player never
+  // shows the song it replaced in between.
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
+  clearSelectedTrack();
   if (pendingClaim !== true && !await pendingClaim) {
     if (selectionToken === playerTrackSelectionToken) {
       pauseStreamingPlayback();
@@ -411,6 +563,26 @@ async function playTrackFromPayload(track, options = {}) {
     return false;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
+  if (waitsForGrant && (diedWaiting || getPlayerPlaybackSnapshot().mode === 'error')) {
+    // Answered, it starts by itself, with no second press.
+    let retryError = null;
+    try {
+      startedRole = await start();
+    } catch (error) {
+      retryError = error;
+    }
+    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (retryError || startedRole === null) {
+      // As any failed start: the song it replaced stays the player's, with its waveform.
+      pendingPlayerStart = null;
+      setCurrentPlayerTrack(previousTrack, { previousPlaybackSnapshot });
+      if (previousTrack?.path && typeof loadPlayingWaveformPeaks === 'function') {
+        void loadPlayingWaveformPeaks(previousTrack.path).catch(() => {});
+      }
+      updatePlayerUi();
+      throw retryError || new Error('Streaming playback did not start');
+    }
+  }
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
       generation: startedRole.generation,
@@ -465,6 +637,8 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  if (pendingPlayerStart?.path === selectedTrackPath) pendingPlayerStart = null;
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(selectedTrackPath);
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -474,6 +648,9 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  // It sounds: the player's title, time, cover and waveform change to it together, now.
+  if (typeof getPlayerElements === 'function') updatePlayerUi();
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
@@ -545,16 +722,21 @@ async function handleStreamingPlaybackEnded(event = {}) {
       finishedFully: true,
     });
   }
-  if (typeof releasePlaybackOwnership === 'function'
-      && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
-    await releasePlaybackOwnership('stopped', track);
+  const isStillThisEnd = () => ownershipVersion === null
+    || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0);
+  // The engine names a queued successor it could not continue into: a new sample rate, or a
+  // native queue that ended its window. It starts on the claim still held, with no wait for a new one.
+  const continues = Boolean(event.startNextTrackPath)
+    && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath;
+  if (!continues && typeof releasePlaybackOwnership === 'function' && isStillThisEnd()) {
+    // Released is what lets another client sound: the last rendered audio leaves the output first.
+    if (typeof drainStreamingOutput === 'function') await drainStreamingOutput();
+    if (isStillThisEnd()) await releasePlaybackOwnership('stopped', track);
   }
   updatePlayerUi();
-  // The engine names a queued successor it could not continue into: a new sample rate, or a
-  // native queue that ended its window.
-  if (event.startNextTrackPath
-      && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath) {
-    // A locked phone may refuse the new context; stay paused so a tap can resume it.
+  if (continues) {
+    // A locked phone may refuse the new context; stay paused so a tap can resume it. A successor that
+    // does not start leaves the claim to the heartbeat, which gives a silent tab's back.
     await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
   }
 }
@@ -623,6 +805,9 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
+  // A gapless move sounds at the boundary itself.
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(promotedTrack.path);
   if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
@@ -851,6 +1036,7 @@ function setLoopPlaybackHead(value) {
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 
@@ -872,6 +1058,7 @@ function setPlayerPlaybackHead(value, options = {}) {
     void seek.catch(() => {});
   }
   if (shouldResumeSegment) void resumeListenSessionPlayback(state.player.current, next);
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 
@@ -932,6 +1119,13 @@ function isPlayerSurfaceVisible() {
 
 function togglePlayerPlayback(options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
+  // Play while another client plays moves its song here (playback.claim.takeover).
+  if (typeof isPlaybackPlayingElsewhere === 'function' && isPlaybackPlayingElsewhere()) {
+    void Promise.resolve(takeOverPlaybackHere()).catch((error) => {
+      console.warn('[AlbumHaven][Playback] Taking playback over failed.', error);
+    });
+    return true;
+  }
   const playback = getPlayerPlaybackSnapshot();
   if (!(playback.src || state.player.current?.src)) return false;
   if (typeof resumeStreamingPlayback !== 'function'
@@ -939,11 +1133,13 @@ function togglePlayerPlayback(options = {}) {
   if (playback.paused) {
     const track = state.player.current;
     const selectionToken = ++playerTrackSelectionToken;
+    clearSelectedTrack();
     Promise.resolve().then(async () => {
       if (selectionToken !== playerTrackSelectionToken) return false;
       const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
-      // Instant resume: the paused stream sounds while the claim is asked for; a refusal pauses it again.
-      const early = claim !== true && playback.mode !== 'stopped' && !playback.ended
+      // The audio starts inside the press and is held until the grant; a refusal pauses it again.
+      const early = claim !== true && mayStartBeforeTheAnswer()
+        && playback.mode !== 'stopped' && !playback.ended
         ? resumeStreamingPlayback()
         : null;
       // The controls follow the sound as soon as it resumes, not after the claim's round trip.
@@ -959,7 +1155,12 @@ function togglePlayerPlayback(options = {}) {
       }
       if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
       pendingPlayerPlaybackHandoff = null;
-      if (early) return early;
+      if (early) {
+        const held = getPlayerPlaybackSnapshot();
+        if (held.mode !== 'error') return early;
+        // The stream died while it waited for the server: answered, it starts by itself at its place.
+        return Boolean(await startStreamingTrack(track, { startSeconds: Number(held.currentTime) || 0 }));
+      }
       if (playback.mode === 'stopped') {
         return Boolean(await startStreamingTrack(track, {
           startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),
@@ -967,7 +1168,12 @@ function togglePlayerPlayback(options = {}) {
       }
       if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
       if (selectionToken !== playerTrackSelectionToken) return false;
-      return resumeStreamingPlayback();
+      // Resumed on the claim its pause kept: only once its first frame sounds does it tell the server it
+      // plays again, so other devices see it within a round trip and the request never delays the sound.
+      const sayItPlays = claim === true && typeof publishPlaybackPositionSoon === 'function'
+        ? () => { publishPlaybackPositionSoon(); }
+        : null;
+      return resumeStreamingPlayback(null, null, null, sayItPlays);
     }).then((resumed) => {
       if (resumed === false || selectionToken !== playerTrackSelectionToken) return;
       beginStreamingPlayerListenSession(
@@ -990,6 +1196,8 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
   pendingPlayerPlaybackHandoffSelectionToken = ++playerTrackSelectionToken;
   const selectionToken = playerTrackSelectionToken;
+  // The switch it supersedes never finishes: nothing may go on naming its song.
+  clearSelectedTrack();
   const track = state.player.current;
   const session = state.player.listenSession;
   const ownership = typeof getPlaybackOwnershipState === 'function' ? getPlaybackOwnershipState() : null;
@@ -999,6 +1207,8 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
+    // The button shows Play at once; what follows may wait on a network that is gone.
+    updatePlayerUi();
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {
@@ -1009,16 +1219,16 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     if (typeof persistPausedListenSession === 'function') {
       try {
         await persistPausedListenSession(session);
-      } catch (_error) {
+      } catch (error) {
         if (!isCurrentPause()) return false;
         saved = false;
-        showToast('Listening history could not be saved.', 'error', 4200);
+        // Offline the listen stays open and the next checkpoint saves it; only an answer is a failure.
+        if (error?.status) showToast('Listening history could not be saved.', 'error', 4200);
       }
     }
     if (!isCurrentPause()) return saved;
-    if (typeof releasePlaybackOwnership === 'function') {
-      await releasePlaybackOwnership('paused', track);
-    }
+    // Paused, it gives its claim back: another device may start, and its own next Play asks the server.
+    if (typeof releasePlaybackOwnership === 'function') await releasePlaybackOwnership('paused', track);
     updatePlayerUi();
     return saved;
   });
@@ -1168,10 +1378,26 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     triggerAlbumTrackPlayActivation(btn);
   }
   const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
+  if (isPlayerStartPending(trackPath)) {
+    // A press on a song still starting is ignored. Its one start keeps the wait it began with, double
+    // tap or not.
+    if (typeof countIgnoredStreamingPress === 'function') countIgnoredStreamingPress(trackPath);
+    if (typeof retryStreamingConnection === 'function') retryStreamingConnection();
+    return;
+  }
   const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
   const playback = getPlayerPlaybackSnapshot();
   const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
   if (isLoadedCurrentTrack && !restart) {
+    // The song still sounding, pressed while another starts: the switch is given up and it plays on.
+    const switching = String(state.player.selectedTrack?.path || trackPath) !== String(trackPath);
+    if (switching && !playback.paused && typeof cancelStreamingSwitch === 'function' && cancelStreamingSwitch()) {
+      pendingPlayerStart = null;
+      cancelPendingPlayerSelection();
+      if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
+      updatePlayerUi();
+      return;
+    }
     togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
     updatePlayerUi();
     return;

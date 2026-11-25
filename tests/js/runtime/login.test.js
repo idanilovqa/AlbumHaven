@@ -33,7 +33,11 @@ function element(initial = {}) {
   };
 }
 
-function loadLoginRuntime({ reply, replies = [reply], now = () => 0 } = {}) {
+// [copyWorker]: the sign-in page names the copy's worker; [workers] stands in for
+// navigator.serviceWorker, [bridge] for the Android shell's bridge.
+function loadLoginRuntime({
+  reply, replies = [reply], now = () => 0, copyWorker = false, workers = null, bridge = undefined, timers = [],
+} = {}) {
   const csrfToken = element({ value: 'first-token' });
   const form = element({
     action: 'https://music.test/login',
@@ -51,6 +55,7 @@ function loadLoginRuntime({ reply, replies = [reply], now = () => 0 } = {}) {
     ['.login-password-toggle', toggle],
     ['.login-submit', submit],
     ['.login-alert', failure],
+    ['meta[name="album-haven-app-copy-worker"]', copyWorker ? { content: '/app-copy-worker.js?mode=web' } : null],
     ['.login-expired', expired],
   ]);
   const stages = [];
@@ -84,6 +89,10 @@ function loadLoginRuntime({ reply, replies = [reply], now = () => 0 } = {}) {
       addEventListener: (name, fn) => events.set(name, fn),
       fetch,
       location: { assign: (target) => navigations.push(target) },
+      isSecureContext: true,
+      navigator: workers ? { serviceWorker: workers } : {},
+      AlbumHavenBridge: bridge,
+      setTimeout: (callback, delay) => timers.push({ callback, delay }),
     },
     document: doc,
     Date: { now },
@@ -364,4 +373,94 @@ test('startup failure provides recovery and reset restores login interactivity',
   ui.controller.reset();
   assert.equal(ui.root.hidden, true);
   assert.equal(ui.content.inert, false);
+});
+
+// Signed in, the connection lost at once, then a new tab offline showed "This site
+// can't be reached", because nothing kept the library page until a second render of it.
+function fakeWorkers() {
+  let activate;
+  const registered = [];
+  return {
+    registered,
+    activate: () => activate(),
+    register: async (url, options) => { registered.push({ url, options }); },
+    ready: new Promise((resolve) => { activate = resolve; }),
+  };
+}
+
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('IAR-W12: the sign-in page installs the copy worker and opens the library once it runs', async () => {
+  const workers = fakeWorkers();
+  const timers = [];
+  const ui = loadLoginRuntime({ reply: { status: 200, body: { redirect: '/' } }, copyWorker: true, workers, timers });
+  assert.deepEqual(JSON.parse(JSON.stringify(workers.registered)), [{ url: '/app-copy-worker.js?mode=web', options: { scope: '/', updateViaCache: 'none' } }]);
+
+  const submitting = ui.submitForm();
+  await settle();
+  assert.deepEqual(ui.navigations, [], 'the library waits for the worker that keeps it');
+  workers.activate();
+  await submitting;
+
+  assert.deepEqual(ui.navigations, ['/']);
+});
+
+test('IAR-W12: a worker that is late never holds sign-in past two seconds', async () => {
+  const workers = fakeWorkers();
+  const timers = [];
+  const ui = loadLoginRuntime({ reply: { status: 200, body: { redirect: '/' } }, copyWorker: true, workers, timers });
+
+  const submitting = ui.submitForm();
+  await settle();
+  assert.deepEqual(timers.map(timer => timer.delay), [2000]);
+  timers[0].callback();
+  await submitting;
+
+  assert.deepEqual(ui.navigations, ['/']);
+});
+
+for (const [name, options] of [
+  ['the copy is off', { copyWorker: false }],
+  ['inside the Android app, which starts its own worker', { copyWorker: true, bridge: { postMessage() {}, window: {} } }],
+]) {
+  test(`IAR-W12: no worker is installed and sign-in never waits when ${name}`, async () => {
+    const workers = fakeWorkers();
+    const timers = [];
+    const ui = loadLoginRuntime({ reply: { status: 200, body: { redirect: '/' } }, workers, timers, ...options });
+    await ui.submitForm();
+
+    assert.deepEqual(workers.registered, []);
+    assert.deepEqual(timers, []);
+    assert.deepEqual(ui.navigations, ['/']);
+  });
+}
+
+test('the sign-in page takes what the device kept of the account, but not songs kept for offline play', () => {
+  const removed = { local: [], session: [] };
+  const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/login.js'), 'utf8');
+  vm.runInNewContext(source, {
+    window: {
+      localStorage: { removeItem: key => removed.local.push(key) },
+      sessionStorage: { removeItem: key => removed.session.push(key) },
+      addEventListener() {}, navigator: {},
+    },
+    document: { querySelector: () => null },
+  });
+  const runtime = path.join(__dirname, '../../../music_app/static/js/runtime');
+  const named = (file, constant) => {
+    const match = fs.readFileSync(path.join(runtime, file), 'utf8').match(new RegExp(`const ${constant} = '([^']+)'`));
+    assert.ok(match, `${constant} in ${file}`);
+    return match[1];
+  };
+  const { STORAGE_KEY } = require('../../../music_app/static/js/return-place.js');
+
+  // Also what versions that kept paths saved, on a device that signs out before loading the app again.
+  assert.deepEqual(removed.local, [STORAGE_KEY,
+    'albumhaven.playerState.v1', named('core-state-and-helpers.js', 'PLAYER_STATE_STORAGE_KEY'),
+    'albumhaven.androidNativeQueue.v1', named('android-bridge-client.js', 'ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY')]);
+  assert.deepEqual(removed.session, [
+    named('player-state-persistence-helpers.js', 'PLAYER_TAB_STATE_STORAGE_KEY'),
+    named('bootstrap-gallery-event-handlers.js', 'RECENT_SEARCH_STORAGE_KEY'),
+    named('playback-ownership-helpers.js', 'PLAYBACK_HANDOFF_STORAGE_KEY'),
+    named('playback-ownership-helpers.js', 'PLAYBACK_SAME_TAB_STORAGE_KEY')]);
 });

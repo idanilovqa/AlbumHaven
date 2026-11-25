@@ -845,6 +845,9 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             // The sign-in page means signed out: the page's copy went as it left (app-copy-worker.js).
             if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) {
                 copies.reported(siteOrigin, stored = false)
+                // Nothing of the account stays on the phone but the songs kept for offline play.
+                playback?.signedOut()
+                lastScreen.clear()
                 // An offer still unanswered waits for the library after signing in.
                 batteryCard.isVisible = false
             }

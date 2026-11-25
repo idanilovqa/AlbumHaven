@@ -431,6 +431,7 @@ export function observeWaveformTraffic(page) {
   const matches = (record, criteria) => (
     (!criteria.path || record.path === criteria.path)
     && (criteria.cachedOnly === undefined || record.cachedOnly === criteria.cachedOnly)
+    && (criteria.priority === undefined || record.priority === criteria.priority)
     && (criteria.status === undefined || record.response?.status === criteria.status)
   );
   const notifyWaiters = (record) => {
@@ -448,6 +449,7 @@ export function observeWaveformTraffic(page) {
     if (request.method() !== 'GET' || url.pathname !== '/playback/waveform') return;
     requests.push({
       cachedOnly: url.searchParams.get('cachedOnly') === '1',
+      priority: url.searchParams.get('priority') || '',
       path: String(url.searchParams.get('path') || ''),
       requestedAtEpochMs: Date.now(),
       request,
@@ -461,7 +463,9 @@ export function observeWaveformTraffic(page) {
     const receivedAtEpochMs = Date.now();
     let payload = null;
     try {
-      payload = await response.json();
+      // A playing song's build streams NDJSON lines; its last line is the complete waveform.
+      const lines = (await response.text()).split('\n').filter((line) => line.trim());
+      payload = lines.length ? JSON.parse(lines.at(-1)) : null;
     } catch {
       payload = null;
     }
@@ -498,6 +502,7 @@ export function observeWaveformTraffic(page) {
           waiters.delete(waiter);
           const seen = requests.slice(afterMark).map((record) => ({
             cachedOnly: record.cachedOnly,
+            priority: record.priority,
             status: record.response?.status ?? 'no response',
           }));
           reject(new Error(
@@ -643,6 +648,109 @@ export async function createStreamingReplacementDiagnosticsObserver(page) {
   };
 }
 
+// What the listener sees and hears through a switch, read every 10 ms: the visible title and the stream that sounds.
+export async function observeSwitchPresentation(page, titleSelector) {
+  // parity-check: allow-read-only-measurement-evaluate -- repeated reading of a switch, changing nothing
+  const handle = await page.evaluateHandle((selector) => {
+    const samples = [];
+    const sample = () => {
+      const snapshot = getStreamingPlaybackSnapshot();
+      const engine = state.player?.streaming;
+      const currentPath = String(engine?.roles?.current?.track?.path || '');
+      // A switch waits from the press: first for its song's rate (the pending start names the song),
+      // then for its audio (the pending seek's continuity role).
+      const pressedPath = String(engine?.pendingStart?.track?.path || '');
+      samples.push({
+        at: performance.now(),
+        currentPath,
+        currentStreamId: Number(engine?.roles?.current?.streamId || 0),
+        currentTime: Number(snapshot.currentTime || 0),
+        generation: Number(snapshot.generation || 0),
+        mode: String(snapshot.mode || ''),
+        paused: Boolean(snapshot.paused),
+        switchingTo: engine?.pendingSeek ? String(engine.roles?.continuity?.track?.path || '')
+          : (pressedPath !== currentPath ? pressedPath : ''),
+        title: String(document.querySelector(selector)?.textContent || '').trim(),
+      });
+      if (samples.length > 12_000) samples.shift();
+    };
+    sample();
+    const intervalId = setInterval(sample, 10);
+    return {
+      finish() {
+        clearInterval(intervalId);
+        sample();
+        return samples;
+      },
+    };
+  }, titleSelector);
+  let finished = false;
+  return {
+    async finish() {
+      if (finished) return [];
+      finished = true;
+      // parity-check: allow-read-only-measurement-evaluate -- stop and read the switch observer without changing application state
+      const samples = await handle.evaluate((observer) => observer.finish());
+      await handle.dispose();
+      return samples;
+    },
+  };
+}
+
+// The outgoing song sounds up to the cut, where exactly one stream, the pressed song's, takes over:
+// no stop, restart, underrun or silent frame between them, and never both.
+export function assertSwitchKeepsSongSounding(expect, { before, after, pressed, samples }) {
+  const cut = samples.findIndex((sample) => sample.currentStreamId !== before.currentStreamId);
+  expect(cut, 'the previous song must still sound after the press').toBeGreaterThan(0);
+  for (const sample of samples.slice(0, cut)) {
+    expect(sample.paused, 'a press never pauses the playing song').toBe(false);
+    expect(sample.mode, 'the playing song never stops or restarts to make way').toBe('playing');
+    expect(sample.generation).toBe(before.generation);
+  }
+  // Half a second of waiting is long enough for the sounding song's place to have moved.
+  if (cut >= 50) {
+    expect(samples[cut - 1].currentTime, 'the previous song plays on while the switch waits')
+      .toBeGreaterThan(samples[0].currentTime);
+  }
+  for (const sample of samples.slice(cut)) {
+    expect(sample.currentPath, 'only the last pressed song follows').toBe(pressed.path);
+  }
+  expect(after.currentStreamId).toBe(samples.at(-1).currentStreamId);
+  expect(after.generation).toBe(before.generation);
+  expect(after.underruns).toBe(before.underruns);
+  expect(after.lastError).toBeNull();
+  expect(after.seekSilentFrames, 'no silent frame at the cut').toBe(0);
+  for (const channel of ['left', 'right']) {
+    const heard = Array.from(after.seekCapture?.outgoing?.[channel] || [])
+      .slice(0, Number(after.seekCapture?.outgoing?.frames || 0));
+    expect(
+      heard.some((sample) => Math.abs(Number(sample)) > 0),
+      'the previous song must be audible as the switch is reserved',
+    ).toBe(true);
+  }
+  expect(after.renderedPcmEvidence?.streamId).toBe(after.currentStreamId);
+  expect(after.renderedPcmEvidence?.nonZeroSamples).toBeGreaterThan(0);
+  expect(after.renderedPcmEvidence?.peakSample).toBeGreaterThan(0);
+  assertTitleFollowsSound(expect, { before, pressed, samples });
+}
+
+// The player keeps the playing song's title until the pressed song sounds, then shows the pressed
+// one within 250 ms and keeps it.
+export function assertTitleFollowsSound(expect, { before, pressed, samples }) {
+  const cut = samples.findIndex((sample) => sample.currentStreamId !== before.currentStreamId);
+  expect(cut, 'the pressed song must sound').toBeGreaterThan(0);
+  // The desktop player reads "Artist - Title /", a phone's "Title".
+  const showsPressed = ({ title }) => title === pressed.title
+    || title.replace(/ \/$/, '').endsWith(` - ${pressed.title}`);
+  const titled = samples.findIndex(showsPressed);
+  expect(titled, 'the pressed title must be shown').toBeGreaterThanOrEqual(0);
+  expect(titled, 'the pressed title shows only once its song sounds').toBeGreaterThanOrEqual(cut);
+  expect(samples[titled].at - samples[cut].at, 'the pressed title shows as its song sounds').toBeLessThan(250);
+  for (const sample of samples.slice(titled)) {
+    expect(showsPressed(sample), `the pressed title stays, not ${JSON.stringify(sample.title)}`).toBe(true);
+  }
+}
+
 export function findPromotedReplacementOpen(events, path) {
   for (const [openIndex, event] of events.entries()) {
     if (event.direction !== 'sent'
@@ -665,28 +773,66 @@ export function findPromotedReplacementOpen(events, path) {
   return null;
 }
 
-export function assertActiveReplacementContract(expect, {
-  activeSocketCount,
-  afterDiagnostics,
-  beforeDiagnostics,
-  events,
-  lifecycle,
-  path,
-  socketCount,
-}) {
-  const replacementOpens = events.filter((event) => (
+// The stream already prepared for the track at the click, promoted only once a refresh-only probe sent
+// after the click was answered.
+export function findPromotedPreparedReplacement(priorEvents, events, path) {
+  const open = priorEvents.findLast((event) => (
     event.direction === 'sent'
       && event.type === 'open'
       && event.role === 'continuity'
       && event.path === path
   ));
-  expect(replacementOpens.length, 'the visible replacement click must open the selected track as continuity')
-    .toBeGreaterThan(0);
-  const promotedReplacement = findPromotedReplacementOpen(events, path);
-  expect(promotedReplacement, 'the selected replacement stream must be promoted').toBeTruthy();
+  if (!open) return null;
+  const ofStream = (event) => event.generation === open.generation && event.streamId === open.streamId;
+  // Closed or already promoted, it was not prepared for that track at the click.
+  if (priorEvents.some((event) => (
+    event.direction === 'sent' && ['close', 'promote'].includes(event.type) && ofStream(event)
+  ))) return null;
+  const probeIndex = events.findIndex((event) => (
+    event.direction === 'sent'
+      && event.type === 'probe'
+      && event.authorityOnly === true
+      && event.path === path
+  ));
+  if (probeIndex < 0) return null;
+  const answerIndex = events.findIndex((event, index) => (
+    index > probeIndex
+      && event.direction === 'received'
+      && event.type === 'probe-result'
+      && event.requestId === events[probeIndex].requestId
+  ));
+  if (answerIndex < 0) return null;
+  const promotionIndex = events.findIndex((event) => (
+    event.direction === 'sent' && event.type === 'promote' && ofStream(event)
+  ));
+  return promotionIndex > answerIndex ? { open, promotionIndex } : null;
+}
+
+// Owner-approved FTC-PLAYER-013 contract: "The replacement is either opened as continuity after the
+// click, or is the stream already prepared for that track. In the second case a refresh-only probe is
+// sent after the click and answered before that stream is promoted. Either way, every existing
+// assertion stays: one second decoded before promotion, non-silent rendered samples of that stream,
+// no underrun, same generation, socket, context and node."
+export function assertActiveReplacementContract(expect, {
+  activeSocketCount,
+  afterDiagnostics,
+  beforeDiagnostics,
+  events,
+  priorEvents = [],
+  lifecycle,
+  path,
+  socketCount,
+}) {
+  const promotedReplacement = findPromotedReplacementOpen(events, path)
+    || findPromotedPreparedReplacement(priorEvents, events, path);
+  expect(
+    promotedReplacement,
+    'the selected track must be promoted from a continuity open after the click, or from its prepared stream once a refresh-only probe answered',
+  ).toBeTruthy();
   const replacementOpen = promotedReplacement.open;
-  const promotionIndex = promotedReplacement.promotionIndex;
-  const receivedBeforePromotion = events.slice(0, promotionIndex)
+  // A prepared stream's audio arrived before the click.
+  const beforePromotion = [...priorEvents, ...events.slice(0, promotedReplacement.promotionIndex)];
+  const receivedBeforePromotion = beforePromotion
     .filter((event) => (
       event.direction === 'received'
         && event.type === 'pcm'
@@ -694,7 +840,7 @@ export function assertActiveReplacementContract(expect, {
         && event.streamId === replacementOpen.streamId
     ))
     .reduce((total, event) => total + Number(event.frameCount || 0), 0);
-  const pcmBeforePromotion = events.slice(0, promotionIndex).filter((event) => (
+  const pcmBeforePromotion = beforePromotion.filter((event) => (
     event.direction === 'received'
       && event.type === 'pcm'
       && event.generation === replacementOpen.generation
@@ -708,7 +854,7 @@ export function assertActiveReplacementContract(expect, {
     0,
     ...pcmBeforePromotion.map((event) => Number(event.peakSample || 0)),
   );
-  const encodedBeforePromotion = events.slice(0, promotionIndex).filter((event) => (
+  const encodedBeforePromotion = beforePromotion.filter((event) => (
     event.direction === 'received'
       && event.type === 'encoded'
       && event.generation === replacementOpen.generation
@@ -867,8 +1013,9 @@ export function assertPersistentWaveformCacheContract(expect, {
   requests,
   response,
 }) {
+  // The playing song asks once, and a persisted waveform answers that request from the cache.
   expect(requests).toHaveLength(1);
-  expect(requests[0].cachedOnly).toBe(true);
+  expect(requests[0].priority).toBe('current');
   expect(requests[0].response?.status).toBe(200);
   expect(response.response.status).toBe(200);
   expect(response.response.payload?.sampleCount).toBe(720);
@@ -1249,4 +1396,11 @@ export async function waitForGaplessBoundary(page, options = {}) {
     throw error;
   }
   return readGaplessPlaybackDiagnostics(page);
+}
+
+// Whether the page holds a playback claim: a Play the server had not answered yet plays without one.
+export async function pageHoldsPlaybackClaim(page) {
+  // parity-check: allow-read-only-measurement-evaluate -- cleanup reads whether a give-back will follow
+  return page.evaluate(() => Boolean(
+    typeof state !== 'undefined' && state.player?.ownership?.activeClaim?.claimToken));
 }

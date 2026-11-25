@@ -70,6 +70,11 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
     fetch: async (url, init) => {
       fetches.push({ url, init, body: JSON.parse(init.body) });
       const body = fetches.at(-1).body;
+      // A kept queue's tokens (savedTrack) name the fixture tracks back by their index.
+      if (url === '/playback/refs/resume') {
+        return { ok: true, json: async () => ({ protocol: 1, tracks: body.tracks.map(track => ({
+          clientKey: track.clientKey, playbackRef: 'opaque-ref', path: tracks[Number(track.resumeToken.split('-').pop())]?.path ?? null })) }) };
+      }
       const issued = refs ? refs(body) : {
         protocol: 1,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
@@ -88,7 +93,7 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
   vm.createContext(context);
   loadCapabilityUi(context);
   // The listen helpers name the track identity a queue item's listen key is derived from.
-  const files = ['player-streaming-engine.js', 'android-bridge-client.js', 'playback-engine.js', 'player-listen-session-helpers.js',
+  const files = ['player-saved-tokens.js', 'player-streaming-engine.js', 'android-bridge-client.js', 'playback-engine.js', 'player-listen-session-helpers.js',
     ...(listen ? ['playback-ownership-helpers.js'] : [])];
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
@@ -239,6 +244,29 @@ test('native events drive the existing player facade callbacks and stale revisio
   assert.equal(calls.at(-1)[0], 'ended');
   assert.equal(calls.at(-1)[1].trackPath, tracks[2].path);
   assert.equal(api.snapshot().ended, true);
+});
+
+// Your words: the tracklist and player still showed the first song while the app played on. A page
+// that missed an advance follows the item Android reports instead of waiting for the next one.
+test('a page that missed an advance shows the item Android plays', async () => {
+  const { api, bridge, context } = createHarness();
+  const { player } = withPlayer(context);
+  await api.start(tracks[0]);
+  // The player shows the song it started (setCurrentPlayerTrack runs beside the engine's start).
+  context.state.player.current = tracks[0];
+  bridge.event('playback.state', state(1, 'playing', 1000));
+
+  bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 2), reason: 'advance' });
+  assert.deepEqual(player.tracks.map(([trackPath]) => trackPath).slice(-1), [tracks[2].path]);
+  bridge.event('playback.state', state(1, 'playing', 5000, 1));
+  assert.deepEqual(player.tracks.map(([trackPath]) => trackPath).slice(-1), [tracks[1].path], 'a state naming another item moves the page too');
+  assert.equal(api.snapshot().currentTime, 5);
+
+  // A song the page selected itself, before Android plays it, stays shown.
+  const shown = player.tracks.length;
+  context.state.player.current = tracks[0];
+  bridge.event('playback.state', state(1, 'playing', 6000, 2));
+  assert.equal(player.tracks.length, shown);
 });
 
 test('transport commands name the applied revision and continuity reuses the native queue', async () => {
@@ -460,7 +488,7 @@ function withPlayer(context) {
   Object.assign(context, {
     getLocalStorageItem: key => storage.get(key) || '',
     setLocalStorageItem: (key, value) => { storage.set(key, value); return true; },
-    setCurrentPlayerTrack: (track, options) => player.tracks.push([track.path, options]),
+    setCurrentPlayerTrack: (track, options) => { player.tracks.push([track.path, options]); context.state.player.current = track; },
     beginStreamingPlayerListenSession: (track, startSeconds) => player.sessions.push([track.path, startSeconds]),
     pausePlayerPlaybackForHandoff: snapshot => { player.pauses.push(snapshot); return context.pauseStreamingPlayback(); },
     togglePlayerPlayback: options => player.toggles.push(options),
@@ -479,25 +507,31 @@ test('a loaded queue is remembered for the next document of the origin', async (
   const { api, context } = createHarness();
   const { storage } = withPlayer(context);
   await api.start({ ...tracks[1], year: '1999' });
-  const record = JSON.parse(storage.get('albumhaven.androidNativeQueue.v1'));
+  const record = JSON.parse(storage.get('albumhaven.androidNativeQueue.v2'));
   // The next document's queue keeps the album year the media card shows.
   assert.equal(record.tracks[1].year, '1999');
   assert.equal(record.clientId, handshakePayload.playback.clientId);
   assert.equal(record.queueRevision, 1);
-  assert.deepEqual(record.tracks.map(track => track.path), tracks.map(track => track.path));
+  // Each track is kept by its resume token: no path or stream address is on the device.
+  assert.deepEqual(record.tracks.map(track => track.resumeToken).sort(), tracks.map((_track, index) => `opaque-resume-${index}`));
+  assert.ok(record.tracks.every(track => !('path' in track) && !('src' in track)));
 });
+
+// The queue as the device keeps it: each fixture track by a token naming its index.
+const savedTrack = ({ path: _path, src: _src, ...shown }, index) => ({ ...shown, resumeToken: `kept-resume-${index}` });
 
 test('a reloaded document re-attaches its UI to the queue Android kept playing', async () => {
   const live = { state: 'playing', queueRevision: 7, currentIndex: 1, positionMs: 61500, durationMs: 180000 };
   const { api, bridge, fetches, context } = createHarness({ respond: liveHandshake(live) });
   const { storage, player } = withPlayer(context);
-  storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({
-    clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks,
+  storage.set('albumhaven.androidNativeQueue.v2', JSON.stringify({
+    clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks: tracks.map(savedTrack),
   }));
 
   assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), true);
   assert.equal(commands(bridge, 'playback.loadQueue').length, 0);
-  assert.equal(fetches.length, 0);
+  // The one request asks the server for the kept tokens' paths.
+  assert.deepEqual(fetches.map(fetched => fetched.url), ['/playback/refs/resume']);
   assert.deepEqual(player.tracks.map(([trackPath]) => trackPath), [tracks[1].path]);
   // Android's listen of the playing item continues; the document starts none.
   assert.deepEqual(player.sessions, []);
@@ -522,14 +556,14 @@ test('a queue another client or revision applied is never adopted', async () => 
       respond: liveHandshake({ state: 'playing', queueRevision: 7, currentIndex: 0, positionMs: 1000 }),
     });
     const { storage, player } = withPlayer(context);
-    storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({ ...record, tracks }));
+    storage.set('albumhaven.androidNativeQueue.v2', JSON.stringify({ ...record, tracks }));
     assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), false);
     assert.equal(player.tracks.length, 0);
     assert.equal(bridge.sent.filter(message => message.name !== 'bridge.handshake').length, 0);
   }
   const { context } = createHarness({ respond: liveHandshake({ state: 'idle', queueRevision: 7, currentIndex: 0 }) });
   const { storage } = withPlayer(context);
-  storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({
+  storage.set('albumhaven.androidNativeQueue.v2', JSON.stringify({
     clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks,
   }));
   assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), false);
@@ -544,6 +578,9 @@ test('pauses and resumes from Android controls run the web pause and resume path
 
   bridge.event('playback.state', { ...state(1, 'paused', 4000), initiator: 'system' });
   assert.equal(player.pauses.length, 1);
+  // Android paused already (a call took the audio): no pause goes back, which would count as the
+  // user's and drop the resume Android holds for the end of the call.
+  assert.equal(commands(bridge, 'playback.pause').length, 0);
   assert.equal(player.pauses[0].paused, false);
   assert.equal(player.pauses[0].currentTime, 4);
   assert.equal(api.snapshot().paused, true);
@@ -553,8 +590,9 @@ test('pauses and resumes from Android controls run the web pause and resume path
   bridge.event('playback.state', { ...state(1, 'loading', 4000), initiator: 'system' });
   assert.equal(JSON.stringify(player.toggles), '[{"focusTimelineOnResume":false}]');
   assert.equal(api.snapshot().paused, false);
-  // The web's own pause is already applied when Android reports it.
+  // The web's own pause is already applied when Android reports it, and is sent.
   await api.pause();
+  assert.equal(commands(bridge, 'playback.pause').length, 1);
   bridge.event('playback.state', state(1, 'paused', 5000));
   assert.equal(player.pauses.length, 1);
 });
@@ -616,7 +654,8 @@ test('a playback claim inside the APK waits for the handshake that names the nat
   const claim = `claimPlaybackOwnership(${JSON.stringify(tracks[0])}, { showBlockedToast: false })`;
   assert.equal(await vm.runInContext(claim, context), true);
   assert.notEqual(vm.runInContext('getPlaybackOwnershipState().lockStatus', context), 'locked');
-  assert.deepEqual(urls, [], 'Android claims for itself; the web never asks');
+  assert.equal(urls.length, 1, 'Android claims for itself, and starts only on the word that nobody plays');
+  assert.match(urls[0], /^\/playback\/state\?client_id=/, 'read as the native client, never a web claim');
 });
 
 test('events the stopped queue still emits never revive playback or ownership', async () => {
@@ -833,4 +872,160 @@ test('references are asked for the started track first, then the ones after it, 
   await api.start(tracks[1]);
   const refs = fetches.find(({ url }) => String(url) === '/playback/refs');
   assert.deepEqual(refs.body.tracks.map(track => track.path), [tracks[1].path, tracks[2].path, tracks[0].path]);
+});
+
+// Play again while a song is still starting is ignored.
+async function rowPressesInTheApp(options = {}) {
+  const harness = createHarness(options);
+  const { api, context } = harness;
+  let now = 0;
+  context.performance = { now: () => now };
+  for (const file of ['player-loop-playback.js', 'album-track-table.js']) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
+  }
+  Object.assign(context, {
+    getPlayerPlaybackSnapshot: api.snapshot,
+    canStartPlaybackInThisTab: () => true,
+    setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+    renderSelectedTrackState: () => {},
+    beginStreamingPlayerListenSession: () => {},
+    setAlbumPlaybackQueue: () => {},
+    closeListenSegment: () => {},
+    markListenSessionPaused: () => {},
+    maybeScrobbleListenSession: async () => {},
+    persistPausedListenSession: async () => {},
+    releasePlaybackOwnership: async () => {},
+    focusPlayerTimeline: () => {},
+    updatePlayerUi: () => {},
+    triggerAlbumTrackPlayActivation: () => {},
+    usesMobilePageLayout: () => true,
+    document: { getElementById: () => ({ hidden: true }) },
+  });
+  context.window.AlbumHavenCapabilities = { ...context.window.AlbumHavenCapabilities, allows: () => true };
+  await api.connectAndroidBridge();
+  const track = tracks[1];
+  const attributes = { 'data-src': track.src, 'data-track-path': track.path, 'data-track-duration-seconds': '180' };
+  const button = {
+    getAttribute: key => attributes[key] || '',
+    classList: { contains: () => false },
+    click: () => context.activateSharedTrackButton(button),
+  };
+  const row = { dataset: {}, querySelector: () => button, ownerDocument: { getSelection: () => null } };
+  const settled = async () => { for (let turn = 0; turn < 4; turn += 1) await settle(); };
+  return {
+    ...harness,
+    settled,
+    setNow: (value) => { now = value; },
+    async press() {
+      button.click();
+      await settled();
+    },
+    async doubleTap() {
+      for (const detail of [1, 2]) {
+        context.handleAlbumTrackRowClick({
+          detail, currentTarget: row, target: { closest: () => null }, preventDefault() {},
+        });
+        await settled();
+      }
+    },
+  };
+}
+
+for (const waiting of ['references', 'loadQueue answer']) {
+  for (const again of ['presses', 'a double tap']) {
+    test(`${again} on a row waiting for its ${waiting} send one loadQueue`, async () => {
+      let answer;
+      const held = new Promise((resolve) => { answer = resolve; });
+      const app = await rowPressesInTheApp(waiting === 'references' ? {} : {
+        respond: message => (message.name === 'playback.loadQueue'
+          ? held.then(() => ({ ok: true, queueRevision: message.payload.queueRevision })) : null),
+      });
+      if (waiting === 'references') {
+        const answered = app.context.fetch;
+        app.context.fetch = async (...request) => {
+          const response = answered(...request);
+          await held;
+          return response;
+        };
+      }
+      if (again === 'presses') await app.press();
+      else await app.doubleTap();
+      for (let press = 0; press < 3; press += 1) await app.press();
+      answer();
+      await app.settled();
+
+      assert.equal(app.fetches.length, 1, 'the references are asked for once');
+      assert.equal(commands(app.bridge, 'playback.loadQueue').length, 1);
+      assert.equal(commands(app.bridge, 'playback.pause').length, 0);
+    });
+  }
+}
+
+test('a press while Android loads or buffers is ignored, and once it plays the row pauses', async () => {
+  const app = await rowPressesInTheApp();
+  await app.press();
+  const [load] = commands(app.bridge, 'playback.loadQueue');
+  const report = nativeState => app.bridge.event('playback.state',
+    state(load.payload.queueRevision, nativeState, 0, load.payload.currentIndex));
+  for (const starting of ['answered', 'loading', 'buffering']) {
+    if (starting !== 'answered') report(starting);
+    await app.press();
+    await app.doubleTap();
+    assert.equal(commands(app.bridge, 'playback.pause').length, 0, `no pause while ${starting}`);
+    assert.equal(commands(app.bridge, 'playback.loadQueue').length, 1, `no second load while ${starting}`);
+  }
+  report('playing');
+  report('buffering');
+  await app.press();
+  assert.equal(commands(app.bridge, 'playback.pause').length, 1, 'a song that has sounded pauses, buffering or not');
+});
+
+test('a start Android reports failed can be pressed again at once', async () => {
+  const app = await rowPressesInTheApp();
+  await app.press();
+  const [load] = commands(app.bridge, 'playback.loadQueue');
+  app.bridge.event('playback.state', state(load.payload.queueRevision, 'error', 0, load.payload.currentIndex));
+  await app.settled();
+  const before = app.bridge.sent.length;
+  await app.press();
+
+  assert.ok(app.bridge.sent.slice(before).some(({ name }) => name === 'playback.loadQueue' || name === 'playback.play'));
+});
+
+test('a loadQueue the bridge timed out can be pressed again at once', async () => {
+  let unanswered = true;
+  const app = await rowPressesInTheApp({
+    respond: message => (message.name === 'playback.loadQueue' && unanswered ? new Promise(() => {}) : null),
+  });
+  const deadlines = [];
+  app.context.setTimeout = (callback, delay) => {
+    if (delay !== 15_000) return setTimeout(callback, delay);
+    deadlines.push(callback);
+    return 0;
+  };
+  await app.press();
+  assert.equal(commands(app.bridge, 'playback.loadQueue').length, 1);
+  unanswered = false;
+  for (const deadline of deadlines.splice(0)) deadline();
+  await app.settled();
+  await app.press();
+
+  assert.equal(commands(app.bridge, 'playback.loadQueue').length, 2);
+});
+
+test('references that never answer stop holding the row after fifteen seconds', async () => {
+  const app = await rowPressesInTheApp();
+  let asked = 0;
+  app.context.fetch = () => {
+    asked += 1;
+    return new Promise(() => {});
+  };
+  await app.press();
+  app.setNow(14_999);
+  await app.press();
+  assert.equal(asked, 1);
+  app.setNow(15_000);
+  await app.press();
+
+  assert.equal(asked, 2);
 });

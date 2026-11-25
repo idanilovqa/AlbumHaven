@@ -18,6 +18,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.media_session.v1": "optional",
     "playback.resumption.v1": "optional",
     "playback.album_details.v1": "optional",
+    "playback.takeover.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
     "updates.choose.v1": "optional",
@@ -283,11 +284,14 @@ const ANDROID_NATIVE_REFERENCE_CACHE_LIMIT = 512;
 const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
 // The shell keeps playback in a media session that outlives the document (playback.media_session.v1).
 const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
-const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
+const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v2';
 // The shell persists each item's path-free resume token, so its media card can resume playback
 // after the session, the process or the device restarted (playback.resumption.v1).
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
 const ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY = 'playback.album_details.v1';
+// `loadQueue` may carry `takeover`. A shell without it refuses that key, so its page never takes
+// playback over: it fails closed before anything is asked of the server.
+const ANDROID_NATIVE_TAKEOVER_CAPABILITY = 'playback.takeover.v1';
 const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
 const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
 // How long a seek outlasts positions Android sent before it took the seek, and how near the
@@ -420,6 +424,8 @@ async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
   const expiresAtMs = Date.parse(result.expiresAt);
   missing.forEach(({ index, path }, position) => {
     refs[index] = issuedRefs[position];
+    // The kept queue and player name songs by resume token (player-saved-tokens.js).
+    if (typeof rememberPlaybackResumeToken === 'function') rememberPlaybackResumeToken(path, issuedRefs[position].resumeToken);
     if (!(expiresAtMs > Date.now())) return;
     const cache = androidNativePlayback.refs;
     cache.delete(path);
@@ -498,7 +504,7 @@ function androidNativeCurrentRole() {
 }
 
 async function startAndroidNativePlaybackTrack(track, {
-  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false,
+  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false, takeover = false,
 } = {}) {
   const native = androidNativePlayback;
   const revision = ++native.revision;
@@ -515,6 +521,8 @@ async function startAndroidNativePlaybackTrack(track, {
     // A pause or play while the references were fetched decides whether the kept item plays.
     if (keepCurrent) autoplay = !native.snapshot.paused;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    // Play while another client plays: Android's claim replaces that client's (playback.claim.takeover).
+    if (takeover && autoplay && hasAndroidCapability(ANDROID_NATIVE_TAKEOVER_CAPABILITY)) payload.takeover = true;
     native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {
@@ -568,17 +576,27 @@ function androidNativeStoredTrack(track) {
 
 // The queue this document handed Android, kept beside the persisted player state so the next
 // document of this origin can name the tracks Android is still playing.
+// Each track is kept by its resume token, never its path; a queue with a track whose token is
+// unknown is not kept, and no older queue stays in its place.
 function saveAndroidNativeAttachment(revision, items) {
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  const tracks = items.map(androidNativeStoredTrack).map(savedPlayerTrack);
+  if (!tracks.every(Boolean)) {
+    if (typeof removeLocalStorageItem === 'function') removeLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY);
+    return;
+  }
+  const account = typeof pageAccountKey === 'function' ? pageAccountKey() : '';
   setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
+    ...(account ? { account } : {}),
     clientId: getAndroidNativePlaybackClientId(),
     queueRevision: revision,
-    tracks: items.map(androidNativeStoredTrack),
+    tracks,
   }));
 }
 
-// Only the exact native client and revision that queue was applied as can be adopted.
-function readAndroidNativeAttachment(live) {
+// Only the exact native client and revision that queue was applied as can be adopted; its tracks'
+// paths come from the server (player-saved-tokens.js).
+async function readAndroidNativeAttachment(live) {
   if (typeof getLocalStorageItem !== 'function') return null;
   let record = null;
   try {
@@ -586,11 +604,13 @@ function readAndroidNativeAttachment(live) {
   } catch (_error) {
     return null;
   }
+  // Another account's queue is never adopted.
+  if ((record?.account || '') !== (typeof pageAccountKey === 'function' ? pageAccountKey() : '')) return null;
   const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
   if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
-  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
-      || !tracks.every(track => track?.path && track.src)) return null;
-  return tracks;
+  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]) return null;
+  const inMemory = await playerTracksFromDevice(tracks).catch(() => null);
+  return inMemory?.every(Boolean) ? inMemory : null;
 }
 
 // Null outside the APK, so ordinary browsers restore exactly as before.
@@ -601,13 +621,14 @@ function attachAndroidNativePlayback(persistedState = null) {
 
 // A reloaded document of the same origin takes over the queue Android kept playing instead of
 // restarting it: the same tracks, item, position and revision. Android's listen continues.
-function adoptAndroidNativePlayback(persistedState) {
+async function adoptAndroidNativePlayback(persistedState) {
   const native = androidNativePlayback;
   const live = androidBridge.info?.playback;
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || native.revision !== 0
       || !ANDROID_NATIVE_ATTACHABLE_STATES.has(live?.state)) return false;
-  const tracks = readAndroidNativeAttachment(live);
-  if (!tracks) return false;
+  const tracks = await readAndroidNativeAttachment(live);
+  // A queue this document started while the paths were asked for wins.
+  if (!tracks || native.revision !== 0) return false;
   const track = tracks[live.currentIndex];
   const playing = live.state !== 'paused';
   native.revision = live.queueRevision;
@@ -641,6 +662,7 @@ function adoptAndroidNativePlayback(persistedState) {
     const album = resolveAlbumForPlayerTrack(track);
     if (album) setAlbumPlaybackQueue(album, track.path);
   }
+  if (!playing && typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
   if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
   // A reload restores loops inactive, so Android's loop ends with the old document.
   clearAndroidNativeLoop();
@@ -672,6 +694,7 @@ function pauseAndroidNativePlayback() {
   native.ownerIntent = false;
   native.snapshot.paused = true;
   if (native.mode !== 'error') native.mode = 'paused';
+  if (native.followingSystemPause) return Promise.resolve();
   return sendAndroidNativeTransport('playback.pause').then(() => undefined);
 }
 
@@ -869,7 +892,14 @@ function followAndroidNativeSystemState(payload) {
   const active = payload.state === 'playing' || payload.state === 'buffering' || payload.state === 'loading';
   if (payload.state === 'paused' && !snapshot.paused && typeof pausePlayerPlaybackForHandoff === 'function') {
     snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
-    void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    // Android paused already, so no pause goes back: a pause from the page counts as the user's and
+    // drops the resume Android holds for the end of a call.
+    androidNativePlayback.followingSystemPause = true;
+    try {
+      void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    } finally {
+      androidNativePlayback.followingSystemPause = false;
+    }
   } else if (active && snapshot.paused && typeof togglePlayerPlayback === 'function') {
     togglePlayerPlayback({ focusTimelineOnResume: false });
   }
@@ -919,9 +949,23 @@ function androidNativeReportedSeconds(payload) {
   return hold.seconds;
 }
 
+// Android moved to another item of the applied queue without the page hearing it (an advance
+// reported while the page could not read it): the page selects the item Android plays. A song the
+// page selected itself (pressed, or a queue Android has not applied yet) is left alone.
+function catchUpAndroidNativeItem(payload) {
+  const native = androidNativePlayback;
+  const shown = String(state.player.current?.path || '');
+  if (!Number.isInteger(payload.currentIndex) || payload.currentIndex === native.index
+      || payload.queueRevision !== native.appliedRevision || native.revision !== native.appliedRevision
+      || !shown || shown !== String(native.items[native.index]?.path || '')) return false;
+  followAndroidNativeSystemStep(payload);
+  return true;
+}
+
 function handleAndroidNativeState(payload) {
   const native = androidNativePlayback;
   const snapshot = native.snapshot;
+  catchUpAndroidNativeItem(payload);
   if (payload.initiator === 'system') followAndroidNativeSystemState(payload);
   const trackPath = String(native.items[native.index]?.path || '');
   const nativeState = payload.state;
@@ -985,8 +1029,13 @@ function handleAndroidNativeCurrentItem(payload) {
     followAndroidNativeSystemStep(payload);
     return;
   }
-  // The web's own loads name items it already selected; only a natural advance is new.
-  if (payload.reason !== 'advance' || payload.currentIndex !== native.index + 1) return;
+  // The web's own loads name items it already selected; only a natural advance is new. An advance
+  // past the next item means the page missed one: it catches up to the item Android plays.
+  if (payload.reason !== 'advance') return;
+  if (payload.currentIndex !== native.index + 1) {
+    catchUpAndroidNativeItem(payload);
+    return;
+  }
   const outgoing = native.items[native.index];
   const incoming = native.items[payload.currentIndex];
   if (!outgoing || !incoming) return;

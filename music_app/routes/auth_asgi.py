@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from asyncio import sleep as _sleep
 import hmac
+import logging
 import ipaddress
 import threading
 from collections.abc import Mapping
@@ -18,6 +19,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from music_app.services.app_copy import app_copy_enabled
+from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
 from music_app.services.auth_login_postgres import LoginOutcome, PostgresLoginAuthService
 from music_app.services.auth_password_reset_request_postgres import (
@@ -49,6 +52,7 @@ from music_app.services.auth_session_csrf import (
 )
 from music_app.services.auth_reset_csrf import issue_reset_csrf, matches_reset_csrf
 from music_app.services.auth_tokens import hash_opaque_token
+from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
 
 
 router = APIRouter()
@@ -102,6 +106,7 @@ def _render_login(
             "failed": failed,
             "expired": expired,
             "return_to": return_to,
+            "app_copy_enabled": app_copy_enabled(),
         },
     )
 
@@ -390,7 +395,22 @@ def _generic_unavailable() -> HTMLResponse:
 
 @router.get("/login", response_class=HTMLResponse)
 async def get_login(request: Request) -> HTMLResponse:
+    # Someone already signed in opens the app (or the page they were sent from) instead of the form.
+    # The form's own token refresh asks for JSON and always gets a token.
+    if not _wants_json(request) and await _signed_in(request):
+        return _no_store(RedirectResponse(_safe_return_path(request.query_params.get("return_to")), status_code=303))
     return await _login_page(request, status_code=200, failed=False)
+
+
+async def _signed_in(request: Request) -> bool:
+    """Whether the request carries a live session; any failure to tell shows the form."""
+    if not request.cookies.get(_SESSION_COOKIE):
+        return False
+    try:
+        actor = await current_actor_from_request(request)
+    except Exception:
+        return False
+    return bool(actor.is_authenticated)
 
 
 async def _expired_login_page(request: Request, payload: Mapping[str, str]) -> Response:
@@ -1038,6 +1058,7 @@ async def post_logout(request: Request) -> Response:
         )
     except Exception:
         return _no_store(HTMLResponse("Logout is temporarily unavailable.", status_code=503))
+    await _forget_last_played(request, config)
 
     response = RedirectResponse("/login", status_code=303)
     for cookie_name, httponly in (
@@ -1052,6 +1073,19 @@ async def post_logout(request: Request) -> Response:
             samesite="lax",
         )
     return _no_store(response)
+
+
+async def _forget_last_played(request: Request, config: Mapping[str, object]) -> None:
+    """Sign-out clears the player: the account's last-played song and place go. A live claim stays, as its
+    holder may still sound. The sign-out itself never fails for it."""
+    actor = getattr(request.state, "current_actor", None)
+    if actor is None:
+        return
+    claims = PostgresPlaybackClaims({**(getattr(request.app.state, "config", None) or {}), **config})
+    try:
+        await run_in_threadpool(claims.forget_last_played, actor)
+    except Exception:  # noqa: BLE001 - a record left behind is replaced by the next play.
+        logging.getLogger(__name__).warning("The last-played record was not cleared at sign-out.")
 
 
 def _safe_text_match(left: object, right: object) -> bool:

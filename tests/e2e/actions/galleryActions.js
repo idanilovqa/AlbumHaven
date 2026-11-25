@@ -396,6 +396,22 @@ export class GalleryActions {
     await this.galleryPage.albumCard.detailsButtonAt(index).click();
   }
 
+  // Opens the details of the first album whose details button is wholly inside the gallery's
+  // visible area; returns that album card's index among the rendered cards.
+  async clickFirstAlbumDetailsInView() {
+    const view = await this.galleryPage.galleryScroll.boundingBox();
+    const buttons = this.galleryPage.albumDetailsButtons;
+    const count = await buttons.count();
+    for (let index = 0; index < count; index += 1) {
+      const box = await buttons.nth(index).boundingBox();
+      if (box && box.y >= view.y && box.y + box.height <= view.y + view.height) {
+        await buttons.nth(index).click();
+        return index;
+      }
+    }
+    throw new Error('no album details button is wholly in view');
+  }
+
   async clickAlbumDetailsByAlbumName(albumName) {
     await this.galleryPage.albumCard.detailsButtonByAlbumName(albumName).first().click();
   }
@@ -1981,6 +1997,12 @@ export class GalleryActions {
     if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1) return;
     await this.galleryPage.galleryScroll.hover(options);
     await this.galleryPage.page.mouse.wheel(0, deltaY);
+  }
+
+  // The gallery's scroll position alone, also while a page of more albums failed to load.
+  async readGalleryScrollTop() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the gallery scroll position without changing application state
+    return this.galleryPage.galleryScroll.evaluate(galleryScroll => galleryScroll.scrollTop);
   }
 
   async readGalleryScrollState() {

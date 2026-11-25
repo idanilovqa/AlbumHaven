@@ -1,4 +1,4 @@
-function coverLookupFixtureEndpoint(testInfo, pathname) {
+export function coverLookupFixtureEndpoint(testInfo, pathname) {
   const providerBaseURL = String(testInfo?.config?.metadata?.providerBaseURL || '').trim();
   if (!providerBaseURL) {
     throw new Error('The isolated Playwright config must expose its fixture-owned provider base URL.');
@@ -10,7 +10,7 @@ function coverLookupFixtureEndpoint(testInfo, pathname) {
   return endpoint;
 }
 
-async function readJsonResponse(response, operation) {
+export async function readJsonResponse(response, operation) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(`${operation} failed with HTTP ${response.status}: ${JSON.stringify(payload)}`);

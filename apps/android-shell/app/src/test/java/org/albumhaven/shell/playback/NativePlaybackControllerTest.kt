@@ -26,15 +26,25 @@ const val TEST_DEVICE_ID = "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01"
 class FakeClaimApi : PlaybackClaimApi {
     val calls = mutableListOf<String>()
     val tracks = mutableListOf<ClaimTrack>()
+    val takeovers = mutableListOf<Boolean>()
+    val positions = mutableListOf<ClaimPosition?>()
     var acquireResponse: () -> ClaimResponse = { ClaimResponse.Granted("token-${++issued}") }
     var renewResponse: (String) -> ClaimResponse = { ClaimResponse.Granted(it) }
     var releaseAnswered = true
     private var issued = 0
 
-    override fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse {
+    override fun acquire(
+        clientId: String,
+        claimToken: String?,
+        track: ClaimTrack,
+        takeover: Boolean,
+        position: ClaimPosition?,
+    ): ClaimResponse {
         check(clientId == TEST_CLIENT_ID)
         calls += "acquire:$claimToken"
         tracks += track
+        takeovers += takeover
+        positions += position
         return if (claimToken == null) acquireResponse() else renewResponse(claimToken)
     }
 
@@ -96,6 +106,7 @@ class ControllerHarness(
     /** Every [StartTiming] line the controller reported, in order. */
     val timings = mutableListOf<String>()
     var listener: PcmTransportListener? = null
+    val handoverAnswers = mutableListOf<String>()
     var connects = 0
     var closes = 0
 
@@ -115,7 +126,8 @@ class ControllerHarness(
             if (refuseConnect) socketListener.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
             else if (openOnConnect) socketListener.onOpen()
             object : PcmTransport {
-                override fun send(text: String) = server.receive(text)
+                override fun send(text: String) =
+                    if (text.contains("handover-")) handoverAnswers.add(text) else server.receive(text)
                 override fun close() {
                     closes += 1
                 }
@@ -229,12 +241,53 @@ class NativePlaybackControllerTest {
         // The claim goes once the listen writes for the end are done.
         harness.step()
         assertEquals(listOf("owned", "released"), harness.ownership())
-        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
+        assertEquals(listOf("acquire:null", "acquire:token-1", "release:token-1"), harness.claims.calls)
         assertEquals(1, harness.connects)
         assertTrue(harness.server.texts.none { JSONObject(it).has("path") })
         assertTrue(harness.server.texts.filter { it.contains("\"open\"") }.all { it.contains("playbackRef") })
         assertEquals(emptyList<String>(), harness.server.violations)
         assertEquals(1, harness.controller.snapshot.currentIndex)
+    }
+
+    // playback.claim.takeover: Play while another device plays moves its song
+    // here; the claim replaces the other device's and reports where this device's song is.
+    // Play here on another device asks this one, which stops and says what sounds.
+    @Test
+    fun askedByPlayHereElsewhereItStopsAndAnswersTheSoundingItemAndItsPlaceWithoutGivingTheClaimBack() {
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+
+        checkNotNull(harness.listener).onText("""{"type":"handover","requestId":"request-1"}""")
+        harness.step()
+        assertEquals("it stops only once told the press is still wanted", NativePlaybackState.PLAYING, harness.state())
+        assertEquals("handover-wanted", org.json.JSONObject(harness.handoverAnswers.single()).getString("type"))
+        harness.handoverAnswers.clear()
+        checkNotNull(harness.listener).onText("""{"type":"handover-stop","requestId":"request-1"}""")
+        harness.step()
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals("no answer before the paused output drained", emptyList<String>(), harness.handoverAnswers)
+        harness.runUntil { harness.handoverAnswers.isNotEmpty() }
+
+        val answer = org.json.JSONObject(harness.handoverAnswers.single())
+        assertEquals("request-1", answer.getString("requestId"))
+        assertEquals(long.pcm.playbackRef, answer.getJSONObject("track").getString("playbackRef"))
+        assertEquals(30_000L, answer.getJSONObject("position").getLong("durationMs"))
+        assertEquals(false, answer.getJSONObject("track").has("path"))
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals("no give-back follows the token it handed on", listOf("acquire:null"), harness.claims.calls)
+        assertEquals(listOf("owned", "lost"), harness.ownership())
+    }
+
+    @Test
+    fun aTakeoverQueueClaimsOnceAsATakeoverAndReportsWhereTheSongIs() {
+        val harness = ControllerHarness(first)
+        harness.controller.loadQueue(QueueLoad(1, listOf(harness.item(first)), 0, 1_000, null, autoplay = true, takeover = true))
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(listOf(true), harness.claims.takeovers)
+        assertEquals(1_000L, harness.claims.positions.single()!!.ms)
+        assertEquals(3_000L, harness.claims.positions.single()!!.durationMs)
     }
 
     @Test
@@ -263,15 +316,15 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun aPlayIsHeardFromItsBufferWhileTheClaimIsRequested() {
+    fun aPlayFillsItsBufferAndIsHeardOnlyOnceTheClaimIsGranted() {
         val claimIo = ManualExecutor()
         val harness = ControllerHarness(first, claimIo = claimIo)
         harness.load(1, first)
         repeat(20) { harness.step() }
 
-        // The owner chose an instant start: the buffered stream plays before the claim answers.
-        assertEquals(NativePlaybackState.PLAYING, harness.state())
-        assertTrue(harness.sinks.last().writtenFrames > 0)
+        // Nothing starts without the server's answer: the stream fills its buffer, and nothing is heard.
+        assertEquals(NativePlaybackState.BUFFERING, harness.state())
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
 
         claimIo.drain()
         harness.runUntil { harness.state() == NativePlaybackState.ENDED }
@@ -279,23 +332,18 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun aRefusedClaimSilencesAnInstantStartAtOnce() {
+    fun aClaimRefusedAfterAWaitWasNeverHeard() {
         val claimIo = ManualExecutor()
         val harness = ControllerHarness(first, claimIo = claimIo)
         harness.claims.acquireResponse = { ClaimResponse.Conflict }
         harness.load(1, first)
         repeat(20) { harness.step() }
-        val output = harness.sinks.last()
-        assertTrue(output.writtenFrames > 0)
 
         claimIo.drain()
-        harness.step()
-        val written = output.writtenFrames
         repeat(20) { harness.step() }
 
         assertEquals(NativePlaybackState.PAUSED, harness.state())
-        assertEquals(written, output.writtenFrames)
-        assertTrue("the output was stopped and flushed", output.operations.takeLast(2) == listOf("pause", "flush"))
+        assertTrue(harness.sinks.all { it.writtenFrames == 0 })
     }
 
     @Test
@@ -309,8 +357,9 @@ class NativePlaybackControllerTest {
         harness.step()
         harness.controller.play(1)
         harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        harness.runUntil(maxSteps = 4) { harness.claims.calls.size > 1 }
 
-        assertEquals(listOf("acquire:null"), harness.claims.calls)
+        assertEquals("the resume renews the claim the pause had not given back yet", listOf("acquire:null", "acquire:token-1"), harness.claims.calls)
         assertEquals(listOf("owned"), harness.ownership())
     }
 
@@ -409,7 +458,7 @@ class NativePlaybackControllerTest {
             val sequences = session.map { it.second.getLong("sequence") }
             assertEquals(sequences.sorted(), sequences)
         }
-        assertEquals(listOf("acquire:null", "release:token-1"), harness.claims.calls)
+        assertEquals(listOf("acquire:null", "acquire:token-1", "release:token-1"), harness.claims.calls)
     }
 
     @Test
@@ -625,6 +674,81 @@ class NativePlaybackControllerTest {
         assertEquals(listOf("owned", "released", "owned"), harness.ownership())
     }
 
+    /** A plain press on another device asks a paused phone to yield; one contract for web, phone and server. */
+    private fun yieldContract() =
+        org.json.JSONObject(java.io.File("../../../tests/fixtures/playback-handover-yield-v1.json").readText())
+
+    // Android's org.json has no similar(): the same keys with the same values.
+    private fun assertSameMessage(expected: org.json.JSONObject, sent: String) {
+        val actual = org.json.JSONObject(sent)
+        assertEquals(expected.keys().asSequence().toSet(), actual.keys().asSequence().toSet())
+        expected.keys().forEach { key -> assertEquals(key, expected.get(key), actual.get(key)) }
+    }
+
+    /** Paused with its listen writes still on their way, so the claim is not given back yet. */
+    private fun pausedAfterASecond(long: SyntheticTrack): ControllerHarness {
+        val harness = ControllerHarness(long, listenIo = ManualExecutor())
+        harness.load(1, long)
+        harness.runUntil { harness.sinks.lastOrNull()?.writtenFrames ?: 0 >= RATE }
+        harness.controller.pause()
+        repeat(20) { harness.step() }
+        return harness
+    }
+
+    @Test
+    fun pausedOnItsClaimItYieldsToAPressElsewhereOnceSilentAndItsNextPlayAsksTheServer() {
+        val contract = yieldContract()
+        val harness = pausedAfterASecond(SyntheticTrack(tag = 3, frames = 20L * RATE))
+        val written = harness.sinks.last().writtenFrames
+        assertEquals("the claim is not given back before its listen writes", listOf("acquire:null"), harness.claims.calls)
+
+        checkNotNull(harness.listener).onText(contract.getJSONObject("ask").toString())
+        harness.step()
+        assertEquals("no word before the paused output drained", emptyList<String>(), harness.handoverAnswers)
+        harness.runUntil { harness.handoverAnswers.isNotEmpty() }
+
+        assertSameMessage(contract.getJSONObject("silent"), harness.handoverAnswers.single())
+        assertEquals("no give-back follows the word it gave", listOf("acquire:null"), harness.claims.calls)
+        assertEquals(written, harness.sinks.last().writtenFrames)
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals(CommandResult.ACCEPTED, harness.controller.play(1))
+        harness.runUntil { harness.claims.calls.size > 1 }
+        assertEquals("its own next Play asks the server", "acquire:null", harness.claims.calls.last())
+    }
+
+    @Test
+    fun playingItDeclinesAPressElsewhereAndPlaysOn() {
+        val contract = yieldContract()
+        val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
+        val harness = ControllerHarness(long)
+        harness.load(1, long)
+        harness.runUntil { harness.sinks.lastOrNull()?.writtenFrames ?: 0 >= RATE }
+
+        checkNotNull(harness.listener).onText(contract.getJSONObject("ask").toString())
+        harness.step()
+
+        assertSameMessage(contract.getJSONObject("declined"), harness.handoverAnswers.single())
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        assertEquals(listOf("acquire:null"), harness.claims.calls)
+    }
+
+    @Test
+    fun aPlayWhileItsYieldDrainsDeclinesAndRenewsTheClaimItStillHolds() {
+        val contract = yieldContract()
+        val harness = pausedAfterASecond(SyntheticTrack(tag = 3, frames = 20L * RATE))
+        val written = harness.sinks.last().writtenFrames
+
+        checkNotNull(harness.listener).onText(contract.getJSONObject("ask").toString())
+        harness.step()
+        assertEquals(CommandResult.ACCEPTED, harness.controller.play(1))
+        harness.runUntil { harness.handoverAnswers.isNotEmpty() }
+
+        assertSameMessage(contract.getJSONObject("declined"), harness.handoverAnswers.single())
+        harness.runUntil(maxSteps = 4) { harness.sinks.last().writtenFrames > written }
+        harness.step()
+        assertEquals("once it sounds it says it plays", listOf("acquire:null", "acquire:token-1"), harness.claims.calls)
+    }
+
     @Test
     fun aPauseIsSilentWithinTheFadeAndPlayContinuesTheKeptQueueOnItsNextFrame() {
         val long = SyntheticTrack(tag = 3, frames = 20L * RATE)
@@ -743,8 +867,8 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun anUnreachableServerNeverStopsPlaybackAndOnlyAnotherDeviceTakingOverDoes() {
-        // Owner decision 2026-11-15: losing the network never stops playback, past the lease too.
+    fun anUnreachableServerKeepsPlaybackForFiveMinutesAndAnotherDeviceTakingOverEndsIt() {
+        // Past the lease, for at most five minutes.
         val long = SyntheticTrack(tag = 3, frames = 120L * RATE)
         val harness = ControllerHarness(long, realTime = true)
         harness.claims.renewResponse = { ClaimResponse.Unreachable }
@@ -1216,13 +1340,12 @@ class NativePlaybackControllerTest {
     }
 
     /**
-     * Owner retest B-P3 (2026-11-17): paused with the network gone, Play did not go on. Paused, a
-     * failed reconnect gave the received audio up, and an unanswered claim request ended in an error.
-     * Now Play goes on from the received audio with nothing answering, and once the network is back
-     * the kept token renews and the rest of the song joins in place.
+     * Paused with the network gone, Play did not go on: paused, a failed reconnect gave the received
+     * audio up, and an unanswered claim request ended in an error. Play during an outage now goes on at
+     * once from the received audio, and once the server answers the rest of the song joins in place.
      */
     @Test
-    fun pausedWithTheNetworkGonePlayGoesOnFromTheReceivedAudio() {
+    fun pausedWithTheNetworkGonePlayGoesOnAtOnceFromTheReceivedAudioAndTheRestJoinsLater() {
         val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
         val harness = ControllerHarness(long, realTime = true, encoded = true)
         harness.load(1, long)
@@ -1248,8 +1371,7 @@ class NativePlaybackControllerTest {
         val playedAt = harness.now
         harness.runUntil { harness.now >= playedAt + 3_000 || harness.events.any { it is NativePlaybackEvent.Error } }
         assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
-        assertTrue("plays on from the received audio", sink.writtenFrames > written)
-        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        assertTrue("no network is no reason to wait: it plays what it has", sink.writtenFrames > written)
 
         harness.refuseConnect = false
         harness.claims.renewResponse = { ClaimResponse.Granted(it) }

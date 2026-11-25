@@ -123,13 +123,18 @@ async function readLatestDiagnosticSequence(galleryActions) {
 // Response headers are not the commit: the body, parse and merge can land after
 // the 96 ms settle window, when merging immediately is correct. A gesture that
 // must overlap the merge stays alive until production has deferred the update.
+// The grid keeps only its last 24 diagnostic events, which a busy render can fill
+// before a second read, so the boundary hands on the event it saw.
 function deferredUpdateBoundary(galleryActions, afterSequence, responseAt) {
   return responseAt.then(async (epoch) => {
     const deadline = Date.now() + RESPONSE_BOUNDARY_TIMEOUT_MS;
-    while (Date.now() < deadline && !(await readDeferredGroupUpdate(galleryActions, afterSequence))) {
+    let deferredEvent = null;
+    while (Date.now() < deadline) {
+      deferredEvent = await readDeferredGroupUpdate(galleryActions, afterSequence);
+      if (deferredEvent) break;
       await new Promise(resolve => setTimeout(resolve, 8));
     }
-    return epoch;
+    return { responseAt: epoch, deferredEvent };
   });
 }
 
@@ -250,6 +255,7 @@ async function dispatchTouchSwipe(ui, cdp, point, startY, endY) {
 async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY, page) {
   const observedHeights = [];
   const sections = [];
+  let wheelTravels = true;
   for (let rootPage = 0; rootPage < HELD_DRAG_ROOT_PAGES; rootPage += 1) {
     if (rootPage > 0) await swipeIntoNextRootPage(ui, cdp, point, lowerY, page);
     const rejected = [];
@@ -291,6 +297,19 @@ async function positionForSingleArtistHeldDrag(ui, cdp, point, lowerY, upperY, p
         throw new Error(`Mobile preposition did not reach a single-artist drag start: ${JSON.stringify({
           swipes, stalledSwipes, candidates, rejected, sections,
         })}`);
+      }
+      // A root page puts the next start tens of thousands of pixels ahead: 280 px swipes took over a
+      // minute per page, so the far travel is one native wheel scroll that stops a viewport short of
+      // the start, and the swipes below only fine-tune. The held drag itself is always a touch.
+      const travel = next.plan.target - geometry.scrollTop;
+      if (wheelTravels && Math.abs(travel) > geometry.clientHeight * 2) {
+        await page.mouse.move(point(lowerY).x, lowerY);
+        await page.mouse.wheel(0, travel - Math.sign(travel) * geometry.clientHeight);
+        await ui.waitForNativeScrollSettled({ maximumFrames: 240 });
+        const travelled = (await ui.readGalleryContextGeometry()).scrollTop - geometry.scrollTop;
+        if (Math.abs(travelled) < 1) wheelTravels = false;
+        swipes += 1;
+        continue;
       }
       const distance = prepositionSwipeDistance(next.plan, geometry.scrollTop);
       if (distance > 0) {
@@ -551,7 +570,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       }
       if (overlapFailures.length) throw overlapFailures[0];
       response = responseResult.value;
-      responseAt = boundaryResult.value;
+      ({ responseAt, deferredEvent } = boundaryResult.value);
       const responsePayload = await response.json();
       responseSummary = {
         viewDataSource: responsePayload?.view_data_source || null,
@@ -560,10 +579,6 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         groupAlbumCount: (responsePayload?.artist_groups || [])
           .reduce((count, group) => count + (group.albums || []).length, 0),
       };
-        deferredEvent = await waitForDeferredGroupUpdate(
-          galleryActions,
-          diagnosticSequenceBeforeInput,
-        );
       inputEndedAt = await ui.readBrowserEpoch();
         expect(response, 'native wheel sequence must overlap a full search refresh response').not.toBeNull();
         expect(deferredEvent, 'full refresh must reach the production deferred group-update path').not.toBeNull();
@@ -692,14 +707,10 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         deferredUpdateBoundary(galleryActions, diagnosticSequenceBeforeInput, responseBoundary.responseAt),
         distance => { commandedDistance += distance; },
       );
-      [response, responseAt] = await Promise.all([
+      [response, { responseAt, deferredEvent }] = await Promise.all([
         responseOverlap,
         activeInput.completion,
       ]);
-        deferredEvent = await waitForDeferredGroupUpdate(
-          galleryActions,
-          diagnosticSequenceBeforeInput,
-        );
         inputEndedAt = await ui.readBrowserEpoch();
         expect(response, 'native wheel sequence must overlap a real continuation response').not.toBeNull();
         expect(deferredEvent, 'real continuation must reach the production deferred group-update path').not.toBeNull();

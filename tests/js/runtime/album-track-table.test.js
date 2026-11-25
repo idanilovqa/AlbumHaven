@@ -225,11 +225,13 @@ test('playing spectra share the exact row outline path at opposite offsets and f
   assert.match(css, /conic-gradient\(/);
   assert.match(css, /0\.5turn/);
   assert.match(css, /mask:[^;]*linear-gradient/s);
-  assert.match(css, /border-radius:\s*inherit/);
-  assert.match(css, /animation-duration:\s*var\(--album-track-playing-period/);
+  assert.match(css, /animation:\s*album-track-perimeter-spectrum var\(--album-track-playing-period\) linear infinite/);
+  // The spectrum turns by transform (compositor), never by an animated custom property (main thread).
+  assert.match(css, /@keyframes album-track-perimeter-spectrum \{ from \{ rotate: 0turn; \} to \{ rotate: 1turn; \} \}/);
+  assert.doesNotMatch(css, /@property --album-track-spectrum/);
   assert.match(css, /\.album-track-table__row--playing\s*\{[^}]*outline:/s);
-  assert.match(css, /\.album-track-table__row--playing::before/);
-  assert.match(css, /\.album-track-table__row--playing::after/);
+  assert.match(css, /\.album-track-table__spectrum::before/);
+  assert.match(css, /\.album-track-table__spectrum::after/);
   assert.match(css, /--album-track-spectrum-offset:\s*0\.5turn/);
   assert.match(css, /\.album-track-table__total\s*\{[^}]*border-left:\s*0[^}]*border-top:\s*0/s);
   assert.match(css, /linear-gradient\(to left/);
@@ -281,7 +283,7 @@ test('AlbumTrackTable uses theme text tokens, plain durations, and a subtly diss
   assert.match(css, /\.album-track-table \.compact-data-table(?:,[^{]+)?\s*\{[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
   assert.match(css, /\.album-track-table \[role="columnheader"\][^}]*color:\s*var\(--appearance-muted,\s*var\(--muted\)\)/s);
   assert.match(css, /\.album-track-table \.track-duration\s*\{[^}]*margin-left:\s*0[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
-  assert.match(css, /album-track-table__row--animated::after\s*\{[^}]*opacity:\s*\.84/s);
+  assert.match(css, /\.album-track-table__spectrum::after\s*\{[^}]*opacity:\s*\.84/s);
 });
 
 test('a paused current track keeps a dim, still highlight and its play button', () => {
@@ -294,19 +296,27 @@ test('a paused current track keeps a dim, still highlight and its play button', 
   assert.match(paused[1], /outline:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 50%/);
   assert.match(paused[1], /background:\s*color-mix\(in srgb, var\(--album-track-accent\) 8%/);
   assert.doesNotMatch(paused[1], /animation|box-shadow/, 'only the playing row glows and moves');
-  assert.match(css, /:is\([^)]*\.album-track-table__row--current\) \.album-track-table__play \{ opacity: 1; \}/);
+  assert.match(css, /:is\(.*\.album-track-table__row--current\) \.album-track-table__play \{ opacity: 1; \}/);
 });
 
 test('play activation is transient and live playback refresh can own the component state classes', () => {
   const context = loadTrackTable();
   assert.equal(typeof context.triggerAlbumTrackPlayActivation, 'function');
-  const source = fs.readFileSync(
-    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'),
-    'utf8',
-  );
-  assert.match(source, /album-track-table__row--current/);
-  assert.match(source, /album-track-table__row--playing/);
-  assert.match(source, /album-track-table__row--animated/);
+  const classes = new Set(['album-track-table__row']);
+  const row = {
+    dataset: {},
+    classList: { toggle: (name, active) => (active ? classes.add(name) : classes.delete(name)) },
+    getAttribute: () => 'song.flac',
+    querySelector: () => null,
+  };
+  const page = { querySelectorAll: selector => (selector.includes('[data-track-row-path="song.flac"]') ? [row] : []) };
+  context.syncAlbumTrackTablePlayback(page, { trackPath: 'song.flac', playing: true, currentTime: '0:01 / 3:00' });
+  assert.deepEqual([...classes].sort(), [
+    'album-track-table__row', 'album-track-table__row--animated', 'album-track-table__row--current',
+    'album-track-table__row--playing', 'is-current', 'is-playing',
+  ]);
+  context.syncAlbumTrackTablePlayback(page, { trackPath: 'song.flac', playing: true, currentTime: '0:02 / 3:00', animated: false });
+  assert.equal(classes.has('album-track-table__row--animated'), false);
 });
 
 test('per-track Play hover uses the main player Play color without affecting disabled controls', () => {

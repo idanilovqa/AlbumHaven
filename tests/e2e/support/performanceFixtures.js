@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { expect, test as base } from './baseFixtures.js';
 import { loadSyntheticSearchInventory } from '../helpers/syntheticSearchInventory.js';
@@ -14,6 +16,18 @@ import {
   samplePeakMemory,
   summarizePeakMemory,
 } from '../helpers/index.js';
+
+const require = createRequire(import.meta.url);
+const { describeQuarantine, listQuarantinedCases } = require('../../../scripts/ci/performance-quarantine.cjs');
+
+const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const QUARANTINED_CASES = listQuarantinedCases();
+
+function findQuarantinedCase(testInfo) {
+  const testPath = path.relative(REPOSITORY_ROOT, testInfo.file).split(path.sep).join('/');
+  const caseTitle = testInfo.titlePath.slice(1).join(' › ');
+  return QUARANTINED_CASES.find((entry) => entry.test === testPath && entry.case === caseTitle) || null;
+}
 
 function buildIdleMemoryBudgetSummary({
   fixture,
@@ -805,6 +819,11 @@ async function useSyntheticPerformanceReportFixture({ page, performanceReport },
 }
 
 export const test = base.extend({
+  performanceQuarantine: [async ({}, use, testInfo) => {
+    const quarantined = findQuarantinedCase(testInfo);
+    testInfo.skip(Boolean(quarantined), quarantined ? describeQuarantine(quarantined) : '');
+    await use(quarantined);
+  }, { auto: true }],
   syntheticSearchInventory: [async ({}, use) => {
     await use(await loadSyntheticSearchInventory());
   }, { scope: 'worker' }],

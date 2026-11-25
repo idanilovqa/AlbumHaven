@@ -435,6 +435,22 @@ function buildLooseTracksPartialNoteHtml() {
     + 'Still indexing loose tracks, so more may appear.</div>';
 }
 
+// A running library scan may add loose tracks too, so the same note shows under any listed Loose Tracks.
+function looseTracksScanRunning() {
+  return Boolean(state.status?.scan_in_progress);
+}
+
+// Each status update keeps the note in step with the scan without re-reading or re-rendering the list.
+function syncLooseTracksPartialNote() {
+  const table = getNonAlbumModalElements().table;
+  if (!table?.querySelector('.album-track-table:not([aria-busy])')) return;
+  const note = table.querySelector('[data-loose-tracks-partial-note]');
+  const wanted = looseTracksScanRunning()
+    || (state.ui?.nonAlbumLibraryWide === true && hasPartialLibraryNonAlbumTracks());
+  if (wanted && !note) table.insertAdjacentHTML('beforeend', buildLooseTracksPartialNoteHtml());
+  else if (!wanted) note?.remove();
+}
+
 // The bounded wait ran out with no stored row (owner-approved wording, 2026-11-22).
 const LOOSE_TRACKS_STILL_PREPARING = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
 
@@ -601,14 +617,17 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     ? payload.library_non_album_tracks
     : Array.isArray(payload?.non_album_tracks) ? payload.non_album_tracks : []);
   const request = { key: requestKey, promise: null };
+  // The scope moved while this answer was on its way (on a reload the inventory revision arrives after the
+  // first ask): ask again for the current scope rather than drop the answer with nothing asking again.
+  const askCurrentScope = () => (libraryNonAlbumHydrationRequest === request
+    ? hydrateLibraryNonAlbumTracks({ resolveLibrary })
+    : state.view?.library_non_album_tracks || []);
   request.promise = (async () => {
     const probed = view.library_non_album_search_probe_scope === scopeKey;
     const payload = probed ? null : await fetchLibraryNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view));
     let tracks = libraryTracks(payload);
     const searchMatched = searching && tracks.length > 0;
-    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
-      return state.view?.library_non_album_tracks || [];
-    }
+    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return askCurrentScope();
     if (payload?.non_album_tracks_deferred) {
       request.deferred = true;
       return tracks;
@@ -632,9 +651,7 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
       tracks = libraryTracks(await fetchNonAlbumPayload(
         buildLibraryNonAlbumRequestUrl(view, { withQuery: false }),
       ));
-      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
-        return state.view?.library_non_album_tracks || [];
-      }
+      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return askCurrentScope();
     }
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
@@ -771,6 +788,7 @@ function buildNonAlbumTrackLoadingMarkup() {
     collapsibleGroups: true,
     ariaLabel: 'Loading loose tracks',
     idPrefix: 'loose-track-loading',
+    density: 'default',
   });
 }
 
@@ -804,6 +822,10 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
   if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
+  // While library-wide Loose Tracks is the page, no artist (or All artists) is the tree's selection.
+  if (Boolean(state.ui.looseTracksNavigationActive) === libraryWideOpen) return;
+  state.ui.looseTracksNavigationActive = libraryWideOpen;
+  if (typeof renderSidebar === 'function') renderSidebar();
 }
 
 function syncCompactLibraryNavigation(looseTracks) {
@@ -901,6 +923,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
+    density: 'default',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
@@ -1028,7 +1051,7 @@ function openNonAlbumModal(options = {}) {
     : hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
-      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial ? buildLooseTracksPartialNoteHtml() : ''}`
+      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial || looseTracksScanRunning() ? buildLooseTracksPartialNoteHtml() : ''}`
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;

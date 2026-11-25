@@ -72,8 +72,10 @@ function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
   return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span><span class="gallery-bar__artist-genres">${genreHtml}</span>`;
 }
 
+// The phone header's second line: the count and only the top genre (the country sits on the name's line).
 function buildGalleryArtistMobileSummaryHtml(albumCount, artistMusicBrainz = null) {
-  return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span>${buildGalleryArtistMetadataHtml(artistMusicBrainz)}<span class="gallery-bar__artist-genres">${buildGalleryArtistGenresHtml(artistMusicBrainz)}</span>`;
+  const [topGenre = ''] = galleryArtistGenrePillsHtml(artistMusicBrainz);
+  return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span><span class="gallery-bar__artist-genres">${topGenre ? `<span class="gallery-bar__artist-genre">${topGenre}</span>` : ''}</span>`;
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
@@ -379,7 +381,7 @@ function buildGalleryCardInfoHtml(config = {}) {
   const metadata = `${artist ? `<span class="gallery-card__artist"><span data-gallery-metadata-text>${escapeHtml(artist)}</span></span>` : ''}${year ? `<span class="gallery-card__year">${artist ? '· ' : ''}${escapeHtml(year)}</span>` : ''}`;
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
-    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
+    ? `<button class="album-open-trigger album-title-button" type="button" tabindex="-1" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
   return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle gallery-card__metadata">${metadata}</div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }

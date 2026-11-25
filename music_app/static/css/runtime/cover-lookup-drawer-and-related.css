@@ -79,6 +79,8 @@
   pointer-events: none;
 }
 .cover-lookup-drawer.is-open {
+  /* Visible from the first frame of the slide-in, so opening can move focus into it. */
+  transition: transform 220ms ease, opacity 220ms ease, visibility 0s;
   visibility: visible;
   transform: translateX(0);
   opacity: 1;
@@ -294,8 +296,10 @@
   gap: 10px;
   padding: 10px 4px 13px 10px;
 }
+/* Keyboard focus shows as the card's focus-within fill; the clipped button outline drew a stray line (owner, 2026-11-25). */
 :root .cover-lookup-task-open:hover,
-:root .cover-lookup-task-open:active {
+:root .cover-lookup-task-open:active,
+:root .cover-lookup-task-open:focus-visible {
   border-color: transparent !important;
   outline: none !important;
   background: transparent !important;

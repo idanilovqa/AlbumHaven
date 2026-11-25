@@ -164,11 +164,12 @@
 .shell-navigation-rail { height: 100%; padding: 20px 14px; }
 /* The navigation-tree header stays visible while the tree scrolls: it sticks to the rail's top edge over the
    rail padding, on the rail's own surface. Its margins become padding, so the tree does not move. The mobile
-   drawer already keeps its header fixed above a scrolling list. */
+   drawer already keeps its header fixed above a scrolling list. The header starts at the page header's top
+   inset, so "Artists" sits on the Gallery title line instead of the rail padding's 14px lower. */
 @media (min-width: 901px) {
   #artist-tree-expanded > .shell-navigation-rail-header {
     position: sticky; top: -20px; z-index: 3;
-    margin: -20px -14px 0; padding: 20px 14px 12px;
+    margin: -20px -14px 0; padding: var(--app-page-header-top) 14px 12px;
     background: var(--app-chrome);
   }
 }
@@ -198,8 +199,6 @@
 .shell-navigation-rail-toggle { flex: 0 0 auto; margin-left: 1px; }
 .shell-navigation-rail:not(.is-folded) .shell-navigation-rail-toggle { order: -1; }
 .shell-navigation-rail.is-folded { padding: 16px 10px; }
-/* NEW-005: a running search hides the stale tree until its results render. */
-.shell-navigation-rail[data-search-pending] .navigation-tree { visibility: hidden; }
 .shell-navigation-compact { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .shell-navigation-compact[hidden],
 #artist-tree-expanded[hidden] { display: none; }

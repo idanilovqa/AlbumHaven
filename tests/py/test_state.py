@@ -1740,7 +1740,8 @@ def test_state_utility_prewarm_routes_to_authoritative_postgres_projections_when
     state_module._queue_utility_rules_prewarm_for_state(library_state, config, logger)
 
     assert repository_configs == [config, config]
-    assert queued_kinds == ["problematic-files", "duplicate-identities", "rules"]
+    # No whole-library duplicate identity index is built at startup: candidates come from the keyed read.
+    assert queued_kinds == ["problematic-files", "rules"]
     assert legacy_calls == []
 
 
@@ -5972,9 +5973,8 @@ def test_a_handed_over_replay_reaches_the_registered_owner_and_restarts_after_it
 
     runs = []
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://owner-registry"}
-    owner = relation_reconciliation.RelationReconciliationOwner(
-        config, reconciled=lambda: None, prepare=lambda _config, **_kwargs: runs.append(True),
-    )
+    owner = relation_reconciliation.RelationReconciliationOwner(config, reconciled=lambda: None)
+    owner.run_once = lambda: runs.append(True)
     try:
         assert relation_reconciliation.request_relation_reconciliation(config) is True
         owner._thread.join(5)

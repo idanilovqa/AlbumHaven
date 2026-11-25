@@ -108,6 +108,9 @@
 :root .trigger-anchor-open::after {
   content: ''; position: absolute; left: -2px; right: -2px; top: -2px;
   bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px);
+  /* The insets size the outline; a trigger's own pseudo-element (a selected
+     filter's dot, a dropdown's chevron) must not leave a size or transform behind. */
+  width: auto; height: auto; transform: none;
   border: 0; border-radius: inherit; z-index: 0; pointer-events: none;
   background: var(--trigger-anchor-border-fill);
 }
@@ -116,10 +119,15 @@
      clips at the same fractional pixel would otherwise leave a colored seam. */
   content: ''; position: absolute; left: 0; right: 0; top: 0;
   bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 4px);
+  width: auto; height: auto; transform: none;
   border: 0; border-radius: 6px 6px 0 0; z-index: 1; pointer-events: none;
   background: var(--trigger-anchor-background);
 }
 :root .trigger-anchor-open > * { position: relative; z-index: 2; }
+/* An open dropdown control's own field joins the control's interior: no ring or fill of its own. */
+:root .ui-dropdown-control.trigger-anchor-open > input {
+  border-color: transparent !important; background: transparent !important; box-shadow: none !important; outline: none !important;
+}
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after {
   top: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px); bottom: -2px;
 }
@@ -156,8 +164,8 @@
    stays underneath; the accent becomes transparent without a terminal seam. */
 :root .trigger-anchor-surface[data-trigger-anchor-side]:not([data-trigger-anchor-side="none"])::before {
   display: block;
-  top: 0; bottom: auto; left: -1px;
-  width: 2px; height: min(210px, 100%);
+  top: 0; bottom: auto; left: var(--trigger-anchor-side-left, -1px);
+  width: var(--trigger-anchor-side-left-width, 2px); height: min(210px, 100%);
   z-index: 1;
   border: 0;
   --trigger-edge-direction: to bottom;
@@ -170,7 +178,8 @@
     transparent 100%);
 }
 :root .trigger-anchor-surface[data-trigger-anchor-side="right"]:not([data-trigger-anchor-side="none"])::before {
-  left: auto; right: -1px;
+  left: auto; right: var(--trigger-anchor-side-right, -1px);
+  width: var(--trigger-anchor-side-right-width, 2px);
 }
 :root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"][data-trigger-anchor-side]::before {
   top: auto; bottom: 0;

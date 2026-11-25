@@ -542,12 +542,17 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 
 
 let searchPendingRailFallback = null;
+// NEW-005: a running search hides the stale tree until its results render.
+function setRailTreesPending(rail, pending) {
+  rail?.querySelectorAll?.('.navigation-tree').forEach((tree) => window.NavigationTree?.setPending?.(tree, pending));
+}
 function releaseSearchPendingRail() {
   if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
   searchPendingRailFallback = null;
   const rail = document.getElementById('shell-navigation-rail');
   rail?.removeAttribute?.('data-search-pending');
   rail?.setAttribute?.('aria-busy', 'false');
+  setRailTreesPending(rail, false);
 }
 function holdSearchPendingRail(searching) {
   const rail = document.getElementById('shell-navigation-rail');
@@ -556,6 +561,7 @@ function holdSearchPendingRail(searching) {
     searchPendingRailFallback = null;
     rail?.setAttribute?.('data-search-pending', '');
     rail?.setAttribute?.('aria-busy', 'true');
+    setRailTreesPending(rail, true);
   } else if (rail?.hasAttribute?.('data-search-pending') && searchPendingRailFallback === null) {
     // renderSidebar releases it with the new tree; a search whose tree needs no re-render releases it shortly.
     searchPendingRailFallback = setTimeout(releaseSearchPendingRail, 1000);
@@ -576,7 +582,9 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.scanPageReturnContext
+  // A scan page or library-wide Loose Tracks is the page: no tree row is the current selection.
+  const selectionSuppressed = Boolean(state.ui.scanPageReturnContext || state.ui.looseTracksNavigationActive);
+  const effectiveView = selectionSuppressed
     ? {
       ...v,
       selected_artist: '',
@@ -593,7 +601,7 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.scanPageReturnContext
+    !selectionSuppressed
     && effectiveSurface === 'albums'
     && (
       effectiveView.all_artists_active

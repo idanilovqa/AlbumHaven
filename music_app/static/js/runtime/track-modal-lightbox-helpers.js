@@ -865,7 +865,25 @@ function openTrackModal(album, options = {}) {
   document.body.classList.add('modal-open');
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
+  revealTrackModalSearchDisc(getAlbumRequestKey(albumWithPlaybackContext));
   attachSharedPlayer();
+}
+
+// A search that matched a CD name opens Album Details on that CD, once per album and query.
+let revealedTrackModalSearchDisc = '';
+
+function revealTrackModalSearchDisc(albumKey) {
+  const query = String(state.view?.query || '').trim();
+  const revealKey = `${albumKey}\n${query}`;
+  if (!query || revealedTrackModalSearchDisc === revealKey) return;
+  const disc = getTrackModalElements().list?.querySelector('[data-disc-search-match="true"]');
+  if (!disc) return;
+  revealedTrackModalSearchDisc = revealKey;
+  // Align once the album page has laid out, and again after its header settles from that scroll.
+  scheduleBrowserAnimationFrame(() => {
+    revealAlbumTrackTableDisc(disc);
+    scheduleBrowserAnimationFrame(() => revealAlbumTrackTableDisc(disc));
+  });
 }
 
 function getCurrentTrackModalAlbum() {
@@ -1157,8 +1175,10 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
-  // An empty second artbox never outlives Album Details.
+  // An empty second artbox, or a Re-scan's message, never outlives Album Details.
   if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
+  if (typeof clearMissingAlbumRescanResult === 'function') clearMissingAlbumRescanResult();
+  revealedTrackModalSearchDisc = '';
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);

@@ -87,6 +87,7 @@ def _start_library_warmup(
     recover_persistence=None,
     metadata_repair_required=None,
     acquire_metadata_repair_lease=None,
+    import_cover_cache=None,
 ):
     stop_requested = threading.Event()
     runtime.relation_projection_startup_started_at = datetime.now(timezone.utc)
@@ -129,6 +130,12 @@ def _start_library_warmup(
                     # A retained journal (e.g. an unprovable legacy publication)
                     # is cleared only by a full publication, so still repair.
                     runtime.logger.exception("Postgres relation warm-up failed.")
+                # After relation readiness: the one-time backfill never delays artist pages at startup.
+                if import_cover_cache is not None and not stop_requested.is_set():
+                    try:
+                        import_cover_cache(runtime.config, stop_requested=stop_requested)
+                    except Exception:
+                        runtime.logger.exception("Cover provider cache import failed.")
                 if stop_requested.is_set() or metadata_repair_required is None:
                     return
                 try:
@@ -529,6 +536,10 @@ def create_asgi_app():
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.runtime_asset_versions import runtime_asset_version_cache
     from music_app.services.postgres_connections import prewarm_connection_pool
+    from music_app.services.cover_provider_cache import (
+        configure_shared_cover_search_cache,
+        import_cover_search_cache_file,
+    )
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
@@ -680,6 +691,7 @@ def create_asgi_app():
             progress=lambda update: runtime.library_state.update({"relation_compatibility_backfill": dict(update)}),
             logger=runtime.logger,
         )
+        configure_shared_cover_search_cache(runtime.config)
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -690,6 +702,7 @@ def create_asgi_app():
             recover_persistence=recover_runtime_library_persistence_on_startup,
             metadata_repair_required=file_metadata_repair_required_on_startup,
             acquire_metadata_repair_lease=acquire_file_metadata_repair_lease_on_startup,
+            import_cover_cache=import_cover_search_cache_file,
         )
         lastfm_started = False
         welcome_worker = None

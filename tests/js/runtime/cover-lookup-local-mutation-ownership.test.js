@@ -123,6 +123,45 @@ function harness() {
   return { context, markSeen, loadTasks, open, settle, draft, selection, save, remove, overlay, confirm, requests, galleries, notifications, painted, shown, server };
 }
 
+// BUGFIX-22: an interrupted save leaves the lookup's recorded choice on its task while the album keeps its old
+// cover. Save compares a pick with the album's own cover, so that recorded candidate can still be saved.
+test('a lookup recorded choice that never reached the album can be saved as its cover', async () => {
+  const h = harness();
+  const a = album('A');
+  const drones = { id: 'muse-drones', url: 'https://i.ytimg.com/vi/drones/maxresdefault.jpg', source: 'youtube',
+    art_kind: 'cover' };
+  await h.open(a);
+  h.context.state.coverLookup.tasks = [{ id: 'task-A', status: 'canceled', selected_candidate_id: drones.id,
+    album_payload: a, possible_matches: [drones] }];
+  Object.assign(h.context.state.coverLookup.modal, { taskId: 'task-A', possibleMatches: [drones] });
+  assert.equal(h.context.state.coverLookup.modal.remoteCover, null, 'the album still shows its local cover');
+
+  h.context.selectRemoteCoverFromLookup(drones.id);
+  assert.equal(h.save.disabled, false, 'the recorded choice is not the album cover, so Save is available');
+
+  h.context.markCoverLookupTaskActionTaken = () => {};
+  const saving = h.context.saveRemoteCoverFromLookup();
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].url, '/utilities/cover-lookup/save-remote');
+  assert.equal(h.requests[0].body.candidate_id, drones.id);
+  assert.equal(h.shown.get('A'), drones.url, 'Album Details and the gallery show the saved choice at once');
+  // The server now links the album to that remote cover.
+  h.server.set('A', { ok: true, remote_cover: { id: 'saved-remote:drones', url: drones.url },
+    local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: false }] });
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true,
+    task: { id: 'task-A', status: 'completed', selected_candidate_id: drones.id } }) });
+  await saving;
+  assert.deepEqual(h.notifications, []);
+  assert.equal(h.shown.get('A'), drones.url);
+
+  // Once that remote cover is the album's own cover, choosing it again has nothing to save.
+  await h.open(a);
+  assert.equal(h.context.state.coverLookup.modal.remoteCover.url, drones.url);
+  Object.assign(h.context.state.coverLookup.modal, { taskId: 'task-A', possibleMatches: [drones] });
+  h.context.selectRemoteCoverFromLookup(drones.id);
+  assert.equal(h.save.disabled, true);
+});
+
 test('lookup identity previews leave the caller hydrated album and its virtual release reference untouched', async () => {
   const h = harness();
   const original = { ...album('A'), id: 7, album_id: 7, key: 'album-a', album_ref: 'edition:album-a',
@@ -1250,4 +1289,72 @@ test('bounded interaction: a Cover Look Up gallery refresh reads its own album o
       return { requests: sent.slice(before), metrics: { renderCommits: renders() - rendered } };
     },
   });
+});
+
+// Owner (sandbox2): an OTHER ART image chosen as the cover reopened in both sections until a later listing.
+// Every render of the reopened lookup shows it once, in LOCAL.
+test('an other-art image chosen as the cover reopens only in LOCAL on every render', async () => {
+  const h = harness();
+  const a = album('A');
+  const booklet = { candidate_cover_ref: '/A/booklet.jpg', is_squareish: false, width: 1200, height: 600 };
+  h.server.set('A', { ok: true, active_cover_ref: a.cover_ref, selected_source_cover_ref: a.cover_ref,
+    local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: true, is_squareish: true }],
+    other_art: [booklet] });
+  await h.open(a);
+  assert.deepEqual(Array.from(h.context.state.coverLookup.modal.otherArt, cover => cover.candidate_cover_ref), [booklet.candidate_cover_ref]);
+  h.context.markCoverLookupTaskActionTaken = () => {};
+  const saving = h.context.saveLocalCoverFromLookup(booklet.candidate_cover_ref);
+  const saved = { ...a, cover_ref: booklet.candidate_cover_ref, cover_revision: 'booklet' };
+  h.server.set('A', { ok: true, active_cover_ref: '/A/cover.jpg', selected_source_cover_ref: booklet.candidate_cover_ref,
+    local_covers: [{ ...booklet, is_active: true }, { candidate_cover_ref: a.cover_ref, is_active: false, is_squareish: true }],
+    other_art: [] });
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true, updated_albums: [saved] }) });
+  await saving;
+
+  const renders = [];
+  h.context.renderCoverLookupModal = () => {
+    const modal = h.context.state.coverLookup.modal;
+    const count = list => (list || []).filter(cover => cover.candidate_cover_ref === booklet.candidate_cover_ref).length;
+    renders.push({ local: count(modal.localCovers), other: count(modal.otherArt) });
+  };
+  await h.open(saved);
+  await nextTurn();
+  assert.ok(renders.length > 1, 'the reopening renders from its cache and then from the server');
+  assert.deepEqual(renders.filter(render => render.local !== 1 || render.other !== 0), [], JSON.stringify(renders));
+});
+
+// Owner (sandbox2): deleting the selected cover brought it back into the window. A listing that answers while
+// the delete is in flight never restores it, and the selection is on the fallback from the first render.
+test('a deleted selected cover never reappears while its delete is in flight', async () => {
+  const h = harness();
+  const a = album('A');
+  const listing = { ok: true, active_cover_ref: a.cover_ref, selected_source_cover_ref: a.cover_ref,
+    local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: true, is_squareish: true },
+      { candidate_cover_ref: '/A/second.jpg', is_squareish: true }, { candidate_cover_ref: '/A/third.jpg', is_squareish: true }] };
+  h.server.set('A', listing);
+  await h.open(a);
+  const renders = [];
+  h.context.renderCoverLookupModal = () => {
+    const modal = h.context.state.coverLookup.modal;
+    renders.push({
+      deletedShown: (modal.localCovers || []).some(cover => cover.candidate_cover_ref === a.cover_ref),
+      selected: String(modal.pendingLocalRef || modal.activeLocalSelectionRef || ''),
+    });
+  };
+  const deleting = h.context.deleteLocalCoverFromLookup(a.cover_ref);
+  await nextTurn();
+  // The folder index has not caught up yet: a refresh still lists the deleted file.
+  await h.context.refreshCoverLookupGallery(false);
+  const deleteRequest = h.requests.find(request => request.url === '/utilities/cover-lookup/local-delete');
+  assert.equal(deleteRequest.body.next_cover_ref, '/A/second.jpg', 'the server selects the card the lookup shows selected');
+  const afterDelete = { ok: true, active_cover_ref: '/A/second.jpg', selected_source_cover_ref: '/A/second.jpg',
+    local_covers: [{ candidate_cover_ref: '/A/second.jpg', is_active: true, is_squareish: true },
+      { candidate_cover_ref: '/A/third.jpg', is_squareish: true }] };
+  h.server.set('A', afterDelete);
+  deleteRequest.resolve({ ok: true, json: async () => ({ ok: true,
+    updated_albums: [{ ...a, cover_ref: '/A/second.jpg' }], gallery: afterDelete }) });
+  await deleting;
+  assert.ok(renders.length >= 3, JSON.stringify(renders));
+  assert.deepEqual(renders.filter(render => render.deletedShown), [], JSON.stringify(renders));
+  assert.deepEqual([...new Set(renders.map(render => render.selected))], ['/A/second.jpg'], JSON.stringify(renders));
 });

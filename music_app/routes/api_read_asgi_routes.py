@@ -617,6 +617,7 @@ def library_loose_tracks(request: Request) -> JSONResponse:
         query_params=request.query_params,
     )
     payload["inventory_mutation_revision"] = int(_library_state(request).get("inventory_mutation_revision") or 0)
+    _project_missing_album_actions_for_request(request, payload)
     return JSONResponse(payload)
 
 
@@ -859,6 +860,7 @@ def _unsupported_postgres_selected_artist_browse_response(request: Request) -> J
 def _is_postgres_album_search_request(request: Request) -> bool:
     allowed_search_params = {
         "q",
+        "keep_artist",
         "payload_tier",
         "surface",
         "all_artists",

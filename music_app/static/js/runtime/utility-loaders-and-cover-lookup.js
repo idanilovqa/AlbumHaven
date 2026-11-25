@@ -47,9 +47,15 @@ async function loadProblematicFiles(force = false, options = {}) {
   // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
   const refreshesCompleteList = state.utility.loaded === true
     && state.utility.problematicFilesComplete === true;
+  // An open tab's refresh commits the next complete list at once: a bounded page committed first
+  // showed a filtered view's few rows of it until the rest came.
+  const replacesShownList = refreshesCompleteList && problematicFilesTabOnScreen();
+  const completeOnly = options.completeOnly === true || replacesShownList;
   state.utility.loading = true;
-  state.utility.problematicFilesComplete = false;
-  state.utility.problematicArtistItems = [];
+  if (!replacesShownList) {
+    state.utility.problematicFilesComplete = false;
+    state.utility.problematicArtistItems = [];
+  }
   // The complete list carries every Artist problem, so the paint before it must not page Artists.
   // A refresh keeps the complete list on screen until its bounded page commits: no Artist page before then.
   state.utility.problematicArtistHasMore = options.completeOnly !== true && !refreshesCompleteList;
@@ -134,10 +140,22 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
-        // A track-opened album stays listed until the complete list can confirm it.
+        // A track-opened album stays listed until the complete list can confirm it, unless it no longer
+        // lists that track: a list read during a merge still held the merged-away album (FTC-TAGS-020).
+        const focusedTrackPath = String(state.utility.focusedTrackPath || '');
+        const listsFocusedTrack = (album) => {
+          const paths = [
+            ...(Array.isArray(album?.track_paths) ? album.track_paths : []),
+            ...(Array.isArray(album?.tracks) ? album.tracks.map((track) => track?.path) : []),
+          ].map((path) => String(path || '')).filter(Boolean);
+          // Only a loaded membership can show the track has left; a summary row without one keeps its pin.
+          if (!focusedTrackPath || (!paths.length && album?.detail_loaded !== true)) return true;
+          return paths.includes(focusedTrackPath);
+        };
         const pinnedKey = String(
           state.utility.pinnedProblematicKey
-          || (data.complete === false && selectedAlbum && !state.utility.problematicMutation ? selectedKey : ''),
+          || (data.complete === false && selectedAlbum && !state.utility.problematicMutation
+            && listsFocusedTrack(selectedAlbum) ? selectedKey : ''),
         );
         const pinnedAlbum = pinnedKey && data.complete === false
           && !summaryItems.some((item) => item.key === pinnedKey)
@@ -168,6 +186,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         // A bounded page's reason catalog served paging; the complete list's own reasons replace it.
         if (!Array.isArray(completeData?.problem_reason_types)) state.utility.completeProblemReasonTypes = [];
         const committed = commitSummary(completeData, true, true);
+        state.utility.problematicArtistItems = [];
         state.utility.problematicHasMore = false;
         state.utility.problematicNextCursor = '';
         state.utility.problematicArtistHasMore = false;
@@ -176,8 +195,9 @@ async function loadProblematicFiles(force = false, options = {}) {
       };
       let data;
       let committedSelection;
-      if (options.completeOnly === true) {
-        // The tab opened on a list loaded in the background: its bounded page is already on screen.
+      if (completeOnly) {
+        // The tab opened on a list loaded in the background (its bounded page is already on screen),
+        // or a complete list on screen is refreshed.
         data = await fetchSummary('/utilities/problematic-files');
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
         committedSelection = commitCompleteList(data);

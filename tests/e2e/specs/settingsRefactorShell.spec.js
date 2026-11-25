@@ -191,8 +191,8 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   await phone.goto('/');
   await expect(phone.locator('#mobile-library-button')).toBeVisible();
   // Owner (11-09): the phone Gallery header keeps its count right under the title, as on web, and every Settings
-  // page header lines up with it: Back where the Gallery hamburger is, then the hamburger, then the title on the
-  // same line and size.
+  // page header lines up with it on the same line and size. Owner (11-16, 11-25): each header piece keeps one place
+  // and order on every page: the hamburger where the Gallery hamburger is, then Back, then the title.
   // parity-check: allow-read-only-measurement-evaluate -- header geometry of the real phone pages
   const readHeader = (pg) => pg.evaluate(() => {
     const box = (selector) => { const node = [...document.querySelectorAll(selector)].find((match) => match.getClientRects().length); if (!node) return null;
@@ -248,10 +248,10 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   await expect(phone.locator('#mobile-page-title')).toHaveText('Appearance');
   await expect.poll(async () => (await readHeader(phone)).back?.y).toBe(gallery.hamburger.y);
   const settings = await readHeader(phone);
-  expect({ x: settings.back.x, y: settings.back.y }).toEqual({ x: gallery.hamburger.x, y: gallery.hamburger.y });
-  expect(settings.pageHamburger.y).toBe(gallery.hamburger.y);
-  expect(settings.pageHamburger.x).toBeGreaterThan(settings.back.x);
-  expect(settings.pageTitle.x).toBeGreaterThan(settings.pageHamburger.x);
+  expect({ x: settings.pageHamburger.x, y: settings.pageHamburger.y }).toEqual({ x: gallery.hamburger.x, y: gallery.hamburger.y });
+  expect(settings.back.y).toBe(gallery.hamburger.y);
+  expect(settings.back.x).toBeGreaterThan(settings.pageHamburger.x);
+  expect(settings.pageTitle.x).toBeGreaterThan(settings.back.x);
   expect({ y: settings.pageTitle.y, height: settings.pageTitle.height, fontSize: settings.pageTitle.fontSize })
     .toEqual({ y: gallery.title.y, height: gallery.title.height, fontSize: gallery.title.fontSize });
   expect(Math.abs((settings.picker.y + settings.picker.height / 2) - (gallery.hamburger.y + gallery.hamburger.height / 2))).toBeLessThanOrEqual(1);

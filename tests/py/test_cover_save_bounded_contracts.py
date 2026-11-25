@@ -34,7 +34,7 @@ from tests.py.test_library_route_bounded_contracts import (
     library_app,  # noqa: F401 - fixture
 )
 
-_OTHER_PROJECTIONS = ("duplicate-identities", "duplicate-absence", "non-album-candidates", "relation-alias-maps")
+_OTHER_PROJECTIONS = ("duplicate-absence", "non-album-candidates", "relation-alias-maps")
 
 
 class _Library:

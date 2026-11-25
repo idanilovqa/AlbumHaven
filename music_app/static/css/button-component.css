@@ -161,8 +161,10 @@ vertical-align: -2px;
 border: 2px solid currentColor;
 border-right-color: transparent;
 border-radius: 50%;
-animation: spin 0.8s linear infinite;
+animation: ui-button-spin 0.8s linear infinite;
 }
+/* The component owns its keyframes: account and admin pages do not load the library's base CSS. */
+@keyframes ui-button-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
 .ui-button:not(.action-button)[aria-busy='true'] .ui-button__content::before { animation: none; border-right-color: currentColor; }
 }
@@ -353,7 +355,26 @@ box-shadow: none !important;
 
 /* Shared dropdown control: positions a neutral chevron against the control, not its label. */
 .ui-dropdown-control { position: relative; width: 100%; cursor: pointer; }
-.ui-dropdown-control > input { width: 100%; }
+/* The dropdown's field is drawn by the component, as in Edit Tags; pages choose a size, not a look. */
+.ui-dropdown-control > input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 34px 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.86rem;
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Small size: compact headers such as the phone Settings page. */
+.ui-dropdown-control--small > input { height: 36px; padding: 0 30px 0 12px; font-size: 13px; }
 :root .ui-dropdown-control > input:not(:disabled):not([readonly]) { cursor: pointer; }
 .ui-dropdown-control:has(> input:disabled),
 .ui-dropdown-control > input:disabled { cursor: not-allowed; }

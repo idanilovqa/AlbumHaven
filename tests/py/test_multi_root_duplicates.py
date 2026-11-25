@@ -262,11 +262,13 @@ def test_multidisc_folders_remain_one_source_when_compared_with_flat_copy():
     assert rejected_local_album_paths(entries) == {}
 
 
-def test_scoped_postgres_membership_checks_mixed_tags_within_each_disc_folder():
+def test_scoped_postgres_membership_labels_only_proven_copies_never_a_mixed_folder():
+    # The strict multi-album folder rule owns "Mixed album metadata in one folder" (2026-11-24); the membership
+    # twin labels a file only when it is a proven copy outside its album's folder.
     sql = local_album_membership_ctes_sql(scope_album_key=True)
 
-    assert "physical_folder" in sql
-    assert "mixed.physical_folder = files.physical_folder" in sql
+    assert "Duplicate track outside album folder" in sql
+    assert "Mixed album metadata in one folder" not in sql
 
 
 def test_multidisc_copy_keeps_all_discs_in_its_own_source():

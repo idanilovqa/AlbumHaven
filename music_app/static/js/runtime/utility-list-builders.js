@@ -447,7 +447,12 @@ function buildDetectedProblemsHtml(album) {
           ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
-      ${buildMissingAlbumDetailsHtml({ canRemove, albumKey: album.key, reason: album.missing_reason })}
+      ${buildMissingAlbumDetailsHtml({
+        canRemove,
+        albumKey: album.key,
+        reason: album.missing_reason,
+        rescanMessage: typeof getMissingAlbumRescanResult === 'function' ? getMissingAlbumRescanResult(album.key)?.message : '',
+      })}
     `;
   }
   const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));
@@ -455,12 +460,11 @@ function buildDetectedProblemsHtml(album) {
   proposals.forEach(proposal => {
     if (!rows.some(row => row.path === proposal.path)) rows.push({ path: proposal.path, filename: getFilenameFromPath(proposal.path), reasons: [], ignorable_reasons: [] });
   });
-  const selectedFilters = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
-  const visibleReason = reason => !selectedFilters.length || selectedFilters.includes(normalizeProblemFilterReason(reason));
+  // Problem filters narrow the list only; an open entry always shows every problem it has (owner, 2026-11-24).
   const coverReasons = new Set(['Missing cover art', 'Poor art quality']);
   const albumRows = Array.isArray(album?.album_problem_rows) ? album.album_problem_rows
     : (album.problem_reasons || []).map(reason => ({ reason, row_key: '' }));
-  const albumProblems = albumRows.filter(item => visibleReason(item.reason)).map(item => {
+  const albumProblems = albumRows.map(item => {
     const matching = getIgnorableProblemRows(album).filter(row => normalizeProblemFilterReason(row.reason) === normalizeProblemFilterReason(item.reason));
     const keys = matching.map(row => String(row.row_key || '')).filter(Boolean);
     return buildAlertLabelHtml({
@@ -473,7 +477,7 @@ function buildDetectedProblemsHtml(album) {
   }).join('');
   const tableRows = rows.map((row, rowIndex) => {
     const track = (album.tracks || []).find(item => item.path === row.path) || {};
-    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason) && visibleReason(reason));
+    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason));
     const suggestions = proposals.filter(proposal => proposal.path === row.path);
     if (!reasons.length && !suggestions.length) return null;
     return {
@@ -516,7 +520,7 @@ function buildDetectedProblemsHtml(album) {
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
     <h4 class="utility-detail-section-title">Detected problems</h4>
-    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
@@ -1135,11 +1139,16 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     mergedAlbum.total_duration_seconds = totalDurationSeconds;
     mergedAlbum.total_duration_display = formatCanonicalAlbumDuration(totalDurationSeconds);
   }
-  if (visibleAlbum?.preview_only !== true
-      && tracks.length
-      && (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
-        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview'))) {
-    mergedAlbum.track_count_preview = tracks.length;
+  if (visibleAlbum?.preview_only !== true && tracks.length) {
+    if (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
+        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview')) {
+      mergedAlbum.track_count_preview = tracks.length;
+    }
+    // A complete merge is its tracks: a membership copied from either side (the moved tracks only, or
+    // the destination before the merge) made Album Details trim the merged album back to it.
+    if (Array.isArray(mergedAlbum.track_paths)) {
+      mergedAlbum.track_paths = tracks.map((track) => String(track?.path || '')).filter(Boolean);
+    }
   }
   return mergedAlbum;
 }
@@ -1840,11 +1849,19 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
         (artist) => artist !== selectedArtist,
         false,
       );
-    const allFamilyArtists = Array.from(new Set([
-      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : []),
-      ...allFamilyGroups
+    const nextFamilyArtists = allFamilyGroups
+      .map((group) => String(group.artist || '').trim())
+      .filter((artist) => artist && artist !== selectedArtist);
+    // An artist whose mounted family group this edit emptied (an undone credit move) is no longer family.
+    const emptiedFamilyArtists = new Set(
+      ((hasMountedRoleGroups ? state.view.family_artist_groups : state.view.artist_groups) || [])
         .map((group) => String(group.artist || '').trim())
-        .filter((artist) => artist && artist !== selectedArtist),
+        .filter((artist) => artist && artist !== selectedArtist && !nextFamilyArtists.includes(artist)),
+    );
+    const allFamilyArtists = Array.from(new Set([
+      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : [])
+        .filter((artist) => !emptiedFamilyArtists.has(String(artist || '').trim())),
+      ...nextFamilyArtists,
     ])).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
     const visibleFamilyGroups = activeRelatedSet.size
       ? allFamilyGroups.filter((group) => groupMatchesRelatedArtists(group, activeRelatedSet))
@@ -1960,15 +1977,27 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   return mutation;
 }
 
-async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = false } = {}) {
+// `problematicAlbum` is the save's own answer for its album (null: no problem left); undefined leaves
+// the list for a later reconciliation.
+async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = false, problematicAlbum } = {}) {
   const normalizedTaskId = String(taskId || '').trim();
   const mutation = state.utility?.problematicMutation;
   if (!mutation || String(mutation.taskId || '') !== normalizedTaskId) return false;
   const mutationOwnsView = (
     String(state.utility.selectedProblematicKey || '') === String(mutation.albumKey || '')
   );
+  if (problematicAlbum !== undefined) {
+    const originalPaths = new Set(mutation.originalTrackPaths || []);
+    const listed = replaceProblematicEntries(state.utility.problematicFiles, mutation.albumKey, originalPaths, problematicAlbum);
+    const searched = replaceProblematicEntries(
+      state.utility.problematicServerSearchItems, mutation.albumKey, originalPaths, problematicAlbum,
+    );
+    if (problematicAlbum && !listed.placed && !searched.placed) listed.items.push(problematicAlbum);
+    state.utility.problematicFiles = listed.items;
+    state.utility.problematicServerSearchItems = searched.items;
+  }
   if (reconcileSelection && mutationOwnsView) {
-    const items = getAllProblematicItems();
+    const items = getFilteredProblematicAlbums();
     const survivingKeys = new Set(items.map((album) => String(album?.key || '')).filter(Boolean));
     const selectedKey = String(mutation.albumKey || '');
     if (survivingKeys.has(selectedKey)) {
@@ -2275,6 +2304,13 @@ async function watchSaveTask(taskId, context = {}) {
     || Number(state.ui?.viewStateRevision || 0) === originatingViewStateRevision
   );
   const originatingViewRequestUrl = String(context.originatingViewRequestUrl || '').trim();
+  // A content search's top artist is refreshed as the same search so its other matches stay. A search for
+  // an artist's own name keeps that artist: re-running it as a search reshuffled the open utilities.
+  const saveTaskRefreshView = () => (
+    (state.view?.search_context?.artist_name_match_artists || []).length
+      ? state.view
+      : viewForSearchRefresh(state.view)
+  );
   const currentViewMatchesOriginRequest = () => (
     Boolean(originatingViewRequestUrl)
     && typeof buildApiUrl === 'function'
@@ -2457,7 +2493,9 @@ async function watchSaveTask(taskId, context = {}) {
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         const openTrackModalRefreshes = [];
         const deferOpenTrackModalRefresh = (refresh) => openTrackModalRefreshes.push(refresh);
-        await refreshLoadedProblematicFilesAfterSaveCompletion();
+        // A save that answered with its own Problematic Files entry has updated the list already; a whole-list
+        // read right after the commit can still serve the index row the save replaced.
+        if (!context.problematicEntryApplied) await refreshLoadedProblematicFilesAfterSaveCompletion();
         await yieldToNavigationAfterCompletion();
         let destinationViewReconciled = false;
         if (data.destination_artist && canReconcileOriginView()) {
@@ -2584,25 +2622,9 @@ async function watchSaveTask(taskId, context = {}) {
             && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
-              let refreshView = state.view;
-              const originSearch = context.originatingSearchContext;
-              const restoresAllSearchResults = Boolean(
-                canReconcileOriginView()
-                && structuralTagEditRequiresMountedGalleryChildReplacement
-                && originSearch?.selected_artist_source === 'auto_top_match'
-                && !(originSearch.artist_name_match_artists || []).length
-                && originatingViewRequestUrl
-                && String(state.view.query || '').trim()
-                && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
-                && !state.view.primary_filter_active
-                && !(state.view.related_filter_artists || []).length
-              );
-              if (restoresAllSearchResults) {
-                refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
-              }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await ownViewRequest(fetchAndRender(
-                buildApiUrl(refreshView, { rootFullPayload: true }),
+                buildApiUrl(saveTaskRefreshView(), { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -2628,9 +2650,6 @@ async function watchSaveTask(taskId, context = {}) {
               ) {
                 await waitForBrowserTimeout(500);
                 continue;
-              }
-              if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
-                replaceBrowserViewState(state.view);
               }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
@@ -2704,7 +2723,7 @@ async function watchSaveTask(taskId, context = {}) {
           renderView(currentRenderOptions());
         } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
-            await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
+            await fetchAndRender(buildApiUrl(saveTaskRefreshView()), false, currentViewRenderOptions());
           } catch (refreshError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but the navigated view could not be refreshed.',
@@ -2821,7 +2840,7 @@ async function watchSaveTask(taskId, context = {}) {
         if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
-              buildApiUrl(state.view),
+              buildApiUrl(saveTaskRefreshView()),
               false,
               currentViewRenderOptions(),
             );
@@ -3087,33 +3106,37 @@ function updateTrackModalIfStillShowingAlbum(originalAlbum, updatedAlbums) {
   updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums);
 }
 
+// Every entry of a saved album (by key or by any of its files) gives way to its new entry, placed once
+// where the first stood; a null entry drops them.
+function replaceProblematicEntries(items, originalKey, originalPaths, updatedAlbum) {
+  const updatedKey = String(updatedAlbum?.key || '');
+  let placed = false;
+  const next = [];
+  for (const item of items || []) {
+    const matches = (originalKey && item.key === originalKey)
+      || (updatedKey && item.key === updatedKey)
+      || albumsShareTrackPath(item, originalPaths);
+    if (!matches) next.push(item);
+    else if (updatedAlbum && !placed) {
+      next.push(updatedAlbum);
+      placed = true;
+    }
+  }
+  return { items: next, placed };
+}
+
 function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
-  const originalKey = String(originalAlbum?.key || '');
-  const originalPaths = getAlbumTrackPaths(originalAlbum);
   const hasUpdatedAlbum = updatedAlbum && typeof updatedAlbum === 'object' && Object.keys(updatedAlbum).length;
-  const updatedKey = hasUpdatedAlbum ? String(updatedAlbum.key || '') : '';
   const previousItems = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
   const selectedKeyBefore = String(state.utility.selectedProblematicKey || '');
   const selectedIndexBefore = previousItems.findIndex((item) => String(item?.key || '') === selectedKeyBefore);
-  let insertedUpdatedAlbum = false;
-
-  const nextItems = (state.utility.problematicFiles || []).reduce((items, item) => {
-    const matchesOriginal = (originalKey && item.key === originalKey) || albumsShareTrackPath(item, originalPaths);
-    const matchesUpdated = updatedKey && item.key === updatedKey;
-    if (matchesOriginal || matchesUpdated) {
-      if (hasUpdatedAlbum && !insertedUpdatedAlbum) {
-        items.push(updatedAlbum);
-        insertedUpdatedAlbum = true;
-      }
-      return items;
-    }
-    items.push(item);
-    return items;
-  }, []);
-
-  if (hasUpdatedAlbum && !insertedUpdatedAlbum) {
-    nextItems.push(updatedAlbum);
-  }
+  const { items: nextItems, placed } = replaceProblematicEntries(
+    previousItems,
+    String(originalAlbum?.key || ''),
+    getAlbumTrackPaths(originalAlbum),
+    hasUpdatedAlbum ? updatedAlbum : null,
+  );
+  if (hasUpdatedAlbum && !placed) nextItems.push(updatedAlbum);
 
   state.utility.problematicFiles = nextItems;
   state.utility.loaded = true;
@@ -4200,11 +4223,9 @@ function getVisibleProblemSuggestions(album = getSelectedProblematicAlbum()) {
   const albumKey = String(album?.key || '');
   if (state.utility.proposalAlbumKey && state.utility.proposalAlbumKey !== albumKey) state.utility.proposalSelections = {};
   state.utility.proposalAlbumKey = albumKey;
-  const selected = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
   const query = String(state.utility.searchQuery || '').trim().toLocaleLowerCase();
   return (Array.isArray(album?.suggested_edits) ? album.suggested_edits : []).filter(proposal => {
     if (!proposal?.id || proposal.eligible === false) return false;
-    if (selected.length && !selected.includes(normalizeProblemFilterReason(proposal.reason))) return false;
     if (!query) return true;
     const track = (album.tracks || []).find(item => item.path === proposal.path) || {};
     return [album.name, album.album_artist, track.title, track.artist, proposal.original, proposal.corrected, proposal.path]

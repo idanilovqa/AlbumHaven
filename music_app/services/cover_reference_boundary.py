@@ -40,6 +40,8 @@ OUTBOUND_FIELDS: Mapping[str, tuple[str, str]] = {
 INBOUND_FIELDS: Mapping[str, str] = {
     **{client: server for server, (client, _kind) in OUTBOUND_FIELDS.items()},
     "source_cover_ref": "source_path",
+    # The card a lookup selects after deleting the selected one.
+    "next_cover_ref": "next_cover_path",
 }
 UNAVAILABLE_COVER_URL = "/cover/unavailable"
 

@@ -94,13 +94,16 @@
 .album-track-table__disc--collapsible .album-track-table__row--secondary {
   contain-intrinsic-block-size: auto max(28px, calc(1.2em + .805rem));
 }
-.album-track-table .compact-data-table-row:hover,
-:root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table-row:hover { background: color-mix(in srgb, var(--appearance-ink, white) 5%, transparent); }
+/* Hover looks need a device that can hover: a tap leaves :hover on the row, and a touch screen never clears it. */
+@media (hover: hover) {
+  .album-track-table .compact-data-table-row:hover,
+  :root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table-row:hover { background: color-mix(in srgb, var(--appearance-ink, white) 5%, transparent); }
+}
 .album-track-table__row--search-match {
   background: color-mix(in srgb, var(--album-track-accent) 11%, transparent);
   box-shadow: inset 3px 0 0 var(--album-track-accent), inset 12px 0 18px -16px var(--album-track-accent);
 }
-.album-track-table .album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
+@media (hover: hover) { .album-track-table .album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); } }
 .album-track-table__row--playing {
   border-radius: 8px;
   outline: 1px solid color-mix(in srgb, var(--album-track-accent) 86%, transparent);
@@ -116,39 +119,51 @@
   background: color-mix(in srgb, var(--album-track-accent) 8%, transparent);
 }
 .album-track-table__row--current:not(.album-track-table__row--playing) .album-track-table__play { border-color: color-mix(in srgb, var(--album-track-accent) 60%, transparent); color: var(--album-track-accent); }
-.album-track-table__row--playing::before,
-.album-track-table__row--playing::after {
-  --album-track-spectrum-offset: 0turn;
-  content: '';
+/* The playing row's perimeter spectrum: a ring mask (the row's 2px edge) over two conic
+   gradients that turn by transform, so the compositor animates them without a main-thread
+   frame. Each gradient is a square centred on the row and wider than its diagonal; the clip keeps
+   its layer to the row, so neighbouring rows keep their own text rendering. */
+.album-track-table__spectrum {
+  display: none;
   pointer-events: none;
   position: absolute;
   z-index: 3;
   inset: 0;
+  overflow: hidden;
   padding: 2px;
-  border-radius: inherit;
-  background: conic-gradient(from calc(var(--album-track-spectrum-angle, 0turn) + var(--album-track-spectrum-offset)), transparent 0turn, transparent .018turn, color-mix(in srgb, var(--album-track-accent) 10%, transparent) .045turn, color-mix(in srgb, var(--album-track-accent) 48%, transparent) .074turn, var(--album-track-accent) .096turn, color-mix(in srgb, white 78%, var(--album-track-accent)) .104turn, var(--album-track-accent) .112turn, color-mix(in srgb, var(--album-track-accent) 34%, transparent) .14turn, transparent .19turn, transparent 1turn);
+  border-radius: 8px;
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
-  opacity: 0;
 }
-.album-track-table__row--playing::after { --album-track-spectrum-offset: 0.5turn; }
-@property --album-track-spectrum-angle { syntax: '<angle>'; initial-value: 0turn; inherits: false; }
-.album-track-table[data-playing-animation="enabled"] .album-track-table__row--playing.album-track-table__row--animated::before,
-.album-track-table[data-playing-animation="enabled"] .album-track-table__row--playing.album-track-table__row--animated::after {
+@media (prefers-reduced-motion: no-preference) {
+  .album-track-table[data-playing-animation="enabled"] .album-track-table__row--playing.album-track-table__row--animated .album-track-table__spectrum { display: block; }
+}
+.album-track-table__spectrum::before,
+.album-track-table__spectrum::after {
+  --album-track-spectrum-offset: 0turn;
+  --album-track-spectrum-size: calc(100% + 96px);
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--album-track-spectrum-size);
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  background: conic-gradient(from var(--album-track-spectrum-offset), transparent 0turn, transparent .018turn, color-mix(in srgb, var(--album-track-accent) 10%, transparent) .045turn, color-mix(in srgb, var(--album-track-accent) 48%, transparent) .074turn, var(--album-track-accent) .096turn, color-mix(in srgb, white 78%, var(--album-track-accent)) .104turn, var(--album-track-accent) .112turn, color-mix(in srgb, var(--album-track-accent) 34%, transparent) .14turn, transparent .19turn, transparent 1turn);
   opacity: .84;
-  animation-name: album-track-perimeter-spectrum;
-  animation-duration: var(--album-track-playing-period);
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
+  animation: album-track-perimeter-spectrum var(--album-track-playing-period) linear infinite;
 }
-@keyframes album-track-perimeter-spectrum { to { --album-track-spectrum-angle: 1turn; } }
+.album-track-table__spectrum::after { --album-track-spectrum-offset: 0.5turn; }
+@keyframes album-track-perimeter-spectrum { from { rotate: 0turn; } to { rotate: 1turn; } }
 .album-track-table__play { position: relative; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid color-mix(in srgb, var(--appearance-ink, white) 58%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 80%, transparent); color: var(--appearance-ink, var(--text)); cursor: pointer; }
-.album-track-table__play:hover:not(:disabled) {
-  border-color: var(--album-track-play-hover);
-  outline: 2px solid var(--album-track-play-hover);
-  outline-offset: 2px;
+@media (hover: hover) {
+  .album-track-table__play:hover:not(:disabled) {
+    border-color: var(--album-track-play-hover);
+    outline: 2px solid var(--album-track-play-hover);
+    outline-offset: 2px;
+  }
 }
 .album-track-table__row--playing .album-track-table__play { border-color: var(--album-track-accent); color: var(--album-track-accent); box-shadow: 0 0 10px color-mix(in srgb, var(--album-track-accent) 42%, transparent); }
 .album-track-table__play::before,
@@ -189,6 +204,14 @@
 .album-track-table[data-playing-animation='disabled'] .album-track-table__secondary > span { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .album-track-table__secondary.is-credit-overflowing > span { animation: none; }
+}
+/* Default density (pages of loose tracks): larger type and a clear gap between the title and its second line.
+   Album Details keeps the approved compact rows. */
+.album-track-table[data-density='default'] .compact-data-table-row:not(.album-track-table__section-row) { font-size: max(1.08em, .875rem); }
+.album-track-table[data-density='default'] .album-track-table__secondary { margin-top: 6px; font-size: max(.78em, .7rem); line-height: 1.25; }
+.album-track-table[data-density='default'] .album-track-table__disc--collapsible .album-track-table__row { contain-intrinsic-block-size: auto 34px; }
+.album-track-table[data-density='default'] .album-track-table__disc--collapsible .album-track-table__row--secondary {
+  contain-intrinsic-block-size: auto calc(1.2em + 1rem + 20px);
 }
 .album-track-table__path { display: block; min-width: 0; overflow: hidden; color: var(--appearance-muted, var(--muted)); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }
@@ -232,8 +255,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .album-track-table__row--playing::before,
-  .album-track-table__row--playing::after,
   .album-track-table__play--activating::before,
   .album-track-table__play--activating::after { display: none; animation: none; }
 }
@@ -253,8 +274,14 @@
 .album-track-table__number-play { position: relative; display: grid; place-items: center; width: 28px; height: 28px; }
 .album-track-table__number-play > .album-track-table__play { position: absolute; inset: 0; opacity: 0; }
 .album-track-table__number { font-variant-numeric: tabular-nums; }
-.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__number { visibility: hidden; }
-.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__play { opacity: 1; }
+/* The play button replaces the number on the playing or current track and for keyboard focus;
+   hover reveals it only where the device can hover (a tapped row would keep it). */
+.album-track-table__row:is(:has(:focus-visible), .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__number { visibility: hidden; }
+.album-track-table__row:is(:has(:focus-visible), .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__play { opacity: 1; }
+@media (hover: hover) {
+  .album-track-table__row:hover .album-track-table__number { visibility: hidden; }
+  .album-track-table__row:hover .album-track-table__play { opacity: 1; }
+}
 .album-track-table__title, .album-track-table__path { user-select: text; }
 .album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
 

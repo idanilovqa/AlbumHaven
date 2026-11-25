@@ -1065,12 +1065,14 @@ test('empty scoped log history renders its captured console and keeps export exp
     detail: { innerHTML: '' },
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
-    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
+    // The shared field button still carries the Problematic Files filter's active state.
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {}, classList: new Set(['is-active']) },
     problemFilterMenu: { hidden: false },
     problemFilterChips: { innerHTML: 'old chips' },
     sidebarLabel: { textContent: '' },
     tabs: [],
   };
+  elements.problemFilterButton.classList.remove = elements.problemFilterButton.classList.delete;
   const context = {
     state: {
       utility: {
@@ -1101,6 +1103,7 @@ test('empty scoped log history renders its captured console and keeps export exp
   }
   runProblematicRenderer(context);
   context.renderUtilityLogHistory();
+  assert.equal(elements.problemFilterButton.classList.has('is-active'), false, 'the Period button is not a selected PF filter');
   assert.match(elements.detail.innerHTML, /No events in this snapshot/);
   assert.match(elements.detail.innerHTML, /Recent activity/);
   assert.equal(elements.count.textContent, '0');

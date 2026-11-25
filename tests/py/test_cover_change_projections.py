@@ -80,7 +80,7 @@ def test_a_full_invalidation_discards_the_noted_changes(repository):
 
 
 def test_a_change_keeps_every_projection_cached(repository):
-    other = (URL, "duplicate-identities")
+    other = (URL, "duplicate-absence")
     browse._UTILITY_PROJECTION_CACHE.update({KEY: {}, other: {}})
 
     _save("a")

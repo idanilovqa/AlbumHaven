@@ -176,7 +176,7 @@ function windowRows({ context, els }, albums) {
 // One open of Problematic Files (a forced load of the complete list) raced by a forced reload while it is in
 // flight, which joins it; then renders of the committed list: reopening the loaded tab, and selecting a
 // mounted row.
-async function openAndRender(session) {
+async function openAndRender(session, pass = 1) {
   const { albums, capture, context, counts, els, settle } = session;
   const before = capture.requests.length;
   const mutationsBefore = counts.domMutations;
@@ -202,7 +202,10 @@ async function openAndRender(session) {
   assert.equal(context.state.utility.selectedProblematicKey, mounted[1]);
 
   const requests = capture.urls().slice(before);
-  assert.deepEqual(requests, ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+  // Reloading the complete list the open tab shows reads only the complete list (PF-NEW-PROBLEMS).
+  assert.deepEqual(requests, pass === 1
+    ? ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']
+    : ['/utilities/problematic-files']);
   return { requests, metrics: { itemsVisited, domMutations } };
 }
 

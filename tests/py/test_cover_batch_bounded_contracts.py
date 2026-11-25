@@ -91,11 +91,21 @@ def _cover_library(root: Path, *, covered: int, missing: int) -> dict[str, dict[
     return file_cache
 
 
+def _fresh_cover_cache() -> None:
+    """Each cardinality starts with an empty provider cache."""
+    from music_app.services import cover_provider_cache
+
+    cover_provider_cache._PROCESS_CACHES.clear()
+
+
 @pytest.fixture
 def cover_state(tmp_path, monkeypatch):
     from music_app.services import cover_refresh_provider
     from music_app.services import state as state_service
 
+    from music_app.services import cover_provider_cache
+
+    monkeypatch.setattr(cover_provider_cache, "_PROCESS_CACHES", {})
     app = create_test_asgi_app(tmp_path, monkeypatch)
     executor = _CapturingExecutor()
     monkeypatch.setattr(state_service, "_COVER_EXECUTOR", executor)
@@ -192,7 +202,7 @@ def test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_p
         planning_passes[0] = 0
         library_state = app.state.library_state
         # Each cardinality starts with an empty provider cache.
-        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{trigger_count}.json"
+        _fresh_cover_cache()
         library_state.update({
             "file_cache": _cover_library(tmp_path / f"library-{trigger_count}", covered=4, missing=_MISSING_COVER_ALBUMS),
             "covers_in_progress": False, "scan_in_progress": False,
@@ -295,7 +305,7 @@ def test_background_cover_refresh_contract_coalesces_triggers_and_converges_at_p
         planning_passes[0] = 0
         library_state = app.state.library_state
         # Each cardinality starts with an empty provider cache.
-        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{trigger_count}.json"
+        _fresh_cover_cache()
         file_cache = _cover_library(tmp_path / f"library-{trigger_count}", covered=4, missing=_MISSING_COVER_ALBUMS)
         library_state.update({
             "file_cache": file_cache, "albums": build_albums_from_file_cache(file_cache),
@@ -329,7 +339,7 @@ def test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_pro
     def run(album_count: int) -> OperationCounts:
         searches.clear()
         counts = OperationCounts()
-        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        _fresh_cover_cache()
         # The watcher added one album without a cover to a library of `album_count` albums.
         added = _cover_library(tmp_path / f"added-{album_count}", covered=0, missing=1)
         library = {
@@ -542,7 +552,7 @@ def test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_al
 
     def run(album_count: int) -> OperationCounts:
         searches.clear()
-        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        _fresh_cover_cache()
         library = {
             path: {"path": path, "title": "One", "album": "Album", "album_artist": f"Artist {index:05d}"}
             for index in range(album_count - 1)
@@ -693,7 +703,7 @@ def test_fetch_cover_keeps_a_missing_cover_selection_and_writes_nothing_at_produ
         counts = OperationCounts()
         database = _with_counting_cover_database(app, monkeypatch, counts)
         _with_library_roots(monkeypatch, tmp_path / f"selected-{album_count}")
-        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        _fresh_cover_cache()
         library = {
             path: {"path": path, "title": "One", "album": "Album", "album_artist": f"Other {index:05d}"}
             for index in range(album_count - 1)
@@ -740,7 +750,7 @@ def test_unsuccessful_cover_batch_keeps_each_missing_cover_selection_and_writes_
         counts = OperationCounts()
         database = _with_counting_cover_database(app, monkeypatch, counts)
         _with_library_roots(monkeypatch, tmp_path / f"library-{album_count}")
-        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        _fresh_cover_cache()
         file_cache = _missing_cover_albums(tmp_path / f"library-{album_count}", album_count)
         saved = {path: dict(entry) for path, entry in file_cache.items()}
         library_state = app.state.library_state
@@ -784,7 +794,7 @@ def test_unsuccessful_cover_batch_skips_an_offline_library_root_without_searchin
         database = _with_counting_cover_database(app, monkeypatch, counts)
         offline_root = tmp_path / f"offline-{album_count}"
         _with_library_roots(monkeypatch, offline_root)
-        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        _fresh_cover_cache()
         # The albums were indexed while the share was online; it is gone now.
         file_cache = _missing_cover_albums(offline_root, album_count)
         for entry in file_cache.values():

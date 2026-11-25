@@ -1070,6 +1070,192 @@ test('FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that di
   }
 });
 
+// Owner (2026-11-24): with the second CD far below the first, Album Details opens on the CD the search matched.
+test('FTC-SEARCH-NAV-038 a CD name search opens Album Details scrolled to that CD', {
+  tag: '@area:gallery-search',
+}, async ({
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  const album = 'Watcher Long First CD';
+  const firstDiscName = 'Moscow Club 2014';
+  const secondDiscName = 'V-ROX Festival 2015';
+  const firstDiscTitles = Array.from({ length: 30 }, (_, index) => `Moscow Song ${index + 1}`);
+  const secondDiscTitles = ['Festival Opener', 'Festival Second', 'Festival Closer'];
+  const trackTitles = [...firstDiscTitles, ...secondDiscTitles];
+  const discNumbers = trackTitles.map((_, index) => (index < firstDiscTitles.length ? 1 : 2));
+  const discSubtitles = discNumbers.map(disc => (disc === 1 ? firstDiscName : secondDiscName));
+  const { trackModal } = trackModalActions;
+
+  let fixture;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add a two-CD album whose second CD starts below a 30-track first CD', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      const status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+      fixture = await createWatchedAlbumFixture({
+        artist: 'Watcher Long Disc Artist', album, year: 2016, trackTitles, discNumbers, discSubtitles,
+        context, managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+    });
+
+    await stepLogger.step('Search the second CD name and open the album it finds', async () => {
+      await searchToolbarActions.search(secondDiscName, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(secondDiscName);
+      await galleryActions.waitForAlbumVisible(album, { timeout: 60000 });
+      await galleryActions.clickAlbumDetailsByAlbumName(album);
+      await trackModalActions.waitForReady();
+      await expect(trackModal.trackRows).toHaveCount(trackTitles.length);
+    });
+
+    await stepLogger.step('Album Details shows the matched CD heading and its first matches, unobscured', async () => {
+      await expect(trackModal.header).toContainText(album);
+      await expect(trackModal.searchMatchDisc).toHaveCount(1);
+      // Settled: two reads 500 ms apart agree.
+      let placement;
+      await expect.poll(async () => {
+        const first = await trackModal.readSearchMatchDiscPlacement();
+        await page.waitForTimeout(500);
+        placement = await trackModal.readSearchMatchDiscPlacement();
+        return placement.scrollTop === first.scrollTop && placement.headingTop === first.headingTop;
+      }, { timeout: 10000 }).toBe(true);
+      expect(placement.headingText).toBe(`CD 2 • ${secondDiscName}`);
+      expect(placement.scrollTop).toBeGreaterThan(0);
+      expect(placement.headingTop).toBeGreaterThanOrEqual(placement.viewTop);
+      // The heading reaches the top of the track area unless the list ends first: a short last CD leaves the
+      // list scrolled to its end, with the heading and every match of that CD in view.
+      expect(Math.min(placement.headingTop - placement.viewTop, placement.maxScrollTop - placement.scrollTop))
+        .toBeLessThanOrEqual(1);
+      expect(placement.headingUncovered).toBe(true);
+      expect(placement.rows.map(row => row.title)).toEqual(secondDiscTitles.slice(0, 2));
+      for (const row of placement.rows) {
+        expect(row.top).toBeGreaterThan(placement.headingTop);
+        expect(row.bottom).toBeLessThanOrEqual(placement.viewBottom);
+        expect(row.uncovered).toBe(true);
+      }
+      await expect(trackModal.discHeaders.nth(1)).toBeInViewport({ ratio: 1 });
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+// Owner (2026-11-24): Re-scan answers in the Album Details alert and the answer stays there, for an album
+// still deleted, one whose drive cannot be reached, and one found again.
+test('FTC-LIBROOTS-021 Re-scan answers in the Album Details alert for each outcome', {
+  tag: '@area:album-details',
+}, async ({
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.skip(process.platform !== 'win32', 'The unreachable drive is a dangling Windows junction.');
+  test.setTimeout(300000);
+  const artist = 'Watcher Rescan Artist';
+  const album = 'Watcher Rescan Album';
+  const notFound = 'Album must have been deleted or moved out of the library. '
+    + 'Add it back to one of the library paths to see it in the app';
+  const unreachable = 'Still missing: its drive or network share cannot be reached.';
+  const found = 'Album found and restored.';
+  const { trackModal } = trackModalActions;
+  // The answer outlives the 3.6 s a toast showed it for.
+  const expectAnswerStays = async (alertMessage, text) => {
+    await expect(alertMessage).toHaveText(text, { timeout: 60000 });
+    await expect(trackModal.toastWithText(text)).toHaveCount(0);
+    await page.waitForTimeout(4500);
+    await expect(alertMessage).toHaveText(text);
+  };
+
+  // The folder moves to a stand-in drive outside the library; renaming that drive away unplugs it.
+  let fixture;
+  let drive;
+  let unpluggedDrive;
+  let originalFailure;
+  try {
+    await stepLogger.step('Add an album, then move its folder out of the library', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      let status = await libraryFilesystemWatcherActions.readStatus();
+      fixture = await createWatchedAlbumFixture({
+        artist, album, year: 2011, context, managedAppLifecycle,
+      });
+      status = await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      drive = path.join(path.dirname(fixture.mediaRoot), `.watcher-rescan-drive-${process.pid}`);
+      unpluggedDrive = `${drive}-unplugged`;
+      fs.renameSync(fixture.albumDirectory, drive);
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+      await searchToolbarActions.search(artist, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(artist);
+      await expect(galleryActions.galleryPage.albumCard.artboxByAlbumName(album))
+        .toHaveAttribute('data-album-artbox-state', 'missing', { timeout: 60000 });
+    });
+
+    await stepLogger.step('Re-scan an album still gone: the alert says it must have been deleted or moved', async () => {
+      await galleryActions.clickAlbumDetailsByAlbumName(album);
+      await expect(trackModal.missingAlert).toContainText('Album details unavailable', { timeout: 60000 });
+      await trackModal.rescanMissingAlbumButton.click();
+      await expectAnswerStays(trackModal.missingAlertMessage, notFound);
+      await expect(trackModal.missingAlert).toContainText('Album details unavailable');
+      await expect(trackModal.rescanMissingAlbumButton).toBeEnabled();
+    });
+
+    await stepLogger.step('Re-scan with its drive unreachable: the alert says the drive cannot be reached', async () => {
+      // The album folder becomes a junction onto the drive, and the drive is unplugged.
+      fs.renameSync(drive, unpluggedDrive);
+      fs.symlinkSync(drive, fixture.albumDirectory, 'junction');
+      await trackModal.rescanMissingAlbumButton.click();
+      await expectAnswerStays(trackModal.missingAlertMessage, unreachable);
+      await expect(trackModal.rescanMissingAlbumButton).toBeEnabled();
+    });
+
+    await stepLogger.step('Re-scan once the drive is back: the alert says the album was found, and its tracks show', async () => {
+      // Plugging the drive back changes nothing the library watcher sees; only the Re-scan finds it.
+      fs.renameSync(unpluggedDrive, drive);
+      await trackModal.rescanMissingAlbumButton.click();
+      await expect(trackModal.rescanFoundAlert).toBeVisible({ timeout: 60000 });
+      await expectAnswerStays(trackModal.rescanFoundMessage, found);
+      await expect(trackModal.missingAlert).toHaveCount(0);
+      await expect(trackModal.trackRows).toHaveCount(2);
+      await expect(trackModal.header).toContainText(album);
+    });
+
+    await stepLogger.step('Closing Album Details clears the answer', async () => {
+      await trackModalActions.close();
+      await galleryActions.clickAlbumDetailsByAlbumName(album);
+      await expect(trackModal.trackRows).toHaveCount(2, { timeout: 15000 });
+      await expect(trackModal.rescanFoundAlert).toHaveCount(0);
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture && fs.lstatSync(fixture.albumDirectory, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      fs.unlinkSync(fixture.albumDirectory);
+    }
+    for (const folder of [drive, unpluggedDrive]) if (folder && fs.existsSync(folder)) fs.rmSync(folder, { recursive: true });
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
 test('FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist', {
   tag: '@area:gallery-search',
 }, async ({

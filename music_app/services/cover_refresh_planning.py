@@ -4,7 +4,11 @@ from collections import Counter
 
 from pathlib import Path
 
-from music_app.services.album_local_membership import physical_album_folder, rejected_local_album_paths
+from music_app.services.album_local_membership import (
+    current_membership_label,
+    physical_album_folder,
+    rejected_local_album_paths,
+)
 from music_app.services.cover_provider_cache import cover_query_key
 from music_app.services.cover_refresh_provider import local_cover_requires_upgrade_check
 from music_app.services.cover_refresh_policy import automatic_cover_repair_minimum_edge
@@ -18,7 +22,7 @@ def _album_identity_resolver(file_cache, rejected_paths):
     """
     album_ids, editions, years = {}, {}, {}
     for raw_path, entry in file_cache.items():
-        if raw_path in rejected_paths or entry.get("local_album_membership_problem"):
+        if raw_path in rejected_paths or current_membership_label(entry.get("local_album_membership_problem")):
             continue
         try:
             folder_key = str(Path(raw_path).parent)
@@ -70,7 +74,7 @@ def build_cover_refresh_jobs(
 
     album_identity_for = _album_identity_resolver(file_cache, rejected_paths)
     for raw_path, entry in file_cache.items():
-        if raw_path in rejected_paths or entry.get("local_album_membership_problem"):
+        if raw_path in rejected_paths or current_membership_label(entry.get("local_album_membership_problem")):
             continue
         try:
             folder = Path(raw_path).parent

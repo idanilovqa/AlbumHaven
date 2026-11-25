@@ -77,6 +77,13 @@ def library_app(tmp_path, monkeypatch):
     refusal = pytest.MonkeyPatch()
     refusal.setattr(psycopg, "connect", refuse_connection)
     refusal.setattr(psycopg.Connection, "connect", classmethod(lambda cls, *args, **kwargs: refuse_connection()))
+    # A refresh or rule write here queues an ignored-repair drain against this unreachable database. Run in the
+    # background, it fails and retries every minute for the rest of the session, and its work was counted
+    # against later contracts (news_center, 11-25). These contracts record the request instead.
+    from music_app.services import ignored_repair_intents
+
+    app.state.queued_ignored_repair_drains = []
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", app.state.queued_ignored_repair_drains.append)
     monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", _RootSettingsStore)
     # The in-memory inventory below is the published library: no hydration runs.
     monkeypatch.setattr(api_read_asgi_routes, "request_library_hydration_for_state", lambda *_args, **_kwargs: True)
@@ -1059,11 +1066,13 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_add_remote"))
 
 
-@pytest.mark.parametrize("route", ["additional-artwork", "additional-artwork/remove"])
-def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size(
-    library_app, tmp_path, monkeypatch, route,
+def test_cover_lookup_additional_artwork_remove_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch,
 ):
-    """The second artbox's choose and remove routes read and check only the selected album."""
+    """The second artbox's remove route reads and checks only the selected album. (Its choose route has its own
+    contract below; this one shared that test's name, so the later definition hid it and the remove entry was
+    never measured.)"""
+    route = "additional-artwork/remove"
     from music_app.routes import api_wave_d_asgi_routes
     from music_app.services import album_additional_artworks_postgres, covers, library_browse_postgres
 
@@ -1100,10 +1109,7 @@ def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_
     monkeypatch.setattr(api_wave_d_asgi_routes, "AlbumCoverCandidateSnapshotRepository", AlbumIdentity)
     monkeypatch.setattr(library_browse_postgres, "PostgresLibraryBrowseRepository", SelectedAlbumDetail)
     monkeypatch.setattr(album_additional_artworks_postgres, "AlbumAdditionalArtworkRepository", Artworks)
-    interaction = (
-        "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork"
-        + ("_remove" if route.endswith("remove") else "")
-    )
+    interaction = "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove"
 
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"{route[-6:]}-{album_count}", album_count)
@@ -1116,7 +1122,7 @@ def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_
             status, _headers, body = run_asgi_request(library_app, "POST", f"/utilities/cover-lookup/{route}", json_body=payload)
             assert status == 200, body
             assert decode_json(body)["album_id"] == 7
-            assert [kind for kind, _values in saved] == ["remove" if route.endswith("remove") else "save"]
+            assert [kind for kind, _values in saved] == ["remove"]
 
         request()
         counts.__init__()
@@ -1410,31 +1416,9 @@ def _problematic_rows(track_count: int) -> list[dict[str, object]]:
     return rows
 
 
-class _CandidateFolderConnection:
-    """The narrowing's one read of the candidate folders' files, counted (6.5, 2026-11-24)."""
-
-    def __init__(self, counts, rows):
-        self.counts, self.rows = counts, rows
-
-    def execute(self, _sql, params):
-        from music_app.services.album_local_membership import physical_album_folder
-
-        self.counts.sql_statements += 1
-        folders = {physical_album_folder(path) for path in params["paths"]}
-        # The index answer: only the candidate folders' own files, never the library.
-        found = [{"private_path": row["file_private_path"], "album": row["file_entry"]["album"],
-                  "album_artist": row["file_entry"]["album_artist"], "artist": row["file_entry"]["artist"],
-                  "track_number": row["track_number"], "disc_number": 1, "total_tracks": None,
-                  "exception_type": None, "membership_problem": None, "album_files_elsewhere": False}
-                 for row in self.rows if physical_album_folder(row["file_private_path"]) in folders]
-        self.counts.returned_rows += len(found)
-        return SimpleNamespace(fetchall=lambda: found)
-
-
-
 class _DetailConnection:
-    """The detail request's one connection: the narrowing's read of candidate folders, and the read of the
-    ignored-repair intents a held publication kept (deadlock part 3), each counted."""
+    """The detail request's one connection: the index's listed-as-missing read and the read of the
+    ignored-repair intents a held publication kept (deadlock part 3), each counted. Nothing else reaches it."""
 
     PENDING = (
         {"id": 1, "action": "upsert", "repair_keys": ["broadcast::tender buttons::problem-album::missing-cover-art"],
@@ -1467,9 +1451,9 @@ class _DetailConnection:
             rows[1]["repair_keys"] = [f"{selected[0]['file_private_path']}::problem-file::encoding-problem"]
             self.counts.pending_intent_rows += len(rows)
             return SimpleNamespace(fetchall=lambda: rows)
-        return _CandidateFolderConnection(self.counts, self.current["selected"]).execute(sql, params)
+        raise AssertionError(f"an unexpected statement on the detail's connection: {text[:120]}")
 
-# The mixed-folder narrowing belongs to the Postgres projection: only that backend has candidate folders.
+# Mixed-folder candidates belong to the Postgres projection: only that backend has them.
 @pytest.mark.parametrize(("backend", "candidate_folders"), [
     ("in-memory", 0), ("postgres", 0), ("postgres", 1), ("postgres", 5),
 ])
@@ -1481,8 +1465,8 @@ class _DetailConnection:
 def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count(
     library_app, tmp_path, monkeypatch, route, backend, candidate_folders,
 ):
-    """D3 (6.5, 2026-11-24): with candidate folders, the mixed-folder narrowing adds exactly one statement,
-    however many folders, and reads only those folders' files."""
+    """The strict multi-album folder verdict comes in the keyed row read itself (2026-11-24): candidate folders,
+    however many, add no statement and no row."""
     from music_app.routes import api_read_asgi_routes
     from music_app.services import library_browse_postgres, problematic_albums, problematic_index
 
@@ -1520,8 +1504,8 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
             current["counts"].candidate_rows += len(rows)
             return SimpleNamespace(fetchall=lambda: rows)
 
-        # The real loader runs: its keyed reads answer above; the narrowing and the pending intents laid over
-        # the rows (deadlock part 3) go through the request's connection.
+        # The real loader runs: its keyed reads answer above; the pending intents laid over the rows
+        # (deadlock part 3) go through the request's connection.
         monkeypatch.setattr(library_browse_postgres, "_execute_problematic_sql", execute_problematic_sql)
         monkeypatch.setattr(library_browse_postgres, "_load_duplicate_candidate_album_ids",
                             lambda _connection, keys, **_options: [1] if keys == ["broadcast::tender buttons"] else [])
@@ -1565,11 +1549,10 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
             # The pending Ignore and Unignore show as made: the cover problem is ignored, the encoding problem back.
             assert "Missing cover art" not in payload["problem_reasons"]
             assert not payload.get("album_problem_rows")
-            # The index's listed-as-missing read (1 row), the alias read and the pending-intents read; the
-            # narrowing's one read with any number of candidate folders (6.5, 11-24). The intents read returns this
-            # album's two kept intents.
-            assert counts.sql_statements == (4 if candidate_folders else 3)
-            assert counts.returned_rows == (13 if candidate_folders else 1)
+            # The index's listed-as-missing read (1 row), the alias read and the pending-intents read, with any
+            # number of candidate folders. The intents read returns this album's two kept intents.
+            assert counts.sql_statements == 3
+            assert counts.returned_rows == 1
             assert counts.pending_intent_rows == 2
         return counts
 

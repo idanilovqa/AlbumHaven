@@ -3069,6 +3069,35 @@ test('library Loose Tracks shows the rows already stored, keeps asking with the 
   assert.equal(page.live.size, 0, 'no retry once the store is ready');
 });
 
+// Owner (sandbox2, 2026-11-25): Loose Tracks stayed on its loading rows after a page reload. The list was asked
+// for before the library's inventory revision was known; the revision then arrived during the request, so the
+// answer belonged to an older scope and was dropped with nothing asking again.
+test('library Loose Tracks asks again when its scope changes during the request, and shows the answer', async () => {
+  const page = loadDeferredNonAlbumPage();
+  const tracks = [{ path: 'D:/Music/One.flac', title: 'One' }];
+  page.context.state.status = {};
+  page.context.state.view.selected_artist = '';
+  page.context.fetch = async (url) => {
+    page.requests.push(String(url));
+    // The status poll lands while the first request is in flight.
+    page.context.state.status = { inventory_mutation_revision: 10575 };
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: tracks }) };
+  };
+  const rendered = [];
+  page.context.rerenderOpenLibraryNonAlbumModal = () => rendered.push(
+    page.context.getVisibleNonAlbumTracks({ libraryWide: true }).map(track => track.title),
+  );
+
+  const result = await page.context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+
+  assert.deepEqual(page.requests.map(url => new URL(url, 'http://localhost').searchParams.get('inventory_revision')),
+    [null, '10575'], 'one more request, for the scope now current');
+  assert.deepEqual(result.map(track => track.title), ['One']);
+  assert.equal(page.context.hasHydratedLibraryNonAlbumTracks(), true);
+  assert.deepEqual(rendered, [['One']], 'the open page shows the list');
+  assert.equal(page.live.size, 0, 'no retry left armed');
+});
+
 // Owner approved (2026-11-22): when the bounded wait runs out with no stored row, the page says so.
 test('a Loose Tracks page with no stored row says it is still being prepared once the bounded wait runs out', async () => {
   const { context } = loadHelper();

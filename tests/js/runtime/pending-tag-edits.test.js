@@ -100,9 +100,9 @@ test('a save still running or already received keeps waiting; no answer keeps it
   api.add({ id: SAVE_ID, payload });
   assert.equal(await runNext(), 2000);
   assert.equal(api.list()[0].state, 'waiting');
-  assert.equal(await runNext(), 2000);
+  assert.equal(await runNext(), 4000, 'a save the server holds is asked about less often');
   const backoff = await runNext();
-  assert.equal(backoff, 4000, 'an unreachable server is asked less often');
+  assert.equal(backoff, 8000, 'an unreachable server is asked less often');
   assert.equal(api.list().length, 1, 'nothing is dropped while the server is unreachable');
   await runNext();
   assert.equal(api.list()[0].state, 'waiting', 'a duplicate means the first copy is being saved');
@@ -342,4 +342,42 @@ test('more waiting saves than one status request may carry all settle in the sam
     ['POST', STATUS_URL, 500], ['POST', STATUS_URL, 1],
   ], 'one request per 500 ids, each within the route cap');
   assert.deepEqual(api.list(), [], 'the 501st save settled in the same pass');
+});
+
+test('a late resend says when the page made the save, and a refusal for newer changes is never sent again', async () => {
+  const savedAt = Date.now() - 5000;
+  const { api, requests, timers, runNext } = loadPendingTagEdits({
+    answers: [
+      known(false, null),
+      { status: 409, body: { ok: false, code: 'superseded', error: 'These files changed after this edit was made, so it was not saved over them.' } },
+    ],
+    stored: [{ id: SAVE_ID, payload, album: { name: 'Album' }, state: 'waiting', scope: '', created_at: savedAt }],
+  });
+  await runNext();
+  const resend = requests.find(([, url]) => url === '/utilities/edit-tags')[2];
+  assert.equal(resend.client_request_id, SAVE_ID);
+  assert.equal(resend.resend, true);
+  assert.equal(resend.client_saved_at, savedAt);
+  assert.equal(api.list()[0].state, 'failed', 'the older save stays in the Edit Queue, unsent');
+  assert.match(api.list()[0].last_error, /changed after this edit/);
+  assert.equal(timers.length, 0, 'nothing is checked or resent again on its own');
+});
+
+test('a save another account or an older unscoped build left in storage is never shown or sent here', async () => {
+  const { api, requests, timers } = loadWithOverlay({
+    scope: 'scope-b',
+    stored: [{ id: SAVE_ID, payload: finishingPayload, state: 'waiting', created_at: Date.now() }],
+  });
+  assert.equal(api.list().length, 0);
+  assert.equal(timers.length, 0);
+  assert.equal(requests.length, 0);
+});
+
+test('a save the server holds but has not finished is checked less and less often, up to a minute', async () => {
+  const { api, runNext } = loadPendingTagEdits({ answers: () => known(true, 'prepared') });
+  api.add({ id: SAVE_ID, payload });
+  const delays = [];
+  for (let pass = 0; pass < 8; pass += 1) delays.push(await runNext());
+  assert.deepEqual(delays, [2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000]);
+  assert.equal(api.list()[0].state, 'waiting', 'it is still kept');
 });

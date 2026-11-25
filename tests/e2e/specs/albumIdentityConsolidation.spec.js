@@ -376,6 +376,7 @@ test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and remo
     await tagEditorActions.setTrackNumber(15);
     const pendingContinuityPromise = utilityProblematicFilesActions
       .waitForMutationOverlayAndReadContinuity();
+    await utilityProblematicFilesActions.startNavigationRenderObservation();
     const acceptedRepair = await tagEditorActions.applyAndReturnAcceptedEdit();
     const pendingContinuity = await pendingContinuityPromise;
     expect(pendingContinuity).toMatchObject({
@@ -390,8 +391,24 @@ test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and remo
     expect(Math.abs(pendingContinuity.scrollTop - pendingContinuity.expectedScrollTop))
       .toBeLessThanOrEqual(1);
     await acceptedRepair.waitForCompletion({ timeout: 90000 });
+    // By the time the save is confirmed, the overlay has ended and the album has left the list.
+    expect(await utilityProblematicFilesActions.isMutationOverlayShown()).toBe(false);
+    expect((await utilityProblematicFilesActions.readVisibleListItems()).map((item) => item.key))
+      .not.toContain(mutationTarget.removedKey);
     const previousSelection = await utilityProblematicFilesActions
       .waitForMutationRemovalAndPreviousSelection(mutationTarget);
+    // From the removal on, the rows shown never change: never a partial set followed by the rest.
+    const renderRecords = await utilityProblematicFilesActions.finishNavigationRenderObservation();
+    const overlayShownAt = renderRecords.findIndex((record) => record.mutationOverlayVisible);
+    const overlayEndedAt = renderRecords.findIndex((record, index) => (
+      index > overlayShownAt && !record.mutationOverlayVisible
+    ));
+    expect(overlayShownAt).toBeGreaterThanOrEqual(0);
+    expect(overlayEndedAt).toBeGreaterThan(overlayShownAt);
+    const listStates = renderRecords.slice(overlayEndedAt).map((record) => record.listKeys.join('\n'));
+    expect(new Set(listStates)).toEqual(new Set([listStates.at(-1)]));
+    expect(listStates.at(-1).split('\n')).toContain(mutationTarget.previousKey);
+    expect(listStates.at(-1).split('\n')).not.toContain(mutationTarget.removedKey);
     expect(previousSelection).toEqual({
       key: mutationTarget.previousKey,
       title: mutationTarget.previousTitle,

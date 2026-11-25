@@ -1695,6 +1695,7 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  if (typeof syncLooseTracksPartialNote === 'function') syncLooseTracksPartialNote();
   const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
   const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
   state.loopCreateAllowed = loopCreateAllowed;

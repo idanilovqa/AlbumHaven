@@ -143,6 +143,24 @@ function buildUrl(view) {
   return `${pathname}${qs ? `?${qs}` : ''}`;
 }
 
+// BUGFIX-04: the top artist of a search is the server's pick for that query, not a request. Refreshing
+// it by name returns that artist's albums only and loses the search's other matches, so a refresh asks
+// for the same search and names the pick to keep (an edit can change which owner ranks first).
+// Family filters belong to that artist and keep it.
+function viewForSearchRefresh(view) {
+  const query = String(view?.query || '').trim();
+  const searchContext = view?.search_context || {};
+  const committedQuery = String(searchContext.committed_query ?? query).trim();
+  if (
+    !query
+    || committedQuery !== query
+    || String(searchContext.selected_artist_source || '').trim() !== 'auto_top_match'
+    || view.primary_filter_active
+    || (view.related_filter_artists || []).length
+  ) return view;
+  return { ...view, selected_artist: '', search_kept_artist: view.selected_artist };
+}
+
 function buildApiUrl(view, options = {}) {
   const resolvedSurface = resolveViewSurface(view);
   if (resolvedSurface === 'home') {
@@ -153,6 +171,7 @@ function buildApiUrl(view, options = {}) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  else if (view.query && view.search_kept_artist) params.set('keep_artist', view.search_kept_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);

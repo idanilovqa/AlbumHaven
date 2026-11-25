@@ -101,6 +101,8 @@
   box-shadow: 0 1px 6px rgb(0 0 0 / .35);
 }
 .small-alert--badge:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+/* Collapsed, the glyph sits in the badge's exact center (owner, 11-25); an expanded badge lays out from the left. */
+.small-alert.small-alert--badge:not(.is-expanded) { justify-content: center; }
 .small-alert--badge .small-alert__icon { width: 22px; height: 22px; color: inherit; }
 .small-alert--badge .small-alert__icon svg { stroke: currentColor; stroke-width: 2.2; }
 .small-alert--badge .small-alert__text { display: none; }

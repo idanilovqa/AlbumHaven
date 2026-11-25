@@ -105,12 +105,6 @@ def _counted(sql_text):
         psycopg.Connection.execute = original
 
 
-def _candidate_sql(browse):
-    return browse._CANDIDATE_FOLDER_FILES_SQL.replace(
-        "__SEED_PARENT__", browse._physical_parent_sql("seed.private_path"),
-    ).replace("__FILE_PARENT__", browse._physical_parent_sql("files.private_path"))
-
-
 def _plan(setup_url, sql, params, *, seqscan=True):
     """The query plan, with the default planner unless seqscan=False (a structural proof only)."""
     with isolatedPostgres._connect(setup_url) as connection:
@@ -154,33 +148,25 @@ def test_live_copy_folder_reads_stay_flat_at_two_library_sizes(seeded_app):
         with isolatedPostgres._connect(setup_url) as connection:
             twin_rows = connection.execute(twin_sql, {"album_key": keys["Album One"]}).fetchone()["n"]
 
-        # Problematic Files: only the real multi-album folder keeps the mixed-folder type.
-        with _counted(_candidate_sql(browse)) as narrowing:
-            status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files")
+        # Problematic Files: only the real multi-album folder keeps the mixed-folder type (the row SQL's strict rule).
+        status, _headers, body = run_asgi_request(app, "GET", "/utilities/problematic-files")
         assert status == 200, body
         reasons = {item["name"]: set(item.get("problem_reasons") or []) for item in decode_json(body)["items"]}
         assert MIXED in reasons.get("Fourth Album", set()) and MIXED in reasons.get("Fifth Album", set())
         assert MIXED not in reasons.get("Sixth Album", set()) | reasons.get("Seventh Album", set())
 
-        measured[unrelated] = {"copy_reads": list(copy_reads), "twin_rows": twin_rows, "narrowing": list(narrowing)}
+        measured[unrelated] = {"copy_reads": list(copy_reads), "twin_rows": twin_rows}
 
     # Flat: the same statements and rows at 20 and at 200 unrelated albums.
     small, large = (measured[size] for size in SIZES)
     assert small == large, measured
     assert len(small["copy_reads"]) == 1 and small["copy_reads"][0] == 2, "one read, returning the album's 2 copies"
-    # The summary reaches the narrowing at most once per read (or not at all when it serves stored items).
-    assert len(small["narrowing"]) <= 1, small
 
 
 _INDEXES = {
     # B: the copy lookup goes through the duplicate identity index (0093).
     "copies": ("local_track_files_active_duplicate_identity_idx",),
-    # D3: candidate folders by private path and physical parent (0088), other albums' files by album id.
-    "candidate folders": ("local_track_files_private_path_idx", "local_track_files_active_physical_parent_idx"),
 }
-# At 200 albums the default planner reads local_tracks (a few hundred rows) sequentially, which is cheaper there;
-# that the "files elsewhere" check can use the album-id index is shown with sequential scans off.
-_STRUCTURAL_INDEXES = {"candidate folders": ("local_tracks_album_id_idx",)}
 
 
 def _plans(seed, setup_url, *, seqscan):
@@ -188,12 +174,9 @@ def _plans(seed, setup_url, *, seqscan):
 
     _app, music_dir = seed(SIZES[-1])
     album_paths = [str(Path(music_dir) / f"Owner/Album One/{number:02d}.flac") for number in (1, 2, 3)]
-    shared_paths = [str(Path(music_dir) / f"Owner/Shared/{album[:5]}-{number:02d}.flac")
-                    for album in ("Fourth Album", "Fifth Album") for number in (1, 2)]
     return {
         "copies": _plan(setup_url, browse._OUTSIDE_COPIES_SQL,
                         {"paths": album_paths, "reason": "Duplicate track outside album folder"}, seqscan=seqscan),
-        "candidate folders": _plan(setup_url, _candidate_sql(browse), {"paths": shared_paths}, seqscan=seqscan),
     }
 
 
@@ -202,13 +185,4 @@ def test_live_added_reads_reach_their_indexes_with_the_default_planner(seeded_ap
     every index the added reads rely on."""
     plans = _plans(*seeded_app, seqscan=True)
     missing = [(read, index) for read, indexes in _INDEXES.items() for index in indexes if index not in plans[read]]
-    assert not missing, (missing, plans)
-
-
-def test_live_album_id_index_structural_proof(seeded_app):
-    """Structural proof (sequential scans off): the candidate folders' "files elsewhere" check can reach other
-    albums' files through local_tracks_album_id_idx, so it stays keyed by album at any library size."""
-    plans = _plans(*seeded_app, seqscan=False)
-    missing = [(read, index) for read, indexes in _STRUCTURAL_INDEXES.items()
-               for index in indexes if index not in plans[read]]
     assert not missing, (missing, plans)

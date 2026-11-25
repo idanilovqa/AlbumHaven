@@ -381,6 +381,24 @@ def test_owner_equivalent_track_credit_is_not_persisted_as_featured(
     ] == [("beyoncé", "owner")]
 
 
+@pytest.mark.parametrize("album_artist", ["Nine Arc / Nine Arc", "Nine Arc / NINE ARC"])
+def test_repeated_album_artist_credit_is_that_artists_own_album(monkeypatch, album_artist):
+    # Owner report (2026-11-24): an Album Artist "Nine Arc / Nine Arc" names one artist, so the album is
+    # Nine Arc's own, never a "Nine Arc / Nine Arc" artist's album that only features Nine Arc.
+    album, rows = _published_rows(
+        monkeypatch,
+        album="Night Score",
+        album_artist=album_artist,
+        track_artists=("Nine Arc", "Nine Arc"),
+    )
+    artist_rows, album_rows, featured_rows, _track_rows, _track_file_rows = rows
+
+    assert album.album_artist == "Nine Arc"
+    assert album_rows[0]["artist_key"] == "nine arc"
+    assert [(row["artist_key"], row["featured_kind"]) for row in featured_rows] == [("nine arc", "owner")]
+    assert {row["artist_key"] for row in artist_rows} == {"nine arc"}
+
+
 def test_owner_equivalent_album_member_does_not_create_duplicate_artist(
     monkeypatch,
 ):

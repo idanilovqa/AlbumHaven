@@ -858,7 +858,7 @@ test('current GalleryBar owner keeps desktop and mobile metadata to two lines wi
   assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < countryAt && countryAt < countAt && countAt < firstGenreAt);
   assert.match(markup, /gallery-bar__title[\s\S]*data-artist-info-trigger[\s\S]*data-gallery-context-metadata[\s\S]*Russia[\s\S]*<\/div>[\s\S]*<span class="gallery-bar__summary"[\s\S]*4 albums[\s\S]*Heavy Metal/);
   assert.match(markup, /class="ui-metadata-pill ui-metadata-pill--country"[^>]*>Russia</);
-  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 8, 'desktop and mobile projections each own four genres');
+  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 5, 'desktop owns four genres; the phone line two only the top one');
   assert.match(markup, />Heavy Metal</);
   assert.match(markup, />Power Metal</);
   assert.match(markup, />Hard Rock</);
@@ -873,8 +873,9 @@ test('current GalleryBar owner keeps desktop and mobile metadata to two lines wi
   assert.doesNotMatch(galleryMainCssSource, /ui-metadata-pill--country/, 'no page-local country colour');
   assert.match(markup, /data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
     'the first line ends with the country pill');
-  assert.match(markup, /data-gallery-context-mobile-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span>/,
-    'mobile places country before genre labels in one metadata row');
+  // Owner (ARTIST-HEADER-LABELS, 2026-11-24): the phone's second line is the count and only the top genre.
+  assert.match(markup, /data-gallery-context-mobile-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span><\/span><\/span><\/span>/,
+    'mobile line two carries the count and only the top genre');
   assert.match(markup, /data-gallery-context-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span>/,
     'desktop keeps count and ranked genres on its second line');
   assert.doesNotMatch(galleryMainCssSource, /\.gallery-bar__artist-country::before\s*\{[^}]*content:/s);
@@ -885,7 +886,9 @@ test('current GalleryBar owner keeps desktop and mobile metadata to two lines wi
   assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*grid-template-rows:\s*24px auto/s);
   // Owner (MOBILE-SETTINGS-HEADER 2, 6, 7; 2026-11-18): one line that stops before the title-line buttons.
   assert.match(mobileLayoutCssSource, /gallery-bar__artist-mobile-summary\s*\{[^}]*grid-column:\s*text \/ actions;[^}]*flex-wrap:\s*nowrap;[^}]*overflow:\s*hidden/s);
-  assert.match(mobileLayoutCssSource, /is-controls-below \.gallery-bar__artist-mobile-summary\s*\{[^}]*grid-column:\s*text \/ end;/s);
+  // Owner (ARTIST-HEADER-LABELS, 2026-11-24): moved controls share line two; the header never grows a third line.
+  assert.match(mobileLayoutCssSource, /is-controls-below > \.gallery-bar__actions\s*\{[^}]*grid-row:\s*2;/s);
+  assert.doesNotMatch(mobileLayoutCssSource, /grid-template-rows:\s*24px 40px auto/);
   assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*\.gallery-bar__summary\s*\{\s*display:\s*none;/s);
   assert.match(galleryMainCssSource, /\.gallery-bar__artist-genres\s*\{[^}]*overflow:\s*hidden/s);
 });

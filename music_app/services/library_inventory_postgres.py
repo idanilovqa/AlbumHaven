@@ -786,7 +786,13 @@ def _non_album_candidates_sql(
           library.local_track_files.content_signature,
           library.local_track_files.metadata as track_file_metadata,
           (library.local_track_files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
-            'local_album_membership_problem', nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '')
+            -- album_local_membership.current_membership_label for a file of an album: the obsolete stored mixed-folder
+            -- label is no label, so the file stays in its album. A file without an album keeps any label and stays
+            -- listed (never vanishes); the payloads show the obsolete one as no reason.
+            'local_album_membership_problem', case when library.local_tracks.album_id is not null
+              then nullif(nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', ''),
+                'Mixed album metadata in one folder')
+              else nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') end
           ) as file_entry,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album}}' as raw_file_album,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album_artist}}' as raw_file_album_artist,

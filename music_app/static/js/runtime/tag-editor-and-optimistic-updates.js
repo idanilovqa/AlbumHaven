@@ -819,7 +819,6 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
-  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -1009,7 +1008,6 @@ async function confirmManualTagEdit() {
       tagEditorDraft,
       originatingViewStateRevision,
       originatingViewRequestUrl,
-      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
@@ -1030,6 +1028,20 @@ async function confirmManualTagEdit() {
     ) {
       provisionalProblematicMutation.taskId = String(data.save_task_id);
     }
+    if (provisionalProblematicMutation) {
+      // The detail overlay ends with the acknowledgement. A completed save carries its album's own
+      // Problematic Files entry, which updates the list at the same moment; the watch below then only
+      // reconciles the Gallery.
+      saveTaskWatchOptions.problematicMutationOriginKey = '';
+      saveTaskWatchOptions.problematicEntryApplied = responseIsTerminal
+        && Object.prototype.hasOwnProperty.call(data, 'updated_problematic_album');
+      await settleProblematicSaveTaskMutation(String(provisionalProblematicMutation.taskId || ''), {
+        reconcileSelection: true,
+        ...(saveTaskWatchOptions.problematicEntryApplied
+          ? { problematicAlbum: data.updated_problematic_album }
+          : {}),
+      });
+    }
     if (terminalResponseNeedsCanonicalRefresh) {
       pendingProblematicEntry.accept();
       await watchSaveTask(data.save_task_id || pendingProblematicEntry.key, {
@@ -1040,7 +1052,8 @@ async function confirmManualTagEdit() {
       pendingProblematicEntry.accept();
       scheduleTagEditSaveTaskWatch(data.save_task_id, saveTaskWatchOptions);
     } else if (
-      Object.prototype.hasOwnProperty.call(data, 'updated_problematic_album')
+      !provisionalProblematicMutation
+      && Object.prototype.hasOwnProperty.call(data, 'updated_problematic_album')
       && responseOwnsVisibleResources
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
@@ -1062,16 +1075,6 @@ async function confirmManualTagEdit() {
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
       pendingProblematicEntry.settle();
-      if (
-        provisionalProblematicMutation
-        && !terminalResponseNeedsCanonicalRefresh
-        && typeof settleProblematicSaveTaskMutation === 'function'
-      ) {
-        await settleProblematicSaveTaskMutation(
-          String(provisionalProblematicMutation.taskId || ''),
-          { reconcileSelection: true },
-        );
-      }
       if (!terminalResponseNeedsCanonicalRefresh) {
         settleTagEditViewMutation(tagEditMutationClaim);
       }
@@ -1263,7 +1266,8 @@ function isInstrumentalVariant(album) {
 // Release title case, matching the server's title_case_tag_value: capitalise each
 // word, keep all-caps (CD, MTV) and inner-capital words (iTunes) as tagged.
 function titleCaseReleaseText(text) {
-  return String(text || '').replace(/\p{L}+(?:['’]\p{L}+)?/gu, (word) => {
+  // A word glued to digits (the "th" of "20th") is not a new word (owner, 2026-11-25).
+  return String(text || '').replace(/(?<![\p{L}\p{N}])\p{L}+(?:['’]\p{L}+)?/gu, (word) => {
     const letters = word.replace(/['’]/g, '');
     if (letters.length > 1 && letters === letters.toUpperCase() && letters !== letters.toLowerCase()) return word;
     if (word.length > 1 && /\p{Lu}/u.test(word.slice(1))) return word;
@@ -1592,7 +1596,7 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
 // UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
 // the mounted gallery and its scroll stay; no Loading page.
 function refreshGalleryAfterVersionChange() {
-  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+  return fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, { preserveScroll: true });
 }
 
 function scheduleVersionGalleryRefresh() {
@@ -1785,6 +1789,59 @@ function handleTrackModalCoverImageLoad(imageElement) {
   }
 }
 
+const trackModalCoverRenderTokens = new WeakMap();
+
+function loadTrackModalCoverImage(imageElement, coverSrc, isCurrent) {
+  void loadGalleryCoverPreviewImage(imageElement, coverSrc, { isCurrent }).catch((error) => {
+    if (!isCurrent()) return;
+    console.error('[AlbumHaven][Covers] Failed to load the track-modal cover preview.', error);
+    handleAlbumDisplayCoverImageError(imageElement);
+  });
+}
+
+function isCoverDecodedOnPage(coverSrc) {
+  const absoluteSrc = new URL(coverSrc, window.location.href).href;
+  return Array.from(document.images || []).some((image) => (
+    image.currentSrc === absoluteSrc && image.complete && image.naturalWidth > 0
+  ));
+}
+
+// A changed cover never blanks the one on screen. One already decoded on the page, such as the
+// cover just picked in Cover Look Up, takes its place at once; any other loads and decodes off
+// the page first. One that cannot decode goes through the ordinary visible load, which owns the
+// retry, remote fallback and placeholder.
+async function replaceTrackModalCoverWhenDecoded(shownImage, coverSrc, visualHtml, ownsSwap, ownsModalCover) {
+  const createVisual = () => {
+    const host = document.createElement('span');
+    host.innerHTML = visualHtml;
+    const image = host.querySelector('img');
+    return { image, visual: image.closest('.track-modal-cover-visual') };
+  };
+  if (isCoverDecodedOnPage(coverSrc)) {
+    const next = createVisual();
+    next.image.setAttribute('data-production-cover-src', coverSrc);
+    next.image.setAttribute('src', coverSrc);
+    shownImage.closest('.track-modal-cover-visual').replaceWith(next.visual);
+    if (next.image.complete && next.image.naturalWidth > 0) handleTrackModalCoverImageLoad(next.image);
+    return;
+  }
+  const replacement = createVisual();
+  let decoded = false;
+  try {
+    if (await loadGalleryCoverPreviewImage(replacement.image, coverSrc, { isCurrent: ownsSwap })) {
+      if (typeof replacement.image.decode === 'function') await replacement.image.decode();
+      decoded = true;
+    }
+  } catch (_error) {
+    decoded = false;
+  }
+  if (!ownsSwap()) return;
+  const next = decoded ? replacement : createVisual();
+  if (decoded) handleTrackModalCoverImageLoad(next.image);
+  shownImage.closest('.track-modal-cover-visual').replaceWith(next.visual);
+  if (!decoded) loadTrackModalCoverImage(next.image, coverSrc, () => ownsModalCover(next.image));
+}
+
 function getAlbumDuplicateSources(album) {
   return Array.isArray(album?.duplicate_sources) ? album.duplicate_sources.filter((source) => source && Array.isArray(source.tracks)) : [];
 }
@@ -1944,6 +2001,16 @@ const MISSING_ALBUM_RESCAN_MESSAGES = {
 // The background search's result is asked for about every 1.5 s, for at most 30 s.
 const MISSING_ALBUM_SEARCH_POLL_MS = 1500;
 const MISSING_ALBUM_SEARCH_POLLS = 20;
+// The last Re-scan's message, shown in that album's missing alert (or its found alert) until Album Details closes.
+let missingAlbumRescanResult = null;
+
+function getMissingAlbumRescanResult(albumKey) {
+  return missingAlbumRescanResult && missingAlbumRescanResult.albumKey === albumKey ? missingAlbumRescanResult : null;
+}
+
+function clearMissingAlbumRescanResult() {
+  missingAlbumRescanResult = null;
+}
 
 async function keepMissingAlbum(album) {
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -1981,11 +2048,26 @@ async function rescanMissingAlbum(album, button) {
     if (!response.ok) throw new Error((method === 'POST' && payload.error) || 'Unable to re-scan this album.');
     return payload;
   };
-  const toast = ([message, tone]) => { if (typeof showToast === 'function') showToast(message, tone, 3600); };
+  // Each message stays in the album's alert (renders keep it); a toast carries it only when no alert shows it.
+  const toastUnlessShown = ([message, tone], shown) => {
+    if (!shown && typeof showToast === 'function') showToast(message, tone, 3600);
+  };
+  const report = ([message, tone]) => {
+    missingAlbumRescanResult = { albumKey, message, tone };
+    const alertMessage = button?.closest?.('.on-page-alert')?.querySelector('.on-page-alert__message');
+    if (alertMessage) alertMessage.textContent = message;
+    toastUnlessShown([message, tone], Boolean(alertMessage));
+  };
+  const reportAfterRefresh = async ([message, tone]) => {
+    missingAlbumRescanResult = { albumKey, message, tone };
+    await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
+    toastUnlessShown([message, tone], typeof document !== 'undefined'
+      && [...document.querySelectorAll('.missing-album-rescan-result')].some(node => node.checkVisibility?.() ?? true));
+  };
   try {
     let payload = await request('POST');
     if (payload.status === 'searching') {
-      toast(MISSING_ALBUM_RESCAN_MESSAGES.searching);
+      report(MISSING_ALBUM_RESCAN_MESSAGES.searching);
       for (let poll = 0; payload.status === 'searching'; poll += 1) {
         // Still searching after 30 s: the button is freed with no further message.
         if (poll >= MISSING_ALBUM_SEARCH_POLLS) return false;
@@ -1993,12 +2075,11 @@ async function rescanMissingAlbum(album, button) {
         payload = await request('GET');
       }
     }
-    await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
-    toast(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+    await reportAfterRefresh(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
       || MISSING_ALBUM_RESCAN_MESSAGES.deleted);
     return payload.status !== 'missing';
   } catch (error) {
-    if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);
+    report([error?.message || 'Unable to re-scan this album.', 'error']);
     return false;
   } finally {
     if (button?.isConnected) {
@@ -2162,14 +2243,20 @@ function renderTrackModalRelease(album) {
     els.editTags.dataset.albumKey = resolvedAlbumKey;
   }
   if (els.missingWarning) {
-    els.missingWarning.hidden = !albumMissing;
-    els.missingWarning.innerHTML = albumMissing
-      ? buildMissingAlbumDetailsHtml({
+    const rescanResult = getMissingAlbumRescanResult(resolvedAlbumKey);
+    let missingWarningHtml = '';
+    if (albumMissing) {
+      missingWarningHtml = buildMissingAlbumDetailsHtml({
         canRemove: canConfirmMissingAlbumRemoval(album),
         albumKey,
         reason: album.missing_reason,
-      })
-      : '';
+        rescanMessage: rescanResult?.message,
+      });
+    } else if (rescanResult?.tone === 'success') {
+      missingWarningHtml = buildMissingAlbumRescanFoundHtml(rescanResult.message);
+    }
+    els.missingWarning.hidden = !missingWarningHtml;
+    els.missingWarning.innerHTML = missingWarningHtml;
   }
   if (albumMissing) {
     els.cover.innerHTML = `
@@ -2192,12 +2279,23 @@ function renderTrackModalRelease(album) {
     const reusableCoverImage = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
       && (
         existingProductionSrc === coverSrc
-        ||
-        existingCoverImage.getAttribute('src') === coverSrc
+        // The preview loader records the absolute URL of the cover it loaded.
+        || existingProductionSrc === new URL(coverSrc, window.location.href).href
+        || existingCoverImage.getAttribute('src') === coverSrc
         || existingCoverImage.currentSrc === new URL(coverSrc, window.location.href).href
       )
       ? existingCoverImage
       : null;
+    const existingCoverIsDecoded = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
+      && existingCoverImage.getAttribute('data-cover-visual-state') === 'ready'
+      && existingCoverImage.complete
+      && existingCoverImage.naturalWidth > 0;
+    const retainedCoverImage = !reusableCoverImage
+      && existingCoverIsDecoded
+      && els.cover.dataset?.coverAlbumKey === resolvedAlbumKey
+      ? existingCoverImage
+      : null;
+    const mountedCoverImage = reusableCoverImage || retainedCoverImage;
     const localCoverRefRaw = String(album?.cover_ref || '').trim();
     const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     const localCoverRef = escapeHtml(localCoverRefRaw);
@@ -2220,34 +2318,36 @@ function renderTrackModalRelease(album) {
       ? els.cover.querySelector('.track-modal-cover-image-slot')
       : null;
     if (canInspectHtmlElements && coverImageSlot instanceof HTMLElement) {
+      const renderToken = {};
+      trackModalCoverRenderTokens.set(els.cover, renderToken);
+      if (els.cover.dataset) els.cover.dataset.coverAlbumKey = resolvedAlbumKey;
+      const coverVisualHtml = buildTrackModalCoverVisualHtml({
+        albumName: String(album?.name || ''),
+        localCoverRef: localCoverRefRaw,
+        remoteCoverUrl: remoteCoverUrlRaw,
+      });
       let modalCoverImage = null;
-      if (reusableCoverImage instanceof HTMLImageElement) {
+      if (mountedCoverImage instanceof HTMLImageElement) {
         const visual = document.createElement('span');
         visual.classList.add('track-modal-cover-visual');
-        const coverIsPending = (
-          reusableCoverImage.getAttribute('data-cover-visual-state') !== 'ready'
-          || !reusableCoverImage.complete
-          || reusableCoverImage.naturalWidth <= 0
-        );
-        if (coverIsPending) {
+        if (!existingCoverIsDecoded) {
           visual.classList.add('is-loading');
           const placeholder = document.createElement('span');
           placeholder.classList.add('cover-placeholder');
           placeholder.setAttribute('aria-hidden', 'true');
           visual.appendChild(placeholder);
         }
-        reusableCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
-        reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
-        reusableCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
-        visual.appendChild(reusableCoverImage);
+        // A retained cover keeps describing itself until its replacement takes its place.
+        if (mountedCoverImage === reusableCoverImage) {
+          mountedCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
+          mountedCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
+          mountedCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
+        }
+        visual.appendChild(mountedCoverImage);
         coverImageSlot.replaceWith(visual);
-        modalCoverImage = reusableCoverImage;
+        modalCoverImage = mountedCoverImage;
       } else {
-        coverImageSlot.outerHTML = buildTrackModalCoverVisualHtml({
-          albumName: String(album?.name || ''),
-          localCoverRef: localCoverRefRaw,
-          remoteCoverUrl: remoteCoverUrlRaw,
-        });
+        coverImageSlot.outerHTML = coverVisualHtml;
         modalCoverImage = els.cover.querySelector('.track-modal-cover-visual img');
       }
       if (
@@ -2255,19 +2355,20 @@ function renderTrackModalRelease(album) {
         && modalCoverImage instanceof HTMLImageElement
         && typeof loadGalleryCoverPreviewImage === 'function'
       ) {
-        const ownsCurrentModalCover = () => {
-          if (els.overlay.hidden || !modalCoverImage.isConnected) return false;
-          if (els.cover.querySelector('.track-modal-cover-visual img') !== modalCoverImage) return false;
+        const ownsModalCover = (imageElement) => {
+          if (els.overlay.hidden || !imageElement.isConnected) return false;
+          if (els.cover.querySelector('.track-modal-cover-visual img') !== imageElement) return false;
           const currentAlbum = state.modalReleases[state.modalReleaseIndex] || null;
           return getTrackModalAlbumRequestKey(currentAlbum) === resolvedAlbumKey;
         };
-        void loadGalleryCoverPreviewImage(modalCoverImage, coverSrc, {
-          isCurrent: ownsCurrentModalCover,
-        }).catch((error) => {
-          if (!ownsCurrentModalCover()) return;
-          console.error('[AlbumHaven][Covers] Failed to load the track-modal cover preview.', error);
-          handleAlbumDisplayCoverImageError(modalCoverImage);
-        });
+        if (retainedCoverImage) {
+          // A later render supersedes a swap; a visible load survives same-cover re-renders.
+          const ownsSwap = () => ownsModalCover(retainedCoverImage)
+            && trackModalCoverRenderTokens.get(els.cover) === renderToken;
+          void replaceTrackModalCoverWhenDecoded(retainedCoverImage, coverSrc, coverVisualHtml, ownsSwap, ownsModalCover);
+        } else {
+          loadTrackModalCoverImage(modalCoverImage, coverSrc, () => ownsModalCover(modalCoverImage));
+        }
       }
     }
   } else {
@@ -2581,6 +2682,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discNumber: group.discNumber,
       discLabel,
       discSubtitle: group.discSubtitle,
+      discMatchesSearch,
       isBonus: Boolean(group.isBonus),
       lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
       discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
@@ -2796,102 +2898,29 @@ function getNextQueuedTrack() {
   return nextTrack;
 }
 
-function refreshTrackModalPlaybackState() {
-  const trackModal = document.getElementById('track-modal');
-  if (!trackModal || trackModal.hidden) return;
+// Album Details and Loose Tracks show playback through the same AlbumTrackTable rows.
+function refreshTrackTablePlaybackState(pageId) {
+  const page = document.getElementById(pageId);
+  if (!page || page.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
-  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
-  const activeCurrent = selectedTrackPath
-    ? '0:00'
-    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = selectedTrackPath
-    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
-    : formatTrackDuration(playback.duration) || '0:00';
-
-  document.querySelectorAll('#track-modal [data-track-row-path]').forEach((row) => {
-    const rowPath = String(row.getAttribute('data-track-row-path') || '');
-    const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack
-      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
-    row.classList.toggle('is-current', isCurrentTrack);
-    row.classList.toggle('is-playing', isActivelyPlaying);
-    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
-    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
-    row.classList.toggle(
-      'album-track-table__row--animated',
-      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
-    );
-    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
-
-    const button = row.querySelector('.play-track-button');
-    if (button) {
-      const iconName = isActivelyPlaying ? 'pause' : 'play';
-      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
-      if (button.getAttribute('aria-label') !== label) {
-        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
-          className: `album-track-table__play-icon ui-icon--${iconName}`,
-        });
-        button.setAttribute('aria-label', label);
-      }
-    }
-
-    const durationEl = row.querySelector('[data-track-duration-path]');
-    if (durationEl) {
-      const originalDuration = durationEl.dataset.originalDuration || '';
-      const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
-    }
+  const selected = state.player.selectedTrack;
+  const selectedTrackPath = String(selected?.path || '');
+  const elapsed = selectedTrackPath ? '0:00' : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const total = formatTrackDuration(selectedTrackPath ? selected.durationSeconds : playback.duration) || '0:00';
+  syncAlbumTrackTablePlayback(page, {
+    trackPath: selectedTrackPath || String(state.player.current?.path || ''),
+    playing: Boolean(selectedTrackPath) || (!playback.paused && !playback.ended),
+    currentTime: `${elapsed} / ${total}`,
+    animated: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }
 
+function refreshTrackModalPlaybackState() {
+  refreshTrackTablePlaybackState('track-modal');
+}
+
 function refreshNonAlbumModalPlaybackState() {
-  const nonAlbumModal = document.getElementById('non-album-modal');
-  if (!nonAlbumModal || nonAlbumModal.hidden) return;
-  const playback = getPlayerPlaybackSnapshot();
-  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
-  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
-  const activeCurrent = selectedTrackPath
-    ? '0:00'
-    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = selectedTrackPath
-    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
-    : formatTrackDuration(playback.duration) || '0:00';
-
-  document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
-    const rowPath = String(row.getAttribute('data-track-row-path') || '');
-    const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack
-      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
-    row.classList.toggle('is-current', isCurrentTrack);
-    row.classList.toggle('is-playing', isActivelyPlaying);
-    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
-    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
-    row.classList.toggle(
-      'album-track-table__row--animated',
-      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
-    );
-    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
-
-    const button = row.querySelector('.play-track-button');
-    if (button) {
-      const iconName = isActivelyPlaying ? 'pause' : 'play';
-      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
-      if (button.getAttribute('aria-label') !== label) {
-        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
-          className: `album-track-table__play-icon ui-icon--${iconName}`,
-        });
-        button.setAttribute('aria-label', label);
-      }
-    }
-
-    const durationEl = row.querySelector('[data-track-duration-path]');
-    if (durationEl) {
-      const originalDuration = durationEl.dataset.originalDuration || '';
-      const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
-    }
-  });
+  refreshTrackTablePlaybackState('non-album-modal');
 }
 
 

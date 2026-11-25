@@ -3382,3 +3382,41 @@ test('a forced refresh keeps the prior list on screen until the bounded replacem
 
   assert.deepEqual(renderedLengths, [3, 1], 'the old list paints first, then the bounded replacement');
 });
+
+test('a track-opened album that no longer lists the track is not kept on a bounded page (FTC-TAGS-020)', async () => {
+  // Restore 3: Problematic Files opened the restored track on the merged-away suffix album from a list read
+  // during the save. Its detail listed no tracks, yet the bounded page kept it pinned until the complete
+  // list arrived, so the album the merge removed still showed in the list.
+  const trackPath = 'D:/Music/DDT/Studio/03.mp3';
+  const completeList = new Promise(() => {});
+  const { context } = loadHelper({
+    async fetch(url) {
+      if (!String(url).endsWith('?limit=50')) return completeList;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { complete: false, has_more: true, items: [
+            { key: 'source', name: 'Studio', track_paths: [trackPath], detail_loaded: false },
+          ] };
+        },
+      };
+    },
+  });
+  Object.assign(context.state.utility, {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFilesComplete: false,
+    selectedProblematicKey: 'merged-suffix',
+    focusedTrackPath: trackPath,
+    problematicFiles: [
+      { key: 'merged-suffix', name: 'Studio3', track_paths: [], tracks: [], detail_loaded: true },
+      { key: 'source', name: 'Studio', track_paths: [trackPath], detail_loaded: false },
+    ],
+  });
+
+  void context.loadProblematicFiles(true, { render: false });
+  await context.state.utility.initialLoadPromise;
+
+  assert.deepEqual(Array.from(context.state.utility.problematicFiles, (item) => item.key), ['source']);
+});

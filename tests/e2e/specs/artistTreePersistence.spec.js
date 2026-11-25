@@ -136,7 +136,9 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
     const phone = (await freshBrowserSession.create({ phone: true })).page;
     await phone.goto('/');
     await phone.locator('#mobile-library-button').click();
+    // The mode button only shows the Custom Collections tree; its Loose Tracks item opens the page.
     await phone.locator('#shell-navigation-rail [data-navigation-mode="collections"]').tap();
+    await phone.locator('#sidebar-collections [data-open-non-album-tracks][data-library-wide="1"]').tap();
     const title = phone.locator('#mobile-page-title');
     const summary = phone.locator('#mobile-page-summary');
     await expect(title).toBeVisible();

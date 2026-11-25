@@ -85,9 +85,7 @@ test.describe('Loose Tracks navigation on a phone', () => {
     const hamburger = header.getByRole('button', { name: 'Open library navigation', exact: true });
     await stepLogger.step('Open Loose Tracks from the library drawer', async () => {
       await galleryActions.goto('/?surface=albums');
-      await mobileLayout.libraryButton.click();
-      await expect(mobileLayout.artistRail).toHaveAttribute('aria-hidden', 'false');
-      await mobileLayout.artistRail.locator('[data-navigation-mode="collections"]').click();
+      await mobileLayout.openLooseTracksFromDrawer();
       await expect(page.locator('#mobile-page-title')).toHaveText('Loose Tracks');
       await expect(mobileLayout.artistRail).toHaveAttribute('aria-hidden', 'true');
     });

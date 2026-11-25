@@ -74,8 +74,7 @@ test.describe('mobile Home reset', () => {
 
     await stepLogger.step('Open library-wide Loose Tracks as a retained mobile page', async () => {
       await galleryActions.goto('/');
-      await mobileLayout.libraryButton.click();
-      await mobileLayout.artistRail.locator('[data-navigation-mode="collections"]').click();
+      await mobileLayout.openLooseTracksFromDrawer();
       await expect(page).toHaveURL(/\/loose-tracks(?:\?|$)/);
       await expect(nonAlbumPage).toBeVisible();
       await expect(page.locator('#mobile-page-title')).toHaveText('Loose Tracks');

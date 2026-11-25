@@ -172,7 +172,13 @@ test('the panel closes once the header moves on to the next artist', async ({ pa
   for (const top of [second + 160, second + 320, third + 60]) {
     await scrollGallery(page, top);
     const panel = await readPanel(page);
-    if (panel.header === ARTISTS[1]) {
+    // While the header names the artist and some of its albums remain, the panel stays on the header "i".
+    const albumsInView = await page.evaluate(artist => {
+      const scroll = document.getElementById('albums-scroll');
+      const section = scroll.querySelector(`[data-scroll-artist="${CSS.escape(artist)}"]`)?.closest('.artist-section');
+      return Boolean(section) && section.getBoundingClientRect().bottom > scroll.getBoundingClientRect().top;
+    }, ARTISTS[1]);
+    if (panel.header === ARTISTS[1] && albumsInView) {
       expect(panel, `still ${ARTISTS[1]} at ${top}`).toMatchObject({ open: true, anchorInHeader: true, joined: true });
     } else {
       expect(panel, `header moved to ${panel.header} at ${top}`).toMatchObject({ open: false });

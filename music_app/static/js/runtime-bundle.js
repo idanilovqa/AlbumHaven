@@ -7805,9 +7805,23 @@ function isGalleryAnchorVisible(anchor, scroll) {
 function isGalleryArtistInfoAnchorVisible(anchor, scroll) {
   if (anchor?.closest?.('[data-gallery-bar-instance="gallery"]')) {
     const bounds = anchor.getBoundingClientRect?.();
-    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight;
+    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight
+      && galleryArtistSectionsRemainInView(anchor.dataset?.artist, scroll);
   }
   return isGalleryAnchorVisible(anchor, scroll);
+}
+
+// The header keeps naming an artist until the next label is completely hidden, by which time
+// that artist's albums can all be gone. Its header "i" then no longer stands for anything on
+// screen. Without rendered sections (no dividers) the header alone decides.
+function galleryArtistSectionsRemainInView(artist, scroll) {
+  const sections = artist && scroll?.querySelectorAll
+    ? Array.from(scroll.querySelectorAll(`[data-scroll-artist="${cssEscape(artist)}"]`))
+      .map(label => label.closest?.('.artist-section') || label)
+    : [];
+  if (!sections.length) return true;
+  const viewportTop = Number(scroll.getBoundingClientRect?.().top || 0);
+  return sections.some(section => Number(section.getBoundingClientRect?.().bottom) > viewportTop);
 }
 
 function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {

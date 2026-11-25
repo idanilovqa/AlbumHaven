@@ -134,6 +134,7 @@ function foregroundDocumentHealthy() {
 // The native shell replaces a foregrounded document only when it cannot paint and report healthy.
 function acknowledgeAndroidForeground(token) {
   if (!isAndroidShell() || !Number.isSafeInteger(token) || token <= 0) return false;
+  void resyncAndroidNativePlayback();
   const deadline = Date.now() + 4000;
   const afterPaint = () => requestAnimationFrame(() => requestAnimationFrame(() => {
     if (foregroundDocumentHealthy()) {
@@ -322,6 +323,8 @@ const androidNativePlayback = {
   ownerIntent: false,
   // The seek whose target the seekbar holds until Android reports it (androidNativeReportedSeconds).
   seekHold: null,
+  // True while the web follows a pause Android made itself (followAndroidNativeSystemState).
+  followingSystemPause: false,
   refs: new Map(),
   snapshot: { currentTime: 0, duration: 0, paused: true, ended: false, src: '', readyState: 0 },
 };
@@ -666,12 +669,14 @@ function pauseAndroidNativePlayback() {
   traceAndroidPlaybackStop('pause');
   // As the web engine's pause supersedes its pending start, a pause stops a pending switch, so
   // Android never plays the track the web does not show. The next play restarts the shown one.
-  if (native.startingRevision && native.startingRevision === native.revision) {
+  // A pause Android made itself only updates the web; Android decides what its own pause keeps.
+  if (!native.followingSystemPause && native.startingRevision && native.startingRevision === native.revision) {
     return stopAndroidNativePlayback('paused', { preserveSnapshot: true });
   }
   native.ownerIntent = false;
   native.snapshot.paused = true;
   if (native.mode !== 'error') native.mode = 'paused';
+  if (native.followingSystemPause) return Promise.resolve();
   return sendAndroidNativeTransport('playback.pause').then(() => undefined);
 }
 
@@ -865,18 +870,26 @@ function notifyAndroidNativeWaveformReady() {
 // queue directly. The web then runs its own pause or resume path so its UI follows as after an
 // on-page tap; Android has already applied the change and its listen writes.
 function followAndroidNativeSystemState(payload) {
-  const snapshot = androidNativePlayback.snapshot;
+  const native = androidNativePlayback;
+  const snapshot = native.snapshot;
   const active = payload.state === 'playing' || payload.state === 'buffering' || payload.state === 'loading';
   if (payload.state === 'paused' && !snapshot.paused && typeof pausePlayerPlaybackForHandoff === 'function') {
     snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
-    void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    // Android already paused. Sent back as the web's own pause, it would cancel the resume Android
+    // holds for the end of a call, so the web pause path runs without it.
+    native.followingSystemPause = true;
+    try {
+      void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+    } finally {
+      native.followingSystemPause = false;
+    }
   } else if (active && snapshot.paused && typeof togglePlayerPlayback === 'function') {
     togglePlayerPlayback({ focusTimelineOnResume: false });
   }
 }
 
-// A skip from Android's controls: the web selects the item Android moved to as its own skip
-// buttons would.
+// A skip from Android's controls, or a move the web missed: the web selects the item Android moved
+// to as its own skip buttons would.
 function followAndroidNativeSystemStep(payload) {
   const native = androidNativePlayback;
   const incoming = native.items[payload.currentIndex];
@@ -986,7 +999,12 @@ function handleAndroidNativeCurrentItem(payload) {
     return;
   }
   // The web's own loads name items it already selected; only a natural advance is new.
-  if (payload.reason !== 'advance' || payload.currentIndex !== native.index + 1) return;
+  if (payload.reason !== 'advance' || !(payload.currentIndex > native.index)) return;
+  // Advances the web never heard of are skipped over: it moves straight to the item Android plays.
+  if (payload.currentIndex !== native.index + 1) {
+    followAndroidNativeSystemStep({ ...payload, reason: 'resync' });
+    return;
+  }
   const outgoing = native.items[native.index];
   const incoming = native.items[payload.currentIndex];
   if (!outgoing || !incoming) return;
@@ -1069,6 +1087,32 @@ function handleAndroidNativeReferenceExpired() {
   observeAndroidNativeFacade(startAndroidNativePlaybackTrack(track, {
     startSeconds: native.snapshot.currentTime, autoplay: true, referenceRetry: true,
   }), 'reference-refresh-error');
+}
+
+// Android plays on while the page cannot follow: a frozen renderer or a lost event leaves the page
+// on an older item, position or state. Each return to the app takes Android's own snapshot, as the
+// web follows Android's controls.
+async function resyncAndroidNativePlayback() {
+  const native = androidNativePlayback;
+  // A queue the web is still loading is newer than any snapshot of the applied one; so is a skip,
+  // pause or play the user makes while Android answers.
+  const intent = () => `${native.revision}:${native.appliedRevision}:${native.snapshot.paused}`;
+  if (!native.appliedRevision || native.revision !== native.appliedRevision) return false;
+  const before = intent();
+  let live = null;
+  try {
+    live = await sendAndroidBridgeCommand('playback.snapshot');
+  } catch (_error) {
+    return false;
+  }
+  if (intent() !== before || live?.queueRevision !== native.appliedRevision) return false;
+  noteAndroidNativeSampleRate(live);
+  if (Number.isInteger(live.currentIndex) && live.currentIndex !== native.index && native.items[live.currentIndex]) {
+    followAndroidNativeSystemStep({ ...live, reason: 'resync' });
+  }
+  // An end the web already followed is not followed twice.
+  if (live.state !== 'ended' || !native.snapshot.ended) handleAndroidNativeState({ ...live, initiator: 'system' });
+  return true;
 }
 
 function registerAndroidNativePlaybackEvents() {

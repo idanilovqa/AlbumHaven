@@ -1674,6 +1674,12 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
         def start(self):
             events.append("provider.start")
 
+        def gate_pasted_cover_saves(self):
+            events.append("provider.gate-pasted-cover-saves")
+
+        def gate_problematic_complete_list(self):
+            events.append("provider.gate-problematic-complete-list")
+
         def stop(self):
             events.append("provider.stop")
 
@@ -1741,6 +1747,16 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
         "seed_fixture_lastfm_timezone",
         lambda: events.append("lastfm.timezone.seed"),
     )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "seed_cover_lookup_local_inventory",
+        lambda *_args: events.append("cover-inventory.seed"),
+    )
+    monkeypatch.setattr(
+        isolatedPostgres,
+        "prepare_app_to_serve",
+        lambda _app: events.append("app.prepare-to-serve"),
+    )
     monkeypatch.setattr(isolatedLibraryApp, "ProviderFixtureService", RecordingProvider)
     monkeypatch.setattr(isolatedLibraryApp, "_runtime_config", lambda: {})
     monkeypatch.setattr(
@@ -1783,9 +1799,13 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "database.persist",
             "rating-track.materialize",
             "lastfm.timezone.seed",
+            "cover-inventory.seed",
             "provider-candidates.persist",
             "provider.create",
             "provider.start",
+            "provider.gate-pasted-cover-saves",
+            "app.prepare-to-serve",
+            "provider.gate-problematic-complete-list",
             "server.run",
             "provider.stop",
             "database.reset",
@@ -1879,6 +1899,12 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         def start(self):
             events.append("provider.start")
 
+        def gate_pasted_cover_saves(self):
+            events.append("provider.gate-pasted-cover-saves")
+
+        def gate_problematic_complete_list(self):
+            events.append("provider.gate-problematic-complete-list")
+
         def stop(self):
             events.append("provider.stop")
 
@@ -1961,6 +1987,16 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         "seed_fixture_lastfm_timezone",
         lambda: events.append("lastfm.timezone.seed"),
     )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "seed_cover_lookup_local_inventory",
+        lambda *_args: events.append("cover-inventory.seed"),
+    )
+    monkeypatch.setattr(
+        isolatedPostgres,
+        "prepare_app_to_serve",
+        lambda _app: events.append("app.prepare-to-serve"),
+    )
     monkeypatch.setattr(isolatedLibraryApp, "ProviderFixtureService", RecordingProvider)
     monkeypatch.setattr(isolatedLibraryApp, "_runtime_config", lambda: {})
     monkeypatch.setattr(
@@ -2012,6 +2048,9 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "provider-candidates.persist",
             "provider.create",
             "provider.start",
+            "provider.gate-pasted-cover-saves",
+            "app.prepare-to-serve",
+            "provider.gate-problematic-complete-list",
             "server.run",
             "provider.stop",
             "lock.release",
@@ -2026,9 +2065,13 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "database.persist",
             "rating-track.materialize",
             "lastfm.timezone.seed",
+            "cover-inventory.seed",
             "provider-candidates.persist",
             "provider.create",
             "provider.start",
+            "provider.gate-pasted-cover-saves",
+            "app.prepare-to-serve",
+            "provider.gate-problematic-complete-list",
             "server.run",
             "provider.stop",
             "lock.release",
@@ -2298,6 +2341,18 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
     assert loop_source.read_bytes() == b"loop"
     assert len({entry["album_artist"] for entry in file_cache.values()}) == 40
     assert len({(entry["album_artist"], entry["album"]) for entry in file_cache.values()}) == 400
+    # FTC Problematic Files sidebar scrolling needs every sidebar fixture album to carry
+    # the shared problematic title, beside the navigation target's own album.
+    sidebar_fixture_albums = {
+        f"Comfortably Numb Sidebar Fixture {number:02d}"
+        for number in range(1, isolatedLibraryApp.PROBLEMATIC_TRACK_SIDEBAR_FIXTURE_COUNT + 1)
+    }
+    assert {
+        entry["album"]
+        for entry in file_cache.values()
+        if entry["title"] == isolatedLibraryApp.PROBLEMATIC_TRACK_TITLE
+        and entry["album"] in sidebar_fixture_albums
+    } == sidebar_fixture_albums
     benchmark_fixture_entries = {
         (
             entry["album_artist"],

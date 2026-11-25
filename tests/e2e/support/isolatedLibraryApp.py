@@ -1120,6 +1120,8 @@ def register_gapless_playback_fixture(
                 "library_root_id": "isolated-e2e-root",
                 "library_root_category": "main_library",
                 "exception_type": None,
+                # A fresh read of these untagged files reports no compilation tag.
+                "compilation_tag": None,
                 "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
                 "comment": "",
             },
@@ -1652,16 +1654,24 @@ def build_file_cache(
     if alias_overflow_artist_index is None:
         raise RuntimeError("The isolated E2E inventory needs one generic artist for fixture balancing.")
     reserved_indices.add(alias_overflow_artist_index)
-    problematic_sidebar_artist_indices = [
+    generic_artist_indices = [
         index
         for index in range(artist_count)
         if index not in reserved_indices
+    ]
+    # Each sidebar fixture is one generic artist's album: first every generic artist's
+    # first album, then their next albums once the reserved fixtures leave fewer
+    # generic artists than sidebar fixtures.
+    problematic_sidebar_slots = [
+        (artist_index, album_index)
+        for album_index in range(albums_per_artist)
+        for artist_index in generic_artist_indices
     ][:PROBLEMATIC_TRACK_SIDEBAR_FIXTURE_COUNT]
-    if len(problematic_sidebar_artist_indices) != PROBLEMATIC_TRACK_SIDEBAR_FIXTURE_COUNT:
-        raise RuntimeError("The isolated E2E inventory needs artists for Problematic Files sidebar scrolling.")
-    problematic_sidebar_fixture_number_by_artist_index = {
-        artist_index: fixture_number
-        for fixture_number, artist_index in enumerate(problematic_sidebar_artist_indices, start=1)
+    if len(problematic_sidebar_slots) != PROBLEMATIC_TRACK_SIDEBAR_FIXTURE_COUNT:
+        raise RuntimeError("The isolated E2E inventory needs albums for Problematic Files sidebar scrolling.")
+    problematic_sidebar_fixture_number_by_slot = {
+        slot: fixture_number
+        for fixture_number, slot in enumerate(problematic_sidebar_slots, start=1)
     }
     redistributed_album_count = len(alias_fixture_indices) * max(0, albums_per_artist - 1)
     ddt_gallery_extra_album_count = len(DDT_GALLERY_ALBUMS) - albums_per_artist
@@ -1733,10 +1743,8 @@ def build_file_cache(
             is_problematic_track_navigation_fixture = (
                 artist == PROBLEMATIC_TRACK_ARTIST and album_index == 1
             )
-            problematic_sidebar_fixture_number = (
-                problematic_sidebar_fixture_number_by_artist_index.get(artist_index)
-                if album_index == 0
-                else None
+            problematic_sidebar_fixture_number = problematic_sidebar_fixture_number_by_slot.get(
+                (artist_index, album_index)
             )
             is_problematic_sidebar_scroll_fixture = problematic_sidebar_fixture_number is not None
             is_track_credit_fixture = (
@@ -2478,6 +2486,8 @@ def build_file_cache(
                     "library_root_id": "isolated-e2e-root",
                     "library_root_category": "main_library",
                     "exception_type": None,
+                    # The generated files carry no compilation tag (TCMP), as a fresh read reports.
+                    "compilation_tag": None,
                     "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
                     "comment": (
                         f"{TRACK_DESCRIPTION} artist={artist_index} album={album_index} "

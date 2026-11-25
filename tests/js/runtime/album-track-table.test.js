@@ -300,13 +300,21 @@ test('a paused current track keeps a dim, still highlight and its play button', 
 test('play activation is transient and live playback refresh can own the component state classes', () => {
   const context = loadTrackTable();
   assert.equal(typeof context.triggerAlbumTrackPlayActivation, 'function');
-  const source = fs.readFileSync(
-    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'),
-    'utf8',
-  );
-  assert.match(source, /album-track-table__row--current/);
-  assert.match(source, /album-track-table__row--playing/);
-  assert.match(source, /album-track-table__row--animated/);
+  const classes = new Set(['album-track-table__row']);
+  const row = {
+    dataset: {},
+    classList: { toggle: (name, active) => (active ? classes.add(name) : classes.delete(name)) },
+    getAttribute: () => 'song.flac',
+    querySelector: () => null,
+  };
+  const page = { querySelectorAll: selector => (selector.includes('[data-track-row-path="song.flac"]') ? [row] : []) };
+  context.syncAlbumTrackTablePlayback(page, { trackPath: 'song.flac', playing: true, currentTime: '0:01 / 3:00' });
+  assert.deepEqual([...classes].sort(), [
+    'album-track-table__row', 'album-track-table__row--animated', 'album-track-table__row--current',
+    'album-track-table__row--playing', 'is-current', 'is-playing',
+  ]);
+  context.syncAlbumTrackTablePlayback(page, { trackPath: 'song.flac', playing: true, currentTime: '0:02 / 3:00', animated: false });
+  assert.equal(classes.has('album-track-table__row--animated'), false);
 });
 
 test('per-track Play hover uses the main player Play color without affecting disabled controls', () => {

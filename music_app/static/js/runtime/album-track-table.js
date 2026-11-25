@@ -270,6 +270,38 @@ function buildAlbumTrackTableHtml(config = {}) {
   return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
 }
 
+// A playback tick reaches only the rows whose state can change: those marked current or
+// playing, and those of the current track. A 1,000-row Loose Tracks page then costs a
+// tick what one album does, and an unchanged cell is never rewritten.
+function syncAlbumTrackTablePlayback(root, { trackPath = '', playing = false, currentTime = '', animated = true } = {}) {
+  if (!root?.querySelectorAll) return;
+  const quotedPath = trackPath.replace(/["\\]/g, '\\$&');
+  const selector = ['--current', '--playing'].map(state => `[data-track-row-path].album-track-table__row${state}`)
+    .concat(trackPath ? [`[data-track-row-path="${quotedPath}"]`] : []).join(', ');
+  root.querySelectorAll(selector).forEach((row) => {
+    const isCurrent = Boolean(trackPath) && row.getAttribute('data-track-row-path') === trackPath;
+    const isPlaying = isCurrent && playing;
+    row.classList.toggle('is-current', isCurrent);
+    row.classList.toggle('is-playing', isPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrent);
+    row.classList.toggle('album-track-table__row--playing', isPlaying);
+    row.classList.toggle('album-track-table__row--animated', isPlaying && animated);
+    if (row.dataset) row.dataset.trackPlaying = isPlaying ? 'true' : '';
+    const button = row.querySelector('.play-track-button');
+    const label = isPlaying ? 'Pause track' : 'Play track';
+    if (button && button.getAttribute('aria-label') !== label) {
+      const iconName = isPlaying ? 'pause' : 'play';
+      button.innerHTML = ButtonComponent.renderIconSvg(iconName, { className: `album-track-table__play-icon ui-icon--${iconName}` });
+      button.setAttribute('aria-label', label);
+    }
+    const duration = row.querySelector('[data-track-duration-path]');
+    if (duration) {
+      const text = isCurrent ? currentTime : duration.dataset.originalDuration || '';
+      if (duration.textContent !== text) duration.textContent = text;
+    }
+  });
+}
+
 function triggerAlbumTrackPlayActivation(button) {
   if (!button?.classList?.add || !button?.classList?.remove) return;
   button.classList.remove('album-track-table__play--activating');

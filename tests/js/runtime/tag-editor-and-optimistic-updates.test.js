@@ -374,7 +374,7 @@ test('track modal playback refresh preserves generic Play track and Pause track 
   };
   const durationEl = {
     dataset: { originalDuration: '3:00' },
-    innerHTML: '',
+    textContent: '',
   };
   const row = {
     classList: { toggle() {} },
@@ -389,22 +389,20 @@ test('track modal playback refresh preserves generic Play track and Pause track 
   const context = loadHelper([], {
     state: { player: { current: { path: trackPath } } },
     document: {
-      getElementById(id) { return id === 'track-modal' ? { hidden: false } : null; },
-      querySelectorAll(selector) {
-        return selector === '#track-modal [data-track-row-path]' ? [row] : [];
-      },
+      getElementById(id) { return id === 'track-modal' ? { hidden: false, querySelectorAll: () => [row] } : null; },
     },
     formatTrackDuration: () => '0:00',
     getPlayerPlaybackSnapshot: () => playback,
     escapeHtml: (value) => String(value ?? ''),
+    syncAlbumTrackTablePlayback: loadAlbumTrackTableContext().syncAlbumTrackTablePlayback,
   });
 
   context.refreshTrackModalPlaybackState();
   assert.equal(attributes.get('aria-label'), 'Pause track');
   assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
   assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
-  assert.equal(durationEl.innerHTML, '0:00 / 0:00');
-  assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
+  assert.equal(durationEl.textContent, '0:00 / 0:00');
+  assert.doesNotMatch(durationEl.textContent, /sep|8226|•/);
 
   let iconWrites = 0;
   let iconMarkup = button.innerHTML;
@@ -434,7 +432,7 @@ test('Loose Tracks playback refresh applies the AlbumTrackTable current and anim
     getAttribute(name) { return buttonAttributes.get(name) || ''; },
     setAttribute(name, value) { buttonAttributes.set(name, String(value)); },
   };
-  const durationEl = { dataset: { originalDuration: '3:00' }, innerHTML: '' };
+  const durationEl = { dataset: { originalDuration: '3:00' }, textContent: '' };
   const row = {
     dataset: {},
     classList: { toggle(name, active) { classes.set(name, Boolean(active)); } },
@@ -450,14 +448,12 @@ test('Loose Tracks playback refresh applies the AlbumTrackTable current and anim
     state: { player: { current: { path: trackPath } } },
     document: {
       documentElement: { getAttribute(name) { return rootAttributes.get(name) || ''; } },
-      getElementById(id) { return id === 'non-album-modal' ? { hidden: false } : null; },
-      querySelectorAll(selector) {
-        return selector === '#non-album-modal [data-track-row-path]' ? [row] : [];
-      },
+      getElementById(id) { return id === 'non-album-modal' ? { hidden: false, querySelectorAll: () => [row] } : null; },
     },
     formatTrackDuration(value) { return Number(value) === 42 ? '0:42' : '3:00'; },
     getPlayerPlaybackSnapshot: () => ({ currentTime: 42, duration: 180, ended: false, paused: false }),
     escapeHtml: (value) => String(value ?? ''),
+    syncAlbumTrackTablePlayback: loadAlbumTrackTableContext().syncAlbumTrackTablePlayback,
   });
 
   context.refreshNonAlbumModalPlaybackState();
@@ -468,12 +464,129 @@ test('Loose Tracks playback refresh applies the AlbumTrackTable current and anim
   assert.equal(buttonAttributes.get('aria-label'), 'Pause track');
   assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
   assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
-  assert.equal(durationEl.innerHTML, '0:42 / 3:00');
-  assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
+  assert.equal(durationEl.textContent, '0:42 / 3:00');
+  assert.doesNotMatch(durationEl.textContent, /sep|8226|•/);
 
   rootAttributes.set('data-album-playing-row-animation', 'disabled');
   context.refreshNonAlbumModalPlaybackState();
   assert.equal(classes.get('album-track-table__row--animated'), false);
+});
+
+// A playback position tick (about four a second) must not revisit every row of a long
+// Loose Tracks page: at 1,000 rows each tick rewrote every duration cell, churning
+// thousands of DOM nodes a second and starving the audio feed on phones.
+function loadLooseTracksPage(rowCount) {
+  const rows = [];
+  const work = { rowsVisited: 0, durationWrites: 0, classWrites: 0 };
+  for (let index = 0; index < rowCount; index += 1) {
+    const rowPath = `C:\\Music\\Loose\\track-${index}.flac`;
+    const classes = new Set(['album-track-table__row']);
+    const attributes = new Map([['data-track-row-path', rowPath]]);
+    const buttonAttributes = new Map([['aria-label', 'Play track']]);
+    let durationText = '3:00';
+    const durationEl = {
+      dataset: { originalDuration: '3:00' },
+      get textContent() { return durationText; },
+      set textContent(value) { work.durationWrites += 1; durationText = String(value); },
+      get innerHTML() { return durationText; },
+      set innerHTML(value) { work.durationWrites += 1; durationText = String(value); },
+    };
+    const row = {
+      dataset: {},
+      classList: {
+        contains: name => classes.has(name),
+        toggle(name, active) {
+          if (classes.has(name) !== Boolean(active)) work.classWrites += 1;
+          if (active) classes.add(name); else classes.delete(name);
+        },
+      },
+      getAttribute(name) {
+        if (name === 'data-track-row-path') work.rowsVisited += 1;
+        return attributes.get(name) || '';
+      },
+      querySelector(selector) {
+        if (selector === '.play-track-button') {
+          return {
+            innerHTML: '',
+            getAttribute: name => buttonAttributes.get(name) || '',
+            setAttribute: (name, value) => buttonAttributes.set(name, String(value)),
+          };
+        }
+        return selector === '[data-track-duration-path]' ? durationEl : null;
+      },
+      path: rowPath,
+      durationEl,
+    };
+    rows.push(row);
+  }
+  const unescape = value => value.replace(/\\(.)/g, '$1');
+  const page = {
+    hidden: false,
+    // The selectors AlbumTrackTable rows answer: their state classes and their path.
+    querySelectorAll(selector) {
+      return rows.filter(row => selector.split(',').some((part) => {
+        const pathMatch = part.match(/\[data-track-row-path="((?:\\.|[^"\\])*)"\]/);
+        if (pathMatch) return row.path === unescape(pathMatch[1]);
+        const classMatch = part.match(/\.([\w-]+)\s*$/);
+        return Boolean(classMatch) && row.classList.contains(classMatch[1]);
+      }));
+    },
+  };
+  const trackTable = loadAlbumTrackTableContext();
+  const playback = { currentTime: 42, duration: 180, ended: false, paused: false };
+  const context = loadHelper([], {
+    state: { player: { current: { path: rows[0].path } } },
+    document: {
+      documentElement: { getAttribute: () => '' },
+      getElementById: id => (id === 'non-album-modal' ? page : null),
+      querySelectorAll: selector => (selector === '#non-album-modal [data-track-row-path]' ? rows : []),
+    },
+    formatTrackDuration: (value) => {
+      const seconds = Math.floor(Number(value) || 0);
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    },
+    getPlayerPlaybackSnapshot: () => playback,
+    escapeHtml: value => String(value ?? ''),
+    syncAlbumTrackTablePlayback: trackTable.syncAlbumTrackTablePlayback,
+  });
+  return { context, rows, work, playback };
+}
+
+function loadAlbumTrackTableContext() {
+  const context = { escapeHtml: value => String(value ?? ''), encodeURIComponent, ButtonComponent };
+  vm.createContext(context);
+  for (const filename of ['compact-data-table.js', 'album-track-table.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), filename), 'utf8'), context);
+  }
+  return context;
+}
+
+test('a Loose Tracks playback tick touches only the playing row, at 10 or 1,000 rows', () => {
+  const perTick = {};
+  for (const rowCount of [10, 1000]) {
+    const { context, rows, work, playback } = loadLooseTracksPage(rowCount);
+    context.refreshNonAlbumModalPlaybackState();
+    assert.equal(rows[0].durationEl.textContent, '0:42 / 3:00');
+    Object.assign(work, { rowsVisited: 0, durationWrites: 0, classWrites: 0 });
+    playback.currentTime = 43;
+    context.refreshNonAlbumModalPlaybackState();
+    assert.equal(rows[0].durationEl.textContent, '0:43 / 3:00', 'the playing row shows the elapsed time');
+    assert.equal(rows[1].durationEl.textContent, '3:00', 'other rows keep their own length');
+    perTick[rowCount] = { ...work };
+
+    // Moving to another track restores the previous row and marks only the new one.
+    context.state.player.current = { path: rows[rowCount - 1].path };
+    Object.assign(work, { rowsVisited: 0, durationWrites: 0, classWrites: 0 });
+    context.refreshNonAlbumModalPlaybackState();
+    assert.equal(rows[0].durationEl.textContent, '3:00');
+    assert.equal(rows[0].classList.contains('album-track-table__row--playing'), false);
+    assert.equal(rows[rowCount - 1].classList.contains('album-track-table__row--playing'), true);
+    assert.ok(work.rowsVisited <= 2, `a track change visits ${work.rowsVisited} rows at ${rowCount}`);
+  }
+  assert.deepEqual(perTick[1000], perTick[10], 'per-tick work does not grow with the list');
+  assert.ok(perTick[1000].rowsVisited <= 1, `a tick visits ${perTick[1000].rowsVisited} rows`);
+  assert.ok(perTick[1000].durationWrites <= 1, `a tick rewrites ${perTick[1000].durationWrites} duration cells`);
+  assert.equal(perTick[1000].classWrites, 0, 'an unchanged playing state writes no classes');
 });
 
 test('track modal cover transition hides pending image chrome over a blank placeholder', () => {

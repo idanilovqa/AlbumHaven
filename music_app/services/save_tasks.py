@@ -780,7 +780,11 @@ def _finalize_save_task(
             and not scoped_postgres_exception_only
             and (
                 not isinstance(committed_relation_state, dict)
-                or committed_relation_state.get("projection_mode") != "stale"
+                or (
+                    committed_relation_state.get("projection_mode") != "stale"
+                    # Deferred to the journal: background work, not a failure.
+                    and not committed_relation_state.get("relation_publication_deferred")
+                )
             )
         ):
             try:
@@ -1104,7 +1108,10 @@ def finalize_structural_tag_edit_save_task(
                 if relation_projection_edit_fields is None
                 else relation_projection_edit_fields
             )
-            if changed_field_names & required_relation_fields:
+            # A publication deferred to the journal is background work (its owner replays the albums), not a
+            # failure: the save completes with the normal message.
+            if (changed_field_names & required_relation_fields
+                    and not persistence_result.get("relation_publication_deferred")):
                 if (
                     not isinstance(committed_relation_views, dict)
                     and not isinstance(persistence_result.get('relation_view_patch'), dict)

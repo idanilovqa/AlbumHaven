@@ -13343,5 +13343,440 @@
       "settings-header-gallery-structure"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Album Types trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Album Types trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Album Types trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Album Types trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Library check trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Library check trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Library check trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Library check trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History filter after a PF filter trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History filter after a PF filter trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History filter after a PF filter trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History filter after a PF filter trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter with a selection trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter with a selection trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter with a selection trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter with a selection trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Sources trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Sources trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Sources trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Sources trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "the Appearance section picker is the shared dropdown component an Edit Tags dropdown uses",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the Appearance section picker is the shared dropdown component an Edit Tags dropdown uses"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "the PF filter icon stays put closed, open, and with a selection at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the PF filter icon stays put closed, open, and with a selection at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "the PF filter icon stays put closed, open, and with a selection at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the PF filter icon stays put closed, open, and with a selection at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel closes once the header moves on to the next artist",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel closes once the header moves on to the next artist"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel closes when its divider \"i\" leaves the bottom of the gallery",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel closes when its divider \"i\" leaves the bottom of the gallery"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel follows its divider \"i\", then re-anchors to the header \"i\" when its artist becomes the header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel follows its divider \"i\", then re-anchors to the header \"i\" when its artist becomes the header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel returns from the header \"i\" to the divider \"i\" when its artist moves back below the header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel returns from the header \"i\" to the divider \"i\" when its artist moves back below the header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "wheel steps of 120 px never leave the panel on an artist the gallery has moved past",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "wheel steps of 120 px never leave the panel on an artist the gallery has moved past"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "wheel steps of 900 px never leave the panel on an artist the gallery has moved past",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "wheel steps of 900 px never leave the panel on an artist the gallery has moved past"
+    ],
+    "ownerApproval": "approved"
   }
 ]

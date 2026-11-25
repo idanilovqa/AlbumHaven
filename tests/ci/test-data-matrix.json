@@ -9889,7 +9889,7 @@
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
     "test": "tests/e2e/mobile-feedback/settingsInteractions.spec.js",
-    "case": "mobile Problematic Files list scrolls by touch and wheel to its last entry, which opens",
+    "case": "mobile Problematic Files list scrolls by touch and wheel to its last entry and opens it",
     "profile": null,
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -9900,7 +9900,7 @@
       "generated:extended-mobile-media"
     ],
     "expectedContracts": [
-      "mobile Problematic Files list scrolls by touch and wheel to its last entry, which opens"
+      "mobile Problematic Files list scrolls by touch and wheel to its last entry and opens it"
     ],
     "ownerApproval": "approved",
     "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."

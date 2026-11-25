@@ -128,7 +128,7 @@ test('mobile Problematic Files search, filters and exact exceptions survive relo
   await expect(rules.exclusionReason(rules.exclusionRowContaining('Collected Skies 02'))).toHaveText(reason);
 });
 
-test('mobile Problematic Files list scrolls by touch and wheel to its last entry, which opens', async ({ page, app }) => {
+test('mobile Problematic Files list scrolls by touch and wheel to its last entry and opens it', async ({ page, app }) => {
   const ui = new MobileSettingsFeedbackPage(page);
   await ui.openSettings();
   await ui.selectUtility('problematic-files');

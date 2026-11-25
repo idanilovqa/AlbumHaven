@@ -286,7 +286,8 @@ function syncAlbumTrackTablePlayback(root, { trackPath = '', playing = false, cu
     row.classList.toggle('album-track-table__row--current', isCurrent);
     row.classList.toggle('album-track-table__row--playing', isPlaying);
     row.classList.toggle('album-track-table__row--animated', isPlaying && animated);
-    if (row.dataset) row.dataset.trackPlaying = isPlaying ? 'true' : '';
+    const trackPlaying = isPlaying ? 'true' : '';
+    if (row.dataset && row.dataset.trackPlaying !== trackPlaying) row.dataset.trackPlaying = trackPlaying;
     const button = row.querySelector('.play-track-button');
     const label = isPlaying ? 'Pause track' : 'Play track';
     if (button && button.getAttribute('aria-label') !== label) {

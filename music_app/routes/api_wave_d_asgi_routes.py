@@ -597,6 +597,12 @@ async def _serialize_cover_gallery_from_asgi(
         else {},
         include_retained_candidates=True,
     )
+    if serialized_task_payload:
+        # The caller already holds its album; the task's stored album and track paths only slow the answer.
+        serialized_task_payload = {
+            key: value for key, value in serialized_task_payload.items()
+            if key not in {"album_payload", "track_paths"}
+        }
     local_inventory = None
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if include_local and inventory_worker is not None:
@@ -733,6 +739,12 @@ async def _cover_lookup_album_split_response(
     # gallery already shows every release the split produced.
     if not task_track_paths:
         return None
+    return _cover_lookup_lineage_split_response(lineage_choices) or await _cover_lookup_track_split_response(
+        config, task_track_paths,
+    )
+
+
+def _cover_lookup_lineage_split_response(lineage_choices: object) -> tuple[JsonDict, int] | None:
     if isinstance(lineage_choices, list) and len(lineage_choices) > 1:
         current_releases = [
             {
@@ -753,6 +765,13 @@ async def _cover_lookup_album_split_response(
                 },
                 409,
             )
+    return None
+
+
+async def _cover_lookup_track_split_response(
+    config: Mapping[str, object],
+    task_track_paths: set[str],
+) -> tuple[JsonDict, int] | None:
     if len(task_track_paths) < 2:
         return None
     try:
@@ -985,6 +1004,19 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     task_id = str(payload.get("task_id") or "").strip()
     task_payload = await run_in_threadpool(read_cover_lookup_task, task_id, config=config)
     task_track_paths = _cover_lookup_task_track_paths(task_payload)
+    # UI-5: an opening from a notification waits for this answer, so its split read runs beside the album
+    # resolution instead of after it.
+    track_split = (
+        asyncio.ensure_future(_cover_lookup_track_split_response(config, task_track_paths))
+        if task_track_paths else None
+    )
+
+    async def split_response_for(resolved_album: Mapping[str, object]) -> tuple[JsonDict, int] | None:
+        if track_split is None:
+            return None
+        lineage_split = _cover_lookup_lineage_split_response(resolved_album.get("_identity_split_choices"))
+        return lineage_split or await track_split
+
     album, album_context = await _resolve_album_payload_context(
         config,
         album,
@@ -994,11 +1026,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         indexed_gallery=True,
     )
     if album_context is None:
-        split_response = await _cover_lookup_album_split_response(
-            config,
-            task_track_paths,
-            album.get("_identity_split_choices"),
-        )
+        split_response = await split_response_for(album)
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
@@ -1009,11 +1037,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         album_context.track_paths,
     )
     if identity_error is not None:
-        split_response = await _cover_lookup_album_split_response(
-            config,
-            task_track_paths,
-            album.get("_identity_split_choices"),
-        )
+        split_response = await split_response_for(album)
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(identity_error)
@@ -1023,15 +1047,9 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         album_id=album_id,
         album_key=str(album.get("key") or album.get("album_ref") or ""),
     )
-    split_response = None
     # UI-5 (owner, 11-10): opened from its notification right after a split, the request still carries the
     # whole pre-split album (the task's own tracks), so a split is checked even when no track looks missing.
-    if task_payload and task_track_paths:
-        split_response = await _cover_lookup_album_split_response(
-            config,
-            task_track_paths,
-            album.get("_identity_split_choices"),
-        )
+    split_response = await split_response_for(album)
     valid_split_choice = _is_valid_split_choice(album, split_response, album_id)
     if split_response is not None and not valid_split_choice:
         return _json_response(split_response)

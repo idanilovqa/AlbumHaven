@@ -39191,68 +39191,89 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
   );
 }
 
+function coverLookupPatchKey(node) {
+  if (node.nodeType !== 1) return '';
+  const own = node.getAttribute('data-cover-lookup-item-key');
+  if (own) return `card:${own}`;
+  const shellKey = node.classList.contains('cover-lookup-art-card-shell')
+    && node.firstElementChild?.getAttribute('data-cover-lookup-item-key');
+  return shellKey ? `shell:${shellKey}` : '';
+}
+
+// Keep only a decoded image; deferred, loading, and failed nodes may never recover.
+function keepsDecodedCoverLookupPreview(current, next) {
+  const previewSource = (image) => image.getAttribute('data-cover-lookup-deferred-src') || image.getAttribute('src') || '';
+  return !current.hasAttribute('data-cover-lookup-deferred-src') && current.complete && current.naturalWidth > 0
+    && previewSource(current) === previewSource(next);
+}
+
+function patchCoverLookupChildren(parent, incomingParent) {
+  const keyed = new Map();
+  parent.childNodes.forEach((child) => {
+    const key = coverLookupPatchKey(child);
+    if (key) keyed.set(key, child);
+  });
+  let cursor = parent.firstChild;
+  Array.from(incomingParent.childNodes).forEach((next) => {
+    const key = coverLookupPatchKey(next);
+    const current = key ? keyed.get(key) : cursor;
+    keyed.delete(key);
+    const reusable = current && current.nodeName === next.nodeName && coverLookupPatchKey(current) === key
+      && !(next.classList?.contains('cover-lookup-art-preview-image') && !keepsDecodedCoverLookupPreview(current, next));
+    if (!reusable) {
+      parent.insertBefore(next, cursor);
+      return;
+    }
+    if (current === cursor) cursor = cursor.nextSibling;
+    else parent.insertBefore(current, cursor);
+    patchCoverLookupNode(current, next);
+  });
+  while (cursor) {
+    const stale = cursor;
+    cursor = cursor.nextSibling;
+    stale.remove();
+  }
+}
+
+function patchCoverLookupNode(current, next) {
+  if (current.nodeType !== 1) {
+    if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+    return;
+  }
+  if (next.classList.contains('cover-lookup-art-preview-image')) {
+    current.parentElement.classList.remove('is-loading');
+    current.parentElement.setAttribute('aria-busy', 'false');
+    return;
+  }
+  if (current.hasAttribute('data-cover-lookup-item-key')) {
+    const markup = next.outerHTML;
+    if (current.__coverLookupCardMarkup === markup) return;
+    current.__coverLookupCardMarkup = markup;
+  }
+  Array.from(current.attributes).forEach(({ name }) => {
+    if (!next.hasAttribute(name)) current.removeAttribute(name);
+  });
+  Array.from(next.attributes).forEach(({ name, value }) => {
+    if (current.getAttribute(name) !== value) current.setAttribute(name, value);
+  });
+  patchCoverLookupChildren(current, next);
+}
+
 function replaceCoverLookupModalMarkup(body, markup) {
   // Identical renders must not touch the DOM: rebuilding hovered cards restarts their transitions
   // and swallows the first click on controls such as the zoom button.
   if (body.__coverLookupMarkup === markup && body.firstElementChild
     && body.__coverLookupFirstElement === body.firstElementChild) return;
-  const retainedCards = new Map();
-  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
-    const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
-    if (key) retainedCards.set(key, card);
-  });
-  body.innerHTML = markup;
-  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
-    const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
-    const retained = retainedCards.get(key);
-    if (!retained || typeof card.replaceWith !== 'function') return;
-    const incomingMarkup = String(card.outerHTML || '');
-    if (incomingMarkup && retained.__coverLookupCardMarkup === incomingMarkup) {
-      card.replaceWith(retained);
-      return;
-    }
-    retained.__coverLookupCardMarkup = incomingMarkup;
-    const retainedImage = retained.querySelector?.('img.cover-lookup-art-preview-image');
-    const incomingImage = card.querySelector?.('img.cover-lookup-art-preview-image');
-    const previewSource = (image) => String(
-      image?.getAttribute?.('data-cover-lookup-deferred-src')
-      || image?.getAttribute?.('src')
-      || '',
-    );
-    // Keep only a decoded image; deferred, loading, and failed nodes may never recover.
-    if (
-      retainedImage
-      && incomingImage
-      && !retainedImage.hasAttribute?.('data-cover-lookup-deferred-src')
-      && retainedImage.complete === true
-      && Number(retainedImage.naturalWidth || 0) > 0
-      && previewSource(retainedImage) === previewSource(incomingImage)
-      && typeof incomingImage.replaceWith === 'function'
-    ) {
-      if (retainedImage.complete && retainedImage.naturalWidth > 0) {
-        incomingImage.parentElement.classList.remove('is-loading');
-        incomingImage.parentElement.setAttribute('aria-busy', 'false');
-      }
-      incomingImage.replaceWith(retainedImage);
-    }
-    if (retained.attributes && card.attributes) {
-      const incomingAttributeNames = new Set(
-        Array.from(card.attributes).map((attribute) => attribute.name),
-      );
-      Array.from(retained.attributes).forEach((attribute) => {
-        if (!incomingAttributeNames.has(attribute.name)) retained.removeAttribute(attribute.name);
-      });
-      Array.from(card.attributes).forEach((attribute) => {
-        retained.setAttribute(attribute.name, attribute.value);
-      });
-    }
-    if (typeof retained.replaceChildren === 'function' && card.childNodes) {
-      retained.replaceChildren(...Array.from(card.childNodes));
-    } else if ('innerHTML' in retained && 'innerHTML' in card) {
-      retained.innerHTML = card.innerHTML;
-    }
-    card.replaceWith(retained);
-  });
+  if (body.firstChild) {
+    // Candidate polls land several times a second while a search runs. Patch the shown nodes by card key so a
+    // pressed card stays mounted (Chromium drops a click whose press target was detached) and decoded previews
+    // never reload.
+    const incoming = document.createElement('template');
+    incoming.innerHTML = markup;
+    patchCoverLookupChildren(body, incoming.content);
+  } else {
+    body.innerHTML = markup;
+  }
   body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
     if (!card.__coverLookupCardMarkup) card.__coverLookupCardMarkup = String(card.outerHTML || '');
   });

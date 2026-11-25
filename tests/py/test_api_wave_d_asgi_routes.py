@@ -1568,11 +1568,96 @@ def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notific
     assert payload["album"]["year"] == 2026
     assert payload["album"]["preview_only"] is True
     assert payload["task"]["id"] == task_id
+    # The modal keeps its own album; the task's stored album and paths would only slow the opening.
+    assert "album_payload" not in payload["task"]
+    assert "track_paths" not in payload["task"]
     snapshot_candidates = (payload.get("candidate_snapshot") or {}).get("candidates", [])
     if snapshot_matches_task:
         assert snapshot_candidates == [candidate]
     else:
         assert candidate not in snapshot_candidates
+
+
+def test_asgi_cover_lookup_gallery_checks_a_notification_split_while_resolving_its_album(app, monkeypatch):
+    # Opening from a notification waits for this answer (UI-5), so the split check must not queue behind the
+    # album resolution: both start together.
+    import threading
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    album_dir = app.config["MUSIC_DIR"] / "Artist" / "Album"
+    album_dir.mkdir(parents=True, exist_ok=True)
+    track_paths = []
+    for name in ("one.mp3", "two.mp3"):
+        path = (album_dir / name).resolve()
+        path.write_bytes(b"track")
+        track_paths.append(str(path))
+    album = {
+        "name": "Test Album", "album_artist": "Test Artist", "year": 2001, "edition": "",
+        "tracks": [{"path": path} for path in track_paths], "id": 41, "album_id": 41,
+    }
+    cover_lookup_tasks.reset_cover_lookup_runtime_state()
+    task_id, _cancel_event = cover_lookup_tasks.create_cover_lookup_task(album, set(track_paths))
+    cover_lookup_tasks.update_cover_lookup_task(task_id, status="completed", possible_matches=[])
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(app.config, "_LOCAL_COVER_INVENTORY", SimpleNamespace(
+        repository=SimpleNamespace(root_for_tracks=lambda paths: album_dir),
+    ))
+    split_check_started = threading.Event()
+    overlapped = []
+
+    def build_album_payloads_by_track_paths(_self, paths):
+        split_check_started.set()
+        assert set(paths) == set(track_paths)
+        return [{**album, "album_id": 41}]
+
+    class SnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            overlapped.append(split_check_started.wait(timeout=2))
+            return {"album_id": 41, "album_key": "test artist::test album", "track_paths": track_paths}
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            return None
+
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            overlapped.append(split_check_started.wait(timeout=2))
+            return {
+                "status": "resolved",
+                "album": {"album_id": 41, "album_key": "test artist::test album",
+                          "name": "Test Album", "album_artist": "Test Artist", "year": 2001},
+                "choices": [],
+            }
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", SnapshotRepository)
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_album_payloads_by_track_paths",
+                        build_album_payloads_by_track_paths)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
+                        lambda _self, _paths: {})
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={"album": album, "task_id": task_id},
+    )
+
+    assert status == 200, _decode_json(body)
+    assert _decode_json(body)["task"]["id"] == task_id
+    assert overlapped and overlapped[0] is True, overlapped
 
 
 def test_asgi_cover_lookup_gallery_keeps_persisted_task_scope_out_of_any_superset(

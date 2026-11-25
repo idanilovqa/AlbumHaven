@@ -263,12 +263,6 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False, scope_file
               when jsonb_typeof(membership_track_override.override_payload) = 'string' then membership_track_override.override_payload #>> '{}'
               else files.metadata #>> '{scan_cache,file_entry,exception_type}' end, ''))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
         ),
-        local_membership_mixed_roots as materialized (
-          select library_id, library_root_id, physical_folder
-          from local_membership_files
-          group by library_id, library_root_id, physical_folder
-          having count(distinct nullif(album_name, '')) > 1
-        ),
         -- A folder of copied songs holds several album names; its copies are still compared (owner, 2026-11-24).
         local_membership_sources as materialized (
           select files.library_id, files.library_root_id, files.physical_root,
@@ -291,12 +285,10 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False, scope_file
         ),
         local_album_membership as materialized (
           select files.file_id, files.track_id, files.private_path,
-            case when source.library_id is not null then 'Duplicate track outside album folder'
-              when mixed.library_id is not null then 'Mixed album metadata in one folder' else null end as problem
+            -- As rejected_local_album_paths: a file is labelled only when the rule rejects it. Whether its folder
+            -- holds several albums is the album's verdict (multi_album_folders), never a file label (6a047a0af).
+            case when source.library_id is not null then 'Duplicate track outside album folder' else null end as problem
           from local_membership_files files
-          left join local_membership_mixed_roots mixed
-            on mixed.library_id = files.library_id and mixed.library_root_id = files.library_root_id
-           and mixed.physical_folder = files.physical_folder
           left join local_membership_orphan_sources source
             on source.library_id = files.library_id and source.library_root_id = files.library_root_id
            and source.physical_root = files.physical_root and source.album_name = files.album_name

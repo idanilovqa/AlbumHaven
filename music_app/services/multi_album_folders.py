@@ -95,3 +95,103 @@ def _album_identity(entry: Mapping[str, object]) -> tuple[str, str] | None:
         return None
     artist = " ".join(str(entry.get("album_artist") or entry.get("artist") or "").casefold().split())
     return artist, album
+
+
+# The SQL definition of the same rule, read by every browse surface (Problematic Files rows, Album Details).
+# DUPLICATE DEFINITION of strict_multi_album_folders above, kept only for the in-memory cover paths:
+# tests/py/test_strict_multi_album_folder_duplicate_definition_postgres.py runs one case table through both.
+def strict_multi_album_folders_sql(files_sql: str, other_parent_sql) -> str:
+    """CTEs ending in strict_mixed_folders(library_id, library_root_id, physical_parent): the folders of
+    ``files_sql`` that hold several albums. ``files_sql`` selects the files of every folder it may decide, with
+    library_id, library_root_id, physical_parent, file_id, album_id, disc_number, track_number and
+    membership_problem. The tags the rule reads come from the files of folders with more than one album only.
+    ``other_parent_sql(path)`` is the physical parent of another file, for an album's files outside the folder.
+
+    Set-based and per folder: only folders with more than one album are decided, and an album's files elsewhere
+    are found by its id (local_tracks album index)."""
+    # The same disc-marker pattern: Postgres regular expressions read (?:), \d, \s and \uXXXX alike.
+    marker = _DISC_MARKER.pattern.replace("'", "''")
+    folder = "library_id, library_root_id, physical_parent"
+    return f"""
+        strict_candidate_folders as materialized (
+          select {folder} from (
+            select distinct {folder}, album_id from ({files_sql}) files where album_id is not null
+          ) folder_albums
+          group by {folder} having count(*) > 1
+        ),
+        strict_folder_tagged_files as materialized (
+          -- _album_identity: the album tag, and the album artist tag or else the artist tag, case- and space-folded.
+          select files.*,
+            nullif(regexp_replace(lower(btrim(coalesce(tags.metadata #>> '{{scan_cache,file_entry,album}}', ''))),
+              '[[:space:]]+', ' ', 'g'), '') as album_title,
+            regexp_replace(lower(btrim(coalesce(
+              nullif(btrim(tags.metadata #>> '{{scan_cache,file_entry,album_artist}}'), ''),
+              tags.metadata #>> '{{scan_cache,file_entry,artist}}', ''))), '[[:space:]]+', ' ', 'g') as album_artist,
+            case when tags.metadata #>> '{{scan_cache,file_entry,total_tracks}}' ~ '^[0-9]{{1,6}}$'
+              then (tags.metadata #>> '{{scan_cache,file_entry,total_tracks}}')::integer end as total_tracks,
+            btrim(coalesce(tags.metadata #>> '{{scan_cache,file_entry,exception_type}}', '')) as exception_type
+          from ({files_sql}) files
+          join strict_candidate_folders using ({folder})
+          join library.local_track_files tags on tags.id = files.file_id
+          -- A proven copy of another album's track does not count (multi_album_folders._PROVEN_COPY).
+          where coalesce(files.membership_problem, '') <> '{_PROVEN_COPY}'
+        ),
+        strict_folder_files as materialized (
+          select files.*, case when album_title is not null then album_artist || chr(31) || album_title end as album_key
+          from strict_folder_tagged_files files
+        ),
+        strict_folder_albums as materialized (
+          select {folder}, album_key, max(album_title) as album_title, bool_and(complete) as complete
+          from (
+            -- album_completeness.album_is_complete: per disc the numbers run 1..N, N the tagged total or the highest.
+            select {folder}, album_key, max(album_title) as album_title,
+              bool_and(coalesce(track_number, 0) > 0) and min(track_number) = 1
+                and count(distinct track_number) = max(track_number)
+                and coalesce(max(total_tracks) filter (where total_tracks > 0), max(track_number)) = max(track_number)
+                as complete
+            from strict_folder_files
+            where album_key is not null
+            group by {folder}, album_key, coalesce(nullif(disc_number, 0), 1)
+          ) discs
+          group by {folder}, album_key
+        ),
+        strict_folder_shapes as materialized (
+          select {folder},
+            count(*) as albums, bool_and(complete) as complete,
+            count(*) filter (where album_title ~* '{marker}') as disc_marked
+          from strict_folder_albums group by {folder}
+        ),
+        strict_folder_disc_splits as materialized (
+          -- One release split by disc: a marked tag that equals another album's tag once its marker goes.
+          select distinct marked.library_id, marked.library_root_id, marked.physical_parent
+          from strict_folder_albums marked
+          join strict_folder_albums unmarked using ({folder})
+          where marked.album_title ~* '{marker}' and unmarked.album_title !~* '{marker}'
+            and btrim(regexp_replace(marked.album_title, '{marker}', '', 'gi'), ' -\u2013\u2014,.:') = unmarked.album_title
+        ),
+        strict_folder_album_ids as materialized (
+          select distinct {folder}, album_id from strict_folder_files where album_id is not null
+        ),
+        strict_folders_with_albums_elsewhere as materialized (
+          select distinct folder_albums.library_id, folder_albums.library_root_id, folder_albums.physical_parent
+          from strict_folder_album_ids folder_albums
+          where exists (
+            select 1 from library.local_tracks other_tracks
+            join library.local_track_files other_files
+              on other_files.track_id = other_tracks.id and other_files.scan_cache_stale is false
+            where other_tracks.album_id = folder_albums.album_id
+              and {other_parent_sql("other_files.private_path")} <> folder_albums.physical_parent
+          )
+        ),
+        strict_folders_with_loose_songs as materialized (
+          -- A song without an album tag, or with an exception type, makes the folder a collection.
+          select distinct {folder} from strict_folder_files
+          where album_key is null or coalesce(exception_type, '') <> ''
+        ),
+        strict_mixed_folders as materialized (
+          select {folder} from strict_folder_shapes shapes
+          where shapes.albums >= 2 and shapes.complete and shapes.disc_marked < 2
+            and ({folder}) not in (select {folder} from strict_folders_with_loose_songs)
+            and ({folder}) not in (select {folder} from strict_folder_disc_splits)
+            and ({folder}) not in (select {folder} from strict_folders_with_albums_elsewhere)
+        )"""

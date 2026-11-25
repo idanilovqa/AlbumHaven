@@ -67,6 +67,12 @@ def test_a_folder_of_covers_says_mixed_on_no_surface_and_a_real_multi_album_fold
     split_surfaces = _surfaces(fixture, "Left Album", [entry["path"] for entry in split[:2]])
 
     assert _saying_mixed(covers_surfaces) == [], "a folder of covers is not a multi-album folder"
+    # The track "!" in Album Details: a complete album in a folder of covers has none; a real multi-album
+    # folder's tracks have it, for that reason.
+    other = _surfaces(fixture, "Other Album", [entry["path"] for entry in covers[2:]])["album details"]
+    assert [track.get("is_problematic") for track in other["tracks"]] == [False, False]
+    left_tracks = split_surfaces["album details"]["tracks"]
+    assert all(track.get("is_problematic") and MIXED in (track.get("problem_reasons") or []) for track in left_tracks)
     assert {"album details", "problematic files"} <= set(_saying_mixed(split_surfaces)), (
         f"a real multi-album folder says so: {_saying_mixed(split_surfaces)}"
     )
@@ -76,3 +82,4 @@ def test_a_folder_of_covers_says_mixed_on_no_surface_and_a_real_multi_album_fold
 def _problematic_index_off(monkeypatch):
     # Problematic Files' own read (the persisted index is proven elsewhere).
     monkeypatch.setenv("ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED", "0")
+

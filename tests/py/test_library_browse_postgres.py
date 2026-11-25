@@ -20183,7 +20183,7 @@ def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale
     # parse_edition_title superset: bracketed edition, издание, or remaster.
     assert "file_album ~ '[])]$'" in sql
     assert "position('издание' in file_album) > 0" in sql
-    for cte in ("mixed_physical_folders", "duplicate_album_ids", "active_track_order_rollup"):
+    for cte in ("strict_candidate_folders", "duplicate_album_ids", "active_track_order_rollup"):
         assert "count(distinct" not in _cte_body(sql, cte)
     # A join on the union re-scanned every candidate per album (5 s at 9k candidates).
     assert "join candidate_album_ids" not in sql

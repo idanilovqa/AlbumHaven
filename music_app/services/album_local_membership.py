@@ -5,6 +5,18 @@ from collections import defaultdict
 from pathlib import PurePosixPath, PureWindowsPath
 from collections.abc import Mapping, Iterable
 
+# Older scans stored this label for any folder of two album names. The strict multi-album folder rule owns the
+# reason now (multi_album_folders; owner, fix A, 2026-11-25): a stored copy of it is read as no label, and the
+# stored scan entries are never rewritten.
+OBSOLETE_MIXED_FOLDER_LABEL = "Mixed album metadata in one folder"
+
+
+def current_membership_label(label: object) -> str | None:
+    """A stored membership label as the current rule reads it: the obsolete mixed-folder label is none."""
+    text = str(label or "").strip()
+    return text if text and text != OBSOLETE_MIXED_FOLDER_LABEL else None
+
+
 _DISC_FOLDER = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*\d{1,2}(?![A-Za-z0-9])", re.I)
 
 
@@ -166,6 +178,9 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False, scope_file
             from library.local_track_files
             where scan_cache_stale is false
               and nullif(metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
+              -- current_membership_label: the obsolete stored mixed-folder label is no label.
+              and metadata #>> '{scan_cache,file_entry,local_album_membership_problem}'
+                <> 'Mixed album metadata in one folder'
             offset 0
           ) files
           __FILE_SCOPE__

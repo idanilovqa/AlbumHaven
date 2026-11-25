@@ -862,7 +862,7 @@ def test_selected_artist_browse_preserves_split_albums_in_one_folder():
     }
 
 
-def test_album_detail_projection_keeps_only_mixed_folder_file_when_no_valid_source():
+def test_album_detail_projection_keeps_only_rejected_file_when_no_valid_source():
     from music_app.services import library_browse_postgres as browse
 
     row = _browse_album_row(
@@ -876,7 +876,7 @@ def test_album_detail_projection_keeps_only_mixed_folder_file_when_no_valid_sour
         "album_artist": "-",
         "album": "Malformed Tag Album",
         "title": "Malformed Tag Track",
-        "local_album_membership_problem": "Mixed album metadata in one folder",
+        "local_album_membership_problem": "Duplicate track outside album folder",
     }
 
     assert browse._selected_artist_album_payloads([row], "-") == []
@@ -12159,7 +12159,7 @@ def test_problematic_loose_tracks_group_by_folder_and_reuse_cached_paths(monkeyp
                 "artist": artist,
                 "album": album,
                 "title": title,
-                "local_album_membership_problem": "Mixed album metadata in one folder",
+                "local_album_membership_problem": "Missing album",
             },
         }
         for root_id, path, artist, album, title in (

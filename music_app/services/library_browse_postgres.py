@@ -70,6 +70,7 @@ from music_app.services.metadata import (
 )
 from music_app.services.multi_album_folders import strict_multi_album_folders_sql
 from music_app.services.album_local_membership import (
+    current_membership_label,
     local_album_membership_ctes_sql,
     physical_album_folder_sql,
 )
@@ -4614,7 +4615,7 @@ class PostgresLibraryBrowseRepository:
         for raw in candidates:
             row = dict(raw)
             entry = dict(_row_json_mapping(row.get("file_entry")))
-            if row.get("album_id") is not None or not entry.get("local_album_membership_problem"):
+            if row.get("album_id") is not None or not current_membership_label(entry.get("local_album_membership_problem")):
                 continue
             private_path = row.get("private_path")
             membership_group_id = str(row.get("membership_group_id") or "")
@@ -4643,11 +4644,9 @@ class PostgresLibraryBrowseRepository:
                 loose_track_artist=entry.get("artist") or entry.get("album_artist"),
                 loose_track_album=entry.get("album"),
                 file_size=row.get("file_size_bytes"),
-                file_local_album_membership_problem=entry["local_album_membership_problem"],
-                file_mixed_album_folder=(
-                    entry["local_album_membership_problem"]
-                    == "Mixed album metadata in one folder"
-                ),
+                file_local_album_membership_problem=current_membership_label(entry["local_album_membership_problem"]),
+                # A loose file forms no album, so no strict multi-album folder holds it as one.
+                file_mixed_album_folder=False,
             )
             rows.append(row)
         _attach_loose_ignored_repair_keys(connection, rows)
@@ -6284,6 +6283,7 @@ def _duplicate_sources_from_rows(
             else payload["local_album_membership_problem"] if "local_album_membership_problem" in payload
             else file_entry.get("local_album_membership_problem")
         )
+        membership_problem = current_membership_label(membership_problem)
         if normalize_exception_value(entry.get("exception_type")) or path in rejected_paths or str(membership_problem or "").strip():
             continue
         if not key or not path or (key, path) in seen_paths:
@@ -6919,7 +6919,7 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "exception_type": _effective_row_exception_type(row_payload),
         "_text_mojibake_candidate": row_payload.get("file_text_mojibake_candidate"),
         "text_corrections": _row_json_mapping(row_payload.get("file_text_corrections")) or file_entry.get("text_corrections"),
-        "local_album_membership_problem": (
+        "local_album_membership_problem": current_membership_label(
             row_payload["local_album_membership_problem"]
             if "local_album_membership_problem" in row_payload
             else file_entry.get("local_album_membership_problem")
@@ -7548,8 +7548,8 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
     proven_copy = entry.get("local_album_membership_problem") == _OUTSIDE_COPY_REASON
     if entry.get("_mixed_album_folder") is True and not proven_copy:
         yield "Mixed album metadata in one folder"
-    if entry.get("local_album_membership_problem"):
-        yield str(entry["local_album_membership_problem"])
+    if label := current_membership_label(entry.get("local_album_membership_problem")):
+        yield label
     if reviewable_edition_title(entry.get("album"), entry.get("edition")):
         yield "Edition descriptor in album name"
     yield from _text_correction_problem_reasons(entry.get("text_corrections"))
@@ -7604,7 +7604,6 @@ def _iter_problematic_track_reasons(
     mixed_paths = {
         str(entry.get("path") or "") for entry in ordered_entries
         if entry.get("_mixed_album_folder") is True
-        or entry.get("local_album_membership_problem") == "Mixed album metadata in one folder"
     }
     duplicate_problem_by_path = (
         rejected_local_album_paths(ordered_entries) if mixed_paths else {}
@@ -9412,9 +9411,9 @@ def _selected_artist_album_payloads(
     rejected_paths = rejected_local_album_paths(membership_entries)
     all_rows_rejected = retain_rejected_if_empty and bool(rows) and all(
         str(payload.get("file_private_path") or "") in rejected_paths
-        or _row_json_mapping(payload.get("file_entry")).get(
+        or current_membership_label(_row_json_mapping(payload.get("file_entry")).get(
             "local_album_membership_problem"
-        )
+        ))
         for payload in (_row_mapping(row) for row in rows)
     )
     albums: dict[object, dict[str, object]] = {}
@@ -9433,7 +9432,7 @@ def _selected_artist_album_payloads(
         file_entry = _row_json_mapping(row_payload.get("file_entry"))
         if (
             str(row_payload.get("file_private_path") or "") in rejected_paths
-            or file_entry.get("local_album_membership_problem")
+            or current_membership_label(file_entry.get("local_album_membership_problem"))
         ) and not (retain_rejected_if_empty and all_rows_rejected):
             continue
         exception_type = _effective_row_exception_type(row_payload)

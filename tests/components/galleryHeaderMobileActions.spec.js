@@ -12,7 +12,7 @@ const fitSource = source.slice(start, source.indexOf('\n}', start) + 2);
 const header = (name, genres) => `<main class="shell-main-surface" style="display:block">
   <header class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery" data-gallery-bar-layout="mobile-primary" data-gallery-context-kind="artist">
     <button class="action-button mobile-bar-action" id="mobile-library-button" aria-label="Open library navigation"></button>
-    <div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${name}</span><button class="gallery-info-button" data-artist-info-trigger="1" aria-label="Information"><span class="gallery-info-button__glyph">i</span></button><span class="gallery-bar__artist-metadata" data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia</span></span></span><span class="gallery-bar__artist-divider gallery-divider__line" hidden></span><span class="gallery-bar__artist-total" hidden></span></div><span class="gallery-bar__artist-mobile-summary"><span class="gallery-bar__summary-count">9 albums</span><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia</span></span><span class="gallery-bar__artist-genres">${genres.map((genre) => `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${genre}</span></span>`).join('')}</span></span><span class="gallery-bar__summary" data-gallery-context-summary><span class="gallery-bar__summary-count">9 albums</span><span class="gallery-bar__artist-genres">${genres.map((genre) => `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${genre}</span></span>`).join('')}</span></span></div>
+    <div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${name}</span><button class="gallery-info-button" data-artist-info-trigger="1" aria-label="Information"><span class="gallery-info-button__glyph">i</span></button><span class="gallery-bar__artist-metadata" data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia</span></span></span><span class="gallery-bar__artist-divider gallery-divider__line" hidden></span><span class="gallery-bar__artist-total" hidden></span></div><span class="gallery-bar__artist-mobile-summary" data-gallery-context-mobile-summary><span class="gallery-bar__summary-count">9 albums</span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${genres[0]}</span></span></span></span><span class="gallery-bar__summary" data-gallery-context-summary><span class="gallery-bar__summary-count">9 albums</span><span class="gallery-bar__artist-genres">${genres.map((genre) => `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${genre}</span></span>`).join('')}</span></span></div>
     <div class="gallery-bar__actions"><button class="gallery-action-button" aria-label="Artist family">F</button><button class="gallery-action-button" aria-label="View">V</button><button class="gallery-action-button" aria-label="Album types">T</button></div>
   </header></main>`;
 
@@ -30,7 +30,6 @@ async function mount(page, name, width = 390, genres = ['Rock', 'Pop']) {
     const info = bar.querySelector('.gallery-info-button');
     const desktopCountry = bar.querySelector('.gallery-bar__artist-metadata .gallery-bar__artist-country');
     const mobileSummary = bar.querySelector('.gallery-bar__artist-mobile-summary');
-    const mobileCountry = mobileSummary.querySelector('.gallery-bar__artist-country');
     const genres = [...mobileSummary.querySelectorAll('.gallery-bar__artist-genre')];
     const count = mobileSummary.querySelector('.gallery-bar__summary-count');
     syncGalleryBarNameFit(bar, name);
@@ -51,12 +50,16 @@ async function mount(page, name, width = 390, genres = ['Rock', 'Pop']) {
       desktopCountryDot: getComputedStyle(desktopCountry, '::before').content,
       mobileSummaryTop: box(mobileSummary).top,
       countCenter: (box(count).top + box(count).bottom) / 2,
-      mobileCountryCenter: (box(mobileCountry).top + box(mobileCountry).bottom) / 2,
+      countryCut: desktopCountry.scrollWidth > desktopCountry.clientWidth + 1,
+      countryRight: box(desktopCountry).right,
       labelOrder: [...mobileSummary.querySelectorAll('.gallery-bar__summary-count, .gallery-bar__artist-country, .gallery-bar__artist-genre')].map((node) => node.textContent.trim()),
       genreTops: genres.filter((genre) => !genre.hidden).map((genre) => box(genre).top),
+      genreCenters: genres.filter((genre) => !genre.hidden).map((genre) => (box(genre).top + box(genre).bottom) / 2),
+      genreRights: genres.filter((genre) => !genre.hidden).map((genre) => box(genre).right),
       visibleGenreCount: genres.filter((genre) => !genre.hidden && box(genre).width > 0).length,
       metadataBottom: box(mobileSummary).bottom,
       metadataHeight: box(mobileSummary).height,
+      metadataRight: box(mobileSummary).right,
       nameLeft: box(name).left,
     };
   });
@@ -76,9 +79,9 @@ test('an artist takeover keeps the album count below the aligned artist and info
   expect(layout.titleAlignment).toBe('center');
   expect(Math.abs(layout.infoCenter - layout.nameCenter)).toBeLessThanOrEqual(1);
   expect(layout.mobileSummaryTop).toBeGreaterThanOrEqual(layout.nameBottom);
-  expect(Math.abs(layout.mobileCountryCenter - layout.countCenter)).toBeLessThanOrEqual(1);
+  expect(Math.abs(layout.desktopCountryCenter - layout.nameCenter)).toBeLessThanOrEqual(1);
   expect(layout.genreTops.every((top) => top >= layout.mobileSummaryTop)).toBe(true);
-  expect(layout.labelOrder).toEqual(['9 albums', 'Russia', 'Rock', 'Pop']);
+  expect(layout.labelOrder).toEqual(['9 albums', 'Rock']);
 });
 
 test('desktop aligns artist, info, and country without a separator dot', async ({ page }) => {
@@ -88,21 +91,28 @@ test('desktop aligns artist, info, and country without a separator dot', async (
   expect(layout.desktopCountryDot).toBe('none');
 });
 
-test('mobile keeps country then genres on one line when they fit', async ({ page }) => {
+// Owner (ARTIST-HEADER-LABELS, BUGFIX-17, 2026-11-24): exactly two lines that never wrap. Line one ends with the whole
+// country; line two is the count, a fat dot and only the top genre.
+test('mobile keeps the country on the name line and the top genre after the count', async ({ page }) => {
   const layout = await mount(page, 'Yes', 390, ['Rock', 'Pop']);
-  expect(layout.labelOrder).toEqual(['9 albums', 'Russia', 'Rock', 'Pop']);
-  expect(new Set(layout.genreTops).size).toBe(1);
-  await expect(page.locator('[data-gallery-bar-instance="gallery"]')).toHaveScreenshot('gallery-header-mobile-labels-one-line.png', { animations: 'disabled' });
+  expect(layout.labelOrder).toEqual(['9 albums', 'Rock']);
+  expect(Math.abs(layout.desktopCountryCenter - layout.nameCenter)).toBeLessThanOrEqual(1);
+  expect(layout.countryCut).toBe(false);
+  expect(layout.visibleGenreCount).toBe(1);
+  expect(Math.abs(layout.genreCenters[0] - layout.countCenter)).toBeLessThanOrEqual(1);
+  await expect(page.locator('[data-gallery-bar-instance="gallery"]')).toHaveScreenshot('gallery-header-mobile-two-lines.png', { animations: 'disabled' });
 });
 
-test('mobile wraps labels to a second line without moving the right-side actions', async ({ page }) => {
+test('mobile never wraps the labels: a genre without room is dropped whole and the header stays two lines', async ({ page }) => {
   const layout = await mount(page, 'Yes', 320, ['Progressive rock', 'Art rock', 'Symphonic rock']);
-  expect(layout.visibleGenreCount).toBe(3);
-  expect(new Set(layout.genreTops).size).toBe(2);
-  expect(layout.actionsTop).toBeLessThan(layout.mobileSummaryTop);
-  expect(layout.metadataBottom).toBeGreaterThan(layout.actionsBottom);
-  expect(layout.metadataHeight).toBeLessThanOrEqual(50);
-  await expect(page.locator('[data-gallery-bar-instance="gallery"]')).toHaveScreenshot('gallery-header-mobile-labels-two-lines.png', { animations: 'disabled' });
+  expect(layout.metadataHeight).toBeLessThanOrEqual(20);
+  expect(layout.countryCut).toBe(false);
+  expect(layout.countryRight).toBeLessThanOrEqual(layout.controlsBelow ? Infinity : layout.actionsLeft);
+  expect(layout.genreRights.every((right) => right <= Math.min(layout.metadataRight, layout.controlsBelow ? layout.actionsLeft : Infinity) + 0.5)).toBe(true);
+  // The controls sit on line one or share line two with the count; never a third line.
+  const actionsCenter = (layout.actionsTop + layout.actionsBottom) / 2;
+  expect(layout.controlsBelow ? Math.abs(actionsCenter - layout.countCenter) <= 2 : layout.actionsTop < layout.nameBottom).toBe(true);
+  await expect(page.locator('[data-gallery-bar-instance="gallery"]')).toHaveScreenshot('gallery-header-mobile-two-lines-narrow.png', { animations: 'disabled' });
 });
 
 test('artist controls move down before a fitting artist name is ellipsized on mobile', async ({ page }) => {
@@ -111,5 +121,7 @@ test('artist controls move down before a fitting artist name is ellipsized on mo
   expect(layout.wrapping).toBe(false);
   expect(layout.nameFull).toBe(true);
   expect(layout.actionsTop).toBeGreaterThanOrEqual(layout.nameBottom - 1);
-  expect(layout.mobileSummaryTop).toBeGreaterThanOrEqual(layout.actionsBottom);
+  // Owner (ARTIST-HEADER-LABELS, 2026-11-24): the controls share line two with the count; the header stays two lines.
+  expect(layout.mobileSummaryTop).toBeGreaterThanOrEqual(layout.nameBottom);
+  expect(Math.abs((layout.actionsTop + layout.actionsBottom) / 2 - layout.countCenter)).toBeLessThanOrEqual(2);
 });

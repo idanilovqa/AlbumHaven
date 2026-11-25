@@ -5328,8 +5328,10 @@ function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
   return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span><span class="gallery-bar__artist-genres">${genreHtml}</span>`;
 }
 
+// The phone header's second line: the count and only the top genre (the country sits on the name's line).
 function buildGalleryArtistMobileSummaryHtml(albumCount, artistMusicBrainz = null) {
-  return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span>${buildGalleryArtistMetadataHtml(artistMusicBrainz)}<span class="gallery-bar__artist-genres">${buildGalleryArtistGenresHtml(artistMusicBrainz)}</span>`;
+  const [topGenre = ''] = galleryArtistGenrePillsHtml(artistMusicBrainz);
+  return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span><span class="gallery-bar__artist-genres">${topGenre ? `<span class="gallery-bar__artist-genre">${topGenre}</span>` : ''}</span>`;
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;

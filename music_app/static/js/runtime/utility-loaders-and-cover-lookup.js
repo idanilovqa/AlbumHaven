@@ -131,16 +131,28 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
-        // A track-opened album stays listed until the complete list can confirm it.
+        // A track-opened (or selected) album stays listed while the page cannot say whether it is still a
+        // problem: only when it sorts after the page's last row and more pages follow. Within the page's
+        // range, absent means gone.
+        const pageMayHold = (album) => {
+          if (!album || data.complete !== false || data.has_more === false) return false;
+          const last = summaryItems.at(-1);
+          if (!last) return true;
+          const text = (item, field) => String(item?.[field] || '').toLowerCase();
+          return (text(album, 'name').localeCompare(text(last, 'name'))
+            || text(album, 'album_artist').localeCompare(text(last, 'album_artist'))
+            || String(album.year || '').localeCompare(String(last.year || ''))
+            || text(album, 'key').localeCompare(text(last, 'key'))) > 0;
+        };
         const pinnedKey = String(
           state.utility.pinnedProblematicKey
           || (data.complete === false && selectedAlbum && !state.utility.problematicMutation ? selectedKey : ''),
         );
-        const pinnedAlbum = pinnedKey && data.complete === false
-          && !summaryItems.some((item) => item.key === pinnedKey)
+        const pinCandidate = pinnedKey && !summaryItems.some((item) => item.key === pinnedKey)
           ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
           : null;
-        if (data.complete !== false) state.utility.pinnedProblematicKey = '';
+        const pinnedAlbum = pageMayHold(pinCandidate) ? pinCandidate : null;
+        if (!pinnedAlbum) state.utility.pinnedProblematicKey = '';
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;

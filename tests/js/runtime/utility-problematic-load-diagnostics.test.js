@@ -453,6 +453,33 @@ test('a refresh re-reads the shown rows in one page and one commit, never a shor
   assert.equal(context.state.utility.problematicFilesComplete, false, 'later pages still follow');
 });
 
+test('a paged refresh drops a selected album its page range no longer holds, and keeps one beyond the page', async () => {
+  const item = (key, name) => ({ key, name, detail_loaded: false });
+  for (const [selected, kept] of [['b', false], ['z', true]]) {
+    const { context } = loadHelper({
+      getUtilityModalElements() { return { overlay: { hidden: false } }; },
+      async fetch() {
+        return { ok: true, status: 200, async json() {
+          return { complete: false, has_more: true, next_cursor: 'next', items: [item('a', 'A'), item('c', 'C'), item('d', 'D')] };
+        } };
+      },
+    });
+    Object.assign(context.state.utility, {
+      loaded: true,
+      problematicFiles: [item('a', 'A'), { ...item(selected, selected.toUpperCase()), detail_loaded: true }, item('c', 'C')],
+      selectedProblematicKey: selected,
+    });
+
+    await context.loadProblematicFiles(true, { render: false });
+
+    assert.equal(
+      context.state.utility.problematicFiles.some((album) => album.key === selected),
+      kept,
+      kept ? 'an album after the page may still be listed further on' : 'an album within the page range that it lacks is gone',
+    );
+  }
+});
+
 test('opening the account menu prefetches Problematic Files and Settings reuses it', async () => {
   const overlay = { hidden: true };
   const requested = [];

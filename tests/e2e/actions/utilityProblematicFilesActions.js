@@ -364,8 +364,8 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
   }
 
   async readCompleteListItems(options = {}) {
-    // The list is paged: its every page loads first.
-    await this.scrollListToEnd(options);
+    // The list is paged: its every page loads first, and the list returns to where it was.
+    await this.scrollListToEnd({ ...options, returnToStart: true });
     const items = new Map();
     for await (const window of this.walkListWindows({ ...options, restoreScroll: true })) {
       for (const item of window) items.set(item.key, item);
@@ -396,7 +396,11 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
   // under the last row) and its last row is in view; returns the count of rows the list holds.
   async scrollListToEnd(options = {}) {
     const tab = this.utilityProblematicFilesTab;
-    const box = await tab.sidebar.list.boundingBox();
+    const list = tab.sidebar.list;
+    // parity-check: allow-read-only-measurement-evaluate -- read the list's native scroll offset
+    const readOffset = () => list.evaluate(node => node.scrollTop);
+    const startOffset = options.returnToStart ? await readOffset() : null;
+    const box = await list.boundingBox();
     assert.ok(box, 'The Problematic Files list must be visible');
     await tab.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await expect(async () => {
@@ -404,6 +408,14 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       await expect(tab.listFooter).toHaveCount(0, { timeout: 2000 });
       await expect(tab.listItems.last()).toBeInViewport({ timeout: 2000 });
     }).toPass({ timeout: options.timeout || 120000 });
+    if (startOffset !== null) {
+      // Back where the list was, with the wheel, once every page has loaded.
+      await expect(async () => {
+        const offset = await readOffset();
+        if (offset !== startOffset) await tab.page.mouse.wheel(0, startOffset - offset);
+        expect(await readOffset()).toBe(startOffset);
+      }).toPass({ timeout: 30000 });
+    }
     return this.readVisibleResultCount();
   }
 
@@ -456,10 +468,18 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       problemType,
       selectedOptionSelector: searchSection.selectedFilterOptionSelector(problemType),
     });
+    await this.waitForServerQueryAnswered();
     if (await searchSection.problemFilterMenu.isVisible()) {
       await searchSection.problemFilterButton.click();
       await searchSection.problemFilterMenu.waitFor({ state: 'hidden', timeout: 60000 });
     }
+  }
+
+  // A problem filter (or search) is answered by the server, page by page (BUGFIX-14): wait for its answer.
+  async waitForServerQueryAnswered(options = {}) {
+    await this.utilityProblematicFilesTab.waitForPageCondition(() => (
+      typeof state !== 'undefined' && !state.utility?.problematicServerSearchPendingQuery
+    ), { timeout: options.timeout || 60000 });
   }
 
   async clearProblemFilter(problemType) {
@@ -482,6 +502,7 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
     }
     await searchSection.filterOptionByValue(problemType).click();
     await waitForFilterRemoved();
+    await this.waitForServerQueryAnswered();
     if (await this.utilityProblematicFilesTab.searchSection.problemFilterMenu.isVisible()) {
       await this.utilityProblematicFilesTab.searchSection.problemFilterButton.click();
       await this.utilityProblematicFilesTab.searchSection.problemFilterMenu.waitFor({ state: 'hidden', timeout: 60000 });

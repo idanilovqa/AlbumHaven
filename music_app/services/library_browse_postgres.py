@@ -3329,7 +3329,12 @@ class PostgresLibraryBrowseRepository:
             )
             if cursor_generation != _PROBLEMATIC_INDEX_CURSOR_GENERATION:
                 after, cursor_restarted = None, True
-        items = problematic_index.read_page(self, limit=limit, after=after, needle=needle, reasons=reasons)
+        opening = after is None and not scope
+        if opening:
+            read = problematic_index.read_first_page(self, limit=limit)
+            items, reason_types = read if read is not None else (None, [])
+        else:
+            items = problematic_index.read_page(self, limit=limit, after=after, needle=needle, reasons=reasons)
         if items is None:
             return self._problematic_indexing_payload()
         has_more = len(items) > limit
@@ -3341,7 +3346,6 @@ class PostgresLibraryBrowseRepository:
                 _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, scope) if scope
                 else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
             )
-        opening = after is None and not scope
         # The first page opens on its first album's detail (no separate detail request), and names every
         # filter reason of the list, which no client holds in full.
         initial_detail = self.build_problematic_file_detail_payload(items[0]["key"]) if items and opening else None
@@ -3355,9 +3359,7 @@ class PostgresLibraryBrowseRepository:
             "cursor_restarted": cursor_restarted,
             "total_candidate_count": None,
             "projection_cache_status": "indexed",
-            "problem_reason_types": (
-                problematic_index.reason_types(self) or [] if opening else _problematic_filter_reason_types(items)
-            ),
+            "problem_reason_types": reason_types if opening else _problematic_filter_reason_types(items),
             "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,

@@ -1099,7 +1099,17 @@ _READ_PAGE_SQL = f"""
          limit %(limit)s
        ) picked)
     )
-    select item from page
+    select item,
+           -- The first page also names every filter reason of the list (one uncorrelated subquery, read once).
+           case when %(with_reason_types)s then array(
+             select distinct {_FILTER_REASON_SQL.format(reason="reason")}
+             from library.problematic_index_items items
+             left join library.library_roots roots on roots.id = items.root_id
+             cross join lateral jsonb_array_elements_text(coalesce(items.item -> 'problem_reasons', '[]'::jsonb)) reason
+             where items.library_id = (select library_id from library_scope)
+               and (items.root_id is null or roots.is_active is true)
+           ) end as reason_types
+    from page
     order by sort_name, sort_artist, sort_year, sort_key
     limit %(limit)s"""
 
@@ -1112,39 +1122,34 @@ def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str,
     None when no ready index exists yet. Items under an inactive root are not served (a read applies
     root activity, case 55).
     """
+    read = _read(repository, limit=limit, after=after, needle=needle, reasons=reasons, with_reason_types=False)
+    return None if read is None else read[0]
+
+
+def read_first_page(repository: Any, *, limit: int) -> tuple[list[dict[str, object]], list[str]] | None:
+    """The first ``limit + 1`` items and every filter reason of the list (the filter menu offers only those,
+    and no client holds the whole list); None until a ready index exists."""
+    return _read(repository, limit=limit, after=None, needle="", reasons=(), with_reason_types=True)
+
+
+def _read(repository: Any, *, limit: int | None, after: tuple[str, str, str, str] | None, needle: str,
+          reasons: tuple[str, ...], with_reason_types: bool) -> tuple[list[dict[str, object]], list[str]] | None:
     if not refresh(repository):
         return None
     with repository._browse_connection_context() as connection:
         rows = connection.execute(
             _READ_PAGE_SQL,
             {"after": list(after) if after is not None else None, "needle": needle,
-             "reasons": list(reasons), "limit": None if limit is None else limit + 1},
+             "reasons": list(reasons), "with_reason_types": with_reason_types,
+             "limit": None if limit is None else limit + 1},
         ).fetchall()
         items = [
             json.loads(item) if isinstance(item, str) else dict(item)
             for row in rows
             if (item := _value(row, "item")) is not None
         ]
-        return _with_pending_ignores(repository, connection, items)
-
-
-_REASON_TYPES_SQL = f"""
-    with library_scope as materialized (select ({_LIBRARY_SQL}) as library_id)
-    select distinct {_FILTER_REASON_SQL.format(reason="reason")} as reason
-    from library_scope
-    join library.problematic_index_items items on items.library_id = library_scope.library_id
-    left join library.library_roots roots on roots.id = items.root_id
-    cross join lateral jsonb_array_elements_text(coalesce(items.item -> 'problem_reasons', '[]'::jsonb)) reason
-    where items.root_id is null or roots.is_active is true"""
-
-
-def reason_types(repository: Any) -> list[str] | None:
-    """Every filter reason an indexed item has (the filter menu offers only those); None until ready."""
-    if not refresh(repository):
-        return None
-    with repository._browse_connection_context() as connection:
-        return sorted(str(_value(row, "reason")) for row in connection.execute(_REASON_TYPES_SQL).fetchall()
-                      if str(_value(row, "reason") or ""))
+        reason_types = sorted(str(reason) for reason in (_value(rows[0], "reason_types") or []) if reason) if rows else []
+        return _with_pending_ignores(repository, connection, items), reason_types
 
 
 def _with_pending_ignores(repository: Any, connection: Any, items: list[dict[str, object]]) -> list[dict[str, object]]:

@@ -36759,6 +36759,62 @@ function fileToDataUrl(file) {
   });
 }
 
+// Owner (sandbox2): a pasted copy of a local image is that image, whatever its format. Pictures compare by their
+// decoded pixels: a 32x32 grey thumbnail with its brightness and contrast evened out. Re-encoded and resized
+// copies differ by at most about 0.06 on average; different covers and crops by 0.14 or more.
+const COVER_LOOKUP_PICTURE_SIDE = 32;
+const COVER_LOOKUP_SAME_PICTURE_DISTANCE = 0.1;
+const COVER_LOOKUP_SAME_PICTURE_ASPECT = 0.02;
+
+function coverLookupPictureFingerprint(picture, width, height) {
+  if (!width || !height || typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = COVER_LOOKUP_PICTURE_SIDE;
+  canvas.height = COVER_LOOKUP_PICTURE_SIDE;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return null;
+  context.imageSmoothingQuality = 'high';
+  try {
+    context.drawImage(picture, 0, 0, COVER_LOOKUP_PICTURE_SIDE, COVER_LOOKUP_PICTURE_SIDE);
+    const rgba = context.getImageData(0, 0, COVER_LOOKUP_PICTURE_SIDE, COVER_LOOKUP_PICTURE_SIDE).data;
+    const grey = [];
+    for (let index = 0; index < rgba.length; index += 4) {
+      grey.push(0.299 * rgba[index] + 0.587 * rgba[index + 1] + 0.114 * rgba[index + 2]);
+    }
+    const mean = grey.reduce((sum, value) => sum + value, 0) / grey.length;
+    const spread = Math.sqrt(grey.reduce((sum, value) => sum + (value - mean) ** 2, 0) / grey.length) || 1;
+    return { aspect: width / height, pixels: grey.map((value) => (value - mean) / spread) };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function isSameCoverLookupPicture(left, right) {
+  if (!left || !right) return false;
+  if (Math.abs(left.aspect - right.aspect) / right.aspect > COVER_LOOKUP_SAME_PICTURE_ASPECT) return false;
+  const distance = left.pixels.reduce((sum, value, index) => sum + Math.abs(value - right.pixels[index]), 0)
+    / left.pixels.length;
+  return distance <= COVER_LOOKUP_SAME_PICTURE_DISTANCE;
+}
+
+// The local card already showing this picture, read from its loaded preview; a card still loading never matches.
+function findCoverLookupLocalCardShowing(fingerprint) {
+  if (!fingerprint || typeof document === 'undefined') return '';
+  const cards = document.querySelectorAll?.('#cover-lookup-modal [data-select-local-cover]') || [];
+  for (const card of cards) {
+    const image = card.querySelector('img.cover-lookup-art-preview-image');
+    if (!image?.complete || !image.naturalWidth) continue;
+    if (image.__coverLookupFingerprintSource !== image.currentSrc) {
+      image.__coverLookupFingerprintSource = image.currentSrc;
+      image.__coverLookupFingerprint = coverLookupPictureFingerprint(image, image.naturalWidth, image.naturalHeight);
+    }
+    if (isSameCoverLookupPicture(fingerprint, image.__coverLookupFingerprint)) {
+      return String(card.getAttribute('data-select-local-cover') || '');
+    }
+  }
+  return '';
+}
+
 async function addPastedImageToCoverLookup(file) {
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.upload')) return;
   if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
@@ -36781,12 +36837,14 @@ async function addPastedImageToCoverLookup(file) {
   const objectUrl = URL.createObjectURL(file);
   let width = 0;
   let height = 0;
+  let fingerprint = null;
   if (typeof createImageBitmap === 'function') {
     let bitmap;
     try {
       bitmap = await createImageBitmap(file);
       width = Number(bitmap?.width || 0) || 0;
       height = Number(bitmap?.height || 0) || 0;
+      fingerprint = coverLookupPictureFingerprint(bitmap, width, height);
     } catch (_error) {
       // The preview remains usable when this browser cannot decode dimensions here.
     } finally {
@@ -36804,6 +36862,7 @@ async function addPastedImageToCoverLookup(file) {
     data_url: dataUrl,
     mime_type: String(file.type || 'image/png').trim() || 'image/png',
     size_bytes: Number(file.size || 0) || 0,
+    fingerprint,
   };
   state.coverLookup.modal.manualImageAttachments = [
     ...(Array.isArray(state.coverLookup.modal.manualImageAttachments)
@@ -36874,8 +36933,17 @@ function extractCoverLookupPendingAttachments() {
   const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments : [];
   if (!attachments.length) return 0;
+  const staged = attachments.filter((item) => {
+    const localRef = findCoverLookupLocalCardShowing(item.fingerprint);
+    if (!localRef) return true;
+    // Already one of the album's images: point at it instead of staging a copy.
+    state.coverLookup.modal.suggestedLocalRef = localRef;
+    const objectUrl = String(item.object_url || '').trim();
+    if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+    return false;
+  });
   state.coverLookup.modal.pastedImages = [
-    ...attachments,
+    ...staged,
     ...(Array.isArray(state.coverLookup.modal.pastedImages)
       ? state.coverLookup.modal.pastedImages : []),
   ];
@@ -37719,6 +37787,8 @@ function syncCoverLookupSelectionUi() {
         : card.hasAttribute('data-cover-lookup-local-active') && !state.coverLookup.modal.artboxCleared
     );
     card.classList.toggle('is-active', shouldBeActive);
+    card.classList.toggle('is-suggested', Boolean(state.coverLookup.modal.suggestedLocalRef)
+      && coverLookupLocalPathMatches(localPath, state.coverLookup.modal.suggestedLocalRef));
     if (shouldBeActive) {
       card.setAttribute('data-cover-lookup-local-active', '1');
     } else {
@@ -39025,7 +39095,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && (state.coverLookup.modal.selectedRemoteId === String(item?.id || '')
           || (typeof isSecondArtboxSavedRemoteActive === 'function' && isSecondArtboxSavedRemoteActive(item)))));
-  const isSuggested = kind === 'remote'
+  const isSuggested = kind === 'local'
+    ? Boolean(String(state.coverLookup.modal.suggestedLocalRef || ''))
+      && coverLookupLocalPathMatches(item?.candidate_cover_ref, state.coverLookup.modal.suggestedLocalRef)
+    : kind === 'remote'
     && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
@@ -41349,6 +41422,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.activeLocalSelectionRef = '';
   // UI-14: the second artbox's lookup starts with its own saved art selected; deselecting it lets Save empty it.
   state.coverLookup.modal.artboxCleared = false;
+  state.coverLookup.modal.suggestedLocalRef = '';
   if (state.coverLookup.modal.artboxSlot && typeof getAlbumAdditionalArtwork === 'function') {
     state.coverLookup.modal.activeLocalSelectionRef = String(getAlbumAdditionalArtwork(album)?.cover_ref || '');
   }
@@ -41420,6 +41494,7 @@ function closeCoverLookupModal({ immediate = false } = {}) {
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
+  state.coverLookup.modal.suggestedLocalRef = '';
   state.coverLookup.modal.manualBusy = false;
   state.coverLookup.modal.manualPendingCount = 0;
   state.coverLookup.modal.manualStatusText = '';

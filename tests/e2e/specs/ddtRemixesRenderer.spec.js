@@ -231,3 +231,72 @@ test('FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремик
     topologyObservations,
   );
 });
+
+test('FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just created, with no frame left on its card', { tag: '@area:tag-edit' }, async ({
+  galleryActions,
+  searchToolbarActions,
+  stepLogger,
+  tagEditorActions,
+}) => {
+  const SPLIT_ALBUM = 'Ремиксы2';
+  const splitFilenames = TRACKS.slice(0, 3).map((track) => track.filename);
+  const { albumCard } = galleryActions.galleryPage;
+  let accepted = null;
+  let splitSaved = false;
+
+  // The context menu action must open the editor for the right-clicked album, and the card that
+  // was right-clicked must not keep a focus frame once the editor is up.
+  const openEditorFromContextMenu = async (album, expectedFilenames) => {
+    await galleryActions.openAlbumTagEditorFromContextMenu(album);
+    await tagEditorActions.waitForOpen({ expectedTrackCount: expectedFilenames.length });
+    await expect(tagEditorActions.tagEditor.dialog).toBeVisible();
+    expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(expectedFilenames);
+    const card = albumCard.cardByAlbumName(album).first();
+    await expect(card.locator(':focus-visible')).toHaveCount(0);
+    // parity-check: allow-read-only-measurement-evaluate -- read the right-clicked card's own frame
+    const frame = await card.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { outline: style.outlineStyle, focusWithin: element.matches(':focus-visible, :focus-within') };
+    });
+    expect(frame).toEqual({ outline: 'none', focusWithin: false });
+  };
+
+  try {
+    await stepLogger.step('Search ДДТ and split three Ремиксы tracks into Ремиксы2 from the card menu', async () => {
+      await galleryActions.goto('/');
+      await galleryActions.waitForGalleryReady();
+      await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(ARTIST);
+      await galleryActions.waitForSelectedArtistGallery(ARTIST, { queryValue: ARTIST });
+      await openEditorFromContextMenu(SOURCE_ALBUM, TRACKS.map((track) => track.filename));
+      await tagEditorActions.selectTracksByFilenames(splitFilenames);
+      await tagEditorActions.setAlbumName(SPLIT_ALBUM);
+      accepted = await tagEditorActions.applyAndReturnAcceptedEdit();
+      splitSaved = true;
+    });
+
+    await stepLogger.step('Edit Tags on the new Ремиксы2 card opens while the save finishes', async () => {
+      await expect(albumCard.cardByAlbumName(SPLIT_ALBUM)).toBeVisible();
+      await openEditorFromContextMenu(SPLIT_ALBUM, splitFilenames);
+      await tagEditorActions.close();
+    });
+
+    await stepLogger.step('Edit Tags on Ремиксы2 still opens after the save completes', async () => {
+      await accepted.waitForCompletion({ timeout: 90000 });
+      await openEditorFromContextMenu(SPLIT_ALBUM, splitFilenames);
+      await tagEditorActions.close();
+    });
+  } finally {
+    if (splitSaved) {
+      await tagEditorActions.closeIfOpen();
+      await accepted?.waitForCompletion({ timeout: 90000 }).catch(() => {});
+      await galleryActions.openAlbumTagEditorFromContextMenu(SPLIT_ALBUM);
+      await tagEditorActions.waitForOpen({ expectedTrackCount: splitFilenames.length });
+      await tagEditorActions.selectAllTracks();
+      await tagEditorActions.setAlbumName(SOURCE_ALBUM);
+      const restored = await tagEditorActions.applyAndReturnAcceptedEdit();
+      await restored.waitForCompletion({ timeout: 90000 });
+      await galleryActions.waitForAlbumHidden(SPLIT_ALBUM);
+    }
+  }
+});

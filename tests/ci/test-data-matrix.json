@@ -2549,6 +2549,30 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
+    "case": "FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just created, with no frame left on its card",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "gallery:ddt-remixes-context-menu-edit-tags"
+    ],
+    "filesystemScenarios": [
+      "media-copy:ddt-remixes"
+    ],
+    "expectedContracts": [
+      "context-menu-edit-tags-after-save"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ddt-remixes-context-menu",
+      "filesystemCopy": "media/cases/ddt-remixes-context-menu"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/ddtStudioRecordsRenderer.spec.js",
     "case": "FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores",
     "profile": "functional-core",

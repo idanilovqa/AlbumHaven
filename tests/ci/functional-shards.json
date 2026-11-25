@@ -280,6 +280,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
+              "case": "FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just created, with no frame left on its card",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/ddtStudioRecordsRenderer.spec.js",
               "case": "FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores",
               "area": "tag-edit"

@@ -16433,6 +16433,72 @@
       "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_drain_applies_only_the_kept_intents",
       "testIdentity": "test_live_drain_applies_only_the_kept_intents",
       "rollback": "The drain reads and writes only the kept intents, plus one stuck check (6.5, 11-24: due since the lock was free, a partial index on due_since); reading or rewriting every ignored repair makes sql_statements grow."
+    },
+    {
+      "id": "py:services/relation_reconciliation.py#RelationReconciliationOwner._run",
+      "action": "Replay the journaled albums in the background until tag edits no longer wait for reconciliation, retrying with backoff",
+      "entrypoints": [
+        "py:music_app/services/relation_reconciliation.py#RelationReconciliationOwner._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/relation_reconciliation.py",
+        "music_app/services/scoped_relation_projection.py",
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/relation_reconciliation.py#request_relation_reconciliation",
+      "action": "Hand a failed journal replay to this process's reconciliation owner",
+      "entrypoints": [
+        "py:music_app/services/relation_reconciliation.py#request_relation_reconciliation:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/relation_reconciliation.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#relation_reconciliation_due",
+      "action": "Check with three keyed reads whether tag edits would wait for reconciliation",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#relation_reconciliation_due:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/state.py#_request_relation_reconciliation",
+      "action": "Start the reconciliation owner from start-up readiness when tag edits would wait",
+      "entrypoints": [
+        "py:music_app/services/state.py#_request_relation_reconciliation:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/state.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     }
   ]
 }

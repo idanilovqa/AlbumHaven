@@ -31,10 +31,9 @@ FAILED_BUILD_RETRY_SECONDS = 300
 _LOGGER = logging.getLogger("music_app")
 _PREPARE_LOCK = threading.Lock()
 _BUSY_RECHECK_SECONDS = 1.0
-# Held for a whole build on a session of its own: the "building" state's owner across processes.
-_BUILD_LOCK_KEY = "hashtextextended('album-haven.loose-track-store.build', 0)"
-_BUILD_LOCK_SQL = f"select pg_try_advisory_lock({_BUILD_LOCK_KEY}) as held"
-_BUILD_UNLOCK_SQL = f"select pg_advisory_unlock({_BUILD_LOCK_KEY})"
+# Held by a transaction that stays open for the whole build, on a connection of its own: the "building"
+# state's owner across processes. It ends with that transaction, however the build ends.
+_BUILD_LOCK_SQL = "select pg_try_advisory_xact_lock(hashtextextended('album-haven.loose-track-store.build', 0)) as held"
 
 _LIBRARY_SQL = """(
   select libraries.id
@@ -254,15 +253,9 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int | None:
     """Build every row once (start-up, builder change or owner rebuild); return the tracks written, or None
     while another process holds the build (its "building" state is then not an interrupted build)."""
     with connect() as owner:
-        held = bool(dict(owner.execute(_BUILD_LOCK_SQL).fetchone())["held"])
-        owner.commit()
-        if not held:
+        if not dict(owner.execute(_BUILD_LOCK_SQL).fetchone())["held"]:
             return None
-        try:
-            return _build_rows(inventory, connect, progress=progress)
-        finally:
-            owner.execute(_BUILD_UNLOCK_SQL)
-            owner.commit()
+        return _build_rows(inventory, connect, progress=progress)
 
 
 def _build_rows(inventory: Any, connect: Any, *, progress=None) -> int:

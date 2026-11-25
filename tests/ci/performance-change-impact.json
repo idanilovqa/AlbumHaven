@@ -108,7 +108,8 @@
     "migrations/postgres/0201_backfill_cover_references.sql",
     "music_app/static/js/runtime/modal-and-overlay-helpers.js",
     "scripts/ci/load-fixture-profile.py",
-    "tests/e2e/helpers/postgresProjectionFixture.js"
+    "tests/e2e/helpers/postgresProjectionFixture.js",
+    "migrations/postgres/0300_key_loose_track_rows_by_artist.sql"
   ],
   "rules": [
     {
@@ -463,6 +464,7 @@
     {
       "paths": [
         "music_app/services/loose_track_store.py",
+        "migrations/postgres/0300_key_loose_track_rows_by_artist.sql",
         "music_app/services/problematic_index.py",
         "scripts/ci/load-fixture-profile.py",
         "music_app/services/relation_projection_postgres.py",

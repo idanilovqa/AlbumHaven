@@ -119,9 +119,6 @@ def test_a_build_another_process_holds_is_not_taken_for_an_interrupted_one(monke
             statements.append(statement)
             return SimpleNamespace(fetchone=lambda: {"held": False})
 
-        def commit(self):
-            pass
-
     class _Connect:
         def __enter__(self):
             return _Owner()

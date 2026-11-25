@@ -169,7 +169,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
       expect(opened.connectorVisible).toBe(true);
       expect(opened.connectorWidth).toBeGreaterThan(0);
       expect(opened.connectorHeight).toBeGreaterThan(0);
-      expect(opened.panelClipPath).toMatch(/^(none|inset\(0px)/);
+      expect(opened.panelClipPath).toMatch(/^(none|inset\(0px\b)/);
       expect(opened.panelBottom).toBeLessThanOrEqual(opened.playerTop+1);
       expect(opened.panelTop).toBeCloseTo(opened.triggerBottom-1,0);
       expect(opened.triggerOwner).toBe('divider');
@@ -204,7 +204,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
       expect(farScrolled.connectorVisible).toBe(true);
       expect(farScrolled.connectorWidth).toBeGreaterThan(0);
       expect(farScrolled.connectorHeight).toBeGreaterThan(0);
-      expect(farScrolled.panelClipPath).toMatch(/^(none|inset\(0px)/);
+      expect(farScrolled.panelClipPath).toMatch(/^(none|inset\(0px\b)/);
       expect(farScrolled.triggerTop).toBeGreaterThanOrEqual(0);
       expect(farScrolled.triggerBottom).toBeLessThanOrEqual(farScrolled.viewportHeight);
       expect(farScrolled.panelTop).toBeGreaterThanOrEqual(0);

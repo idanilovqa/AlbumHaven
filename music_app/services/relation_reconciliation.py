@@ -4,7 +4,8 @@ When start-up readiness finds the index needs reconciliation, browsing serves th
 edits refuse with a readable message. This owner then replays the journaled albums one album at a time through
 ``prepare_relation_compatibility`` and, once that holds, runs start-up readiness again so edits work.
 
-It runs only from the start-up owner path, never from a request, and never makes a whole-library pass: a missing
+Start-up readiness starts it, and a save's failed journal replay hands it over (never a request's own work).
+It never makes a whole-library pass: a missing
 projection with nothing journaled needs the explicit initialization, which stays with the owner. One owner across
 processes: the preparation takes the relation projection advisory lock. It is cancellable at shutdown and
 retries a failure with backoff.
@@ -17,6 +18,15 @@ from collections.abc import Callable, Mapping, Sequence
 
 _LOGGER = logging.getLogger("music_app")
 RETRY_BACKOFF_SECONDS: Sequence[float] = (30.0, 60.0, 120.0, 300.0, 600.0)
+_OWNERS: dict[str, "RelationReconciliationOwner"] = {}
+_OWNERS_LOCK = threading.Lock()
+
+
+def request_relation_reconciliation(config: Mapping[str, object]) -> bool:
+    """Hand a failed journal replay to this process's owner (it retries with its backoff)."""
+    with _OWNERS_LOCK:
+        owner = _OWNERS.get(str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""))
+    return owner.request() if owner is not None else False
 
 
 class RelationReconciliationOwner:
@@ -37,11 +47,13 @@ class RelationReconciliationOwner:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        with _OWNERS_LOCK:
+            _OWNERS[str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")] = self
 
     def request(self) -> bool:
-        """Start the replay once (start-up owner path only). Returns whether this call started it."""
+        """Start a replay unless one is running or the owner stopped. Returns whether this call started it."""
         with self._lock:
-            if self._thread is not None or self._stop.is_set():
+            if (self._thread is not None and self._thread.is_alive()) or self._stop.is_set():
                 return False
             self._thread = threading.Thread(target=self._run, name="albumhaven-relation-reconciliation", daemon=True)
             self._thread.start()
@@ -49,6 +61,10 @@ class RelationReconciliationOwner:
 
     def stop(self, timeout: float = 30.0) -> None:
         self._stop.set()
+        with _OWNERS_LOCK:
+            key = str(self._config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
+            if _OWNERS.get(key) is self:
+                _OWNERS.pop(key)
         thread = self._thread
         if thread is not None:
             thread.join(timeout)

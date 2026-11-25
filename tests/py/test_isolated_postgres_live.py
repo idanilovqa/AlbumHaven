@@ -9091,3 +9091,16 @@ def test_live_relation_snapshot_decodes_stay_on_start_up_and_saves_never_rebuild
     RelationReconciliationOwner(fixture.config, reconciled=lambda: None).run_once()
     assert decodes == [], "with the start-up replay caught up, the reconciliation job decodes no whole snapshot"
     assert not scoped.relation_reconciliation_due(fixture.config)
+
+    # An index never initialized: a structural save leaves its albums journaled for the start-up owner.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from library.local_relation_projection_state")
+    decodes.clear()
+    moved_back = {**moved, "artist": "Guest", "album_artist": "Guest", "mtime": moved["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id="repair-main", active_file_entries={moved_back["path"]: moved_back})
+    state._run_scheduled_relation_projection_rebuild(fixture.config, logging.getLogger("test"), "structural_tag_edit")
+    assert decodes == [], "a save on an uninitialized index decodes no whole snapshot and builds nothing"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select count(*) as n from library.local_relation_dirty_albums").fetchone()["n"], (
+            "the save's albums stay journaled for initialization")

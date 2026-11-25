@@ -872,18 +872,23 @@ def _run_scheduled_relation_projection_rebuild(
     while True:
         with _RELATION_REBUILD_LOCK:
             requested_generation = _RELATION_REBUILD_REQUEST_GENERATION
+        from music_app.services.relation_reconciliation import request_relation_reconciliation
+        from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
+
         try:
             if logger is not None:
-                logger.info("Deferred relation projection rebuild started: %s", reason)
-            # An initialized scoped index replays the journaled albums of the save (keyed work, no whole
-            # relation snapshot); only an index never initialized falls back to the start-up readiness.
-            from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
-
-            if not ensure_pending_relation_projection_ready(config).get("initialized"):
-                ensure_relation_projection_ready(config, logger=logger)
+                logger.info("Deferred relation replay started: %s", reason)
+            # The save's journaled albums replay by key (no whole relation snapshot). An index never initialized
+            # keeps them journaled: its initialization belongs to start-up and the owner, never to a save.
+            if not ensure_pending_relation_projection_ready(config).get("initialized") and logger is not None:
+                logger.warning(
+                    "Relation index is not initialized; the save's albums stay journaled until initialization: %s",
+                    reason,
+                )
         except Exception:
             if logger is not None:
-                logger.exception("Deferred relation projection rebuild failed: %s", reason)
+                logger.exception("Deferred relation replay failed; the reconciliation owner retries it: %s", reason)
+            request_relation_reconciliation(config)
         with _RELATION_REBUILD_LOCK:
             if requested_generation != _RELATION_REBUILD_REQUEST_GENERATION:
                 continue

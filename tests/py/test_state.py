@@ -5850,12 +5850,13 @@ def test_startup_persistence_recovery_preserves_journal_and_exclusion_migration_
     assert calls == [("recover", runtime), ("migrate", config)]
 
 
-def _index_not_initialized(monkeypatch):
-    """An index never initialized: the queued relation work falls back to start-up readiness."""
+def _replay_journal(monkeypatch, replay):
+    """The queued relation work replays the journal by key; it never runs the whole-library readiness."""
     from music_app.services import scoped_relation_projection
 
-    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
-                        lambda config, **_kwargs: {"initialized": False})
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready", replay)
+    monkeypatch.setattr(state_module, "ensure_relation_projection_ready",
+                        lambda *_args, **_kwargs: pytest.fail("a save ran the whole-library readiness"))
 
 
 def test_relation_projection_rebuild_scheduler_is_bounded_and_non_blocking(monkeypatch):
@@ -5868,12 +5869,7 @@ def test_relation_projection_rebuild_scheduler_is_bounded_and_non_blocking(monke
             return object()
 
     monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
-    _index_not_initialized(monkeypatch)
-    monkeypatch.setattr(
-        state_module,
-        "ensure_relation_projection_ready",
-        lambda config, **_kwargs: rebuilt.append(config) or {"ready": True},
-    )
+    _replay_journal(monkeypatch, lambda config, **_kwargs: rebuilt.append(config) or {"initialized": True})
     monkeypatch.setattr(
         state_module,
         "_RELATION_REBUILD_PENDING",
@@ -5921,11 +5917,10 @@ def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_duri
                 config,
                 reason="edit_committed_during_rebuild",
             )
-        return {"ready": True}
+        return {"initialized": True}
 
     monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
-    _index_not_initialized(monkeypatch)
-    monkeypatch.setattr(state_module, "ensure_relation_projection_ready", rebuild)
+    _replay_journal(monkeypatch, rebuild)
     monkeypatch.setattr(state_module, "_RELATION_REBUILD_PENDING", False, raising=False)
     monkeypatch.setattr(
         state_module,
@@ -5941,6 +5936,54 @@ def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_duri
 
     assert rebuilt == ["rebuild", "rebuild"]
     assert len(submitted) == 1
+
+
+@pytest.mark.parametrize("outcome", ["not initialized", "refused", "database error"])
+def test_queued_relation_replay_leaves_albums_journaled_or_hands_failures_to_the_owner(monkeypatch, outcome):
+    """A save never initializes the index; a replay that fails goes to the reconciliation owner's backoff."""
+    from music_app.services import relation_projection_postgres as relations
+    from music_app.services import relation_reconciliation
+
+    def replay(_config, **_kwargs):
+        if outcome == "refused":
+            raise relations.RelationReconciliationRequired("Relation compatibility preparation is required before editing tags.")
+        if outcome == "database error":
+            raise RuntimeError("connection lost")
+        return {"initialized": False}
+
+    _replay_journal(monkeypatch, replay)
+    handed_over = []
+    monkeypatch.setattr(relation_reconciliation, "request_relation_reconciliation",
+                        lambda config: handed_over.append(config) or True)
+    monkeypatch.setattr(state_module, "_RELATION_REBUILD_PENDING", True, raising=False)
+    monkeypatch.setattr(state_module, "_RELATION_REBUILD_REQUEST_GENERATION", 0, raising=False)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}
+
+    import logging
+
+    state_module._run_scheduled_relation_projection_rebuild(config, logging.getLogger("test"), "structural_tag_edit")
+
+    assert handed_over == ([] if outcome == "not initialized" else [config])
+    assert state_module._RELATION_REBUILD_PENDING is False
+
+
+def test_a_handed_over_replay_reaches_the_registered_owner_and_restarts_after_it_finished():
+    from music_app.services import relation_reconciliation
+
+    runs = []
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://owner-registry"}
+    owner = relation_reconciliation.RelationReconciliationOwner(
+        config, reconciled=lambda: None, prepare=lambda _config, **_kwargs: runs.append(True),
+    )
+    try:
+        assert relation_reconciliation.request_relation_reconciliation(config) is True
+        owner._thread.join(5)
+        assert relation_reconciliation.request_relation_reconciliation(config) is True, "a finished owner runs again"
+        owner._thread.join(5)
+        assert runs == [True, True]
+    finally:
+        owner.stop()
+    assert relation_reconciliation.request_relation_reconciliation(config) is False, "a stopped owner is unregistered"
 
 
 @pytest.mark.parametrize("setting", [None, "0", "1"])

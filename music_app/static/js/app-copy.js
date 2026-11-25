@@ -12,7 +12,7 @@
 // answer makes the copy read-only, with its Offline notice and every write hidden, until one comes.
 // The notice means unreachable (no answer, a gateway error, or the device offline), never slow. Each
 // answer lets the runtime bring the view up to date in place (onServerAnswer). In every tab, however
-// it started, the notice and read-only also follow the runtime's reachability (setServerUnreachable).
+// it started, the notice also follows the runtime's reachability (setServerUnreachable).
 (function appCopy(root) {
   'use strict';
 
@@ -92,17 +92,13 @@
       if (notice) notice.hidden = !on;
     }
 
-    // The server is unreachable or answers again, in any tab: the line and read-only follow, except
-    // that a page started from the copy stays read-only until its own account check is answered.
+    // The server is unreachable or answers again, in any tab: the line follows. A page started from
+    // the copy keeps it, and stays read-only, until its own account check is answered.
     function setServerUnreachable(on) {
       if (serverUnreachable === on) return;
       serverUnreachable = on;
-      if (on) {
-        setReadOnly(true);
-        showNotice(true);
-      } else if (!startedFromCopy || answered) {
-        setReadOnly(false);
-      }
+      if (on) showNotice(true);
+      else if (!startedFromCopy || answered) showNotice(false);
     }
 
     function setReadOnly(on) {

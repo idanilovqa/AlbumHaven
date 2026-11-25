@@ -4896,6 +4896,7 @@
       "id": "js:runtime/pending-projection-fetch.js#serverReachability",
       "action": "While the server is unreachable, one bounded /health probe every 2.5 s (each given up after 4 s), and one at once on the browser's online event",
       "entrypoints": [
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#<top-level>:event:offline",
         "js:music_app/static/js/runtime/pending-projection-fetch.js#noteServerUnreachable:event:online",
         "js:music_app/static/js/runtime/pending-projection-fetch.js#probeServerReachability:request:fetch",
         "js:music_app/static/js/runtime/pending-projection-fetch.js#probeServerReachability:timer:setTimeout",

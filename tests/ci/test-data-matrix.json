@@ -129,6 +129,33 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-038 a CD name search opens Album Details scrolled to that CD",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-long-disc-subtitle-search"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-reconciliation"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "disc-subtitle-search-match",
+      "album-details-matched-disc-scrolled-into-view",
+      "matched-disc-heading-unobscured"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-long-disc-subtitle-search",
+      "filesystemCopy": "media/cases/watcher-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/gallerySourceSwitchLoading.functional.spec.js",
     "case": "FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, never an empty Library",
     "profile": "functional-core",
@@ -2549,6 +2576,54 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
+    "case": "FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just created, with no frame left on its card",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "gallery:ddt-remixes-context-menu-edit-tags"
+    ],
+    "filesystemScenarios": [
+      "media-copy:ddt-remixes"
+    ],
+    "expectedContracts": [
+      "context-menu-edit-tags-after-save"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ddt-remixes-context-menu",
+      "filesystemCopy": "media/cases/ddt-remixes-context-menu"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
+    "case": "FTC-TAGS-048 keeps every other search match on screen through a merge and an album rename saved from the results",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "gallery:ddt-remixes-search-matches-after-save"
+    ],
+    "filesystemScenarios": [
+      "media-copy:ddt-remixes"
+    ],
+    "expectedContracts": [
+      "search-matches-preserved-after-save"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ddt-remixes-search-matches",
+      "filesystemCopy": "media/cases/ddt-remixes-search-matches"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/ddtStudioRecordsRenderer.spec.js",
     "case": "FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores",
     "profile": "functional-core",
@@ -4817,6 +4892,34 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-LIBROOTS-021 Re-scan answers in the Album Details alert for each outcome",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "watcher:missing-album-rescan-deleted-unreachable-restored"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-reconciliation",
+      "junction:unplugged-stand-in-drive"
+    ],
+    "expectedContracts": [
+      "missing-album-rescan-answer-in-alert",
+      "missing-album-rescan-answer-persists",
+      "missing-album-rescan-found-success-alert",
+      "missing-album-rescan-no-toast-when-shown"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-missing-album-rescan",
+      "filesystemCopy": "media/cases/watcher-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-UTIL-PROBLEMS-014 a watcher-found problem album appears in the open Problematic Files list without a reload",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -4998,6 +5101,21 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "waveform-waits-out-busy-builder"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/buttonBusySpinner.spec.js",
+    "case": "a busy text Button spins on every page that hosts the component",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "busy-button-spins-on-every-host"
     ],
     "ownerApproval": "approved"
   },
@@ -10180,6 +10298,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/problemExclusionRuleOrder.spec.js",
+    "case": "a queued and then saved Ignore shows each rule at its reload position",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a queued and then saved Ignore shows each rule at its reload position"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/triggerAnchorSurface.spec.js",
     "case": "nested calendar dates remain clickable beyond the parent panel clipping boundary",
     "profile": null,
@@ -10712,6 +10845,182 @@
       "mobile-home-closes-loose-tracks",
       "mobile-home-restores-root-url",
       "mobile-home-renders-without-retained-loose-tracks"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-001 the navigation-tree header sits on the Gallery title baseline",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:loose-nav-tree-header"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "navigation-tree-header-gallery-title-baseline"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-nav-tree-header",
+      "filesystemCopy": "media/cases/loose-nav-tree-header"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-002 reopening the Artist Tree over Loose Tracks selects no artist after a search",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:loose-nav-tree-selection"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-page-keeps-loose-tracks-open-on-tree-reopen",
+      "loose-tracks-page-artist-tree-has-no-selection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-nav-tree-selection",
+      "filesystemCopy": "media/cases/loose-nav-tree-selection"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksNavigation.functional.spec.js",
+    "case": "FTC-LOOSE-NAV-003 Loose Tracks opened from the drawer shows the hamburger that reopens the tree",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:loose-tracks-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "loose-tracks-drawer-page-shows-hamburger-not-back",
+      "loose-tracks-page-hamburger-reopens-navigation-tree"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeSearchScroll.functional.spec.js",
+    "case": "FTC-NAV-TREE-SCROLL-001 a search shows no tree scrollbar while it runs or once its short results fit",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:nav-tree-search-scroll"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-tree-search-pending-has-no-scrollbar",
+      "artist-tree-short-results-fit-at-top"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:nav-tree-search-scroll",
+      "filesystemCopy": "media/cases/nav-tree-search-scroll"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksScanNote.functional.spec.js",
+    "case": "FTC-LOOSE-SCAN-NOTE-001 Loose Tracks notes that a running scan may add tracks and drops the note when it ends",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "loose-tracks:scan-note-rarities"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-note-below-table-while-scan-runs",
+      "loose-tracks-note-removed-when-scan-ends",
+      "loose-tracks-no-note-without-scan"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:loose-tracks-scan-note",
+      "filesystemCopy": "media/cases/loose-tracks-scan-note"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 360px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-360",
+      "phone-header-main-text-one-slot-360"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 390px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-390",
+      "phone-header-main-text-one-slot-390"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 412px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-412",
+      "phone-header-main-text-one-slot-412"
     ],
     "ownerApproval": "approved"
   },
@@ -11969,6 +12278,96 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "a CD the search matched scrolls into view below the album header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a-cd-the-search-matched-scrolls-into-view-below-the-album-header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "a CD the search matched scrolls into view below a pinned page header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a-cd-the-search-matched-scrolls-into-view-below-a-pinned-page-header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTableTouch.spec.js",
+    "case": "after playback moves on, the tapped track looks exactly like an idle track on a phone",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "tapped-track-looks-idle-after-playback-moves-on"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTableTouch.spec.js",
+    "case": "keyboard focus still reveals a track's play button where the device can hover",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "keyboard-focus-reveals-track-play-button-on-hover-devices"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksPlaybackTick.spec.js",
+    "case": "a playback tick on 1,000 loose tracks changes only the playing row at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "playback-tick-changes-only-playing-row-390px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksPlaybackTick.spec.js",
+    "case": "a playback tick on 1,000 loose tracks changes only the playing row at 1000px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "playback-tick-changes-only-playing-row-1000px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/albumAdditionalArtbox.spec.js",
     "case": "two artboxes stay square inside the cover column (new Add art box)",
     "profile": null,
@@ -12851,7 +13250,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["quick-search-spinner-stays-centered"],
+    "expectedContracts": [
+      "quick-search-spinner-stays-centered"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -12864,7 +13265,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["desktop-artist-info-country-alignment"],
+    "expectedContracts": [
+      "desktop-artist-info-country-alignment"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -12907,7 +13310,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["loose-tracks-gallery-header-spacing-desktop"],
+    "expectedContracts": [
+      "loose-tracks-gallery-header-spacing-desktop"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -12920,7 +13325,84 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["loose-tracks-mobile-back-title-alignment"],
+    "expectedContracts": [
+      "loose-tracks-mobile-back-title-alignment"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksTableDensity.spec.js",
+    "case": "Loose Tracks rows use the larger table density with a gap under the title at 1440px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-default-density-title-gap-1440"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksTableDensity.spec.js",
+    "case": "Loose Tracks rows use the larger table density with a gap under the title at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-default-density-title-gap-390"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 360px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "phone-gallery-bar-slots-360"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "phone-gallery-bar-slots-390"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 412px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "phone-gallery-bar-slots-412"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -13361,6 +13843,915 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "settings-header-gallery-structure"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "opening the notifications drawer with the keyboard moves focus into it and Escape returns it to the trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "keyboard-open-focuses-drawer",
+      "tab-within-open-drawer",
+      "escape-closes-drawer-to-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "closing the notifications drawer from its Close button by keyboard returns focus to the trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "close-button-returns-focus-to-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Escape closes a pointer-opened notifications drawer and keeps focus on its trigger",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "escape-closes-drawer-to-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "Tab moves card to card in cards view without stopping on hover controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "one-tab-stop-per-card",
+      "no-hover-control-tab-stops"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "Tab moves card to card in covers view without stopping on hover controls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "one-tab-stop-per-card",
+      "no-hover-control-tab-stops"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardKeyboard.spec.js",
+    "case": "a keyboard-focused card still reveals its markers, opens with Enter and offers actions with Shift+F10",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "focused-card-reveals-markers",
+      "enter-opens-focused-card",
+      "keyboard-context-menu-on-card",
+      "pointer-hover-controls-retained"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab walks each notification card, then its Retry when present, then its delete button, and Shift+Tab walks back",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-retry-delete-tab-order",
+      "no-extra-card-tab-stops",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each completed notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each completed with no covers notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each art chosen notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each failed notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each interrupted notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each canceled notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each queued notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each searching notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each downloading the chosen art notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+    "case": "FTC-SEARCH-NAV-003 a reloaded exact-artist search shows the same tree as the typed search when only another artist's file name matches",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "reloaded-search-tree",
+    "databaseScenarios": [
+      "search:owned-file-name-credit"
+    ],
+    "filesystemScenarios": [
+      "media-copy:reloaded-search-tree"
+    ],
+    "expectedContracts": [
+      "reloaded-search-tree-equals-typed"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:reloaded-search-tree",
+      "filesystemCopy": "media/cases/reloaded-search-tree"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+    "case": "FTC-TAGS-045 an Album Artist edit of some tracks shows the new artist with its album, and restoring it leaves no empty artist behind",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-artist-split-restore",
+    "databaseScenarios": [
+      "tag-edit:owned-album-artist-split"
+    ],
+    "filesystemScenarios": [
+      "media-copy:album-artist-split-restore"
+    ],
+    "expectedContracts": [
+      "restored-album-artist-leaves-no-empty-artist"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:album-artist-split-restore",
+      "filesystemCopy": "media/cases/album-artist-split-restore"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+    "case": "FTC-GALLERY-034 an album whose Album Artist repeats one artist is that artist's own album, never Featured On",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "repeated-album-artist-credit",
+    "databaseScenarios": [
+      "gallery:owned-repeated-album-artist"
+    ],
+    "filesystemScenarios": [
+      "media-copy:repeated-album-artist-credit"
+    ],
+    "expectedContracts": [
+      "repeated-album-artist-is-own-album"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:repeated-album-artist-credit",
+      "filesystemCopy": "media/cases/repeated-album-artist-credit"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDelete.spec.js",
+    "case": "a pasted image card uses the art card delete control, shown on hover and focus only",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pasted-card-uses-art-card-delete-control"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a pasted copy of a local image highlights that card instead of staging it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pasted-duplicate-highlights-existing-card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a different pasted image stages it under PASTED IMAGES",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "distinct-pasted-image-is-staged"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
+    "case": "a card pressed while a candidate update re-renders the gallery shows its blue frame in the next frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "selection-frame-survives-candidate-rerender"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
+    "case": "a candidate poll patches the shown cards by key instead of rebuilding the gallery",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "candidate-poll-patches-cards-by-key"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
+    "case": "a re-render keeps a decoded preview and replaces deferred or failed ones",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "rerender-keeps-decoded-previews"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Album Types trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Album Types trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Album Types trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Album Types trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Library check trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Library check trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Library check trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Library check trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History filter after a PF filter trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History filter after a PF filter trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History filter after a PF filter trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History filter after a PF filter trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter with a selection trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter with a selection trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter with a selection trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter with a selection trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Sources trigger and panel form one outline at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Sources trigger and panel form one outline at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Sources trigger and panel form one outline at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Sources trigger and panel form one outline at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "the Appearance section picker is the shared dropdown component an Edit Tags dropdown uses",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the Appearance section picker is the shared dropdown component an Edit Tags dropdown uses"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "the PF filter icon stays put closed, open, and with a selection at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the PF filter icon stays put closed, open, and with a selection at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "the PF filter icon stays put closed, open, and with a selection at 390 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the PF filter icon stays put closed, open, and with a selection at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel closes once the header moves on to the next artist",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel closes once the header moves on to the next artist"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel closes when its divider \"i\" leaves the bottom of the gallery",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel closes when its divider \"i\" leaves the bottom of the gallery"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel follows its divider \"i\", then re-anchors to the header \"i\" when its artist becomes the header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel follows its divider \"i\", then re-anchors to the header \"i\" when its artist becomes the header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the panel returns from the header \"i\" to the divider \"i\" when its artist moves back below the header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the panel returns from the header \"i\" to the divider \"i\" when its artist moves back below the header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "wheel steps of 120 px never leave the panel on an artist the gallery has moved past",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "wheel steps of 120 px never leave the panel on an artist the gallery has moved past"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "wheel steps of 900 px never leave the panel on an artist the gallery has moved past",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "wheel steps of 900 px never leave the panel on an artist the gallery has moved past"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "at 1200x500 the opened panel fits above the player once its reveal scroll settles",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "at 1200x500 the opened panel fits above the player once its reveal scroll settles"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "at 1200x500 the panel the header \"i\" takes over still fits above the player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "at 1200x500 the panel the header \"i\" takes over still fits above the player"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "the header-owned panel closes once its artist's albums have left the gallery, while the next label is still partly visible",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the header-owned panel closes once its artist's albums have left the gallery, while the next label is still partly visible"
     ],
     "ownerApproval": "approved"
   }

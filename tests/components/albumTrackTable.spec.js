@@ -301,20 +301,13 @@ for (const scenario of [
     await expect(row).toHaveClass(/album-track-table__row--playing/);
     await expect(row).toHaveCSS('outline-style', 'solid');
     await expect(row).toHaveCSS('outline-width', '1px');
-    const spectra = await row.evaluate(element => ['::before', '::after'].map(pseudo => {
-      const style = getComputedStyle(element, pseudo);
-      return { animation: style.animationName, display: style.display, opacity: style.opacity };
-    }));
-    for (const spectrum of spectra) {
-      if (scenario.setting && scenario.motion === 'no-preference') {
-        expect(spectrum.animation).toContain('album-track-perimeter-spectrum');
-      } else {
-        if (scenario.motion === 'reduce') expect(spectrum.display).toBe('none');
-        else {
-          expect(spectrum.animation).toBe('none');
-          expect(spectrum.opacity).toBe('0');
-        }
-      }
+    const spectrum = row.locator('.album-track-table__spectrum');
+    if (scenario.setting && scenario.motion === 'no-preference') {
+      await expect(spectrum).toBeVisible();
+      const turns = await spectrum.evaluate(element => ['::before', '::after'].map(pseudo => getComputedStyle(element, pseudo).animationName));
+      expect(turns).toEqual(['album-track-perimeter-spectrum', 'album-track-perimeter-spectrum']);
+    } else {
+      await expect(spectrum).toBeHidden();
     }
     if (!scenario.setting || scenario.motion === 'reduce') {
       expect(await row.evaluate(element => element.getAnimations({ subtree: true })
@@ -569,5 +562,71 @@ for (const width of [340, 760]) {
     else await expect(pathCell).toBeVisible();
     const scroll = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(scroll).toBeLessThanOrEqual(0);
+  });
+}
+
+// Owner (2026-11-24): a search that matched a CD name opens Album Details on that CD. The CD heading and its
+// first matched tracks come into view, unclipped and below anything pinned over the track area.
+for (const pinned of [false, true]) {
+  test(`a CD the search matched scrolls into view below ${pinned ? 'a pinned page header' : 'the album header'}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 600 });
+    await page.route('http://album-track-table-component.test/matched-cd', route => route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><html><head><style>:root{--panel:#101a29;--border:#526172;--text:#f3f6fa;--muted:#9aa9bc}*{box-sizing:border-box}body{margin:0}
+        .pinned-header{position:sticky;top:0;z-index:3;height:64px;background:#101a29}</style></head><body>
+        <div id="track-modal" class="track-modal"><div class="track-modal-dialog">
+          <header class="track-modal-header"><div class="album-details-header"><h2>Watcher Pirate Copies</h2></div></header>
+          <div class="track-modal-body"><div id="track-modal-cover" class="track-modal-cover"></div>
+          <main class="track-modal-main"><div class="track-modal-list" id="table-host">${pinned ? '<div class="pinned-header">Pinned</div>' : ''}<div id="tracks"></div></div></main></div>
+        </div></div></body></html>`,
+    }));
+    await page.goto('http://album-track-table-component.test/matched-cd');
+    for (const cssPath of [baseLayoutCssPath, buttonComponentCssPath, compactDataTableCssPath, albumTrackTableCssPath, albumDetailsComponentsCssPath, trackModalCssPath]) {
+      await page.addStyleTag({ path: cssPath });
+    }
+    await page.addScriptTag({ content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }` });
+    for (const file of ['button-component.js', 'runtime/compact-data-table.js', 'runtime/album-track-table.js']) await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js', file) });
+    await page.locator('#tracks').evaluate((host) => {
+      const tracks = (disc, count, match) => Array.from({ length: count }, (_, i) => ({
+        path: `cd${disc}-${i}`, title: `CD ${disc} Track ${i + 1}`, trackNumber: i + 1, duration: '3:00', isSearchMatch: match,
+      }));
+      host.innerHTML = buildAlbumTrackTableHtml({ multiDisc: true, groups: [
+        { discNumber: 1, discLabel: 'CD 1 • Moscow Club 2014', tracks: tracks(1, 30, false) },
+        { discNumber: 2, discLabel: 'CD 2 • V-ROX Festival 2015', discMatchesSearch: true, tracks: tracks(2, 16, true) },
+      ] });
+    });
+    const list = page.locator('.track-modal-list');
+    const disc = page.locator('[data-disc-search-match="true"]');
+    await expect(disc).toHaveCount(1);
+    const heading = disc.locator('.album-track-table__disc-heading');
+    await expect(heading).toHaveText('CD 2 • V-ROX Festival 2015');
+    await expect(heading).not.toBeInViewport();
+
+    await disc.evaluate(node => revealAlbumTrackTableDisc(node));
+
+    const geometry = await page.evaluate(() => {
+      const list = document.querySelector('.track-modal-list').getBoundingClientRect();
+      const pinnedBottom = document.querySelector('.pinned-header')?.getBoundingClientRect().bottom ?? list.top;
+      const headingNode = document.querySelector('[data-disc-search-match="true"] .album-track-table__disc-heading');
+      const heading = headingNode.getBoundingClientRect();
+      const matches = [...document.querySelectorAll('[data-disc-search-match="true"] [data-track-search-match="true"]')]
+        .slice(0, 2).map(row => row.getBoundingClientRect());
+      const hit = document.elementFromPoint(heading.left + 4, heading.top + 2);
+      return { listTop: list.top, listBottom: list.bottom, pinnedBottom, headingTop: heading.top, matches,
+        headingUncovered: headingNode.contains(hit) };
+    });
+    expect(geometry.headingUncovered).toBe(true);
+    expect(Math.abs(geometry.headingTop - geometry.pinnedBottom)).toBeLessThanOrEqual(1);
+    expect(geometry.headingTop).toBeGreaterThanOrEqual(geometry.listTop);
+    for (const row of geometry.matches) {
+      expect(row.top).toBeGreaterThan(geometry.headingTop);
+      expect(row.bottom).toBeLessThanOrEqual(geometry.listBottom);
+    }
+    await expect(page.getByText('CD 2 Track 1', { exact: true })).toBeInViewport({ ratio: 1 });
+
+    // Already in view: a second reveal leaves the scroll where it is.
+    const scrollTop = await list.evaluate(node => node.scrollTop);
+    await disc.evaluate(node => revealAlbumTrackTableDisc(node));
+    expect(await list.evaluate(node => node.scrollTop)).toBe(scrollTop);
   });
 }

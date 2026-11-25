@@ -2069,6 +2069,7 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  if (typeof syncLooseTracksPartialNote === 'function') syncLooseTracksPartialNote();
   const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
   const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
   state.loopCreateAllowed = loopCreateAllowed;
@@ -2322,6 +2323,24 @@ function buildUrl(view) {
   return `${pathname}${qs ? `?${qs}` : ''}`;
 }
 
+// BUGFIX-04: the top artist of a search is the server's pick for that query, not a request. Refreshing
+// it by name returns that artist's albums only and loses the search's other matches, so a refresh asks
+// for the same search and names the pick to keep (an edit can change which owner ranks first).
+// Family filters belong to that artist and keep it.
+function viewForSearchRefresh(view) {
+  const query = String(view?.query || '').trim();
+  const searchContext = view?.search_context || {};
+  const committedQuery = String(searchContext.committed_query ?? query).trim();
+  if (
+    !query
+    || committedQuery !== query
+    || String(searchContext.selected_artist_source || '').trim() !== 'auto_top_match'
+    || view.primary_filter_active
+    || (view.related_filter_artists || []).length
+  ) return view;
+  return { ...view, selected_artist: '', search_kept_artist: view.selected_artist };
+}
+
 function buildApiUrl(view, options = {}) {
   const resolvedSurface = resolveViewSurface(view);
   if (resolvedSurface === 'home') {
@@ -2332,6 +2351,7 @@ function buildApiUrl(view, options = {}) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  else if (view.query && view.search_kept_artist) params.set('keep_artist', view.search_kept_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -5615,7 +5635,7 @@ function buildGalleryCardInfoHtml(config = {}) {
   const metadata = `${artist ? `<span class="gallery-card__artist"><span data-gallery-metadata-text>${escapeHtml(artist)}</span></span>` : ''}${year ? `<span class="gallery-card__year">${artist ? '· ' : ''}${escapeHtml(year)}</span>` : ''}`;
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
-    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
+    ? `<button class="album-open-trigger album-title-button" type="button" tabindex="-1" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
   return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle gallery-card__metadata">${metadata}</div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
@@ -5911,7 +5931,8 @@ function buildGalleryCardHtml(config = {}) {
   const sourceGradient = sourceCategories.length
     ? `conic-gradient(${sourceCategories.map((category, index) => `${sourceColors[category]} ${index * 100 / sourceCategories.length}% ${(index + 1) * 100 / sourceCategories.length}%`).join(', ')})`
     : 'none';
-  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
+  // The artbox trigger is the card's only Tab stop; these hover controls repeat its open action.
+  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" tabindex="-1" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
   const sourceActions = [
     sourceCategories.includes('hoard') ? sourceAction('hoard', 'Hoard', buildLibrarySourceGlyphHtml('hoard')) : '',
     sourceCategories.includes('new_arrivals') ? sourceAction('new_arrivals', 'New Arrivals', buildLibrarySourceGlyphHtml('new_arrivals')) : '',
@@ -6184,15 +6205,24 @@ function buildMissingAlbumDetailsHtml(config = {}) {
       : { 'data-close-track-modal': '1' },
   });
   const reason = MISSING_ALBUM_REASON_TEXT[config.reason] || 'This album cannot be found under the current libraries.';
-  const message = config.canRemove
+  // A Re-scan's answer replaces the stored reason until the alert is closed.
+  const rescanMessage = String(config.rescanMessage || '').trim();
+  const message = rescanMessage || (config.canRemove
     ? `${reason} Its library entry is still saved.`
-    : `${reason} Ask an owner or administrator to remove it.`;
+    : `${reason} Ask an owner or administrator to remove it.`);
   return buildOnPageAlertHtml({
     severity: 'error',
     title: 'Album details unavailable',
     message,
-    actionsHtml: `${rescanButton}${removeButton}${keepButton}`,
+    className: rescanMessage ? 'missing-album-rescan-result' : '',
+    // Remove from library is the right-most action (owner, 2026-11-25).
+    actionsHtml: `${rescanButton}${keepButton}${removeButton}`,
   });
+}
+
+// A Re-scan that found the album says so where the missing alert stood.
+function buildMissingAlbumRescanFoundHtml(message) {
+  return buildOnPageAlertHtml({ severity: 'success', message, role: 'status', className: 'missing-album-rescan-result' });
 }
 
 /* Inline album metadata and the pinned Gallery Bar never own visible identity
@@ -6850,12 +6880,17 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 
 
 let searchPendingRailFallback = null;
+// NEW-005: a running search hides the stale tree until its results render.
+function setRailTreesPending(rail, pending) {
+  rail?.querySelectorAll?.('.navigation-tree').forEach((tree) => window.NavigationTree?.setPending?.(tree, pending));
+}
 function releaseSearchPendingRail() {
   if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
   searchPendingRailFallback = null;
   const rail = document.getElementById('shell-navigation-rail');
   rail?.removeAttribute?.('data-search-pending');
   rail?.setAttribute?.('aria-busy', 'false');
+  setRailTreesPending(rail, false);
 }
 function holdSearchPendingRail(searching) {
   const rail = document.getElementById('shell-navigation-rail');
@@ -6864,6 +6899,7 @@ function holdSearchPendingRail(searching) {
     searchPendingRailFallback = null;
     rail?.setAttribute?.('data-search-pending', '');
     rail?.setAttribute?.('aria-busy', 'true');
+    setRailTreesPending(rail, true);
   } else if (rail?.hasAttribute?.('data-search-pending') && searchPendingRailFallback === null) {
     // renderSidebar releases it with the new tree; a search whose tree needs no re-render releases it shortly.
     searchPendingRailFallback = setTimeout(releaseSearchPendingRail, 1000);
@@ -6884,7 +6920,9 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.scanPageReturnContext
+  // A scan page or library-wide Loose Tracks is the page: no tree row is the current selection.
+  const selectionSuppressed = Boolean(state.ui.scanPageReturnContext || state.ui.looseTracksNavigationActive);
+  const effectiveView = selectionSuppressed
     ? {
       ...v,
       selected_artist: '',
@@ -6901,7 +6939,7 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.scanPageReturnContext
+    !selectionSuppressed
     && effectiveSurface === 'albums'
     && (
       effectiveView.all_artists_active
@@ -7338,10 +7376,17 @@ function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {
 
 // BEGIN js/runtime/trigger-anchor.js
 
-function getTriggerAnchorGeometry(anchor, surface) {
+// `borders` holds the trigger's and panel's left/right border widths.
+function getTriggerAnchorGeometry(anchor, surface, borders = {}) {
   const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
   const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
   const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
+  // The panel's side line continues the trigger's outline, drawn 2px outside the
+  // trigger's padding box. It starts at that outer edge (in the panel's padding-box
+  // coordinates) and covers the panel's own border, so neither border widths nor a
+  // rounded panel position can step the join.
+  const sideLeft = anchor.left + (borders.anchorLeft || 0) - 2 - (surface.left + (borders.surfaceLeft || 0));
+  const sideRight = surface.right - (borders.surfaceRight || 0) - (anchor.right - (borders.anchorRight || 0) + 2);
   return {
     edge,
     side: alignedLeft && alignedRight ? 'none'
@@ -7350,6 +7395,10 @@ function getTriggerAnchorGeometry(anchor, surface) {
     right: Math.max(0, surface.right - anchor.right),
     width: anchor.width,
     gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
+    'side-left': sideLeft,
+    'side-left-width': Math.max(2, -sideLeft),
+    'side-right': sideRight,
+    'side-right-width': Math.max(2, -sideRight),
   };
 }
 
@@ -7405,7 +7454,10 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
-  const visualAnchor = anchor;
+  // A text field cannot draw the joined outline (no pseudo-elements); the shared
+  // dropdown component's control draws it around the field instead.
+  const visualAnchor = anchor.matches?.('input, select, textarea')
+    ? anchor.closest?.('.ui-dropdown-control') || anchor : anchor;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
@@ -7434,7 +7486,12 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
-  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds);
+  const anchorStyle = globalThis.getComputedStyle?.(visualAnchor);
+  const borderWidth = (style, side) => Number.parseFloat(style?.[`border${side}Width`]) || 0;
+  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds, {
+    anchorLeft: borderWidth(anchorStyle, 'Left'), anchorRight: borderWidth(anchorStyle, 'Right'),
+    surfaceLeft: borderWidth(surfaceStyle, 'Left'), surfaceRight: borderWidth(surfaceStyle, 'Right'),
+  });
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'
@@ -7455,8 +7512,12 @@ function syncTriggerAnchor(surface, anchor) {
  if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
   if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
-  for (const name of ['left', 'right', 'width', 'gap']) {
-    surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
+  // Scroll and resize resynchronize often; only changed geometry is written.
+  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-left-width', 'side-right', 'side-right-width']) {
+    const value = `${geometry[name]}px`;
+    if (surface.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
+      surface.style.setProperty(`--trigger-anchor-${name}`, value);
+    }
   }
   visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
   if (previous?.anchor === anchor) return;
@@ -7781,9 +7842,23 @@ function isGalleryAnchorVisible(anchor, scroll) {
 function isGalleryArtistInfoAnchorVisible(anchor, scroll) {
   if (anchor?.closest?.('[data-gallery-bar-instance="gallery"]')) {
     const bounds = anchor.getBoundingClientRect?.();
-    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight;
+    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight
+      && galleryArtistSectionsRemainInView(anchor.dataset?.artist, scroll);
   }
   return isGalleryAnchorVisible(anchor, scroll);
+}
+
+// The header keeps naming an artist until the next label is completely hidden, by which time
+// that artist's albums can all be gone. Its header "i" then no longer stands for anything on
+// screen. Without rendered sections (no dividers) the header alone decides.
+function galleryArtistSectionsRemainInView(artist, scroll) {
+  const sections = artist && scroll?.querySelectorAll
+    ? Array.from(scroll.querySelectorAll(`[data-scroll-artist="${cssEscape(artist)}"]`))
+      .map(label => label.closest?.('.artist-section') || label)
+    : [];
+  if (!sections.length) return true;
+  const viewportTop = Number(scroll.getBoundingClientRect?.().top || 0);
+  return sections.some(section => Number(section.getBoundingClientRect?.().bottom) > viewportTop);
 }
 
 function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
@@ -7801,16 +7876,21 @@ function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
   surface.style.setProperty?.('--artist-info-body-max-height', `${Math.max(0, Math.floor(available))}px`);
 }
 
+// The artist info panel ends above a visible player.
+function getGalleryArtistInfoViewportBottom() {
+  const player = document.querySelector('[data-shell-slot="bottom_player"]');
+  const playerBounds = player?.getBoundingClientRect?.();
+  return player && !player.hidden && Number(playerBounds?.height || 0) > 0
+    ? Math.min(window.innerHeight, Number(playerBounds.top))
+    : window.innerHeight;
+}
+
 function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!surface?.matches?.('.artist-info-overlay')
       || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
   const scroll = document.getElementById('albums-scroll');
   if (!scroll) return 0;
-  const player = document.querySelector('[data-shell-slot="bottom_player"]');
-  const playerBounds = player?.getBoundingClientRect?.();
-  const viewportBottom = player && !player.hidden && Number(playerBounds?.height || 0) > 0
-    ? Math.min(window.innerHeight, Number(playerBounds.top))
-    : window.innerHeight;
+  const viewportBottom = getGalleryArtistInfoViewportBottom();
   surface.style?.removeProperty?.('--artist-info-panel-max-height');
   surface.style?.removeProperty?.('--artist-info-body-max-height');
   const requiredOffset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
@@ -7835,6 +7915,9 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   if (revealSpace) scroll.style?.setProperty?.('--artist-info-reveal-space', `${Math.ceil(revealSpace)}px`);
   else scroll.style?.removeProperty?.('--artist-info-reveal-space');
   scroll.scrollTop += offset;
+  // The scroll event this reveal causes is not the user moving the gallery: it keeps the open-time fit.
+  const opening = galleryMainSurfaceController?.current?.();
+  if (opening?.surface === surface) opening.revealScrollTop = scroll.scrollTop;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
   requestAnimationFrame(() => {
     const active = galleryMainSurfaceController?.current?.();
@@ -9144,9 +9227,19 @@ function initGalleryMain() {
         }
         if (String(settled.anchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(settled.anchor, scroll)) {
-          settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
-          settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          // A panel following its divider "i" may pass behind the player, except on the reveal's
+          // own scroll. The header "i" does not move, so a panel it owns keeps fitting above the player.
+          const followsGallery = !settled.anchor.closest?.('[data-gallery-bar-instance="gallery"]');
+          if (!followsGallery || settled.revealScrollTop !== scroll.scrollTop) {
+            settled.revealScrollTop = null;
+            settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
+            settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          }
           positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+          const viewportBottom = getGalleryArtistInfoViewportBottom();
+          if (!followsGallery && Number(settled.surface.getBoundingClientRect?.().bottom || 0) > viewportBottom) {
+            constrainGalleryArtistInfoSurface(settled.surface, settled.anchor, viewportBottom);
+          }
         } else {
           closeGalleryMainSurface(false);
         }
@@ -13062,6 +13155,7 @@ function syncArtistsDrawerVisibility() {
     rail.inert = isDrawerVisible && !isOpen;
     const mobileLibraryButton = document.getElementById('mobile-library-button');
     mobileLibraryButton?.setAttribute('aria-expanded', String(isOpen));
+    document.getElementById('mobile-page-library-button')?.setAttribute('aria-expanded', String(isOpen));
     if (isOpen) {
       mobileLibraryButton?.removeAttribute('data-search-results');
       mobileLibraryButton?.removeAttribute('aria-description');
@@ -16318,6 +16412,22 @@ function buildLooseTracksPartialNoteHtml() {
     + 'Still indexing loose tracks, so more may appear.</div>';
 }
 
+// A running library scan may add loose tracks too, so the same note shows under any listed Loose Tracks.
+function looseTracksScanRunning() {
+  return Boolean(state.status?.scan_in_progress);
+}
+
+// Each status update keeps the note in step with the scan without re-reading or re-rendering the list.
+function syncLooseTracksPartialNote() {
+  const table = getNonAlbumModalElements().table;
+  if (!table?.querySelector('.album-track-table:not([aria-busy])')) return;
+  const note = table.querySelector('[data-loose-tracks-partial-note]');
+  const wanted = looseTracksScanRunning()
+    || (state.ui?.nonAlbumLibraryWide === true && hasPartialLibraryNonAlbumTracks());
+  if (wanted && !note) table.insertAdjacentHTML('beforeend', buildLooseTracksPartialNoteHtml());
+  else if (!wanted) note?.remove();
+}
+
 // The bounded wait ran out with no stored row (owner-approved wording, 2026-11-22).
 const LOOSE_TRACKS_STILL_PREPARING = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
 
@@ -16654,6 +16764,7 @@ function buildNonAlbumTrackLoadingMarkup() {
     collapsibleGroups: true,
     ariaLabel: 'Loading loose tracks',
     idPrefix: 'loose-track-loading',
+    density: 'default',
   });
 }
 
@@ -16687,6 +16798,10 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
   if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
+  // While library-wide Loose Tracks is the page, no artist (or All artists) is the tree's selection.
+  if (Boolean(state.ui.looseTracksNavigationActive) === libraryWideOpen) return;
+  state.ui.looseTracksNavigationActive = libraryWideOpen;
+  if (typeof renderSidebar === 'function') renderSidebar();
 }
 
 function syncCompactLibraryNavigation(looseTracks) {
@@ -16784,6 +16899,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     collapsibleGroups: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
+    density: 'default',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
@@ -16911,7 +17027,7 @@ function openNonAlbumModal(options = {}) {
     : hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
-      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial ? buildLooseTracksPartialNoteHtml() : ''}`
+      ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial || looseTracksScanRunning() ? buildLooseTracksPartialNoteHtml() : ''}`
       : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
@@ -18850,7 +18966,25 @@ function openTrackModal(album, options = {}) {
   document.body.classList.add('modal-open');
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
+  revealTrackModalSearchDisc(getAlbumRequestKey(albumWithPlaybackContext));
   attachSharedPlayer();
+}
+
+// A search that matched a CD name opens Album Details on that CD, once per album and query.
+let revealedTrackModalSearchDisc = '';
+
+function revealTrackModalSearchDisc(albumKey) {
+  const query = String(state.view?.query || '').trim();
+  const revealKey = `${albumKey}\n${query}`;
+  if (!query || revealedTrackModalSearchDisc === revealKey) return;
+  const disc = getTrackModalElements().list?.querySelector('[data-disc-search-match="true"]');
+  if (!disc) return;
+  revealedTrackModalSearchDisc = revealKey;
+  // Align once the album page has laid out, and again after its header settles from that scroll.
+  scheduleBrowserAnimationFrame(() => {
+    revealAlbumTrackTableDisc(disc);
+    scheduleBrowserAnimationFrame(() => revealAlbumTrackTableDisc(disc));
+  });
 }
 
 function getCurrentTrackModalAlbum() {
@@ -19142,8 +19276,10 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
-  // An empty second artbox never outlives Album Details.
+  // An empty second artbox, or a Re-scan's message, never outlives Album Details.
   if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
+  if (typeof clearMissingAlbumRescanResult === 'function') clearMissingAlbumRescanResult();
+  revealedTrackModalSearchDisc = '';
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
@@ -21609,13 +21745,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshView = (
-      String(state.view?.query || '').trim()
-      && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
-    )
-      ? { ...state.view, selected_artist: '' }
-      : state.view;
-    const refreshApplied = await fetchAndRender(buildApiUrl(refreshView, { rootFullPayload: true }), false, {
+    const refreshApplied = await fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view), { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
       preserveMountedGalleryChildren: true,
@@ -24388,6 +24518,9 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverRef)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
+// Only a playing row carries the perimeter spectrum (album-track-table.css).
+const ALBUM_TRACK_SPECTRUM_HTML = '<span class="album-track-table__spectrum" aria-hidden="true"></span>';
+
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const trackPath = String(track.path || '');
   const classes = ['album-track-table__row'];
@@ -24424,7 +24557,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(trackNumber)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
+      number: { content: `${track.isPlaying ? ALBUM_TRACK_SPECTRUM_HTML : ''}<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(trackNumber)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
@@ -24481,6 +24614,8 @@ function buildAlbumTrackTableHtml(config = {}) {
   const collapsibleGroups = Boolean(config.collapsibleGroups);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
+  // Album Details keeps the approved compact rows; a page of loose tracks asks for the roomier default density.
+  const density = config.density === 'default' ? 'default' : 'compact';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const totalLength = String(config.totalLength || '').trim();
@@ -24554,12 +24689,14 @@ function buildAlbumTrackTableHtml(config = {}) {
           fullSpanContent: `<span class="album-track-table__section-title">${escapeHtml(sectionTitle)}</span>`,
         }, row] : [row];
       }),
-      density: 'compact',
+      density,
       frame: 'outline',
       overflow: 'none',
       mobile: 'preserve',
     });
     const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : '';
+    // A CD whose name the search matched; Album Details opens scrolled to it.
+    const searchMatchAttribute = group?.discMatchesSearch && showLabel ? ' data-disc-search-match="true"' : '';
     const mainSummarySectionHtml = groupIndex === lastMainIndex && mainSummaryHtml
       ? `<section class="album-track-table__disc">${mainSummaryHtml}</section>` : '';
     if (collapsibleGroups && (showLabel || group?.loadingRows)) {
@@ -24569,7 +24706,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       const headingContent = group?.loadingRows
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
         : `<span class="album-track-table__disc-title">${escapeHtml(label)}</span>${count ? `<span class="album-track-table__disc-count">${escapeHtml(count)}</span>` : ''}${length ? `<span class="album-track-table__disc-length">${escapeHtml(length)}</span>` : ''}`;
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>${mainSummarySectionHtml}`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible"${searchMatchAttribute} open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>${mainSummarySectionHtml}`;
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -24578,10 +24715,76 @@ function buildAlbumTrackTableHtml(config = {}) {
     const heading = ratingHtml
       ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
       : headingHtml;
-    return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
+    return `<section class="album-track-table__disc"${searchMatchAttribute}>${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
-  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}" data-density="${density}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+}
+
+// A playback tick reaches only the rows whose state can change: those marked current or
+// playing, and those of the current track. A 1,000-row Loose Tracks page then costs a
+// tick what one album does, and an unchanged cell is never rewritten.
+function syncAlbumTrackTablePlayback(root, { trackPath = '', playing = false, currentTime = '', animated = true } = {}) {
+  if (!root?.querySelectorAll) return;
+  const quotedPath = trackPath.replace(/["\\]/g, '\\$&');
+  const selector = ['--current', '--playing'].map(state => `[data-track-row-path].album-track-table__row${state}`)
+    .concat(trackPath ? [`[data-track-row-path="${quotedPath}"]`] : []).join(', ');
+  root.querySelectorAll(selector).forEach((row) => {
+    const isCurrent = Boolean(trackPath) && row.getAttribute('data-track-row-path') === trackPath;
+    const isPlaying = isCurrent && playing;
+    row.classList.toggle('is-current', isCurrent);
+    row.classList.toggle('is-playing', isPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrent);
+    row.classList.toggle('album-track-table__row--playing', isPlaying);
+    row.classList.toggle('album-track-table__row--animated', isPlaying && animated);
+    if (isPlaying && !row.querySelector('.album-track-table__spectrum')) {
+      row.querySelector('.album-track-table__number-play')?.insertAdjacentHTML('beforebegin', ALBUM_TRACK_SPECTRUM_HTML);
+    }
+    const trackPlaying = isPlaying ? 'true' : '';
+    if (row.dataset && row.dataset.trackPlaying !== trackPlaying) row.dataset.trackPlaying = trackPlaying;
+    const button = row.querySelector('.play-track-button');
+    const label = isPlaying ? 'Pause track' : 'Play track';
+    if (button && button.getAttribute('aria-label') !== label) {
+      const iconName = isPlaying ? 'pause' : 'play';
+      button.innerHTML = ButtonComponent.renderIconSvg(iconName, { className: `album-track-table__play-icon ui-icon--${iconName}` });
+      button.setAttribute('aria-label', label);
+    }
+    const duration = row.querySelector('[data-track-duration-path]');
+    if (duration) {
+      const text = isCurrent ? currentTime : duration.dataset.originalDuration || '';
+      if (duration.textContent !== text) duration.textContent = text;
+    }
+  });
+}
+
+function findAlbumTrackTableScroller(node) {
+  for (let candidate = node?.parentElement; candidate; candidate = candidate.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(candidate).overflowY) && candidate.scrollHeight > candidate.clientHeight) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+// Brings a disc into view: when its heading or first search match is out of view, the heading moves to the
+// top of the visible track area, below anything pinned over it inside the scroller.
+function revealAlbumTrackTableDisc(disc) {
+  const heading = disc.querySelector('.album-track-table__disc-heading') || disc;
+  const scroller = findAlbumTrackTableScroller(disc);
+  if (!disc.isConnected || !scroller) return;
+  const view = scroller.getBoundingClientRect();
+  const headingBox = heading.getBoundingClientRect();
+  const firstMatch = disc.querySelector('[data-track-search-match="true"]') || heading;
+  if (headingBox.top >= view.top && firstMatch.getBoundingClientRect().bottom <= view.bottom
+    && disc.contains(document.elementFromPoint(headingBox.left + 1, headingBox.top + 1))) return;
+  // Whole pixels, rounded so the heading is never clipped at the top edge.
+  scroller.scrollTop += Math.floor(headingBox.top - view.top);
+  // A header pinned inside the scroller (the small-screen album page) still covers the top: clear it.
+  const top = heading.getBoundingClientRect();
+  const cover = document.elementFromPoint(top.left + 1, top.top + 1);
+  if (cover && !disc.contains(cover) && scroller.contains(cover)) {
+    scroller.scrollTop -= Math.ceil(cover.getBoundingClientRect().bottom - top.top);
+  }
 }
 
 function triggerAlbumTrackPlayActivation(button) {
@@ -25075,7 +25278,12 @@ function buildDetectedProblemsHtml(album) {
           ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
-      ${buildMissingAlbumDetailsHtml({ canRemove, albumKey: album.key, reason: album.missing_reason })}
+      ${buildMissingAlbumDetailsHtml({
+        canRemove,
+        albumKey: album.key,
+        reason: album.missing_reason,
+        rescanMessage: typeof getMissingAlbumRescanResult === 'function' ? getMissingAlbumRescanResult(album.key)?.message : '',
+      })}
     `;
   }
   const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));
@@ -25083,12 +25291,11 @@ function buildDetectedProblemsHtml(album) {
   proposals.forEach(proposal => {
     if (!rows.some(row => row.path === proposal.path)) rows.push({ path: proposal.path, filename: getFilenameFromPath(proposal.path), reasons: [], ignorable_reasons: [] });
   });
-  const selectedFilters = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
-  const visibleReason = reason => !selectedFilters.length || selectedFilters.includes(normalizeProblemFilterReason(reason));
+  // Problem filters narrow the list only; an open entry always shows every problem it has (owner, 2026-11-24).
   const coverReasons = new Set(['Missing cover art', 'Poor art quality']);
   const albumRows = Array.isArray(album?.album_problem_rows) ? album.album_problem_rows
     : (album.problem_reasons || []).map(reason => ({ reason, row_key: '' }));
-  const albumProblems = albumRows.filter(item => visibleReason(item.reason)).map(item => {
+  const albumProblems = albumRows.map(item => {
     const matching = getIgnorableProblemRows(album).filter(row => normalizeProblemFilterReason(row.reason) === normalizeProblemFilterReason(item.reason));
     const keys = matching.map(row => String(row.row_key || '')).filter(Boolean);
     return buildAlertLabelHtml({
@@ -25101,7 +25308,7 @@ function buildDetectedProblemsHtml(album) {
   }).join('');
   const tableRows = rows.map((row, rowIndex) => {
     const track = (album.tracks || []).find(item => item.path === row.path) || {};
-    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason) && visibleReason(reason));
+    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason));
     const suggestions = proposals.filter(proposal => proposal.path === row.path);
     if (!reasons.length && !suggestions.length) return null;
     return {
@@ -25144,7 +25351,7 @@ function buildDetectedProblemsHtml(album) {
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
     <h4 class="utility-detail-section-title">Detected problems</h4>
-    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
@@ -25763,11 +25970,16 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     mergedAlbum.total_duration_seconds = totalDurationSeconds;
     mergedAlbum.total_duration_display = formatCanonicalAlbumDuration(totalDurationSeconds);
   }
-  if (visibleAlbum?.preview_only !== true
-      && tracks.length
-      && (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
-        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview'))) {
-    mergedAlbum.track_count_preview = tracks.length;
+  if (visibleAlbum?.preview_only !== true && tracks.length) {
+    if (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
+        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview')) {
+      mergedAlbum.track_count_preview = tracks.length;
+    }
+    // A complete merge is its tracks: a membership copied from either side (the moved tracks only, or
+    // the destination before the merge) made Album Details trim the merged album back to it.
+    if (Array.isArray(mergedAlbum.track_paths)) {
+      mergedAlbum.track_paths = tracks.map((track) => String(track?.path || '')).filter(Boolean);
+    }
   }
   return mergedAlbum;
 }
@@ -26468,11 +26680,19 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
         (artist) => artist !== selectedArtist,
         false,
       );
-    const allFamilyArtists = Array.from(new Set([
-      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : []),
-      ...allFamilyGroups
+    const nextFamilyArtists = allFamilyGroups
+      .map((group) => String(group.artist || '').trim())
+      .filter((artist) => artist && artist !== selectedArtist);
+    // An artist whose mounted family group this edit emptied (an undone credit move) is no longer family.
+    const emptiedFamilyArtists = new Set(
+      ((hasMountedRoleGroups ? state.view.family_artist_groups : state.view.artist_groups) || [])
         .map((group) => String(group.artist || '').trim())
-        .filter((artist) => artist && artist !== selectedArtist),
+        .filter((artist) => artist && artist !== selectedArtist && !nextFamilyArtists.includes(artist)),
+    );
+    const allFamilyArtists = Array.from(new Set([
+      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : [])
+        .filter((artist) => !emptiedFamilyArtists.has(String(artist || '').trim())),
+      ...nextFamilyArtists,
     ])).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
     const visibleFamilyGroups = activeRelatedSet.size
       ? allFamilyGroups.filter((group) => groupMatchesRelatedArtists(group, activeRelatedSet))
@@ -26916,6 +27136,13 @@ async function watchSaveTask(taskId, context = {}) {
     || Number(state.ui?.viewStateRevision || 0) === originatingViewStateRevision
   );
   const originatingViewRequestUrl = String(context.originatingViewRequestUrl || '').trim();
+  // A content search's top artist is refreshed as the same search so its other matches stay. A search for
+  // an artist's own name keeps that artist: re-running it as a search reshuffled the open utilities.
+  const saveTaskRefreshView = () => (
+    (state.view?.search_context?.artist_name_match_artists || []).length
+      ? state.view
+      : viewForSearchRefresh(state.view)
+  );
   const currentViewMatchesOriginRequest = () => (
     Boolean(originatingViewRequestUrl)
     && typeof buildApiUrl === 'function'
@@ -27227,25 +27454,9 @@ async function watchSaveTask(taskId, context = {}) {
             && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
-              let refreshView = state.view;
-              const originSearch = context.originatingSearchContext;
-              const restoresAllSearchResults = Boolean(
-                canReconcileOriginView()
-                && structuralTagEditRequiresMountedGalleryChildReplacement
-                && originSearch?.selected_artist_source === 'auto_top_match'
-                && !(originSearch.artist_name_match_artists || []).length
-                && originatingViewRequestUrl
-                && String(state.view.query || '').trim()
-                && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
-                && !state.view.primary_filter_active
-                && !(state.view.related_filter_artists || []).length
-              );
-              if (restoresAllSearchResults) {
-                refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
-              }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await ownViewRequest(fetchAndRender(
-                buildApiUrl(refreshView, { rootFullPayload: true }),
+                buildApiUrl(saveTaskRefreshView(), { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -27271,9 +27482,6 @@ async function watchSaveTask(taskId, context = {}) {
               ) {
                 await waitForBrowserTimeout(500);
                 continue;
-              }
-              if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
-                replaceBrowserViewState(state.view);
               }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
@@ -27347,7 +27555,7 @@ async function watchSaveTask(taskId, context = {}) {
           renderView(currentRenderOptions());
         } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
-            await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
+            await fetchAndRender(buildApiUrl(saveTaskRefreshView()), false, currentViewRenderOptions());
           } catch (refreshError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but the navigated view could not be refreshed.',
@@ -27464,7 +27672,7 @@ async function watchSaveTask(taskId, context = {}) {
         if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
-              buildApiUrl(state.view),
+              buildApiUrl(saveTaskRefreshView()),
               false,
               currentViewRenderOptions(),
             );
@@ -28868,11 +29076,9 @@ function getVisibleProblemSuggestions(album = getSelectedProblematicAlbum()) {
   const albumKey = String(album?.key || '');
   if (state.utility.proposalAlbumKey && state.utility.proposalAlbumKey !== albumKey) state.utility.proposalSelections = {};
   state.utility.proposalAlbumKey = albumKey;
-  const selected = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
   const query = String(state.utility.searchQuery || '').trim().toLocaleLowerCase();
   return (Array.isArray(album?.suggested_edits) ? album.suggested_edits : []).filter(proposal => {
     if (!proposal?.id || proposal.eligible === false) return false;
-    if (selected.length && !selected.includes(normalizeProblemFilterReason(proposal.reason))) return false;
     if (!query) return true;
     const track = (album.tracks || []).find(item => item.path === proposal.path) || {};
     return [album.name, album.album_artist, track.title, track.artist, proposal.original, proposal.corrected, proposal.path]
@@ -29071,6 +29277,21 @@ function collectProblemIgnoreItems(rule) {
   return Array.from(byKey.values());
 }
 
+// The Rules payload lists problem exclusions in Python sorted() order of their row keys: code point
+// order, not a locale collation. Comparing code points (not UTF-16 units) keeps astral characters
+// where the server puts them.
+function compareProblemIgnoreRowKeys(left, right) {
+  const leftKey = String(left?.row_key || '').trim();
+  const rightKey = String(right?.row_key || '').trim();
+  for (let index = 0; index < leftKey.length && index < rightKey.length;) {
+    const leftPoint = leftKey.codePointAt(index);
+    const rightPoint = rightKey.codePointAt(index);
+    if (leftPoint !== rightPoint) return leftPoint < rightPoint ? -1 : 1;
+    index += leftPoint > 0xffff ? 2 : 1;
+  }
+  return leftKey.length - rightKey.length;
+}
+
 function replaceProblemIgnoreRule(rules, items) {
   const sourceRules = Array.isArray(rules) ? rules : [];
   const existingIndex = sourceRules.findIndex((rule) => rule?.key === 'problem-ignores');
@@ -29079,7 +29300,7 @@ function replaceProblemIgnoreRule(rules, items) {
     (Array.isArray(items) ? items : [])
       .map((item) => [String(item?.row_key || '').trim(), item])
       .filter(([rowKey]) => rowKey),
-  ).values());
+  ).values()).sort(compareProblemIgnoreRowKeys);
   const nextRule = {
     ...(existing || {
       key: 'problem-ignores',
@@ -31926,7 +32147,7 @@ function renderUtilityLogHistory() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'History';
   const value = getUtilityLogHistoryController().getState();
   if (els.search) { els.search.disabled = false; els.search.readOnly = true; els.search.value = value.temporaryRowId ? value.periodLabel || '' : ''; els.search.placeholder = 'Choose a log period'; }
-  if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
+  if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.classList.remove('is-active'); els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   const scroll = els.list.scrollTop;
   reconcileUtilityLogHistoryTree(els, value);
@@ -36763,6 +36984,62 @@ function fileToDataUrl(file) {
   });
 }
 
+// Owner (sandbox2): a pasted copy of a local image is that image, whatever its format. Pictures compare by their
+// decoded pixels: a 32x32 grey thumbnail with its brightness and contrast evened out. Re-encoded and resized
+// copies differ by at most about 0.06 on average; different covers and crops by 0.14 or more.
+const COVER_LOOKUP_PICTURE_SIDE = 32;
+const COVER_LOOKUP_SAME_PICTURE_DISTANCE = 0.1;
+const COVER_LOOKUP_SAME_PICTURE_ASPECT = 0.02;
+
+function coverLookupPictureFingerprint(picture, width, height) {
+  if (!width || !height || typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = COVER_LOOKUP_PICTURE_SIDE;
+  canvas.height = COVER_LOOKUP_PICTURE_SIDE;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return null;
+  context.imageSmoothingQuality = 'high';
+  try {
+    context.drawImage(picture, 0, 0, COVER_LOOKUP_PICTURE_SIDE, COVER_LOOKUP_PICTURE_SIDE);
+    const rgba = context.getImageData(0, 0, COVER_LOOKUP_PICTURE_SIDE, COVER_LOOKUP_PICTURE_SIDE).data;
+    const grey = [];
+    for (let index = 0; index < rgba.length; index += 4) {
+      grey.push(0.299 * rgba[index] + 0.587 * rgba[index + 1] + 0.114 * rgba[index + 2]);
+    }
+    const mean = grey.reduce((sum, value) => sum + value, 0) / grey.length;
+    const spread = Math.sqrt(grey.reduce((sum, value) => sum + (value - mean) ** 2, 0) / grey.length) || 1;
+    return { aspect: width / height, pixels: grey.map((value) => (value - mean) / spread) };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function isSameCoverLookupPicture(left, right) {
+  if (!left || !right) return false;
+  if (Math.abs(left.aspect - right.aspect) / right.aspect > COVER_LOOKUP_SAME_PICTURE_ASPECT) return false;
+  const distance = left.pixels.reduce((sum, value, index) => sum + Math.abs(value - right.pixels[index]), 0)
+    / left.pixels.length;
+  return distance <= COVER_LOOKUP_SAME_PICTURE_DISTANCE;
+}
+
+// The local card already showing this picture, read from its loaded preview; a card still loading never matches.
+function findCoverLookupLocalCardShowing(fingerprint) {
+  if (!fingerprint || typeof document === 'undefined') return '';
+  const cards = document.querySelectorAll?.('#cover-lookup-modal [data-select-local-cover]') || [];
+  for (const card of cards) {
+    const image = card.querySelector('img.cover-lookup-art-preview-image');
+    if (!image?.complete || !image.naturalWidth) continue;
+    if (image.__coverLookupFingerprintSource !== image.currentSrc) {
+      image.__coverLookupFingerprintSource = image.currentSrc;
+      image.__coverLookupFingerprint = coverLookupPictureFingerprint(image, image.naturalWidth, image.naturalHeight);
+    }
+    if (isSameCoverLookupPicture(fingerprint, image.__coverLookupFingerprint)) {
+      return String(card.getAttribute('data-select-local-cover') || '');
+    }
+  }
+  return '';
+}
+
 async function addPastedImageToCoverLookup(file) {
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.covers.upload')) return;
   if (!(file instanceof Blob) || !String(file.type || '').startsWith('image/')) {
@@ -36785,12 +37062,14 @@ async function addPastedImageToCoverLookup(file) {
   const objectUrl = URL.createObjectURL(file);
   let width = 0;
   let height = 0;
+  let fingerprint = null;
   if (typeof createImageBitmap === 'function') {
     let bitmap;
     try {
       bitmap = await createImageBitmap(file);
       width = Number(bitmap?.width || 0) || 0;
       height = Number(bitmap?.height || 0) || 0;
+      fingerprint = coverLookupPictureFingerprint(bitmap, width, height);
     } catch (_error) {
       // The preview remains usable when this browser cannot decode dimensions here.
     } finally {
@@ -36808,6 +37087,7 @@ async function addPastedImageToCoverLookup(file) {
     data_url: dataUrl,
     mime_type: String(file.type || 'image/png').trim() || 'image/png',
     size_bytes: Number(file.size || 0) || 0,
+    fingerprint,
   };
   state.coverLookup.modal.manualImageAttachments = [
     ...(Array.isArray(state.coverLookup.modal.manualImageAttachments)
@@ -36878,8 +37158,17 @@ function extractCoverLookupPendingAttachments() {
   const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments : [];
   if (!attachments.length) return 0;
+  const staged = attachments.filter((item) => {
+    const localRef = findCoverLookupLocalCardShowing(item.fingerprint);
+    if (!localRef) return true;
+    // Already one of the album's images: point at it instead of staging a copy.
+    state.coverLookup.modal.suggestedLocalRef = localRef;
+    const objectUrl = String(item.object_url || '').trim();
+    if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
+    return false;
+  });
   state.coverLookup.modal.pastedImages = [
-    ...attachments,
+    ...staged,
     ...(Array.isArray(state.coverLookup.modal.pastedImages)
       ? state.coverLookup.modal.pastedImages : []),
   ];
@@ -37261,7 +37550,9 @@ function applyCoverLookupCandidateSource(candidateSource) {
 
 function applyCoverLookupGalleryPayload(gallery, { confirmLocalInventory = true } = {}) {
   if (!gallery || typeof gallery !== 'object') return;
-  gallery = reconcileCoverLookupLocalInventory(state.coverLookup.modal.album, gallery, confirmLocalInventory);
+  gallery = splitCoverLookupLocalArt(
+    reconcileCoverLookupLocalInventory(state.coverLookup.modal.album, gallery, confirmLocalInventory),
+  );
   if (gallery.album && typeof gallery.album === 'object' && state.coverLookup.modal.album) {
     const album = state.coverLookup.modal.album;
     const previousId = String(album.album_id || album.id || '');
@@ -37611,6 +37902,18 @@ function syncCoverLookupManualControlsUi() {
   }
 }
 
+// BUGFIX-22: a remote pick needs no Save only when it already is the art being edited. A lookup's recorded
+// choice is not that: an interrupted save records it without the album ever showing it.
+function isCoverLookupSavedRemoteCover(candidate) {
+  if (!candidate) return false;
+  if (state.coverLookup.modal.artboxSlot) {
+    return typeof isSecondArtboxSavedRemote === 'function' && isSecondArtboxSavedRemote(candidate);
+  }
+  const savedUrl = normalizeCoverLookupCandidateUrl(state.coverLookup.modal.remoteCover?.url).toLowerCase();
+  return Boolean(savedUrl) && [candidate.url, candidate.thumbnail_url]
+    .some((url) => normalizeCoverLookupCandidateUrl(url).toLowerCase() === savedUrl);
+}
+
 function syncCoverLookupSaveButton() {
   const saveButton = document.getElementById('cover-lookup-save-remote-button');
   if (!saveButton) return;
@@ -37620,9 +37923,10 @@ function syncCoverLookupSaveButton() {
   });
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const pendingPastedImageId = String(state.coverLookup.modal.pendingPastedImageId || '');
-  const currentTask = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(state.coverLookup.modal.taskId || '')) || null;
-  const savedRemoteCandidateId = String(currentTask?.selected_candidate_id || '');
-  const hasRemoteSelection = Boolean(selectedRemoteId) && selectedRemoteId !== savedRemoteCandidateId;
+  const selectedRemote = selectedRemoteId
+    ? (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === selectedRemoteId)
+    : null;
+  const hasRemoteSelection = Boolean(selectedRemoteId) && !isCoverLookupSavedRemoteCover(selectedRemote);
   const hasLocalSelection = hasPendingLocalCoverSelection();
   // The second artbox takes a local or remote image; staged pasted images save to the album cover only.
   const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;
@@ -37708,6 +38012,8 @@ function syncCoverLookupSelectionUi() {
         : card.hasAttribute('data-cover-lookup-local-active') && !state.coverLookup.modal.artboxCleared
     );
     card.classList.toggle('is-active', shouldBeActive);
+    card.classList.toggle('is-suggested', Boolean(state.coverLookup.modal.suggestedLocalRef)
+      && coverLookupLocalPathMatches(localPath, state.coverLookup.modal.suggestedLocalRef));
     if (shouldBeActive) {
       card.setAttribute('data-cover-lookup-local-active', '1');
     } else {
@@ -38956,6 +39262,11 @@ function localCardImageRevision(item) {
   return item?.sha256 || item?.cover_revision || undefined;
 }
 
+// The art card's delete control, shared by local art and staged pasted images.
+function buildCoverLookupArtDeleteButton(actionAttribute, label) {
+  return `<button class="cover-lookup-art-delete" type="button" ${actionAttribute} aria-label="${label}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>`;
+}
+
 function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
@@ -39009,7 +39320,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && (state.coverLookup.modal.selectedRemoteId === String(item?.id || '')
           || (typeof isSecondArtboxSavedRemoteActive === 'function' && isSecondArtboxSavedRemoteActive(item)))));
-  const isSuggested = kind === 'remote'
+  const isSuggested = kind === 'local'
+    ? Boolean(String(state.coverLookup.modal.suggestedLocalRef || ''))
+      && coverLookupLocalPathMatches(item?.candidate_cover_ref, state.coverLookup.modal.suggestedLocalRef)
+    : kind === 'remote'
     && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
@@ -39074,8 +39388,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
             </svg>
           </button>
           ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
-          ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.candidate_cover_ref || '')}" aria-label="Delete local cover art"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>` : ''}
-          ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
+          ${kind === 'local' ? buildCoverLookupArtDeleteButton(`data-delete-local-cover="${escapeHtml(item.candidate_cover_ref || '')}"`, 'Delete local cover art') : ''}
+          ${isPastedKind ? buildCoverLookupArtDeleteButton(`data-remove-pasted-cover="${escapeHtml(item.id || '')}"`, 'Remove staged image') : ''}
         </span>
         <span class="cover-lookup-art-meta">
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
@@ -39195,68 +39509,89 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
   );
 }
 
+function coverLookupPatchKey(node) {
+  if (node.nodeType !== 1) return '';
+  const own = node.getAttribute('data-cover-lookup-item-key');
+  if (own) return `card:${own}`;
+  const shellKey = node.classList.contains('cover-lookup-art-card-shell')
+    && node.firstElementChild?.getAttribute('data-cover-lookup-item-key');
+  return shellKey ? `shell:${shellKey}` : '';
+}
+
+// Keep only a decoded image; deferred, loading, and failed nodes may never recover.
+function keepsDecodedCoverLookupPreview(current, next) {
+  const previewSource = (image) => image.getAttribute('data-cover-lookup-deferred-src') || image.getAttribute('src') || '';
+  return !current.hasAttribute('data-cover-lookup-deferred-src') && current.complete && current.naturalWidth > 0
+    && previewSource(current) === previewSource(next);
+}
+
+function patchCoverLookupChildren(parent, incomingParent) {
+  const keyed = new Map();
+  parent.childNodes.forEach((child) => {
+    const key = coverLookupPatchKey(child);
+    if (key) keyed.set(key, child);
+  });
+  let cursor = parent.firstChild;
+  Array.from(incomingParent.childNodes).forEach((next) => {
+    const key = coverLookupPatchKey(next);
+    const current = key ? keyed.get(key) : cursor;
+    keyed.delete(key);
+    const reusable = current && current.nodeName === next.nodeName && coverLookupPatchKey(current) === key
+      && !(next.classList?.contains('cover-lookup-art-preview-image') && !keepsDecodedCoverLookupPreview(current, next));
+    if (!reusable) {
+      parent.insertBefore(next, cursor);
+      return;
+    }
+    if (current === cursor) cursor = cursor.nextSibling;
+    else parent.insertBefore(current, cursor);
+    patchCoverLookupNode(current, next);
+  });
+  while (cursor) {
+    const stale = cursor;
+    cursor = cursor.nextSibling;
+    stale.remove();
+  }
+}
+
+function patchCoverLookupNode(current, next) {
+  if (current.nodeType !== 1) {
+    if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+    return;
+  }
+  if (next.classList.contains('cover-lookup-art-preview-image')) {
+    current.parentElement.classList.remove('is-loading');
+    current.parentElement.setAttribute('aria-busy', 'false');
+    return;
+  }
+  if (current.hasAttribute('data-cover-lookup-item-key')) {
+    const markup = next.outerHTML;
+    if (current.__coverLookupCardMarkup === markup) return;
+    current.__coverLookupCardMarkup = markup;
+  }
+  Array.from(current.attributes).forEach(({ name }) => {
+    if (!next.hasAttribute(name)) current.removeAttribute(name);
+  });
+  Array.from(next.attributes).forEach(({ name, value }) => {
+    if (current.getAttribute(name) !== value) current.setAttribute(name, value);
+  });
+  patchCoverLookupChildren(current, next);
+}
+
 function replaceCoverLookupModalMarkup(body, markup) {
   // Identical renders must not touch the DOM: rebuilding hovered cards restarts their transitions
   // and swallows the first click on controls such as the zoom button.
   if (body.__coverLookupMarkup === markup && body.firstElementChild
     && body.__coverLookupFirstElement === body.firstElementChild) return;
-  const retainedCards = new Map();
-  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
-    const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
-    if (key) retainedCards.set(key, card);
-  });
-  body.innerHTML = markup;
-  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
-    const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
-    const retained = retainedCards.get(key);
-    if (!retained || typeof card.replaceWith !== 'function') return;
-    const incomingMarkup = String(card.outerHTML || '');
-    if (incomingMarkup && retained.__coverLookupCardMarkup === incomingMarkup) {
-      card.replaceWith(retained);
-      return;
-    }
-    retained.__coverLookupCardMarkup = incomingMarkup;
-    const retainedImage = retained.querySelector?.('img.cover-lookup-art-preview-image');
-    const incomingImage = card.querySelector?.('img.cover-lookup-art-preview-image');
-    const previewSource = (image) => String(
-      image?.getAttribute?.('data-cover-lookup-deferred-src')
-      || image?.getAttribute?.('src')
-      || '',
-    );
-    // Keep only a decoded image; deferred, loading, and failed nodes may never recover.
-    if (
-      retainedImage
-      && incomingImage
-      && !retainedImage.hasAttribute?.('data-cover-lookup-deferred-src')
-      && retainedImage.complete === true
-      && Number(retainedImage.naturalWidth || 0) > 0
-      && previewSource(retainedImage) === previewSource(incomingImage)
-      && typeof incomingImage.replaceWith === 'function'
-    ) {
-      if (retainedImage.complete && retainedImage.naturalWidth > 0) {
-        incomingImage.parentElement.classList.remove('is-loading');
-        incomingImage.parentElement.setAttribute('aria-busy', 'false');
-      }
-      incomingImage.replaceWith(retainedImage);
-    }
-    if (retained.attributes && card.attributes) {
-      const incomingAttributeNames = new Set(
-        Array.from(card.attributes).map((attribute) => attribute.name),
-      );
-      Array.from(retained.attributes).forEach((attribute) => {
-        if (!incomingAttributeNames.has(attribute.name)) retained.removeAttribute(attribute.name);
-      });
-      Array.from(card.attributes).forEach((attribute) => {
-        retained.setAttribute(attribute.name, attribute.value);
-      });
-    }
-    if (typeof retained.replaceChildren === 'function' && card.childNodes) {
-      retained.replaceChildren(...Array.from(card.childNodes));
-    } else if ('innerHTML' in retained && 'innerHTML' in card) {
-      retained.innerHTML = card.innerHTML;
-    }
-    card.replaceWith(retained);
-  });
+  if (body.firstChild) {
+    // Candidate polls land several times a second while a search runs. Patch the shown nodes by card key so a
+    // pressed card stays mounted (Chromium drops a click whose press target was detached) and decoded previews
+    // never reload.
+    const incoming = document.createElement('template');
+    incoming.innerHTML = markup;
+    patchCoverLookupChildren(body, incoming.content);
+  } else {
+    body.innerHTML = markup;
+  }
   body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
     if (!card.__coverLookupCardMarkup) card.__coverLookupCardMarkup = String(card.outerHTML || '');
   });
@@ -40201,9 +40536,26 @@ function suppressRedundantGeneratedCoverBackups(covers, selectedPath = '') {
   ));
 }
 
+// One card per picture: the cover and its selected source are LOCAL however they are shaped (as the server lists
+// them). A page's own pending save moves a card before the folder listing does, so every gallery it shows or
+// caches takes an OTHER ART card that became the selection into LOCAL, and never lists a picture twice.
+function splitCoverLookupLocalArt(gallery) {
+  if (!Array.isArray(gallery?.local_covers) || !Array.isArray(gallery.other_art)) return gallery;
+  const selected = String(gallery.selected_source_cover_ref || '');
+  const localRefs = new Set(gallery.local_covers.map(cover => String(cover?.candidate_cover_ref || '')));
+  const listedInLocal = cover => localRefs.has(String(cover?.candidate_cover_ref || ''));
+  const becameSelection = cover => Boolean(cover?.is_active)
+    || (Boolean(selected) && coverLookupLocalPathMatches(cover?.candidate_cover_ref, selected));
+  const moving = gallery.other_art.filter(cover => !listedInLocal(cover) && becameSelection(cover));
+  const otherArt = gallery.other_art.filter(cover => !listedInLocal(cover) && !becameSelection(cover));
+  if (otherArt.length === gallery.other_art.length) return gallery;
+  return { ...gallery, local_covers: [...moving, ...gallery.local_covers], other_art: otherArt };
+}
+
 function cacheCoverLookupGalleryPayload(album, gallery) {
   const key = buildCoverLookupGalleryCacheKey(album);
   if (!key || !gallery || typeof gallery !== 'object') return;
+  gallery = splitCoverLookupLocalArt(gallery);
   gallery = Array.isArray(gallery.local_covers)
     ? {
       ...gallery,
@@ -41212,6 +41564,46 @@ async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileShee
   return true;
 }
 
+// As for the navigation drawer: a keyboard open moves focus to the panel's first enabled
+// control, and closing it while focus is inside (or on its trigger) returns it to the trigger.
+function toggleCoverLookupDrawer({ fromKeyboard = false } = {}) {
+  if (state.coverLookup.drawerOpen) {
+    closeCoverLookupDrawer();
+    return;
+  }
+  state.coverLookup.drawerOpen = true;
+  ensureCoverLookupPolling();
+  loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
+  renderCoverLookupDrawer();
+  if (!fromKeyboard) return;
+  Array.from(document.querySelectorAll('#cover-lookup-drawer :is(button, [href], input, select, textarea, [tabindex])'))
+    .find(control => !control.disabled && control.tabIndex >= 0 && !control.closest('[hidden], [inert]'))
+    ?.focus({ preventScroll: true });
+}
+
+function closeCoverLookupDrawer() {
+  if (!state.coverLookup.drawerOpen) return false;
+  const drawer = document.getElementById('cover-lookup-drawer');
+  const trigger = document.getElementById('cover-lookup-drawer-button');
+  const active = document.activeElement;
+  const restoreFocus = Boolean(active && (drawer?.contains(active) || active === trigger));
+  state.coverLookup.drawerOpen = false;
+  renderCoverLookupDrawer();
+  stopCoverLookupPollingIfIdle();
+  if (restoreFocus) trigger?.focus({ preventScroll: true });
+  return true;
+}
+
+function handleCoverLookupDrawerKeyDown(event) {
+  if (event.key !== 'Escape' || !state.coverLookup.drawerOpen) return false;
+  const drawer = document.getElementById('cover-lookup-drawer');
+  const trigger = document.getElementById('cover-lookup-drawer-button');
+  if (!drawer?.contains(event.target) && event.target !== trigger) return false;
+  event.preventDefault();
+  closeCoverLookupDrawer();
+  return true;
+}
+
 function restoreCoverLookupDrawerScroll() {
   if (!state.coverLookup.drawerOpen) return;
   const restore = () => {
@@ -41295,6 +41687,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.activeLocalSelectionRef = '';
   // UI-14: the second artbox's lookup starts with its own saved art selected; deselecting it lets Save empty it.
   state.coverLookup.modal.artboxCleared = false;
+  state.coverLookup.modal.suggestedLocalRef = '';
   if (state.coverLookup.modal.artboxSlot && typeof getAlbumAdditionalArtwork === 'function') {
     state.coverLookup.modal.activeLocalSelectionRef = String(getAlbumAdditionalArtwork(album)?.cover_ref || '');
   }
@@ -41366,6 +41759,7 @@ function closeCoverLookupModal({ immediate = false } = {}) {
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
+  state.coverLookup.modal.suggestedLocalRef = '';
   state.coverLookup.modal.manualBusy = false;
   state.coverLookup.modal.manualPendingCount = 0;
   state.coverLookup.modal.manualStatusText = '';
@@ -41729,9 +42123,18 @@ async function deleteLocalCoverFromLookup(sourceRef) {
     previousActiveLocalSelectionPath || album?.cover_ref,
     sourceRef,
   );
+  const inventoryKey = buildCoverLookupGalleryCacheKey(album);
   const present = (before) => {
     previousAlbum = before.album;
     invalidateCoverLookupGalleryCache(album);
+    // A listing that answers before the folder index catches up still names the file: hide it, and keep the
+    // fallback selected, from the first render on.
+    const inventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey)
+      || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
+    inventoryMutation.addedCovers.delete(String(sourceRef));
+    inventoryMutation.deletedPaths.add(String(sourceRef));
+    if (deletedActiveLocalSelection) inventoryMutation.selectedPath = fallbackLocalCoverPath;
+    coverLookupLocalInventoryMutations.set(inventoryKey, inventoryMutation);
     const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(previousAlbum, sourceRef, fallbackLocalCoverPath);
     if (optimisticAlbum) {
       markAlbumCoverRefsFresh([optimisticAlbum]);
@@ -41776,7 +42179,12 @@ async function deleteLocalCoverFromLookup(sourceRef) {
     const response = await fetch('/utilities/cover-lookup/local-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album, source_cover_ref: sourceRef }),
+      // The server selects the card this lookup already shows selected (owner, 2026-11-24).
+      body: JSON.stringify({
+        album,
+        source_cover_ref: sourceRef,
+        ...(deletedActiveLocalSelection && fallbackLocalCoverPath ? { next_cover_ref: fallbackLocalCoverPath } : {}),
+      }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
@@ -41789,7 +42197,6 @@ async function deleteLocalCoverFromLookup(sourceRef) {
       || fallbackLocalCoverPath,
     );
     const showLater = rewindLaterCoverLookupMutations(mutation);
-    const inventoryKey = buildCoverLookupGalleryCacheKey(album);
     const inventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey)
       || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
     inventoryMutation.addedCovers.delete(String(sourceRef));
@@ -41818,6 +42225,8 @@ async function deleteLocalCoverFromLookup(sourceRef) {
   } catch (error) {
     const showLater = rewindLaterCoverLookupMutations(mutation);
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    if (mutation.before?.inventory) coverLookupLocalInventoryMutations.set(inventoryKey, mutation.before.inventory);
+    else coverLookupLocalInventoryMutations.delete(inventoryKey);
     if (ownsModal()) {
       state.coverLookup.modal.localCovers = previousLocalCovers;
       if (keepsSelection()) {
@@ -42417,8 +42826,10 @@ const pendingTagEdits = (() => {
     }
   }
 
+  // A save belongs to the one account and library that made it; an entry without a scope (an older
+  // build's) is never shown or sent by a signed-in page.
   function inScope(entry) {
-    return !scope || !entry.scope || entry.scope === scope;
+    return String(entry.scope || '') === scope;
   }
 
   function expired(entry) {
@@ -42493,7 +42904,9 @@ const pendingTagEdits = (() => {
     const resent = await fetch('/utilities/edit-tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(entry.payload),
+      // The server refuses it when its files changed after the page made it: a late resend never
+      // overwrites a newer save.
+      body: JSON.stringify({ ...entry.payload, resend: true, client_saved_at: Number(entry.created_at) || 0 }),
     });
     const result = await readJson(resent);
     if (result.code === 'duplicate_request') return 'waiting';
@@ -42518,6 +42931,7 @@ const pendingTagEdits = (() => {
     running = true;
     let reachedServer = false;
     let settledAny = false;
+    let resentAny = false;
     try {
       const waiting = entries.filter((item) => item.state !== 'failed');
       let statuses;
@@ -42548,14 +42962,15 @@ const pendingTagEdits = (() => {
             showToast(`Tag edit for “${entry.album?.name || 'an album'}” was not saved. It is in the Edit Queue.`, 'error', 5200);
           }
         } else if (entry.state !== 'finishing') {
+          resentAny ||= entry.state === 'resending';
           entry.state = 'waiting';
         }
       }
     } finally {
       running = false;
-      // T6: saves the server holds but has not finished are checked less and less often, up to a minute.
-      const onlyFinishing = entries.length > 0 && entries.every((entry) => entry.state === 'finishing');
-      delayMs = reachedServer && !onlyFinishing
+      // T6: saves the server holds but has not finished are checked less and less often, up to a minute;
+      // only a pass that settled or sent a save checks again soon.
+      delayMs = reachedServer && (settledAny || resentAny)
         ? PENDING_TAG_EDIT_FIRST_DELAY_MS
         : Math.min(delayMs * 2, PENDING_TAG_EDIT_MAX_DELAY_MS);
       publish();
@@ -42710,6 +43125,9 @@ const saveFoldDecisions = (() => {
   let asked = null;
   let saves = readSaves();
   let showing = false;
+  // Finished saves whose fold the library may not show yet: its view right after the commit can still
+  // list the copy as its own card. Kept in this page only, until a view holds the fold itself.
+  let settling = [];
 
   function readSaves() {
     try {
@@ -42810,6 +43228,16 @@ const saveFoldDecisions = (() => {
     return changed || appearing.length > 0;
   }
 
+  function listsFoldedCopy(decision) {
+    const folds = decision.albums.filter((album) => album.folds_into);
+    return ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].some((field) => (
+      (Array.isArray(state.view[field]) ? state.view[field] : []).some((group) => (group.albums || []).some((card) => (
+        folds.some((album) => !isAlbum(card, album.folds_into_key, album.folds_into)
+          && isAlbum(card, album.album_key, album.track_paths))
+      )))
+    ));
+  }
+
   // A view read while the save is being written still holds the album as it was. After a partial move
   // the source keeps its name, so only an edited track still in it means the view holds it as it was.
   function showEdit(save) {
@@ -42834,14 +43262,24 @@ const saveFoldDecisions = (() => {
   function show() {
     // Another page's save is over once the library moves past it; that page may have closed before saying so.
     saves = saves.filter((save) => save.own || !save.revision || knownRevision() <= save.revision);
-    if (showing || !saves.length) return false;
+    settling = settling.filter((save) => Date.now() - save.at < SAVE_FOLD_PENDING_MS);
+    if (showing || (!saves.length && !settling.length)) return false;
     showing = true;
     try {
-      return saves.reduce((changed, save) => {
+      const changedSaves = saves.reduce((changed, save) => {
         const edited = showEdit(save);
         const folded = save.decision ? showFolds(save.decision) : false;
         return changed || edited || folded;
       }, false);
+      let changedSettled = false;
+      settling = settling.filter((save) => {
+        // A view this page did not patch that already leaves the copy out holds the fold itself.
+        if (state.view !== save.patchedView && !listsFoldedCopy(save.decision)) return false;
+        changedSettled = showFolds(save.decision) || changedSettled;
+        save.patchedView = state.view;
+        return true;
+      });
+      return changedSaves || changedSettled;
     } finally {
       showing = false;
     }
@@ -42870,6 +43308,7 @@ const saveFoldDecisions = (() => {
           if (!saves.includes(save)) return;
           saves = saves.filter((item) => item !== save);
           storeSaves();
+          if (!failed && save.decision) settling.push(save);
         },
         // The save's own answer lists a folded copy as an album: its card must not come back.
         keep() {
@@ -43849,7 +44288,6 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
-  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -44039,7 +44477,6 @@ async function confirmManualTagEdit() {
       tagEditorDraft,
       originatingViewStateRevision,
       originatingViewRequestUrl,
-      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
@@ -44298,7 +44735,8 @@ function isInstrumentalVariant(album) {
 // Release title case, matching the server's title_case_tag_value: capitalise each
 // word, keep all-caps (CD, MTV) and inner-capital words (iTunes) as tagged.
 function titleCaseReleaseText(text) {
-  return String(text || '').replace(/\p{L}+(?:['’]\p{L}+)?/gu, (word) => {
+  // A word glued to digits (the "th" of "20th") is not a new word (owner, 2026-11-25).
+  return String(text || '').replace(/(?<![\p{L}\p{N}])\p{L}+(?:['’]\p{L}+)?/gu, (word) => {
     const letters = word.replace(/['’]/g, '');
     if (letters.length > 1 && letters === letters.toUpperCase() && letters !== letters.toLowerCase()) return word;
     if (word.length > 1 && /\p{Lu}/u.test(word.slice(1))) return word;
@@ -44627,7 +45065,7 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
 // UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
 // the mounted gallery and its scroll stay; no Loading page.
 function refreshGalleryAfterVersionChange() {
-  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+  return fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, { preserveScroll: true });
 }
 
 function scheduleVersionGalleryRefresh() {
@@ -44979,6 +45417,16 @@ const MISSING_ALBUM_RESCAN_MESSAGES = {
 // The background search's result is asked for about every 1.5 s, for at most 30 s.
 const MISSING_ALBUM_SEARCH_POLL_MS = 1500;
 const MISSING_ALBUM_SEARCH_POLLS = 20;
+// The last Re-scan's message, shown in that album's missing alert (or its found alert) until Album Details closes.
+let missingAlbumRescanResult = null;
+
+function getMissingAlbumRescanResult(albumKey) {
+  return missingAlbumRescanResult && missingAlbumRescanResult.albumKey === albumKey ? missingAlbumRescanResult : null;
+}
+
+function clearMissingAlbumRescanResult() {
+  missingAlbumRescanResult = null;
+}
 
 async function keepMissingAlbum(album) {
   const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
@@ -45016,11 +45464,26 @@ async function rescanMissingAlbum(album, button) {
     if (!response.ok) throw new Error((method === 'POST' && payload.error) || 'Unable to re-scan this album.');
     return payload;
   };
-  const toast = ([message, tone]) => { if (typeof showToast === 'function') showToast(message, tone, 3600); };
+  // Each message stays in the album's alert (renders keep it); a toast carries it only when no alert shows it.
+  const toastUnlessShown = ([message, tone], shown) => {
+    if (!shown && typeof showToast === 'function') showToast(message, tone, 3600);
+  };
+  const report = ([message, tone]) => {
+    missingAlbumRescanResult = { albumKey, message, tone };
+    const alertMessage = button?.closest?.('.on-page-alert')?.querySelector('.on-page-alert__message');
+    if (alertMessage) alertMessage.textContent = message;
+    toastUnlessShown([message, tone], Boolean(alertMessage));
+  };
+  const reportAfterRefresh = async ([message, tone]) => {
+    missingAlbumRescanResult = { albumKey, message, tone };
+    await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
+    toastUnlessShown([message, tone], typeof document !== 'undefined'
+      && [...document.querySelectorAll('.missing-album-rescan-result')].some(node => node.checkVisibility?.() ?? true));
+  };
   try {
     let payload = await request('POST');
     if (payload.status === 'searching') {
-      toast(MISSING_ALBUM_RESCAN_MESSAGES.searching);
+      report(MISSING_ALBUM_RESCAN_MESSAGES.searching);
       for (let poll = 0; payload.status === 'searching'; poll += 1) {
         // Still searching after 30 s: the button is freed with no further message.
         if (poll >= MISSING_ALBUM_SEARCH_POLLS) return false;
@@ -45028,12 +45491,11 @@ async function rescanMissingAlbum(album, button) {
         payload = await request('GET');
       }
     }
-    await refreshMissingAlbumView(album, albumKey, getPendingMissingAlbumRefreshRequest());
-    toast(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
+    await reportAfterRefresh(MISSING_ALBUM_RESCAN_MESSAGES[payload.status === 'missing' ? payload.reason : payload.status]
       || MISSING_ALBUM_RESCAN_MESSAGES.deleted);
     return payload.status !== 'missing';
   } catch (error) {
-    if (typeof showToast === 'function') showToast(error?.message || 'Unable to re-scan this album.', 'error', 3600);
+    report([error?.message || 'Unable to re-scan this album.', 'error']);
     return false;
   } finally {
     if (button?.isConnected) {
@@ -45197,14 +45659,20 @@ function renderTrackModalRelease(album) {
     els.editTags.dataset.albumKey = resolvedAlbumKey;
   }
   if (els.missingWarning) {
-    els.missingWarning.hidden = !albumMissing;
-    els.missingWarning.innerHTML = albumMissing
-      ? buildMissingAlbumDetailsHtml({
+    const rescanResult = getMissingAlbumRescanResult(resolvedAlbumKey);
+    let missingWarningHtml = '';
+    if (albumMissing) {
+      missingWarningHtml = buildMissingAlbumDetailsHtml({
         canRemove: canConfirmMissingAlbumRemoval(album),
         albumKey,
         reason: album.missing_reason,
-      })
-      : '';
+        rescanMessage: rescanResult?.message,
+      });
+    } else if (rescanResult?.tone === 'success') {
+      missingWarningHtml = buildMissingAlbumRescanFoundHtml(rescanResult.message);
+    }
+    els.missingWarning.hidden = !missingWarningHtml;
+    els.missingWarning.innerHTML = missingWarningHtml;
   }
   if (albumMissing) {
     els.cover.innerHTML = `
@@ -45616,6 +46084,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discNumber: group.discNumber,
       discLabel,
       discSubtitle: group.discSubtitle,
+      discMatchesSearch,
       isBonus: Boolean(group.isBonus),
       lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
       discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
@@ -45831,102 +46300,29 @@ function getNextQueuedTrack() {
   return nextTrack;
 }
 
-function refreshTrackModalPlaybackState() {
-  const trackModal = document.getElementById('track-modal');
-  if (!trackModal || trackModal.hidden) return;
+// Album Details and Loose Tracks show playback through the same AlbumTrackTable rows.
+function refreshTrackTablePlaybackState(pageId) {
+  const page = document.getElementById(pageId);
+  if (!page || page.hidden) return;
   const playback = getPlayerPlaybackSnapshot();
-  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
-  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
-  const activeCurrent = selectedTrackPath
-    ? '0:00'
-    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = selectedTrackPath
-    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
-    : formatTrackDuration(playback.duration) || '0:00';
-
-  document.querySelectorAll('#track-modal [data-track-row-path]').forEach((row) => {
-    const rowPath = String(row.getAttribute('data-track-row-path') || '');
-    const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack
-      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
-    row.classList.toggle('is-current', isCurrentTrack);
-    row.classList.toggle('is-playing', isActivelyPlaying);
-    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
-    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
-    row.classList.toggle(
-      'album-track-table__row--animated',
-      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
-    );
-    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
-
-    const button = row.querySelector('.play-track-button');
-    if (button) {
-      const iconName = isActivelyPlaying ? 'pause' : 'play';
-      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
-      if (button.getAttribute('aria-label') !== label) {
-        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
-          className: `album-track-table__play-icon ui-icon--${iconName}`,
-        });
-        button.setAttribute('aria-label', label);
-      }
-    }
-
-    const durationEl = row.querySelector('[data-track-duration-path]');
-    if (durationEl) {
-      const originalDuration = durationEl.dataset.originalDuration || '';
-      const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
-    }
+  const selected = state.player.selectedTrack;
+  const selectedTrackPath = String(selected?.path || '');
+  const elapsed = selectedTrackPath ? '0:00' : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
+  const total = formatTrackDuration(selectedTrackPath ? selected.durationSeconds : playback.duration) || '0:00';
+  syncAlbumTrackTablePlayback(page, {
+    trackPath: selectedTrackPath || String(state.player.current?.path || ''),
+    playing: Boolean(selectedTrackPath) || (!playback.paused && !playback.ended),
+    currentTime: `${elapsed} / ${total}`,
+    animated: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }
 
+function refreshTrackModalPlaybackState() {
+  refreshTrackTablePlaybackState('track-modal');
+}
+
 function refreshNonAlbumModalPlaybackState() {
-  const nonAlbumModal = document.getElementById('non-album-modal');
-  if (!nonAlbumModal || nonAlbumModal.hidden) return;
-  const playback = getPlayerPlaybackSnapshot();
-  const selectedTrackPath = String(state.player.selectedTrack?.path || '');
-  const currentTrackPath = selectedTrackPath || String(state.player.current?.path || '');
-  const activeCurrent = selectedTrackPath
-    ? '0:00'
-    : formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
-  const activeDuration = selectedTrackPath
-    ? formatTrackDuration(state.player.selectedTrack.durationSeconds) || '0:00'
-    : formatTrackDuration(playback.duration) || '0:00';
-
-  document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
-    const rowPath = String(row.getAttribute('data-track-row-path') || '');
-    const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
-    const isActivelyPlaying = isCurrentTrack
-      && (Boolean(selectedTrackPath) || (!playback.paused && !playback.ended));
-    row.classList.toggle('is-current', isCurrentTrack);
-    row.classList.toggle('is-playing', isActivelyPlaying);
-    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
-    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
-    row.classList.toggle(
-      'album-track-table__row--animated',
-      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
-    );
-    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
-
-    const button = row.querySelector('.play-track-button');
-    if (button) {
-      const iconName = isActivelyPlaying ? 'pause' : 'play';
-      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
-      if (button.getAttribute('aria-label') !== label) {
-        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
-          className: `album-track-table__play-icon ui-icon--${iconName}`,
-        });
-        button.setAttribute('aria-label', label);
-      }
-    }
-
-    const durationEl = row.querySelector('[data-track-duration-path]');
-    if (durationEl) {
-      const originalDuration = durationEl.dataset.originalDuration || '';
-      const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
-    }
-  });
+  refreshTrackTablePlaybackState('non-album-modal');
 }
 
 
@@ -48796,6 +49192,25 @@ function rebuildAlbumIndex(groupsList) {
 
 function getIndexedAlbum(albumKey) {
   return state.gallery.albumIndex.get(String(albumKey || '').trim()) || null;
+}
+
+// A card gesture acts on the album its card shows. Invalidating a hydrated copy can drop the card's
+// key from the index while the mounted card stays, so a miss looks the key up in the current view.
+function resolveGalleryCardAlbum(albumKey) {
+  const key = String(albumKey || '').trim();
+  if (!key) return null;
+  const indexed = getIndexedAlbum(key);
+  if (indexed) return indexed;
+  const view = state.view || {};
+  for (const groups of [view.primary_artist_groups, view.family_artist_groups, view.artist_groups]) {
+    for (const group of Array.isArray(groups) ? groups : []) {
+      for (const album of Array.isArray(group?.albums) ? group.albums : []) {
+        if (getAlbumRequestKey(album) === key || getAlbumIdentity(album) === key
+            || getAlbumCardVersionKey(album) === key) return album;
+      }
+    }
+  }
+  return null;
 }
 
 var CARD_GALLERY_LAYOUT_CONFIG = Object.freeze({
@@ -54436,17 +54851,13 @@ async function handleUtilityBootstrapClick(event) {
   const toggleCoverLookupDrawerButton = event.target.closest('[data-toggle-cover-lookup-drawer="1"]');
   if (toggleCoverLookupDrawerButton) {
     event.preventDefault();
-    state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
-    ensureCoverLookupPolling();
-    loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
-    renderCoverLookupDrawer();
+    toggleCoverLookupDrawer({ fromKeyboard: event.detail === 0 });
     return;
   }
 
   if (event.target.closest('[data-close-cover-lookup-drawer="1"]')) {
     event.preventDefault();
-    state.coverLookup.drawerOpen = false;
-    renderCoverLookupDrawer();
+    closeCoverLookupDrawer();
     return;
   }
 
@@ -55008,6 +55419,7 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  if (typeof handleCoverLookupDrawerKeyDown === 'function' && handleCoverLookupDrawerKeyDown(event)) return true;
   const exceptionInput = event.target?.closest?.('#tag-editor-form [data-tag-field="exception_type"]');
   const exceptionOption = event.target?.closest?.('[data-tag-editor-exception-option]');
   if (exceptionInput || exceptionOption) {
@@ -55415,7 +55827,7 @@ function handleGalleryBootstrapClick(event) {
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
     const menuAlbumKey = menu?.dataset.albumKey || '';
-    const album = menu?.albumContext || getIndexedAlbum(menuAlbumKey);
+    const album = menu?.albumContext || resolveGalleryCardAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
 
@@ -56397,7 +56809,7 @@ function getAlbumCardLongPressTarget(target) {
   const card = target?.closest?.('.album-card');
   const trigger = card?.querySelector?.('[data-album-key]');
   const key = String(trigger?.getAttribute?.('data-album-key') || '').trim();
-  const album = key && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  const album = key && typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(key) : null;
   return album ? { key } : null;
 }
 
@@ -56424,7 +56836,7 @@ function beginAlbumCardLongPress(event) {
   albumCardLongPressGesture = gesture;
   gesture.timeoutId = scheduleBrowserTimeout(() => {
     if (albumCardLongPressGesture !== gesture) return;
-    const currentAlbum = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(gesture.key) : null;
+    const currentAlbum = typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(gesture.key) : null;
     if (!currentAlbum) {
       clearAlbumCardLongPressGesture();
       return;
@@ -58107,7 +58519,11 @@ function syncMobilePageShell({ syncNavigation = true } = {}) {
   outlet.hidden = !active;
   outlet.dataset.mobilePageKind = active?.kind || '';
   header.dataset.galleryBarLayout = active ? 'mobile-primary' : '';
-  document.getElementById('mobile-back-button').hidden = !active;
+  // Library-wide Loose Tracks is a library navigation destination: its header reopens the tree instead of Back.
+  const libraryNavigationPage = active?.kind === 'non-album' && active.libraryWide;
+  document.getElementById('mobile-back-button').hidden = !active || libraryNavigationPage;
+  const pageLibraryButton = document.getElementById('mobile-page-library-button');
+  if (pageLibraryButton) pageLibraryButton.hidden = !libraryNavigationPage;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
@@ -59867,7 +60283,7 @@ document.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   clearAlbumCardLongPressGesture();
   const trigger = albumCard.querySelector('[data-album-key]');
-  const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
+  const album = trigger ? resolveGalleryCardAlbum(trigger.getAttribute('data-album-key') || '') : null;
   showAlbumCardContextMenu(event.clientX, event.clientY, album);
 }, true);
 

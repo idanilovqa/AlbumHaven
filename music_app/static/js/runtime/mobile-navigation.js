@@ -31,7 +31,11 @@ function syncMobilePageShell({ syncNavigation = true } = {}) {
   outlet.hidden = !active;
   outlet.dataset.mobilePageKind = active?.kind || '';
   header.dataset.galleryBarLayout = active ? 'mobile-primary' : '';
-  document.getElementById('mobile-back-button').hidden = !active;
+  // Library-wide Loose Tracks is a library navigation destination: its header reopens the tree instead of Back.
+  const libraryNavigationPage = active?.kind === 'non-album' && active.libraryWide;
+  document.getElementById('mobile-back-button').hidden = !active || libraryNavigationPage;
+  const pageLibraryButton = document.getElementById('mobile-page-library-button');
+  if (pageLibraryButton) pageLibraryButton.hidden = !libraryNavigationPage;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);

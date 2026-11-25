@@ -74,6 +74,9 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverRef)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
+// Only a playing row carries the perimeter spectrum (album-track-table.css).
+const ALBUM_TRACK_SPECTRUM_HTML = '<span class="album-track-table__spectrum" aria-hidden="true"></span>';
+
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const trackPath = String(track.path || '');
   const classes = ['album-track-table__row'];
@@ -110,7 +113,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(trackNumber)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
+      number: { content: `${track.isPlaying ? ALBUM_TRACK_SPECTRUM_HTML : ''}<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(trackNumber)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
@@ -167,6 +170,8 @@ function buildAlbumTrackTableHtml(config = {}) {
   const collapsibleGroups = Boolean(config.collapsibleGroups);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
+  // Album Details keeps the approved compact rows; a page of loose tracks asks for the roomier default density.
+  const density = config.density === 'default' ? 'default' : 'compact';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const totalLength = String(config.totalLength || '').trim();
@@ -240,12 +245,14 @@ function buildAlbumTrackTableHtml(config = {}) {
           fullSpanContent: `<span class="album-track-table__section-title">${escapeHtml(sectionTitle)}</span>`,
         }, row] : [row];
       }),
-      density: 'compact',
+      density,
       frame: 'outline',
       overflow: 'none',
       mobile: 'preserve',
     });
     const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : '';
+    // A CD whose name the search matched; Album Details opens scrolled to it.
+    const searchMatchAttribute = group?.discMatchesSearch && showLabel ? ' data-disc-search-match="true"' : '';
     const mainSummarySectionHtml = groupIndex === lastMainIndex && mainSummaryHtml
       ? `<section class="album-track-table__disc">${mainSummaryHtml}</section>` : '';
     if (collapsibleGroups && (showLabel || group?.loadingRows)) {
@@ -255,7 +262,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       const headingContent = group?.loadingRows
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
         : `<span class="album-track-table__disc-title">${escapeHtml(label)}</span>${count ? `<span class="album-track-table__disc-count">${escapeHtml(count)}</span>` : ''}${length ? `<span class="album-track-table__disc-length">${escapeHtml(length)}</span>` : ''}`;
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>${mainSummarySectionHtml}`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible"${searchMatchAttribute} open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>${mainSummarySectionHtml}`;
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -264,10 +271,76 @@ function buildAlbumTrackTableHtml(config = {}) {
     const heading = ratingHtml
       ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
       : headingHtml;
-    return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
+    return `<section class="album-track-table__disc"${searchMatchAttribute}>${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
-  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+  return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}" data-density="${density}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
+}
+
+// A playback tick reaches only the rows whose state can change: those marked current or
+// playing, and those of the current track. A 1,000-row Loose Tracks page then costs a
+// tick what one album does, and an unchanged cell is never rewritten.
+function syncAlbumTrackTablePlayback(root, { trackPath = '', playing = false, currentTime = '', animated = true } = {}) {
+  if (!root?.querySelectorAll) return;
+  const quotedPath = trackPath.replace(/["\\]/g, '\\$&');
+  const selector = ['--current', '--playing'].map(state => `[data-track-row-path].album-track-table__row${state}`)
+    .concat(trackPath ? [`[data-track-row-path="${quotedPath}"]`] : []).join(', ');
+  root.querySelectorAll(selector).forEach((row) => {
+    const isCurrent = Boolean(trackPath) && row.getAttribute('data-track-row-path') === trackPath;
+    const isPlaying = isCurrent && playing;
+    row.classList.toggle('is-current', isCurrent);
+    row.classList.toggle('is-playing', isPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrent);
+    row.classList.toggle('album-track-table__row--playing', isPlaying);
+    row.classList.toggle('album-track-table__row--animated', isPlaying && animated);
+    if (isPlaying && !row.querySelector('.album-track-table__spectrum')) {
+      row.querySelector('.album-track-table__number-play')?.insertAdjacentHTML('beforebegin', ALBUM_TRACK_SPECTRUM_HTML);
+    }
+    const trackPlaying = isPlaying ? 'true' : '';
+    if (row.dataset && row.dataset.trackPlaying !== trackPlaying) row.dataset.trackPlaying = trackPlaying;
+    const button = row.querySelector('.play-track-button');
+    const label = isPlaying ? 'Pause track' : 'Play track';
+    if (button && button.getAttribute('aria-label') !== label) {
+      const iconName = isPlaying ? 'pause' : 'play';
+      button.innerHTML = ButtonComponent.renderIconSvg(iconName, { className: `album-track-table__play-icon ui-icon--${iconName}` });
+      button.setAttribute('aria-label', label);
+    }
+    const duration = row.querySelector('[data-track-duration-path]');
+    if (duration) {
+      const text = isCurrent ? currentTime : duration.dataset.originalDuration || '';
+      if (duration.textContent !== text) duration.textContent = text;
+    }
+  });
+}
+
+function findAlbumTrackTableScroller(node) {
+  for (let candidate = node?.parentElement; candidate; candidate = candidate.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(candidate).overflowY) && candidate.scrollHeight > candidate.clientHeight) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+// Brings a disc into view: when its heading or first search match is out of view, the heading moves to the
+// top of the visible track area, below anything pinned over it inside the scroller.
+function revealAlbumTrackTableDisc(disc) {
+  const heading = disc.querySelector('.album-track-table__disc-heading') || disc;
+  const scroller = findAlbumTrackTableScroller(disc);
+  if (!disc.isConnected || !scroller) return;
+  const view = scroller.getBoundingClientRect();
+  const headingBox = heading.getBoundingClientRect();
+  const firstMatch = disc.querySelector('[data-track-search-match="true"]') || heading;
+  if (headingBox.top >= view.top && firstMatch.getBoundingClientRect().bottom <= view.bottom
+    && disc.contains(document.elementFromPoint(headingBox.left + 1, headingBox.top + 1))) return;
+  // Whole pixels, rounded so the heading is never clipped at the top edge.
+  scroller.scrollTop += Math.floor(headingBox.top - view.top);
+  // A header pinned inside the scroller (the small-screen album page) still covers the top: clear it.
+  const top = heading.getBoundingClientRect();
+  const cover = document.elementFromPoint(top.left + 1, top.top + 1);
+  if (cover && !disc.contains(cover) && scroller.contains(cover)) {
+    scroller.scrollTop -= Math.ceil(cover.getBoundingClientRect().bottom - top.top);
+  }
 }
 
 function triggerAlbumTrackPlayActivation(button) {

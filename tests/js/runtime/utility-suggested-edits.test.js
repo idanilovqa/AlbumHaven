@@ -229,7 +229,8 @@ test('P09 explicit selection never falls back to Apply All when its proposals ar
   const context = proposalContext();
   assert.equal(typeof context.getApplicableProblemSuggestions, 'function');
   context.state.utility.proposalSelections = { 'artist-1': true };
-  context.state.utility.selectedProblemFilters = ['Missing year'];
+  // A search hides proposals; problem filters narrow only the list (owner, 2026-11-24).
+  context.state.utility.searchQuery = '2010';
   assert.deepEqual(Array.from(context.getApplicableProblemSuggestions()), []);
   context.state.utility.proposalSelections['year-2'] = true;
   assert.deepEqual(Array.from(context.getApplicableProblemSuggestions(), item => item.id), ['year-2']);
@@ -388,7 +389,7 @@ test('P09 confirmed stale Apply sends only selected visible proposals and retain
   const { context, requests } = confirmationContext();
   assert.equal(typeof context.openProblemSuggestionsConfirm, 'function');
   assert.equal(typeof context.confirmProblemSuggestions, 'function');
-  context.state.utility.selectedProblemFilters = ['Missing year'];
+  context.state.utility.searchQuery = '2008';
   context.state.utility.proposalSelections = { 'year-1': true, 'artist-1': true };
   context.openProblemSuggestionsConfirm();
   await context.confirmProblemSuggestions();
@@ -459,7 +460,7 @@ for (const status of ['committed', 'stale', 'failed_rolled_back', 'recovery_pend
     const { context, modal } = confirmationContext();
     const refreshes = [];
     context.state.utility.proposalSelections = { 'year-1': true, 'artist-1': true };
-    context.state.utility.selectedProblemFilters = ['Missing year'];
+    context.state.utility.searchQuery = '2008';
     context.loadProblematicFiles = async force => { refreshes.push(['collection', force]); return true; };
     context.loadProblematicAlbumDetail = async (key, force) => { refreshes.push(['detail', key, force]); return true; };
     context.fetch = async () => ({ ok: true, json: async () => ({ ok: true, save_task_status: 'completed', proposal_outcomes: status ? [{ id: 'year-1', status }] : [] }) });

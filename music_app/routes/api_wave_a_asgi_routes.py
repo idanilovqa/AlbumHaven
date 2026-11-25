@@ -63,9 +63,11 @@ from music_app.services.missing_album_removal_postgres import (
 from music_app.services.missing_album_rescan import MissingAlbumRescan
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
     get_library_roots,
     library_root_cache_identity,
     load_library_root_settings,
+    resolve_media_path_within_roots,
 )
 from music_app.services.library_settings import save_library_settings_and_start_refresh
 from music_app.services.log_history import append_log_history
@@ -1908,6 +1910,28 @@ async def tag_editor_fold_decision(request: Request) -> JSONResponse:
 
 
 _MAX_SAVE_STATUS_IDS = 500
+# A page's clock may run ahead of the server's: a file written this long before the page saved still counts as newer.
+_RESEND_CLOCK_MARGIN_SECONDS = 60.0
+
+
+def _resend_is_superseded(config: dict[str, object], updates: Mapping[str, object], saved_at_ms: object) -> bool:
+    """True when a file this resent save edits was written after the page made the save.
+
+    The server never received the save, so another save (or another tagger) may have changed
+    the same files since; sending the older values now would overwrite that newer change."""
+    if isinstance(saved_at_ms, bool) or not isinstance(saved_at_ms, (int, float)) or saved_at_ms <= 0:
+        return True  # A resend that cannot say when it was made could be older than anything.
+    newer_than = saved_at_ms / 1000.0 - _RESEND_CLOCK_MARGIN_SECONDS
+    roots = configured_library_root_paths_snapshot(config)
+    for raw_path in updates:
+        path = resolve_media_path_within_roots(str(raw_path), roots)
+        try:
+            if path is not None and path.stat().st_mtime >= newer_than:
+                return True
+        except OSError:
+            continue  # A missing file is the save pipeline's error to report.
+    return False
+
 
 
 @router.post("/utilities/edit-tags/requests/status")
@@ -1988,6 +2012,13 @@ async def _run_edit_tags_payload(
             return ({"ok": False, "code": "duplicate_request", "intent_status": received_status,
                      "error": "This save was already received."}, 409)
 
+    # A save the page sends again (it never got an answer) never overwrites a newer change to its files.
+    if payload.get("resend") is True and await run_in_threadpool(
+        _resend_is_superseded, _app_config(request), updates, payload.get("client_saved_at"),
+    ):
+        return ({"ok": False, "code": "superseded",
+                 "error": "These files changed after this edit was made, so it was not saved over them."}, 409)
+
     album_track_path_set, _track_error = _require_album_track_paths(album)
     requested_track_paths = (album_track_path_set or set()) | {str(path) for path in updates.keys() if str(path)}
     postgres_targeted_structural_edit = (
@@ -2016,16 +2047,33 @@ async def _run_edit_tags_payload(
     if needs_postgres_edit_state or "proposal_ids" in payload:
         # Request-scoped overlays replace this copy's file cache, never the live one.
         get_state = lambda: dict(library_state)
-    if needs_postgres_edit_state and "proposal_ids" not in payload:
-        try:
-            postgres_edit_state = await run_in_threadpool(
-                _postgres_exception_only_edit_state, request, payload
-            )
-        except EditTagsTracksNotInLibrary as exc:
-            return ({"ok": False, "code": "tracks_not_in_library", "error": str(exc)}, 409)
-        except ValueError as exc:
-            return ({"ok": False, "error": str(exc)}, 400)
-        get_state = lambda: postgres_edit_state
+    # The tags this save compares against are read only once it holds its albums: read before a
+    # save of the same tracks finished, they would call a real change "already saved" and skip it.
+    reservation_started = perf_counter()
+    structural_tag_edit_reservation = (
+        await acquire_structural_tag_edit_reservation_async(
+            reservation_resource_keys
+        )
+        if reservation_resource_keys
+        else None
+    )
+    reservation_wait_ms = (perf_counter() - reservation_started) * 1000.0
+    reservation_kept = False
+    try:
+        if needs_postgres_edit_state and "proposal_ids" not in payload:
+            try:
+                postgres_edit_state = await run_in_threadpool(
+                    _postgres_exception_only_edit_state, request, payload
+                )
+            except EditTagsTracksNotInLibrary as exc:
+                return ({"ok": False, "code": "tracks_not_in_library", "error": str(exc)}, 409)
+            except ValueError as exc:
+                return ({"ok": False, "error": str(exc)}, 400)
+            get_state = lambda: postgres_edit_state
+        reservation_kept = True
+    finally:
+        if not reservation_kept and structural_tag_edit_reservation is not None:
+            structural_tag_edit_reservation.release()
     build_affected_album_dicts = _edit_tags_affected_album_dicts_builder(request, payload)
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
         build_affected_album_dicts = _empty_affected_album_dicts
@@ -2138,17 +2186,7 @@ async def _run_edit_tags_payload(
             return verified
 
         handler_options["validate_proposals"] = validate_proposals
-    reservation_started = perf_counter()
-    structural_tag_edit_reservation = (
-        await acquire_structural_tag_edit_reservation_async(
-            reservation_resource_keys
-        )
-        if reservation_resource_keys
-        else None
-    )
-    handler_options["reservation_wait_ms"] = (
-        perf_counter() - reservation_started
-    ) * 1000.0
+    handler_options["reservation_wait_ms"] = reservation_wait_ms
     result = await _run_edit_tags_handler_with_reservation(
         handler_options,
         _EditTagsReservation(intent_lease, structural_tag_edit_reservation),

@@ -133,9 +133,23 @@ function isGalleryAnchorVisible(anchor, scroll) {
 function isGalleryArtistInfoAnchorVisible(anchor, scroll) {
   if (anchor?.closest?.('[data-gallery-bar-instance="gallery"]')) {
     const bounds = anchor.getBoundingClientRect?.();
-    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight;
+    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight
+      && galleryArtistSectionsRemainInView(anchor.dataset?.artist, scroll);
   }
   return isGalleryAnchorVisible(anchor, scroll);
+}
+
+// The header keeps naming an artist until the next label is completely hidden, by which time
+// that artist's albums can all be gone. Its header "i" then no longer stands for anything on
+// screen. Without rendered sections (no dividers) the header alone decides.
+function galleryArtistSectionsRemainInView(artist, scroll) {
+  const sections = artist && scroll?.querySelectorAll
+    ? Array.from(scroll.querySelectorAll(`[data-scroll-artist="${cssEscape(artist)}"]`))
+      .map(label => label.closest?.('.artist-section') || label)
+    : [];
+  if (!sections.length) return true;
+  const viewportTop = Number(scroll.getBoundingClientRect?.().top || 0);
+  return sections.some(section => Number(section.getBoundingClientRect?.().bottom) > viewportTop);
 }
 
 function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
@@ -153,16 +167,21 @@ function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
   surface.style.setProperty?.('--artist-info-body-max-height', `${Math.max(0, Math.floor(available))}px`);
 }
 
+// The artist info panel ends above a visible player.
+function getGalleryArtistInfoViewportBottom() {
+  const player = document.querySelector('[data-shell-slot="bottom_player"]');
+  const playerBounds = player?.getBoundingClientRect?.();
+  return player && !player.hidden && Number(playerBounds?.height || 0) > 0
+    ? Math.min(window.innerHeight, Number(playerBounds.top))
+    : window.innerHeight;
+}
+
 function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!surface?.matches?.('.artist-info-overlay')
       || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
   const scroll = document.getElementById('albums-scroll');
   if (!scroll) return 0;
-  const player = document.querySelector('[data-shell-slot="bottom_player"]');
-  const playerBounds = player?.getBoundingClientRect?.();
-  const viewportBottom = player && !player.hidden && Number(playerBounds?.height || 0) > 0
-    ? Math.min(window.innerHeight, Number(playerBounds.top))
-    : window.innerHeight;
+  const viewportBottom = getGalleryArtistInfoViewportBottom();
   surface.style?.removeProperty?.('--artist-info-panel-max-height');
   surface.style?.removeProperty?.('--artist-info-body-max-height');
   const requiredOffset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
@@ -187,6 +206,9 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   if (revealSpace) scroll.style?.setProperty?.('--artist-info-reveal-space', `${Math.ceil(revealSpace)}px`);
   else scroll.style?.removeProperty?.('--artist-info-reveal-space');
   scroll.scrollTop += offset;
+  // The scroll event this reveal causes is not the user moving the gallery: it keeps the open-time fit.
+  const opening = galleryMainSurfaceController?.current?.();
+  if (opening?.surface === surface) opening.revealScrollTop = scroll.scrollTop;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
   requestAnimationFrame(() => {
     const active = galleryMainSurfaceController?.current?.();
@@ -1496,9 +1518,19 @@ function initGalleryMain() {
         }
         if (String(settled.anchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(settled.anchor, scroll)) {
-          settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
-          settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          // A panel following its divider "i" may pass behind the player, except on the reveal's
+          // own scroll. The header "i" does not move, so a panel it owns keeps fitting above the player.
+          const followsGallery = !settled.anchor.closest?.('[data-gallery-bar-instance="gallery"]');
+          if (!followsGallery || settled.revealScrollTop !== scroll.scrollTop) {
+            settled.revealScrollTop = null;
+            settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
+            settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          }
           positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+          const viewportBottom = getGalleryArtistInfoViewportBottom();
+          if (!followsGallery && Number(settled.surface.getBoundingClientRect?.().bottom || 0) > viewportBottom) {
+            constrainGalleryArtistInfoSurface(settled.surface, settled.anchor, viewportBottom);
+          }
         } else {
           closeGalleryMainSurface(false);
         }

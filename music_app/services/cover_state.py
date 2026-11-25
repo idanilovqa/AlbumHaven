@@ -294,10 +294,35 @@ def _inventory_cover_backup_name(candidates: list[dict[str, object]], folder: Pa
     cover = next((item for item in candidates if Path(str(item["path"])) == cover_path), None)
     if cover is None:
         return None
-    digest = cover.get("sha256")
-    # An unhashed cover is assumed unique: saves usually keep the replaced picture.
-    if digest and any(item is not cover and item.get("sha256") == digest for item in candidates):
+    # The same comparison the save makes (reserve_existing_cover_variant): no backup when another album image
+    # holds cover.jpg's bytes. Hashes from the index answer it; an unhashed file is compared by size, then bytes.
+    try:
+        cover_size = cover_path.stat().st_size
+    except OSError:
         return None
+    cover_bytes: bytes | None = None
+
+    def cover_data() -> bytes:
+        nonlocal cover_bytes
+        if cover_bytes is None:
+            cover_bytes = cover_path.read_bytes()
+        return cover_bytes
+
+    digest = cover.get("sha256")
+    for item in candidates:
+        if item is cover:
+            continue
+        other_digest = item.get("sha256")
+        if digest and other_digest:
+            if other_digest == digest:
+                return None
+            continue
+        other_path = Path(str(item["path"]))
+        try:
+            if other_path.stat().st_size == cover_size and other_path.read_bytes() == cover_data():
+                return None
+        except OSError:
+            continue
     names = {Path(str(item["path"])).name.casefold() for item in candidates}
     index = 1
     while f"cover-existing-{index}.jpg" in names:

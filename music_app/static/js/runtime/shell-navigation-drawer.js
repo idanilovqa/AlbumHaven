@@ -74,6 +74,7 @@ function syncArtistsDrawerVisibility() {
     rail.inert = isDrawerVisible && !isOpen;
     const mobileLibraryButton = document.getElementById('mobile-library-button');
     mobileLibraryButton?.setAttribute('aria-expanded', String(isOpen));
+    document.getElementById('mobile-page-library-button')?.setAttribute('aria-expanded', String(isOpen));
     if (isOpen) {
       mobileLibraryButton?.removeAttribute('data-search-results');
       mobileLibraryButton?.removeAttribute('aria-description');

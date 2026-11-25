@@ -40,9 +40,10 @@ const utilityLoadersPath = path.join(
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
 test('opening the notification drawer retains accepted tasks during persistence lag', () => {
+  assert.match(helperSource, /toggleCoverLookupDrawer\(\{ fromKeyboard: event\.detail === 0 \}\);/);
   assert.match(
-    helperSource,
-    /state\.coverLookup\.drawerOpen = !state\.coverLookup\.drawerOpen;[\s\S]*?loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\);/,
+    fs.readFileSync(path.join(path.dirname(helperPath), 'cover-lookup-modal-and-drawer.js'), 'utf8'),
+    /function toggleCoverLookupDrawer[\s\S]*?state\.coverLookup\.drawerOpen = true;[\s\S]*?loadCoverLookupTasks\(\{ toast: false, mergeFirstPage: true \}\);/,
   );
 });
 

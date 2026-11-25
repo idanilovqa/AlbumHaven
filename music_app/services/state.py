@@ -1357,7 +1357,6 @@ def _queue_problematic_albums_prewarm_for_state(library_state, config, logger) -
         problematic_index.queue_maintenance(repository)
         # Ignores a stopped server kept behind a publication apply now, before anyone reads them stale.
         ignored_repair_intents.queue_drain(config)
-        repository.queue_utility_projection_prewarm("duplicate-identities")
         return
     __import__(
         "music_app.services.problematic_albums",

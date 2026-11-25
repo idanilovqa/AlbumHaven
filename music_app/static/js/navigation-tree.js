@@ -86,5 +86,12 @@
       if (item.classList.contains('is-selected') !== selected) setItemSelected(item, selected);
     });
   }
-  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), updateItem, setItemSelected, setSelection };
+  // A tree waiting for new content (a running search) takes no space, so its scroll container never keeps the
+  // previous list's height or scroll position while it is empty.
+  function setPending(root, pending) {
+    if (!root?.toggleAttribute) return;
+    root.toggleAttribute('data-navigation-tree-pending', Boolean(pending));
+    root.setAttribute('aria-busy', pending ? 'true' : 'false');
+  }
+  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), updateItem, setItemSelected, setSelection, setPending };
 })();

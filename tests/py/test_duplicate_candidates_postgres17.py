@@ -100,17 +100,37 @@ def test_postgres17_arm_is_gated_by_version_and_bounded_by_the_requested_year():
     import music_app.services.library_browse_postgres as browse
 
     sql = " ".join(browse._duplicate_candidate_album_ids_for_keys_sql().split())
-    arm = sql[sql.index("true as pg17_superset"):sql.index("), candidate_containers as")]
     assert "CI-only path for PostgreSQL 17; delete this arm when CI runs PostgreSQL 18 (P9-CI-024)" in " ".join(
         line.strip(" -") for line in browse._duplicate_candidate_album_ids_for_keys_sql().splitlines()
     )
-    assert f"where {ARM_GATE}" in arm
-    assert ("on library.duplicate_identity_year(files.scan_file_year) = requested_identities.album_year"
-            in arm), "the arm reads only the requested year's files"
-    for text in ("requested_identities.album_artist_identity", "requested_identities.album_identity",
-                 "files.scan_file_album_artist", "files.scan_file_album"):
-        assert f"octet_length({text}) <> length({text})" in arm, text
-    assert sql.count(ARM_GATE) == 1
+    arms = sql[sql.index("true as pg17_superset"):sql.index("), candidate_containers as")]
+    files = sql[sql.index("pg17_casefold_files as materialized"):sql.index("), identity_files as")]
+    sensitive = browse._CASEFOLD_SENSITIVE_CLASS
+    # A casefold-sensitive requested identity reads its year's files; nothing is scanned otherwise.
+    assert ("where requested_identities.pg17_casefold_sensitive and "
+            "library.duplicate_identity_year(files.scan_file_year) = requested_identities.album_year") in arms
+    # Otherwise only the casefold-sensitive files of the requested year: one regex read per statement, gated
+    # by the server version.
+    assert "join pg17_casefold_files files on files.album_year = requested_identities.album_year" in arms
+    assert f"where {ARM_GATE}" in files
+    for text in ("files.scan_file_album", "files.scan_file_album_artist"):
+        assert f"{text} ~ '{sensitive}'" in files, text
+        assert f"{text} ~ '{sensitive}'" in sql[:sql.index("as pg17_casefold_sensitive")], text
+    assert sql.count(ARM_GATE) == 2  # the casefold-sensitive files, and the requested identities' flag
+
+
+def test_casefold_sensitive_class_is_every_character_casefold_and_lower_treat_differently():
+    """The class matches exactly the characters whose casefold() differs from lower(), plus capital sigma
+    (lower() turns it into final sigma at a word's end): text without one folds alike under both."""
+    import re
+    import sys
+
+    import music_app.services.library_browse_postgres as browse
+
+    pattern = re.compile(browse._CASEFOLD_SENSITIVE_CLASS)
+    characters = [chr(code) for code in range(sys.maxunicode + 1) if not 0xD800 <= code <= 0xDFFF]
+    expected = {character for character in characters if character.casefold() != character.lower()} | {"Σ"}
+    assert {character for character in characters if pattern.fullmatch(character)} == expected
 
 
 def _server_version(fixture) -> int:
@@ -236,3 +256,123 @@ def test_ascii_only_identities_add_no_superset_candidates(library):
     results = _duplicate_results(library, [keys["One"], keys["Other"], keys["Elsewhere"]])
     assert results[keys["One"]]["has_duplicate_files"] is True
     assert keys["Other"] not in results and keys["Elsewhere"] not in results
+
+
+def test_casefold_insensitive_non_ascii_identities_add_no_superset_candidates(library):
+    """Cyrillic (or accented) text folds alike under lower() and casefold(): it never widens the PostgreSQL 17
+    arm to the whole requested year (the hosted fixture's backfill read every same-year album otherwise)."""
+    keys = _seed(
+        library,
+        ("One", "Ария", YEAR), ("Two", "АРИЯ", YEAR),
+        ("Other", "Другой", YEAR),
+    )
+    ids = _album_ids(library, keys.values())
+
+    candidates = _candidate_rows(library, keys["One"])
+    assert candidates == {ids[keys["One"]]: False, ids[keys["Two"]]: False}
+
+
+def test_no_keys_read_no_duplicate_candidates_and_run_no_statement():
+    import music_app.services.library_browse_postgres as browse
+
+    class Connection:
+        def execute(self, sql, params=None):
+            pytest.fail(f"no statement for no keys: {' '.join(sql.split())[:80]}")
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "no-keys"})
+    assert browse._load_duplicate_candidate_album_ids(Connection(), [], repository=repository) == []
+
+
+def test_no_whole_library_duplicate_identity_index_remains():
+    """Candidates always come from the keyed, indexed read: nothing builds, caches or refreshes a
+    whole-library identity index (startup, save or request)."""
+    import music_app.services.library_browse_postgres as browse
+
+    for gone in ("_duplicate_identity_index_rows_sql", "_duplicate_candidate_index_from_rows",
+                 "_duplicate_candidate_ids_from_index"):
+        assert not hasattr(browse, gone), gone
+    assert "duplicate-identities" not in browse._UTILITY_PROJECTION_KINDS
+
+
+def test_one_album_save_refresh_runs_no_whole_library_identity_sql(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    statements = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            statements.append(" ".join(sql.split()))
+            rows = ([{"library_id": 1, "inventory_revision": "2", "root_versions": [], "root_count": 1,
+                      "override_versions": None, "override_count": 0, "observed_at": 2}]
+                    if "inventory_mutation_revision" in sql else [])
+            return type("Cursor", (), {"fetchone": lambda _self: rows[0] if rows else None,
+                                       "fetchall": lambda _self: rows})()
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "one-album-save-refresh"}
+    monkeypatch.setattr(browse, "_connect", lambda _url: Connection())
+    monkeypatch.setattr(browse.problematic_index, "queue_maintenance", lambda _repository: None)
+    repository = browse.PostgresLibraryBrowseRepository(config)
+    repository._set_cached_utility_projection("duplicate-absence", {
+        "fingerprint": (1, "1", [], 1, None, 0), "observed_at": 1, "albums": {},
+    })
+    # A process that still held an identity index (the old startup prewarm's) gets no refresh SQL for it.
+    repository._set_cached_utility_projection("duplicate-identities", {
+        "fingerprint": (1, "1", [], 1, None, 0), "observed_at": 1, "index": [(1, "a::b", ("a", "b", 2001))],
+    })
+    browse.refresh_postgres_utility_projections_after_edit(
+        config, track_paths=["/music/a/01.flac"],
+        previous_entries=[{"album_artist": "A", "album": "B", "year": 2001}],
+    )
+    assert statements, "the refresh ran"
+    assert not [sql for sql in statements if "select distinct albums.id as album_id" in sql], statements
+    browse.invalidate_postgres_utility_projection_cache()
+
+
+_INVENTORY_TABLES = {"local_albums", "local_tracks", "local_track_files", "local_artists"}
+
+
+def _rows_scanned(plan) -> int:
+    """Rows a plan read from the inventory tables: rows produced plus rows its filters discarded."""
+    own = 0
+    if plan.get("Relation Name") in _INVENTORY_TABLES:
+        loops = int(plan.get("Actual Loops", 1))
+        own = round((plan.get("Actual Rows", 0) + plan.get("Rows Removed by Filter", 0)
+                     + plan.get("Rows Removed by Index Recheck", 0)) * loops)
+    return own + sum(_rows_scanned(child) for child in plan.get("Plans", ()))
+
+
+def _source_rows_read(fixture, albums: int, candidates: int) -> int:
+    """Rows the duplicate source-rows read scans in the inventory tables, for ``candidates`` albums of a
+    library of ``albums`` (one file each)."""
+    import psycopg
+
+    import music_app.services.library_browse_postgres as browse
+
+    fixture.seed(*(fixture.entry(f"Size{albums}/Artist {index:04d}/Album/01.flac", artist=f"Artist {index:04d}",
+                                 album=f"Album {index:04d}") for index in range(albums)))
+    with psycopg.connect(fixture.runtime_url) as connection:
+        connection.execute("analyze")
+        ids = [row[0] for row in connection.execute(
+            "select id from library.local_albums order by id limit %s", (candidates,)).fetchall()]
+        document = connection.execute(
+            "explain (analyze, format json) " + browse._duplicate_source_rows_for_album_ids_sql(),
+            {"album_ids": ids}).fetchone()[0]
+    return _rows_scanned(document[0]["Plan"])
+
+
+def test_duplicate_source_rows_read_only_the_candidates_rows_at_any_library_size(watcher_repair_inventory):  # noqa: F811
+    """6.5 (11-24): a duplicate absence miss reads the candidate albums' source rows by key. The rows it reads
+    follow the candidates, not the library (it scanned every track and artist: 169,348 rows for 550)."""
+    # Sizes where the planner costs the tables as tables (a few dozen rows are cheaper to filter than to look up).
+    candidates = 5
+    small = _source_rows_read(watcher_repair_inventory, 400, candidates)
+    large = _source_rows_read(watcher_repair_inventory, 1000, candidates)
+    print(f"source-rows read: {small} rows at 400 albums, {large} at 1000")
+    # Each candidate's own album, track, file and artist rows, plus a few index-recheck rows: never the library.
+    assert max(small, large) <= 10 * candidates, (small, large)

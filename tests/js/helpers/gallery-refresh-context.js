@@ -7,6 +7,13 @@ const { loadPendingProjectionFetch } = require('./pending-projection-fetch');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const viewStateHelpersPath = path.join(path.dirname(helperPath), 'view-state-helpers.js');
+// The refresh runtime asks view-state-helpers which view a refresh requests; the URL builders stay stubs.
+const viewForSearchRefreshSource = (() => {
+  const source = fs.readFileSync(viewStateHelpersPath, 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf('function viewForSearchRefresh(');
+  return source.slice(start, source.indexOf('\n}\n', start) + 3);
+})();
 
 // The real gallery refresh runtime (fetchAndRender and its request owners) in a vm context whose
 // collaborators record their calls; `fetch` holds each request until the test resolves it.
@@ -350,6 +357,7 @@ function createGalleryRefreshContext() {
 
   vm.createContext(context);
   loadPendingProjectionFetch(context);
+  vm.runInContext(viewForSearchRefreshSource, context, { filename: viewStateHelpersPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   const runtimeRenderView = context.renderView;
   context.renderView = function renderViewStub(options) {

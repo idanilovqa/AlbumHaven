@@ -6921,6 +6921,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/track-modal-lightbox-helpers.js#revealTrackModalSearchDisc",
+      "action": "scheduleBrowserAnimationFrame timers installed by revealTrackModalSearchDisc",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/track-modal-lightbox-helpers.js#revealTrackModalSearchDisc:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/trigger-anchor.js#<top-level>",
       "action": "album-haven-appearance-change/album-haven:surface-opening/resize/scroll listeners installed by <top-level>",
       "entrypoints": [
@@ -11347,8 +11362,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
-      "testIdentity": "test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_remove_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_additional_artwork_remove_route_contract_reads_only_the_selected_album_at_production_library_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
@@ -15484,6 +15499,22 @@
       "action": "Run reconciler _execute_semantic_local_album_reconciliation",
       "entrypoints": [
         "py:music_app/services/scan_cache_persistence.py#_execute_semantic_local_album_reconciliation:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/scan_cache_persistence.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scan_cache_persistence.py#_publish_album_credits",
+      "action": "Run publisher _publish_album_credits",
+      "entrypoints": [
+        "py:music_app/services/scan_cache_persistence.py#_publish_album_credits:publisher:name"
       ],
       "owners": [
         "music_app/services/scan_cache_persistence.py"

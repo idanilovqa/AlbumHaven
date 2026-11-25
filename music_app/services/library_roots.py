@@ -358,10 +358,10 @@ def library_root_cache_identity(config: dict[str, object]) -> str:
     change what a scan reads stay out: changing them must not force every file
     to be re-read. Excluding a key keeps the hash snapshots already carry.
     """
-    return _identity_of_settings(load_library_root_settings(config))
+    return library_root_settings_identity(load_library_root_settings(config))
 
 
-def _identity_of_settings(settings: dict[str, object]) -> str:
+def library_root_settings_identity(settings: dict[str, object]) -> str:
     payload = dict(settings)
     payload.pop(METADATA_CORRECTIONS_KEY, None)
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -380,7 +380,7 @@ def library_root_cache_identities(config: dict[str, object]) -> frozenset[str]:
 
 def _identities_of_settings(settings: dict[str, object]) -> frozenset[str]:
     legacy = json.dumps(dict(settings), sort_keys=True, separators=(",", ":"))
-    return frozenset({_identity_of_settings(settings), hashlib.sha256(legacy.encode("utf-8")).hexdigest()})
+    return frozenset({library_root_settings_identity(settings), hashlib.sha256(legacy.encode("utf-8")).hexdigest()})
 
 
 class PinnedRootIdentity(str):
@@ -394,7 +394,7 @@ class PinnedRootIdentity(str):
 def pin_library_scan_roots(config: dict[str, object]) -> tuple[list[dict[str, object]], PinnedRootIdentity]:
     """The roots one scan walks and the identity it loads and publishes under, from one settings read."""
     settings = load_library_root_settings(config)
-    identity = PinnedRootIdentity(_identity_of_settings(settings))
+    identity = PinnedRootIdentity(library_root_settings_identity(settings))
     identity.same_roots = _identities_of_settings(settings)
     return _roots_with_category(settings), identity
 

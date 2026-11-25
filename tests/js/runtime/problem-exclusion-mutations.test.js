@@ -839,3 +839,96 @@ test('album selection canonicalization retains foreign or unknown file identitie
   const selected = [albumItem(), foreign, unknown, missingPath];
   assert.deepEqual(clone(context.effectiveProblemExclusionItems(album, selected)), selected);
 });
+
+// The Rules payload lists problem exclusions in Python sorted() order of row_key (code points), so a
+// reload shows them in that order. These keys, in exactly that order, include case, accents, Cyrillic,
+// a full-width letter and an astral character, where code-unit or locale order would differ.
+const SERVER_ORDERED_FILE_KEYS = [
+  'Abba/Gold/01 Dancing Queen.flac::problem-file::missing-year',
+  'Moby/Play/01 Honey.flac::problem-file::missing-year',
+  'Zeta/Zero/01 Start.flac::problem-file::missing-year',
+  'abba/gold/02 Waterloo.flac::problem-file::missing-year',
+  'Émile/Encore/01 Bis.flac::problem-file::missing-year',
+  'émile/encore/02 Bis.flac::problem-file::missing-year',
+  'Алиса/Энергия/01 Пачка.flac::problem-file::missing-year',
+  'Ярослав/Альбом/01 Песня.flac::problem-file::missing-year',
+  'Ａ Wide/Album/01 Track.flac::problem-file::missing-year',
+  '\u{1d11e} Clef/Album/01 Track.flac::problem-file::missing-year',
+];
+
+function orderedFileItem(rowKey, extra = {}) {
+  const filePath = rowKey.split('::')[0];
+  return {
+    row_key: rowKey,
+    scope: 'file',
+    path: filePath,
+    filename: filePath.split('/').pop(),
+    problem_reason: 'Missing year',
+    ...extra,
+  };
+}
+
+function seedServerOrderedRule(context, keys) {
+  const items = keys.map((key) => orderedFileItem(key));
+  context.state.utility.rules = [{
+    ...emptyProblemIgnoreRule(),
+    count: items.length,
+    items,
+    file_items: items,
+  }];
+}
+
+function ruleFileKeys(context) {
+  return Array.from(problemIgnoreRule(context).file_items, (item) => item.row_key);
+}
+
+test('queued, acknowledged and rolled-back rules take their server position without a reload', () => {
+  const { context } = loadMutationHelpers();
+  const existing = [SERVER_ORDERED_FILE_KEYS[1], SERVER_ORDERED_FILE_KEYS[6]];
+  const added = SERVER_ORDERED_FILE_KEYS.filter((key) => !existing.includes(key));
+  seedServerOrderedRule(context, existing);
+
+  const operation = context.beginProblemExclusionMutation({
+    kind: 'create',
+    items: added.map((key) => orderedFileItem(key, { pending: true })),
+    snapshot: { ruleItems: [] },
+  });
+  context.state.utility.rules = context.mergePendingProblemExclusionRules(context.state.utility.rules);
+  assert.deepEqual(ruleFileKeys(context), SERVER_ORDERED_FILE_KEYS, 'queued rows');
+  assert.deepEqual(
+    Array.from(problemIgnoreRule(context).items, (item) => item.row_key),
+    SERVER_ORDERED_FILE_KEYS,
+  );
+
+  context.settleProblemExclusionMutation(operation, added.map((key) => orderedFileItem(key)));
+  assert.deepEqual(ruleFileKeys(context), SERVER_ORDERED_FILE_KEYS, 'acknowledged rows');
+
+  const revert = context.beginProblemExclusionMutation({
+    kind: 'revert',
+    items: [orderedFileItem(SERVER_ORDERED_FILE_KEYS[0])],
+    snapshot: { ruleItems: [orderedFileItem(SERVER_ORDERED_FILE_KEYS[0])] },
+  });
+  context.state.utility.rules = context.mergePendingProblemExclusionRules(context.state.utility.rules);
+  assert.deepEqual(ruleFileKeys(context), SERVER_ORDERED_FILE_KEYS.slice(1), 'reverted row removed');
+  context.rollbackProblemExclusionMutation(revert);
+  assert.deepEqual(ruleFileKeys(context), SERVER_ORDERED_FILE_KEYS, 'rolled-back revert');
+});
+
+test('a Rules load merged with a queued rule keeps the server order', () => {
+  const { context } = loadMutationHelpers();
+  const pendingKey = SERVER_ORDERED_FILE_KEYS[4];
+  context.beginProblemExclusionMutation({
+    kind: 'create',
+    items: [orderedFileItem(pendingKey, { pending: true })],
+    snapshot: { ruleItems: [] },
+  });
+  const loaded = SERVER_ORDERED_FILE_KEYS.filter((key) => key !== pendingKey).map((key) => orderedFileItem(key));
+
+  const merged = context.mergePendingProblemExclusionRules([{
+    ...emptyProblemIgnoreRule(), count: loaded.length, items: loaded, file_items: loaded,
+  }]);
+
+  const rule = merged.find((item) => item.key === 'problem-ignores');
+  assert.deepEqual(Array.from(rule.file_items, (item) => item.row_key), SERVER_ORDERED_FILE_KEYS);
+  assert.equal(rule.file_items[4].pending, true);
+});

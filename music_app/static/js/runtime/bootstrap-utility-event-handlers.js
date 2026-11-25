@@ -775,17 +775,13 @@ async function handleUtilityBootstrapClick(event) {
   const toggleCoverLookupDrawerButton = event.target.closest('[data-toggle-cover-lookup-drawer="1"]');
   if (toggleCoverLookupDrawerButton) {
     event.preventDefault();
-    state.coverLookup.drawerOpen = !state.coverLookup.drawerOpen;
-    ensureCoverLookupPolling();
-    loadCoverLookupTasks({ toast: false, mergeFirstPage: true });
-    renderCoverLookupDrawer();
+    toggleCoverLookupDrawer({ fromKeyboard: event.detail === 0 });
     return;
   }
 
   if (event.target.closest('[data-close-cover-lookup-drawer="1"]')) {
     event.preventDefault();
-    state.coverLookup.drawerOpen = false;
-    renderCoverLookupDrawer();
+    closeCoverLookupDrawer();
     return;
   }
 
@@ -1347,6 +1343,7 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  if (typeof handleCoverLookupDrawerKeyDown === 'function' && handleCoverLookupDrawerKeyDown(event)) return true;
   const exceptionInput = event.target?.closest?.('#tag-editor-form [data-tag-field="exception_type"]');
   const exceptionOption = event.target?.closest?.('[data-tag-editor-exception-option]');
   if (exceptionInput || exceptionOption) {

@@ -258,7 +258,8 @@ def title_case_tag_value(text: str | None) -> str | None:
             return word
         return word[:1].upper() + word[1:].lower()
 
-    return re.sub(r"[^\W\d_]+(?:['’][^\W\d_]+)?", convert_word, normalized, flags=re.UNICODE)
+    # A word glued to digits (the "th" of "20th") is not a new word.
+    return re.sub(r"(?<![^\W_])[^\W\d_]+(?:['’][^\W\d_]+)?", convert_word, normalized, flags=re.UNICODE)
 
 def safe_int(value) -> int | None:
     if value is None:

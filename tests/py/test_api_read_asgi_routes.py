@@ -811,6 +811,33 @@ def test_asgi_loose_track_availability_forwards_cyrillic_artist_scope(
     }
 
 
+@pytest.mark.parametrize("can_read_paths", [False, True])
+def test_asgi_loose_tracks_page_sends_readable_paths_only_to_path_readers(app, asgi_app, monkeypatch, can_read_paths):
+    """COL-07: a member opening Loose Tracks receives no readable file path; playback identity stays."""
+    from types import SimpleNamespace
+
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, config):
+            pass
+
+        def build_library_loose_tracks_payload(self, *, query_params=None):
+            return {"non_album_tracks": [{"path": "D:/Music/A/one.flac", "display_path": "A/one.flac", "title": "One"}]}
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+    monkeypatch.setattr(asgi_read_routes, "is_library_browse_postgres_available", lambda _config: True)
+    monkeypatch.setattr(asgi_read_routes, "allowed_actions_for_request",
+                        lambda *args: SimpleNamespace(as_payload=lambda: {"library.paths.read": can_read_paths}))
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/library/loose-tracks", query={"category": "main_library"})
+
+    assert status == 200
+    track = _decode_json(body)["non_album_tracks"][0]
+    assert ("display_path" in track) is can_read_paths
+    assert track["path"] == "D:/Music/A/one.flac" and track["title"] == "One"
+
+
 def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
     app,
     asgi_app,

@@ -782,6 +782,66 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
     assert other_settings == []
 
 
+def test_asgi_library_settings_save_keeps_the_corrections_mode_and_scans_only_for_changed_roots(
+    app, asgi_app, monkeypatch, ledger,
+):
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
+    from music_app.services.library_roots import save_library_root_settings
+
+    owner = ledger["own"]
+    app.config.update(ledger["config"])
+    app.config["PERSISTENCE_BACKENDS"] = {"library_roots": "postgres"}
+    asgi_app.state.config = app.config
+    actor = CurrentActor(
+        state=ActorState.ACTIVE, account_id=owner["account_id"], session_id=1,
+        username_display="fixture-library-owner", is_bootstrap_owner=True,
+        current_library_id=owner["library_id"],
+        library_relationships=(LibraryRelationship(owner["library_id"], "owner", True),),
+    )
+    asgi_app.state.current_actor_resolver = SimpleNamespace(resolve=lambda _token: actor)
+    asgi_app.state.media_host_library_id = owner["library_id"]
+    asgi_app.state.replace_library_watch_roots = lambda _roots: None
+    root_path = str(Path(app.config["MUSIC_DIR"]).resolve())
+    main_root = {"id": "main-1", "path": root_path, "layout_mode": "artist"}
+    save_library_root_settings(
+        app.config, {"main_library_roots": [main_root], "metadata_corrections": "write_tags"},
+        library_id=owner["library_id"], media_host_library_id=owner["library_id"],
+    )
+    refresh_calls = []
+    monkeypatch.setattr(
+        asgi_routes, "start_background_refresh_for_state",
+        lambda _state, _config, _logger, **kwargs: refresh_calls.append(kwargs),
+    )
+
+    # A client that does not send the corrections mode (an older build, or a save of the roots only).
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/library-settings", json_body={"settings": {"main_library_roots": [main_root]}},
+    )
+    _get_status, _get_headers, get_body = _run_asgi_request(asgi_app, "GET", "/library-settings")
+
+    payload = _decode_json(body)
+    assert (status, payload["ok"]) == (200, True)
+    assert payload["settings"]["metadata_corrections"] == "write_tags"
+    assert _decode_json(get_body)["settings"]["metadata_corrections"] == "write_tags"
+    with ledger["connect"]() as connection:
+        persisted = connection.execute(
+            "select settings_payload from library.library_root_settings where library_id=%s", (owner["library_id"],),
+        ).fetchone()
+    assert persisted["settings_payload"]["metadata_corrections"] == "write_tags"
+    # The roots are the ones already scanned, so the save starts no scan.
+    assert (payload["refresh_started"], payload["refresh_queued"]) == (False, False)
+    assert refresh_calls == []
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/library-settings",
+        json_body={"settings": {"main_library_roots": [main_root], "metadata_corrections": "display_only"}},
+    )
+    payload = _decode_json(body)
+    assert payload["settings"]["metadata_corrections"] == "display_only", "an explicit choice is still saved"
+    assert payload["refresh_started"] is False and refresh_calls == [], "a mode change reads no file again"
+
+
 @pytest.mark.parametrize("concurrent_save", [False, True])
 def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_serialized(
     asgi_app, monkeypatch, concurrent_save,
@@ -808,6 +868,7 @@ def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_se
     def workflow(config, settings, **kwargs):
         return save_library_settings_and_start_refresh(
             config, settings, save_root_settings=save_roots,
+            load_root_settings=lambda _config, **_scope: {},
             load_root_identity=lambda _config: ",".join(saved), **kwargs,
         )
 
@@ -889,6 +950,13 @@ def test_asgi_library_settings_post_rejects_overlapping_roots(app, asgi_app, mon
 
     monkeypatch.setattr("music_app.services.library_roots_postgres.psycopg", FakeLibraryRootsPsycopg())
     monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", FakeLibraryRootSettingsStore)
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.library_settings import save_library_settings_and_start_refresh
+
+    # Nothing is stored yet; the real save validates the roots.
+    monkeypatch.setattr(routes, "save_library_settings_and_start_refresh", lambda config, settings, **kwargs: (
+        save_library_settings_and_start_refresh(config, settings, load_root_settings=lambda _config, **_scope: {}, **kwargs)
+    ))
 
     status, _headers, body = _run_asgi_request(
         asgi_app,
@@ -928,13 +996,14 @@ def test_asgi_library_settings_write_during_a_scan_saves_and_queues_without_brid
 
     saved = []
     queued = []
-    identities = iter(["roots-before", "roots-after" if roots_changed else "roots-before"])
 
     def workflow(config, settings, **kwargs):
         return save_library_settings_and_start_refresh(
             config, settings, **kwargs,
             save_root_settings=lambda _config, payload, **_scope: saved.append(payload) or payload,
-            load_root_identity=lambda _config: next(identities),
+            # The stored roots: the ones being saved, unless this save changes them.
+            load_root_settings=lambda _config, **_scope: {} if roots_changed else dict(settings),
+            load_root_identity=lambda _config: "roots-after",
         )
 
     monkeypatch.setattr(asgi_routes, "save_library_settings_and_start_refresh", workflow)
@@ -5477,6 +5546,70 @@ def test_non_album_media_edit_reserves_source_album_and_track_path(
     assert releases == ["released"]
 
 
+@pytest.mark.parametrize("missing_tracks", [False, True])
+def test_postgres_media_edit_reads_the_tags_it_compares_only_once_it_holds_its_albums(
+    asgi_app,
+    monkeypatch,
+    missing_tracks,
+):
+    # Owner report (2026-11-24): a save sent while another save of the same tracks was still
+    # running compared against the tags read before that save finished, called the change
+    # already saved, and answered success without writing it.
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+
+    track_path = "C:/Music/Artist/Album/song.mp3"
+    events: list[str] = []
+
+    class Lease:
+        def release(self):
+            events.append("released")
+
+    async def acquire(_resource_keys):
+        events.append("reserved")
+        return Lease()
+
+    def load_edit_state(_request, _payload):
+        events.append("read tags")
+        if missing_tracks:
+            raise asgi_routes.EditTagsTracksNotInLibrary("song")
+        return {"file_cache": {track_path: {"path": track_path, "album_artist": "Artist"}}}
+
+    def handle(**kwargs):
+        events.append("compared")
+        assert kwargs["get_state"]()["file_cache"][track_path]["album_artist"] == "Artist"
+        kwargs["structural_tag_edit_reservation"].release()
+        return {"ok": True, "changed_files": [], "changed_count": 0}
+
+    monkeypatch.setattr(asgi_routes, "acquire_structural_tag_edit_reservation_async", acquire)
+    monkeypatch.setattr(asgi_routes, "_is_selected_postgres_library_browse_request", lambda _request: True)
+    monkeypatch.setattr(asgi_routes, "_postgres_exception_only_edit_state", load_edit_state)
+    monkeypatch.setattr(asgi_routes, "handle_edit_tags_request", handle)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/edit-tags",
+        json_body={
+            "confirmed": True,
+            "album": {
+                "key": "artist::album",
+                "name": "Album",
+                "album_artist": "Artist",
+                "tracks": [{"path": track_path}],
+            },
+            "updates": {track_path: {"album_artist": "Artist 2"}},
+        },
+    )
+
+    if missing_tracks:
+        assert status == 409
+        assert _decode_json(body)["code"] == "tracks_not_in_library"
+        assert events == ["reserved", "read tags", "released"]
+    else:
+        assert status == 200
+        assert events == ["reserved", "read tags", "compared", "released"]
+
+
 def test_media_edit_reservation_includes_destination_album_identity_changes():
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
     from music_app.services import save_tasks as save_tasks_module
@@ -5961,6 +6094,47 @@ def test_a_resent_save_the_server_already_received_is_refused_before_any_work(mo
     assert status == 409
     assert _decode_json(body) == {"ok": False, "code": "duplicate_request", "intent_status": "completed",
                                   "error": "This save was already received."}
+
+
+def _resent_save(path, saved_at_ms):
+    return {
+        # An id the journal never received.
+        "confirmed": True, "client_request_id": "5d0c1a2b-3c4d-4e5f-9a0b-1c2d3e4f5a6b", "resend": True,
+        "client_saved_at": saved_at_ms,
+        "album": {"key": "album-alpha", "name": "Album", "album_artist": "Artist", "tracks": [{"path": str(path)}]},
+        "updates": {str(path): {"title": "Older title"}},
+    }
+
+
+def test_a_late_resend_never_overwrites_files_changed_after_the_page_made_it(monkeypatch, tmp_path):
+    """A save the server never received is sent again later; a newer save of the same files may have landed
+    meanwhile, and the older values must not be written over it."""
+    import os
+    import time
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    track = tmp_path / "Artist" / "Album" / "01.mp3"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"generated-test-track")
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config["_library_root_paths_snapshot"] = (tmp_path.resolve(),)
+    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
+    monkeypatch.setattr(routes, "handle_edit_tags_request",
+                        lambda **_kwargs: pytest.fail("an older save must not be written over a newer change"))
+    saved_at_ms = (time.time() - 600) * 1000  # the page made it ten minutes ago; the file changed since
+
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body=_resent_save(track, saved_at_ms))
+
+    assert status == 409
+    assert _decode_json(body) == {"ok": False, "code": "superseded",
+                                  "error": "These files changed after this edit was made, so it was not saved over them."}
+    assert track.read_bytes() == b"generated-test-track"
+
+    # Unchanged since the page made it (allowing for a page clock a minute ahead): the resend goes ahead.
+    os.utime(track, (saved_at_ms / 1000 - 61, saved_at_ms / 1000 - 61))
+    assert routes._resend_is_superseded(asgi_app.state.config, {str(track): {}}, saved_at_ms) is False
+    # A resend that cannot say when it was made could be older than anything.
+    assert routes._resend_is_superseded(asgi_app.state.config, {str(track): {}}, None) is True
 
 
 def test_one_status_request_answers_every_waiting_save(monkeypatch):

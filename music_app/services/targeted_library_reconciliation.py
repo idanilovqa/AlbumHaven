@@ -100,6 +100,24 @@ class TargetedLibraryReconciler:
         primary_root = self._root_by_id(root_id, root_definitions)
         if primary_root is None:
             return TargetedReconciliationResult(0, (), "invalid_path")
+        # Each root is resolved once per pass, not once per path: a whole-root catch-up
+        # otherwise made several filesystem calls per file for the root alone.
+        resolved_roots: dict[int, Path] = {}
+
+        def root_path(root: dict[str, object]) -> Path:
+            if id(root) not in resolved_roots:
+                resolved_roots[id(root)] = Path(str(root.get("path") or "")).resolve(strict=False)
+            return resolved_roots[id(root)]
+
+        def belongs(path: Path, root: dict[str, object]) -> bool:
+            return _is_within(path, root_path(root))
+
+        # A running scan re-reads every root, so preparing paths yields to it as reading does.
+        def yields() -> bool:
+            return interrupted is not None and interrupted()
+
+        if yields():
+            return TargetedReconciliationResult(0, (), "deferred")
 
         supported_extensions = {
             str(extension).casefold()
@@ -127,21 +145,24 @@ class TargetedLibraryReconciler:
         active_targets: list[tuple[Path, dict[str, object]]] = []
         for path in getattr(request, "paths", ()) or ():
             candidate = Path(path)
-            if not self._belongs_to_root(candidate, primary_root):
+            if not belongs(candidate, primary_root):
                 return TargetedReconciliationResult(0, (), "invalid_path")
             if candidate.is_dir():
-                active_targets.extend(
-                    (media_path, primary_root)
-                    for media_path in self._supported_media_descendants(candidate)
-                    if self._belongs_to_root(media_path, primary_root)
-                )
+                descendants = self._supported_media_descendants(candidate, yields)
+                if descendants is None:
+                    return TargetedReconciliationResult(0, (), "deferred")
+                for media_path in descendants:
+                    if yields():
+                        return TargetedReconciliationResult(0, (), "deferred")
+                    if belongs(media_path, primary_root):
+                        active_targets.append((media_path, primary_root))
             elif is_supported_media(candidate):
                 active_targets.append((candidate, primary_root))
-        if not all(self._belongs_to_root(path, primary_root) for path in deleted_paths):
+        if not all(belongs(path, primary_root) for path in deleted_paths):
             return TargetedReconciliationResult(0, (), "invalid_path")
-        if not all(self._belongs_to_root(path, primary_root) for path in deleted_subtrees):
+        if not all(belongs(path, primary_root) for path in deleted_subtrees):
             return TargetedReconciliationResult(0, (), "invalid_path")
-        if not all(self._belongs_to_root(path, primary_root) for path in preserved_subtrees):
+        if not all(belongs(path, primary_root) for path in preserved_subtrees):
             return TargetedReconciliationResult(0, (), "invalid_path")
         for preserved_path in preserved_subtrees:
             # An overlap can be a single file inside a moved directory. Enumerate
@@ -149,11 +170,14 @@ class TargetedLibraryReconciler:
             if preserved_path.is_file() and is_supported_media(preserved_path):
                 active_targets.append((preserved_path, primary_root))
             else:
-                active_targets.extend(
-                    (path, primary_root)
-                    for path in self._supported_media_descendants(preserved_path)
-                    if self._belongs_to_root(path, primary_root)
-                )
+                descendants = self._supported_media_descendants(preserved_path, yields)
+                if descendants is None:
+                    return TargetedReconciliationResult(0, (), "deferred")
+                for path in descendants:
+                    if yields():
+                        return TargetedReconciliationResult(0, (), "deferred")
+                    if belongs(path, primary_root):
+                        active_targets.append((path, primary_root))
 
         normalized_moves: list[dict[str, object]] = []
         source_subtrees = {root_id: {str(path) for path in deleted_subtrees}}
@@ -169,16 +193,21 @@ class TargetedLibraryReconciler:
             if (
                 source_root is None
                 or destination_root is None
-                or not self._belongs_to_root(source, source_root)
-                or not self._belongs_to_root(destination, destination_root)
+                or not belongs(source, source_root)
+                or not belongs(destination, destination_root)
             ):
                 return TargetedReconciliationResult(0, (), "invalid_path")
             is_directory = bool(getattr(move, "is_directory", False))
             if is_directory:
                 deleted_subtrees += (source,)
                 source_subtrees.setdefault(source_root_id, set()).add(str(source))
-                for media_path in self._supported_media_descendants(destination):
-                    if self._belongs_to_root(media_path, destination_root):
+                descendants = self._supported_media_descendants(destination, yields)
+                if descendants is None:
+                    return TargetedReconciliationResult(0, (), "deferred")
+                for media_path in descendants:
+                    if yields():
+                        return TargetedReconciliationResult(0, (), "deferred")
+                    if belongs(media_path, destination_root):
                         active_targets.append((media_path, destination_root))
             else:
                 if is_supported_media(source):
@@ -207,20 +236,21 @@ class TargetedLibraryReconciler:
             tuple[str, Path], tuple[Path, dict[str, object]]
         ] = {}
         for candidate, matched_root in active_targets:
-            album_directory = self._album_directory(candidate, matched_root)
-            directory_key = (
-                str(matched_root.get("id") or ""),
-                album_directory.resolve(strict=False),
-            )
+            if yields():
+                return TargetedReconciliationResult(0, (), "deferred")
+            # Already resolved: the album folder of a resolved path, or the resolved root.
+            album_directory = _album_directory(candidate, root_path(matched_root))
             affected_directories.setdefault(
-                directory_key,
+                (str(matched_root.get("id") or ""), album_directory),
                 (album_directory, matched_root),
             )
         for album_directory, matched_root in affected_directories.values():
+            if yields():
+                return TargetedReconciliationResult(0, (), "deferred")
             expanded_targets.extend(
                 (media_path, matched_root)
                 for media_path in self._supported_album_media(album_directory)
-                if self._belongs_to_root(media_path, matched_root)
+                if belongs(media_path, matched_root)
             )
         active_targets = expanded_targets
 
@@ -230,12 +260,13 @@ class TargetedLibraryReconciler:
             tuple[int | None, int | None, str | None, int | None, int | None],
         ] = {}
         active_by_path = {
-            str(candidate.resolve(strict=False)): (
-                candidate.resolve(strict=False),
-                root,
+            str(resolved): (resolved, root)
+            for resolved, root in (
+                (candidate.resolve(strict=False), root) for candidate, root in active_targets
             )
-            for candidate, root in active_targets
         }
+        if yields():
+            return TargetedReconciliationResult(0, (), "deferred")
         reservation_paths = set(active_by_path)
         reservation_paths.update(str(path) for path in deleted_paths)
         for move in normalized_moves:
@@ -399,16 +430,6 @@ class TargetedLibraryReconciler:
             None,
         )
 
-    @staticmethod
-    def _belongs_to_root(path: Path, root: dict[str, object]) -> bool:
-        try:
-            path.resolve(strict=False).relative_to(
-                Path(str(root.get("path") or "")).resolve(strict=False)
-            )
-        except (OSError, ValueError):
-            return False
-        return True
-
     def _supported_album_media(self, directory: Path) -> tuple[Path, ...]:
         from music_app.services.library import _DISC_FOLDER_RE
 
@@ -431,7 +452,11 @@ class TargetedLibraryReconciler:
                 )
         return tuple(media_paths)
 
-    def _supported_media_descendants(self, directory: Path) -> tuple[Path, ...]:
+    def _supported_media_descendants(
+        self, directory: Path, interrupted: Callable[[], bool] | None = None,
+    ) -> tuple[Path, ...] | None:
+        """Every supported media file under ``directory``; None once ``interrupted`` says so,
+        never an empty result a caller could publish as the subtree's deletion."""
         supported = {
             str(extension).casefold()
             for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
@@ -445,6 +470,8 @@ class TargetedLibraryReconciler:
                 return ()
             # pathlib.rglob suppresses PermissionError and can make an unreadable
             # subtree appear empty. Publication requires complete enumeration.
+            if interrupted is not None and interrupted():
+                return None
             with os.scandir(pending.pop()) as entries:
                 for entry in entries:
                     if self._stop_event.is_set():
@@ -455,19 +482,26 @@ class TargetedLibraryReconciler:
                         paths.append(Path(entry.path))
         return tuple(paths)
 
-    @staticmethod
-    def _album_directory(path: Path, root: dict[str, object]) -> Path:
-        from music_app.services.library import _track_album_container
 
-        resolved_root = Path(str(root.get("path") or "")).resolve(strict=False)
-        album_directory = Path(
-            _track_album_container(path.resolve(strict=False))
-        ).resolve(strict=False)
-        try:
-            album_directory.relative_to(resolved_root)
-        except (OSError, ValueError):
-            return resolved_root
-        return album_directory
+def _is_within(path: Path, resolved_root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(resolved_root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _album_directory(path: Path, resolved_root: Path) -> Path:
+    from music_app.services.library import _track_album_container
+
+    album_directory = Path(
+        _track_album_container(path.resolve(strict=False))
+    ).resolve(strict=False)
+    try:
+        album_directory.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return resolved_root
+    return album_directory
 
 
 def _unchanged_persisted_entry(persisted: object, path: Path) -> dict[str, object] | None:

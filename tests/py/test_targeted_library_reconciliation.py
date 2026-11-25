@@ -1726,3 +1726,115 @@ def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_li
     )
     assert small == production
     assert small.open_calls == production.open_calls
+
+
+def _catch_up_root(root: Path, album_count: int) -> list[Path]:
+    files = []
+    for album in range(album_count):
+        for track in (1, 2):
+            path = root / "Catch Up" / f"Album {album:02d}" / f"{track:02d}.mp3"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"media")
+            files.append(path)
+    return files
+
+
+def _catch_up_reconciler(root: Path, parsed: list[Path]):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    def read(path: Path) -> dict[str, object]:
+        parsed.append(path)
+        return {
+            "path": str(path), "album": path.parent.name, "album_artist": "Catch Up", "artist": "Catch Up",
+            "title": path.stem, "track_number": int(path.stem), "disc_number": 1, "mtime": 1.0, "size": 5,
+        }
+
+    return TargetedLibraryReconciler(
+        {"IMAGE_EXTENSIONS": {".jpg"}, "SUPPORTED_EXTENSIONS": {".mp3"}},
+        repository=RecordingRepository(),
+        root_definitions=[{"id": "main", "path": root, "category": "main_library_roots"}],
+        metadata_reader=read,
+        stable_sample_interval=0,
+    )
+
+
+def _counting_resolve(monkeypatch, counted):
+    """Counts Path.resolve calls per resolved path string."""
+    import pathlib
+
+    original = pathlib.Path.resolve
+
+    def resolve(self, strict=False):
+        counted.append(str(self))
+        return original(self, strict=strict)
+
+    monkeypatch.setattr(pathlib.Path, "resolve", resolve)
+
+
+def test_whole_root_catch_up_resolves_the_root_a_constant_number_of_times(tmp_path, monkeypatch):
+    """A catch-up after an unclean restart re-reads the whole root. Resolving the root once per
+    path (four times per file on Windows, each a filesystem call) kept the reconciliation thread
+    busy for minutes on a 160k-file library while searches waited for the GIL."""
+    root_resolutions = {}
+    for album_count in (2, 12):
+        root = tmp_path / f"Music {album_count}"
+        files = _catch_up_root(root, album_count)
+        parsed, counted = [], []
+        _counting_resolve(monkeypatch, counted)
+        result = _catch_up_reconciler(root, parsed).reconcile(
+            _request(paths=(root,), deleted_subtrees=(root,)),
+        )
+        monkeypatch.undo()
+        assert result.health == "healthy"
+        assert sorted(parsed) == sorted(files)
+        root_resolutions[album_count] = counted.count(str(root))
+
+    assert root_resolutions[2] == root_resolutions[12], f"root resolved per path: {root_resolutions}"
+    # The root definition once, plus the request's own two root paths (the target and the
+    # deleted subtree) checked once each.
+    assert root_resolutions[12] == 3, f"root resolved more than once per pass: {root_resolutions}"
+
+
+def test_whole_root_catch_up_yields_to_a_running_scan_before_preparing_every_path(tmp_path, monkeypatch):
+    """A running scan re-reads every root, so a catch-up yields to it ("deferred") and retries
+    after it. It checked only between file reads, after preparing every path of the root, and
+    so ran on beside the scan for minutes."""
+    root = tmp_path / "Music"
+    files = _catch_up_root(root, 12)
+    parsed, counted, checks = [], [], []
+
+    def scan_starts_after_the_first_check() -> bool:
+        checks.append(True)
+        return len(checks) > 1
+
+    _counting_resolve(monkeypatch, counted)
+    result = _catch_up_reconciler(root, parsed).reconcile(
+        _request(paths=(root,), deleted_subtrees=(root,)),
+        interrupted=scan_starts_after_the_first_check,
+    )
+    monkeypatch.undo()
+
+    assert result.health == "deferred"
+    assert parsed == []
+    file_resolutions = sum(1 for value in counted if value in {str(path) for path in files})
+    assert file_resolutions <= 2, (
+        f"prepared {file_resolutions} file resolutions for {len(files)} files after the scan started"
+    )
+
+
+def test_a_catch_up_interrupted_during_its_root_walk_never_publishes_the_root_as_deleted(tmp_path):
+    """The catch-up names the whole root as a deleted subtree and re-adds what it finds. A walk
+    cut short by a scan that then ended must defer, not publish an empty root."""
+    root = tmp_path / "Music"
+    _catch_up_root(root, 3)
+    parsed = []
+    answers = iter([False, True])  # no scan at the start; one starts during the walk, then ends
+    reconciler = _catch_up_reconciler(root, parsed)
+
+    result = reconciler.reconcile(
+        _request(paths=(root,), deleted_subtrees=(root,)),
+        interrupted=lambda: next(answers, False),
+    )
+
+    assert result.health == "deferred"
+    assert reconciler._repository.calls == [], "an interrupted walk published the root as deleted"

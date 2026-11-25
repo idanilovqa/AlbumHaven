@@ -24389,6 +24389,9 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverRef)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
+// Only a playing row carries the perimeter spectrum (album-track-table.css).
+const ALBUM_TRACK_SPECTRUM_HTML = '<span class="album-track-table__spectrum" aria-hidden="true"></span>';
+
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const trackPath = String(track.path || '');
   const classes = ['album-track-table__row'];
@@ -24425,7 +24428,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(trackNumber)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
+      number: { content: `${track.isPlaying ? ALBUM_TRACK_SPECTRUM_HTML : ''}<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(trackNumber)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
@@ -24601,6 +24604,9 @@ function syncAlbumTrackTablePlayback(root, { trackPath = '', playing = false, cu
     row.classList.toggle('album-track-table__row--current', isCurrent);
     row.classList.toggle('album-track-table__row--playing', isPlaying);
     row.classList.toggle('album-track-table__row--animated', isPlaying && animated);
+    if (isPlaying && !row.querySelector('.album-track-table__spectrum')) {
+      row.querySelector('.album-track-table__number-play')?.insertAdjacentHTML('beforebegin', ALBUM_TRACK_SPECTRUM_HTML);
+    }
     const trackPlaying = isPlaying ? 'true' : '';
     if (row.dataset && row.dataset.trackPlaying !== trackPlaying) row.dataset.trackPlaying = trackPlaying;
     const button = row.querySelector('.play-track-button');

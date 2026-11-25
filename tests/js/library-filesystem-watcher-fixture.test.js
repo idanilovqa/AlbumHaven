@@ -23,7 +23,10 @@ test('watcher fixture forwards custom titles artists and discs through atomic al
   assert.match(source, /async function retag\(trackPath,\s*\{[\s\S]*?trackArtist,[\s\S]*?albumArtist,[\s\S]*?discTag\s*=\s*'1\/1'/);
   assert.match(source, /trackTitles:\s*titles[\s\S]*?trackArtist:\s*defaultTrackArtist[\s\S]*?trackArtists:\s*albumTrackArtists[\s\S]*?albumArtist:\s*albumOwner[\s\S]*?discNumbers:\s*albumDiscNumbers/);
   assert.match(source, /trackArtist:\s*albumTrackArtists\?\.\[index\]\s*\|\|\s*defaultTrackArtist/);
-  assert.match(source, /discTotal\s*>\s*1[\s\S]*?`CD\$\{discNumber\}`/);
+  // Multi-disc albums get one folder per disc: CD1, CD2 by default, or a named part prefix
+  // (FTC-COVERS-045 uses 'Часть ').
+  assert.match(source, /discFolderPrefix\s*=\s*'CD'/);
+  assert.match(source, /discTotal\s*>\s*1[\s\S]*?`\$\{discFolderPrefix\}\$\{discNumber\}`/);
 });
 
 function fixture(t, ownedDirectoryName = 'watcher-reconciliation') {

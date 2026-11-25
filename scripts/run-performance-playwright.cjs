@@ -19,6 +19,7 @@ const {
   classifyPerformanceThreshold,
 } = require('./performance-threshold-classification.cjs');
 const { resolveTimingBudget } = require('./performance-times-contract.cjs');
+const { describeQuarantine, listRegisteredCases } = require('./ci/performance-quarantine.cjs');
 const {
   _private: { loadDotEnvFile },
 } = require('./run-playwright.cjs');
@@ -1460,7 +1461,8 @@ function createAttemptRecord(
   return {
     attemptNumber,
     status,
-    measurementExpected: target.measurementExpected !== false && Boolean(target.reportId),
+    measurementExpected: target.measurementExpected !== false && Boolean(target.reportId)
+      && !isQuarantinedPattern(target, target.metricCasePattern || target.casePattern),
     expectedCasePatterns: listTargetCasePatterns(target),
     runId: latestMetricsRecord?.runMetrics?.runId || null,
     metricCaseId: latestMetricsRecord?.runMetrics?.caseId || null,
@@ -1502,13 +1504,49 @@ function isFinalizedPlaywrightJsonReport(report) {
   return countKeys.reduce((total, key) => total + stats[key], 0) > 0;
 }
 
+let registeredPerformanceCases = listRegisteredCases();
+
+// Tests that pin the full default suite replace the live registry so a quarantine does not reshape them.
+function setRegisteredPerformanceCases(cases) {
+  const previous = registeredPerformanceCases;
+  registeredPerformanceCases = cases;
+  return previous;
+}
+
+function listTargetRegisteredCases(target) {
+  return registeredPerformanceCases.filter((entry) => entry.target === target.aliasNames?.[0]);
+}
+
+// A pattern is quarantined only when every registered case it selects is quarantined, so a shared
+// case-ID pattern keeps running while any of its cases still runs.
+function isQuarantinedPattern(target, pattern) {
+  const normalizedPattern = normalizeTestHierarchy(pattern);
+  const selectedCases = listTargetRegisteredCases(target)
+    .filter((entry) => normalizeTestHierarchy(entry.case).includes(normalizedPattern));
+  return Boolean(normalizedPattern) && selectedCases.length > 0 && selectedCases.every((entry) => entry.quarantine);
+}
+
+function isFullyQuarantinedTarget(target) {
+  const cases = listTargetRegisteredCases(target);
+  return cases.length > 0 && cases.every((entry) => entry.quarantine);
+}
+
+function announceQuarantinedCases(target) {
+  const lines = listTargetRegisteredCases(target)
+    .filter((entry) => entry.quarantine)
+    .map((entry) => `[performance-quarantine] ${entry.target} > ${entry.case}: ${describeQuarantine(entry)}`);
+  for (const line of lines) console.log(line);
+  const summaryPath = String(process.env.GITHUB_STEP_SUMMARY || '').trim();
+  if (lines.length && summaryPath) fs.appendFileSync(summaryPath, lines.map((line) => `- ${line}\n`).join(''));
+}
+
 function listTargetCasePatterns(target) {
   const configuredPatterns = Array.isArray(target.casePatterns)
     ? target.casePatterns
     : [target.casePattern || target.grep];
   return configuredPatterns
     .map((pattern) => String(pattern || '').trim())
-    .filter(Boolean);
+    .filter((pattern) => pattern && !isQuarantinedPattern(target, pattern));
 }
 
 function normalizeTestHierarchy(value) {
@@ -2713,7 +2751,13 @@ function runBatchedPerformanceSuite(targets, options) {
 }
 
 function runSequentialPerformanceSuite(options) {
-  const targets = resolveRequestedTargets(options);
+  const targets = resolveRequestedTargets(options).filter((target) => {
+    announceQuarantinedCases(target);
+    return !isFullyQuarantinedTarget(target);
+  });
+  if (targets.length === 0) {
+    return 0;
+  }
   if (!String(options.targetInput || '').trim()) {
     return runBatchedPerformanceSuite(targets, options);
   }
@@ -2781,6 +2825,11 @@ module.exports = {
     buildRunnerArgs,
     hasAggregateValidationResults,
     groupBatchesForFullSuiteBudgets,
+    isFullyQuarantinedTarget,
+    isQuarantinedPattern,
+    listTargetCasePatterns,
+    createAttemptRecord,
+    setRegisteredPerformanceCases,
     listDefaultPerformanceTargets,
     listGroupedPerformanceTargets,
     mean,

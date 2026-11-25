@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const performanceRunner = require('../../scripts/run-performance-playwright.cjs');
+const { listRegisteredCases } = require('../../scripts/ci/performance-quarantine.cjs');
 const { _private } = performanceRunner;
 const REAL_APP_ENV = {
   ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
@@ -2929,7 +2930,17 @@ test('runTargetWithPolicy does not treat stale metrics from an earlier attempt a
   );
 });
 
+// These tests pin every default target's launch order, so they run against the registry with no
+// quarantine; the quarantine contract has its own tests.
+function withoutPerformanceQuarantine(t) {
+  const previous = performanceRunner._private.setRegisteredPerformanceCases(
+    listRegisteredCases().map((entry) => ({ ...entry, quarantine: null })),
+  );
+  t.after(() => performanceRunner._private.setRegisteredPerformanceCases(previous));
+}
+
 test('runSequentialPerformanceSuite executes the default approved performance targets when no target is provided', (t) => {
+  withoutPerformanceQuarantine(t);
   usePreloadedFixtureEnv(t, 'idle-memory');
   useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
@@ -3198,6 +3209,7 @@ test('buildAttemptEnv prevents report auto-open while preserving headed mode', (
 });
 
 test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even after earlier batches consume wall clock time', (t) => {
+  withoutPerformanceQuarantine(t);
   usePreloadedFixtureEnv(t, 'idle-memory');
   useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
@@ -3276,4 +3288,61 @@ test('one grouped run never mixes the standard and production-calibration librar
     ]),
     /cannot combine the standard and production-calibration synthetic libraries/,
   );
+});
+
+test('a performance quarantine drops only the cases it names and skips a target whose cases are all quarantined', (t) => {
+  const quarantine = { reason: 'Over its hard ceiling.', owner: '#65', failedRun: '1', since: '2026-11-25' };
+  const previous = _private.setRegisteredPerformanceCases(listRegisteredCases().map((entry) => ({
+    ...entry,
+    quarantine: entry.target === 'cover-lookup'
+      || entry.case.endsWith('› Stale projection keeps selected startup and superseding Home responsive')
+      ? quarantine
+      : null,
+  })));
+  t.after(() => _private.setRegisteredPerformanceCases(previous));
+  const selectedArtist = _private.listDefaultPerformanceTargets()
+    .find((target) => target.aliasNames[0] === 'selected-artist');
+  const coverLookup = _private.listDefaultPerformanceTargets()
+    .find((target) => target.aliasNames[0] === 'cover-lookup');
+
+  assert.equal(_private.isQuarantinedPattern(selectedArtist, 'FTC-GALLERY-STARTUP-005Q'), false);
+  assert.deepEqual(_private.listTargetCasePatterns(selectedArtist), [
+    'Selected artist UI reports library_browse telemetry and timing',
+    'FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family',
+  ]);
+  assert.equal(_private.isFullyQuarantinedTarget(selectedArtist), false);
+  assert.equal(_private.isFullyQuarantinedTarget(coverLookup), true);
+
+  const originalSpawnSync = childProcess.spawnSync;
+  const calls = [];
+  childProcess.spawnSync = (...args) => {
+    calls.push(args);
+    return { error: null, status: 1, stdout: '', stderr: '' };
+  };
+  t.after(() => {
+    childProcess.spawnSync = originalSpawnSync;
+  });
+  const exitCode = _private.runSequentialPerformanceSuite({
+    browser: 'chrome',
+    grep: '',
+    group: 'all',
+    headless: true,
+    repeatCount: 1,
+    targetInput: 'cover-lookup',
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('a metric case under quarantine leaves its target without an expected measurement', (t) => {
+  const quarantine = { reason: 'Over its hard ceiling.', owner: '#65', failedRun: '1', since: '2026-11-25' };
+  const previous = _private.setRegisteredPerformanceCases(listRegisteredCases().map((entry) => ({
+    ...entry,
+    quarantine: entry.case.endsWith('› Selected artist UI reports library_browse telemetry and timing') ? quarantine : null,
+  })));
+  t.after(() => _private.setRegisteredPerformanceCases(previous));
+  const selectedArtist = _private.listDefaultPerformanceTargets()
+    .find((target) => target.aliasNames[0] === 'selected-artist');
+
+  assert.equal(_private.createAttemptRecord(selectedArtist, 1, 0, null).measurementExpected, false);
 });

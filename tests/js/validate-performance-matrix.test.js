@@ -366,3 +366,15 @@ test('functional shards and all performance target artifacts remain present with
   assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target17\s*\}\}/);
   assert.doesNotMatch(workflow, /^  (?:merge_cloud_reports|deploy_cloud_reports):/m);
 });
+
+test('a performance quarantine entry must name its reason, owning pull request, failed run and start date', () => {
+  const { quarantineProblems } = require('../../scripts/ci/performance-quarantine.cjs');
+  assert.deepEqual(quarantineProblems({ reason: 'Over its hard ceiling.', owner: '#65', failedRun: '45489013188', since: '2026-11-25' }), []);
+  assert.deepEqual(quarantineProblems({ reason: ' ', owner: '65', failedRun: 'run', since: 'today' }), [
+    'quarantine.reason is missing or malformed',
+    'quarantine.owner is missing or malformed',
+    'quarantine.failedRun is missing or malformed',
+    'quarantine.since is missing or malformed',
+  ]);
+  assert.deepEqual(quarantineProblems(true), ['quarantine must be an object']);
+});

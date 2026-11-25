@@ -3,6 +3,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
 const { validatePerformanceChangeImpact } = require('./performance-change-impact.cjs');
+const { quarantineProblems } = require('./performance-quarantine.cjs');
 
 const EXPECTED_TARGET_COUNT = 29;
 const EXPECTED_CASE_COUNT = 60;
@@ -120,6 +121,11 @@ function validateRegistry(errors, contract, runnerModule, testDataMatrix) {
     }
   }
   const runnerTargets = runnerModule?.PERFORMANCE_TARGETS || {}; if (JSON.stringify(Object.keys(runnerTargets).filter((name) => names.includes(name))) !== JSON.stringify(names)) errors.push('performance runner registry disagrees with reviewed target contract'); const defaultNames = runnerModule?._private?.listDefaultPerformanceTargets?.().map((target) => target.aliasNames?.[0] || target.specPath) || []; if (JSON.stringify(defaultNames.filter((name) => names.includes(name))) !== JSON.stringify(names)) errors.push('performance runner default group disagrees with reviewed target contract'); const ownedKeys = cases.map(caseKey);
+  for (const entry of cases) {
+    if (entry.quarantine !== undefined) {
+      for (const problem of quarantineProblems(entry.quarantine)) errors.push(`performance case ${caseKey(entry)} ${problem}`);
+    }
+  }
   if (new Set(ownedKeys).size !== ownedKeys.length) errors.push('duplicate performance case ownership');
   const matrixKeys = new Set((testDataMatrix || []).map(caseKey));
   for (const key of ownedKeys) if (!matrixKeys.has(key)) errors.push(`performance case is missing from the test-data matrix: ${key}`);

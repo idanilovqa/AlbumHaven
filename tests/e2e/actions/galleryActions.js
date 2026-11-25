@@ -1719,8 +1719,12 @@ export class GalleryActions {
   async openAlbumContextMenu(albumName) {
     const card = this.galleryPage.albumCard.cardByAlbumName(albumName).first();
     await expect(card).toBeVisible();
-    await card.click({ button: 'right' });
-    await expect(this.galleryPage.albumCard.contextMenu).toBeVisible();
+    // The menu closes on any scroll, so a gallery still settling its position after a navigation can
+    // close it right away; the right-click is repeated until the menu stays open.
+    await expect(async () => {
+      await card.click({ button: 'right' });
+      await expect(this.galleryPage.albumCard.contextMenu).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10000 });
   }
 
   async dismissAlbumContextMenu() {

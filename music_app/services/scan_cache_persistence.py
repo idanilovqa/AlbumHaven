@@ -22,7 +22,7 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.library_reachability import missing_reasons
 from music_app.services.missing_album_auto_removal import remove_untouched_deleted
 from music_app.services.album_ratings_postgres import tag_disc_rating_candidates
-from music_app.services.artist_credits import track_artist_credit_members
+from music_app.services.artist_credits import deduplicate_repeated_album_artist_members, track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
 )
@@ -4493,6 +4493,10 @@ def _inventory_rows_from_albums(
                 return classified_owner
             if _is_various_artist(tagged_owner):
                 return None
+            repeated_members = deduplicate_repeated_album_artist_members(tagged_owner)
+            if len(repeated_members) == 1:
+                # "X / X" credits one artist: the album is X's own.
+                tagged_owner = repeated_members[0]
             tagged_members = split_album_artist_members(tagged_owner)
             if (
                 classified_owner is not None

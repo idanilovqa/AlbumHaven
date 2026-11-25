@@ -641,6 +641,13 @@
               "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
               "case": "FTC-MOBILE-HOME-002 mobile Home closes Loose Tracks and renders Home",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+              "case": "FTC-SEARCH-NAV-003 a reloaded exact-artist search shows the same tree as the typed search when only another artist's file name matches",
+              "area": "gallery-search"
             }
           ]
         }
@@ -1260,6 +1267,20 @@
               "project": "functional",
               "test": "tests/e2e/specs/editTagsFinishingOverlay.spec.js",
               "case": "FTC-TAGS-044 a save whose file write fails shows the old values again, keeps no pending edit, and a reload shows the old values",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+              "case": "FTC-TAGS-045 an Album Artist edit of some tracks shows the new artist with its album, and restoring it leaves no empty artist behind",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+              "case": "FTC-TAGS-046 a save made while an earlier save of the same tracks is still running writes its change instead of reporting success without one",
               "area": "tag-edit"
             }
           ]

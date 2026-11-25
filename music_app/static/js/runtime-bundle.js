@@ -25084,12 +25084,11 @@ function buildDetectedProblemsHtml(album) {
   proposals.forEach(proposal => {
     if (!rows.some(row => row.path === proposal.path)) rows.push({ path: proposal.path, filename: getFilenameFromPath(proposal.path), reasons: [], ignorable_reasons: [] });
   });
-  const selectedFilters = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
-  const visibleReason = reason => !selectedFilters.length || selectedFilters.includes(normalizeProblemFilterReason(reason));
+  // Problem filters narrow the list only; an open entry always shows every problem it has (owner, 2026-11-24).
   const coverReasons = new Set(['Missing cover art', 'Poor art quality']);
   const albumRows = Array.isArray(album?.album_problem_rows) ? album.album_problem_rows
     : (album.problem_reasons || []).map(reason => ({ reason, row_key: '' }));
-  const albumProblems = albumRows.filter(item => visibleReason(item.reason)).map(item => {
+  const albumProblems = albumRows.map(item => {
     const matching = getIgnorableProblemRows(album).filter(row => normalizeProblemFilterReason(row.reason) === normalizeProblemFilterReason(item.reason));
     const keys = matching.map(row => String(row.row_key || '')).filter(Boolean);
     return buildAlertLabelHtml({
@@ -25102,7 +25101,7 @@ function buildDetectedProblemsHtml(album) {
   }).join('');
   const tableRows = rows.map((row, rowIndex) => {
     const track = (album.tracks || []).find(item => item.path === row.path) || {};
-    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason) && visibleReason(reason));
+    const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason));
     const suggestions = proposals.filter(proposal => proposal.path === row.path);
     if (!reasons.length && !suggestions.length) return null;
     return {
@@ -25145,7 +25144,7 @@ function buildDetectedProblemsHtml(album) {
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
     <h4 class="utility-detail-section-title">Detected problems</h4>
-    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
@@ -28829,11 +28828,9 @@ function getVisibleProblemSuggestions(album = getSelectedProblematicAlbum()) {
   const albumKey = String(album?.key || '');
   if (state.utility.proposalAlbumKey && state.utility.proposalAlbumKey !== albumKey) state.utility.proposalSelections = {};
   state.utility.proposalAlbumKey = albumKey;
-  const selected = (state.utility.selectedProblemFilters || []).map(normalizeProblemFilterReason);
   const query = String(state.utility.searchQuery || '').trim().toLocaleLowerCase();
   return (Array.isArray(album?.suggested_edits) ? album.suggested_edits : []).filter(proposal => {
     if (!proposal?.id || proposal.eligible === false) return false;
-    if (selected.length && !selected.includes(normalizeProblemFilterReason(proposal.reason))) return false;
     if (!query) return true;
     const track = (album.tracks || []).find(item => item.path === proposal.path) || {};
     return [album.name, album.album_artist, track.title, track.artist, proposal.original, proposal.corrected, proposal.path]

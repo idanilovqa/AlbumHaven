@@ -13772,5 +13772,95 @@
       "filesystemCopy": "media/cases/repeated-album-artist-credit"
     },
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDelete.spec.js",
+    "case": "a pasted image card uses the art card delete control, shown on hover and focus only",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pasted-card-uses-art-card-delete-control"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a pasted copy of a local image highlights that card instead of staging it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "pasted-duplicate-highlights-existing-card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a different pasted image stages it under PASTED IMAGES",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "distinct-pasted-image-is-staged"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
+    "case": "a card pressed while a candidate update re-renders the gallery shows its blue frame in the next frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "selection-frame-survives-candidate-rerender"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
+    "case": "a candidate poll patches the shown cards by key instead of rebuilding the gallery",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "candidate-poll-patches-cards-by-key"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupSelectionDuringUpdate.spec.js",
+    "case": "a re-render keeps a decoded preview and replaces deferred or failed ones",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "rerender-keeps-decoded-previews"
+    ],
+    "ownerApproval": "approved"
   }
 ]

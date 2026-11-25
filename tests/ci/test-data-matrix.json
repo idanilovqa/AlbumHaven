@@ -10809,6 +10809,69 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 360px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-360",
+      "phone-header-main-text-one-slot-360"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 390px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-390",
+      "phone-header-main-text-one-slot-390"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+    "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 412px",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:phone-header-slots"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "phone-header-hamburger-one-slot-412",
+      "phone-header-main-text-one-slot-412"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/dropdownControl.spec.js",
@@ -13040,6 +13103,45 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": ["loose-tracks-default-density-title-gap-390"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 360px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["phone-gallery-bar-slots-360"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["phone-gallery-bar-slots-390"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/phoneHeaderSlots.spec.js",
+    "case": "phone GalleryBar keeps the hamburger and the main text in the same place on every page at 412px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": ["phone-gallery-bar-slots-412"],
     "ownerApproval": "approved"
   },
   {

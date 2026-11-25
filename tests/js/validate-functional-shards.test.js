@@ -19,7 +19,7 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual-1', 36],
-  ['gallery-search-visual-2', 52],
+  ['gallery-search-visual-2', 55],
   ['cover-providers-1', 27],
   ['cover-providers-2', 19],
   ['metadata-mutations', 30],
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 211-case assignment', () => {
+test('functional shard contract pins the approved eight-way 214-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 211-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 211);
+  assert.equal(total, 214);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -836,7 +836,7 @@ validatorTest('gallery startup projections share one early app process before is
   const sharedReaderNames = waves[0].invocations
     .filter((invocation) => invocation.baselineMode === 'shared-setup')
     .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case));
-  assert.equal(sharedReaderNames.length, 41);
+  assert.equal(sharedReaderNames.length, 44);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
   const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
@@ -985,7 +985,7 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual-1', { cases: 36, waves: [1, 2] }],
-    ['gallery-search-visual-2', { cases: 52, waves: [1, 2, 3, 4] }],
+    ['gallery-search-visual-2', { cases: 55, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 27, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 19, waves: [1, 2] }],
     ['metadata-mutations', { cases: 30, waves: [1, 2, 3] }],

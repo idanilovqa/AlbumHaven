@@ -676,6 +676,27 @@
               "test": "tests/e2e/specs/looseTracksScanNote.functional.spec.js",
               "case": "FTC-LOOSE-SCAN-NOTE-001 Loose Tracks notes that a running scan may add tracks and drops the note when it ends",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+              "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 360px",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+              "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 390px",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/phoneHeaderSlots.functional.spec.js",
+              "case": "FTC-PHONE-HEADER-SLOTS-001 the hamburger and main text keep one place on Home, an artist, Loose Tracks and Settings at 412px",
+              "area": "gallery-search"
             }
           ]
         }

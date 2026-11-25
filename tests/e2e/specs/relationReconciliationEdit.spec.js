@@ -85,6 +85,8 @@ test('FTC-TAGS-045 saves edits while relations await reconciliation and parks th
     restarted = await freshBrowserSession.create();
     await restarted.galleryActions.goto(ROOT_GALLERY_URL);
     await restarted.galleryActions.waitForGalleryReady();
+    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM);
+    const scrollBefore = await restarted.galleryActions.readGalleryScrollState();
     // The pending edit changed the sources since the legacy publication: only the explicit initialization can
     // prove the relation compatibility, so the owner parks once instead of retrying, and /status says so.
     await expect.poll(
@@ -92,10 +94,8 @@ test('FTC-TAGS-045 saves edits while relations await reconciliation and parks th
       { timeout: RECONCILED_GROUPING_BOUND_MS },
     ).toBe('needs_initialization');
     // Without compatibility evidence there are no stored relation rows to serve, so /status reports the index
-    // as not ready; the gallery below is served from its own membership regardless.
-    // Browsing is unaffected: the same page shows the album once under its new artist, in place.
-    const scrollBefore = await restarted.galleryActions.readGalleryScrollState();
-    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM);
+    // as not ready; the gallery is served from its own membership regardless. Browsing is unaffected: through
+    // the parking the same page keeps the album once under its new artist, in place.
     expect(await restarted.galleryActions.readAlbumIdentityCardCount({
       artist: RECONCILED_ARTIST, album: FIXTURE_ALBUM, year: FIXTURE_YEAR,
     })).toBe(1);

@@ -208,6 +208,7 @@ test('marking an album version completes without waiting for the canonical galle
       context.state.view = { ...context.state.view, ...patch };
     },
     buildApiUrl: () => '/api/library',
+    viewForSearchRefresh: (view) => view,
     fetchAndRender(_url, _push, options) {
       refreshStarted += 1;
       refreshOptions = options;
@@ -2192,7 +2193,6 @@ test('queued tag edit retains its initial optimistic render until the save-task 
   );
   assert.deepEqual(eventSequence, ['render', 'watch']);
   assert.equal(watchedTasks[0].options.originatingViewRequestUrl, '/api/library?selected_artist=DDT');
-  assert.equal(watchedTasks[0].options.originatingSearchContext.selected_artist_source, 'auto_top_match');
   assert.equal(watchedTasks[0].options.absoluteScrollOwnerGeneration, 7);
 });
 

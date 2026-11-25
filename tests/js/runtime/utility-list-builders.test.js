@@ -982,6 +982,53 @@ test('applyUpdatedAlbumsToCurrentView keeps a restored album beside an existing 
   assert.equal(context.state.view.album_count, 3);
 });
 
+test('undoing a credit move drops the family artist that only the move created (FTC-TAGS-040)', () => {
+  // A failed save undoes its optimistic credit move. The moved-to artist stayed in related_artists,
+  // so the selected artist's bar became a one-artist family and lost its "N albums" count.
+  const context = loadHelpers();
+  const path = 'D:\\Music\\Save Artist\\Twin Release\\01.mp3';
+  const twin = {
+    key: 'save artist::twin release',
+    name: 'Twin Release',
+    album_artist: 'Save Artist',
+    year: 2020,
+    tracks: [{ path, album: 'Twin Release', artist: 'Save Artist', album_artist: 'Save Artist' }],
+  };
+  const group = { artist: 'Save Artist', artist_display: 'Save Artist', albums: [twin] };
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Save Artist',
+    selected_artist_family_display_mode: 'grouped',
+    related_artists: ['Kept Relative'],
+    primary_artist_groups: [group],
+    family_artist_groups: [],
+    artist_groups: [group],
+  };
+  const moved = {
+    ...twin,
+    key: 'save artist moved::twin release',
+    album_artist: 'Save Artist moved',
+    tracks: [{ ...twin.tracks[0], artist: 'Save Artist moved', album_artist: 'Save Artist moved' }],
+  };
+  context.applyUpdatedAlbumsToCurrentView([moved], {
+    originalAlbum: twin,
+    skipRender: true,
+    tagEdits: { [path]: { artist: 'Save Artist moved', album_artist: 'Save Artist moved' } },
+  });
+  assert.deepEqual([...context.state.view.related_artists], ['Kept Relative', 'Save Artist moved']);
+
+  context.applyUpdatedAlbumsToCurrentView([twin], {
+    originalAlbum: twin,
+    skipRender: true,
+    tagEdits: { [path]: { artist: 'Save Artist', album_artist: 'Save Artist' } },
+  });
+  assert.deepEqual([...context.state.view.related_artists], ['Kept Relative']);
+  assert.deepEqual(
+    context.state.view.primary_artist_groups.map((primary) => primary.albums.length),
+    [1],
+  );
+});
+
 test('applyUpdatedAlbumsToCurrentView preserves chronological selected-artist family display', () => {
   const context = loadHelpers();
   const monoAlbum = {
@@ -3883,17 +3930,19 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
   });
 });
 
+// BUGFIX-04: an auto-selected search is refreshed as the same search, so the server picks its top artist
+// again with every other match; asking for that artist by name (or for all artists) changed the results.
 for (const scenario of [
-  { name: 'auto-selected content search', source: 'auto_top_match', allResults: true },
+  { name: 'auto-selected content search', source: 'auto_top_match', reselects: true },
   { name: 'explicit artist selection', source: 'requested_artist' },
-  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true, allResults: true },
-  { name: 'nonstructural edit', source: 'auto_top_match', field: 'title' },
-  { name: 'superseded view', source: 'auto_top_match', superseded: true },
+  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true, reselects: true },
+  { name: 'nonstructural edit', source: 'auto_top_match', field: 'title', reselects: true },
+  { name: 'superseded view', source: 'auto_top_match', superseded: true, reselects: true },
   { name: 'changed query', source: 'auto_top_match', changedQuery: true },
   { name: 'artist-name search', source: 'auto_top_match', artistNameMatch: true },
   { name: 'explicit family filter', source: 'auto_top_match', familyFilter: true },
   { name: 'explicit primary filter', source: 'auto_top_match', primaryFilter: true },
-  { name: 'failed refresh', source: 'auto_top_match', failedRefresh: true, allResults: true },
+  { name: 'failed refresh', source: 'auto_top_match', failedRefresh: true, reselects: true },
 ]) {
   test(`watchSaveTask preserves split search intent for ${scenario.name}`, async () => {
     const context = loadHelpers();
@@ -3918,6 +3967,7 @@ for (const scenario of [
       tracks: [originalAlbum.tracks[0]],
     };
     const originatingSearchContext = {
+      committed_query: 'Collection',
       selected_artist_source: scenario.source,
       artist_name_match_artists: scenario.artistNameMatch ? ['Various Artists'] : [],
     };
@@ -3956,27 +4006,24 @@ for (const scenario of [
     await context.watchSaveTask('split-search-task', {
       originalAlbum, optimisticAlbums: [source, destination],
       originatingViewStateRevision: 7, originatingViewRequestUrl: originUrl,
-      originatingSearchContext,
       tagEdits: { 'selected.flac': { [scenario.field || 'album']: 'Collection Split' } },
       terminalPayload: { ok: true, save_task_id: 'split-search-task', save_task_status: 'completed',
         requires_view_refresh: true, updated_albums: [] },
     });
     assert.equal(refreshCalls.length, 1);
     const refreshed = context.parseBrowserUrlState(refreshCalls[0].url);
-    assert.equal(refreshed.all_artists_active, Boolean(scenario.allResults));
-    assert.equal(refreshed.selected_artist, scenario.allResults ? '' : 'Various Artists');
+    assert.equal(refreshed.all_artists_active, false);
+    assert.equal(refreshed.selected_artist, scenario.reselects ? '' : 'Various Artists');
+    // The same search names the artist it had picked, so an edit that reorders owners keeps it.
+    assert.equal(
+      new URL(refreshCalls[0].url, 'http://localhost').searchParams.get('keep_artist'),
+      scenario.reselects ? 'Various Artists' : null,
+    );
     assert.equal(refreshed.query, scenario.changedQuery ? 'Another query' : 'Collection');
     assert.deepEqual(Array.from(refreshed.visible_library_categories), ['main_library']);
     assert.equal(refreshCalls[0].push, false);
-    if (scenario.allResults && !scenario.failedRefresh) {
-      assert.equal(historyCalls.length, 1);
-      assert.equal(context.parseCurrentBrowserUrlState().all_artists_active, true);
-      assert.equal(context.parseCurrentBrowserUrlState().selected_artist, '');
-      assert.equal(context.parseCurrentBrowserUrlState().query, 'Collection');
-    } else {
-      assert.equal(historyCalls.length, 0);
-      if (!scenario.allResults) assert.equal(refreshCalls[0].url, currentUrl);
-    }
+    assert.equal(historyCalls.length, 0, 'the address keeps the search as the person made it');
+    if (!scenario.reselects) assert.equal(refreshCalls[0].url, currentUrl);
   });
 }
 
@@ -9095,4 +9142,26 @@ test('problem filters never hide an open entry\'s problems', () => {
   }
   assert.deepEqual(labels(unfiltered).filter(label => !label.includes('2013')),
     ['Album name mismatch', 'Duplicate files', 'Missing year']);
+});
+
+test('a merge completed from a hydrated destination declares every merged track as its membership (FTC-TAGS-020)', () => {
+  // Restore 5: the optimistic destination carried only the moved track's path; merged with the hydrated
+  // source it listed 13 tracks but kept that one path, so Album Details trimmed it to one row.
+  const context = loadHelpers();
+  const path = (number) => `D:/Music/DDT/Studio/${String(number).padStart(2, '0')}.mp3`;
+  const hydrated = {
+    key: 'source', name: 'Studio', album_artist: 'DDT', year: 1999, preview_only: false,
+    tracks: Array.from({ length: 12 }, (_, index) => ({ path: path(index + 5) })),
+    track_paths: Array.from({ length: 12 }, (_, index) => path(index + 5)),
+  };
+  const candidate = {
+    key: 'source', name: 'Studio', album_artist: 'DDT', year: 1999, preview_only: true,
+    tracks: [{ path: path(4) }], track_paths: [path(4)], track_count_preview: 13,
+  };
+  const { track_paths: _paths, ...hydratedWithoutMembership } = hydrated;
+  for (const visible of [hydrated, hydratedWithoutMembership]) {
+    const merged = context.mergeVisibleAlbumWithOptimisticCandidate(visible, candidate);
+    assert.equal(merged.tracks.length, 13);
+    assert.deepEqual(new Set(merged.track_paths), new Set(merged.tracks.map((track) => track.path)));
+  }
 });

@@ -819,7 +819,6 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
-  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -1009,7 +1008,6 @@ async function confirmManualTagEdit() {
       tagEditorDraft,
       originatingViewStateRevision,
       originatingViewRequestUrl,
-      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
@@ -1598,7 +1596,7 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
 // UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
 // the mounted gallery and its scroll stay; no Loading page.
 function refreshGalleryAfterVersionChange() {
-  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+  return fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, { preserveScroll: true });
 }
 
 function scheduleVersionGalleryRefresh() {

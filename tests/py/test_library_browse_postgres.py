@@ -20140,6 +20140,25 @@ def test_title_only_search_selects_the_artist_owning_the_most_matching_albums():
     christmas = [{"name": "The Best Christmas Album In The World Ever", "album_artist": "Various Artists"}]
     assert browse._top_search_selected_artist([{"artist": "Broadcast", "albums": christmas}], query="tender") == ""
 
+
+def test_a_refreshed_search_keeps_the_artist_it_had_selected_while_that_artist_still_matches():
+    # BUGFIX-04: a tag save splits an album, so its two owners tie and the search would now select
+    # the other one; the refresh asks to keep the artist the search had selected.
+    from music_app.services import library_browse_postgres as browse
+
+    tied = [
+        {"artist": "Solo Voice", "albums": [{"name": "Featured Signal Collection Split", "album_artist": "Solo Voice"}]},
+        {"artist": "Various Artists", "albums": [{"name": "Featured Signal Collection", "album_artist": "Various Artists"}]},
+    ]
+    assert browse._top_search_selected_artist(tied, query="Featured Signal Collection") == "Solo Voice"
+    assert browse._top_search_selected_artist(
+        tied, query="Featured Signal Collection", kept_artist="various artists",
+    ) == "Various Artists"
+    # An artist that no longer matches the search is not kept.
+    assert browse._top_search_selected_artist(
+        tied, query="Featured Signal Collection", kept_artist="Gone Artist",
+    ) == "Solo Voice"
+
 def test_a_display_correction_is_a_problematic_file_until_written():
     from music_app.services.library_browse_postgres import _physical_file_problem_reasons
 

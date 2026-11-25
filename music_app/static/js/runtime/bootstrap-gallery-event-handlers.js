@@ -129,7 +129,7 @@ function handleGalleryBootstrapClick(event) {
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
     const menuAlbumKey = menu?.dataset.albumKey || '';
-    const album = menu?.albumContext || getIndexedAlbum(menuAlbumKey);
+    const album = menu?.albumContext || resolveGalleryCardAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
 
@@ -1111,7 +1111,7 @@ function getAlbumCardLongPressTarget(target) {
   const card = target?.closest?.('.album-card');
   const trigger = card?.querySelector?.('[data-album-key]');
   const key = String(trigger?.getAttribute?.('data-album-key') || '').trim();
-  const album = key && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  const album = key && typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(key) : null;
   return album ? { key } : null;
 }
 
@@ -1138,7 +1138,7 @@ function beginAlbumCardLongPress(event) {
   albumCardLongPressGesture = gesture;
   gesture.timeoutId = scheduleBrowserTimeout(() => {
     if (albumCardLongPressGesture !== gesture) return;
-    const currentAlbum = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(gesture.key) : null;
+    const currentAlbum = typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(gesture.key) : null;
     if (!currentAlbum) {
       clearAlbumCardLongPressGesture();
       return;

@@ -2323,6 +2323,24 @@ function buildUrl(view) {
   return `${pathname}${qs ? `?${qs}` : ''}`;
 }
 
+// BUGFIX-04: the top artist of a search is the server's pick for that query, not a request. Refreshing
+// it by name returns that artist's albums only and loses the search's other matches, so a refresh asks
+// for the same search and names the pick to keep (an edit can change which owner ranks first).
+// Family filters belong to that artist and keep it.
+function viewForSearchRefresh(view) {
+  const query = String(view?.query || '').trim();
+  const searchContext = view?.search_context || {};
+  const committedQuery = String(searchContext.committed_query ?? query).trim();
+  if (
+    !query
+    || committedQuery !== query
+    || String(searchContext.selected_artist_source || '').trim() !== 'auto_top_match'
+    || view.primary_filter_active
+    || (view.related_filter_artists || []).length
+  ) return view;
+  return { ...view, selected_artist: '', search_kept_artist: view.selected_artist };
+}
+
 function buildApiUrl(view, options = {}) {
   const resolvedSurface = resolveViewSurface(view);
   if (resolvedSurface === 'home') {
@@ -2333,6 +2351,7 @@ function buildApiUrl(view, options = {}) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  else if (view.query && view.search_kept_artist) params.set('keep_artist', view.search_kept_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -21713,13 +21732,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshView = (
-      String(state.view?.query || '').trim()
-      && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
-    )
-      ? { ...state.view, selected_artist: '' }
-      : state.view;
-    const refreshApplied = await fetchAndRender(buildApiUrl(refreshView, { rootFullPayload: true }), false, {
+    const refreshApplied = await fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view), { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
       preserveMountedGalleryChildren: true,
@@ -25944,11 +25957,16 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     mergedAlbum.total_duration_seconds = totalDurationSeconds;
     mergedAlbum.total_duration_display = formatCanonicalAlbumDuration(totalDurationSeconds);
   }
-  if (visibleAlbum?.preview_only !== true
-      && tracks.length
-      && (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
-        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview'))) {
-    mergedAlbum.track_count_preview = tracks.length;
+  if (visibleAlbum?.preview_only !== true && tracks.length) {
+    if (Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'track_count_preview')
+        || Object.prototype.hasOwnProperty.call(candidate || {}, 'track_count_preview')) {
+      mergedAlbum.track_count_preview = tracks.length;
+    }
+    // A complete merge is its tracks: a membership copied from either side (the moved tracks only, or
+    // the destination before the merge) made Album Details trim the merged album back to it.
+    if (Array.isArray(mergedAlbum.track_paths)) {
+      mergedAlbum.track_paths = tracks.map((track) => String(track?.path || '')).filter(Boolean);
+    }
   }
   return mergedAlbum;
 }
@@ -26649,11 +26667,19 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
         (artist) => artist !== selectedArtist,
         false,
       );
-    const allFamilyArtists = Array.from(new Set([
-      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : []),
-      ...allFamilyGroups
+    const nextFamilyArtists = allFamilyGroups
+      .map((group) => String(group.artist || '').trim())
+      .filter((artist) => artist && artist !== selectedArtist);
+    // An artist whose mounted family group this edit emptied (an undone credit move) is no longer family.
+    const emptiedFamilyArtists = new Set(
+      ((hasMountedRoleGroups ? state.view.family_artist_groups : state.view.artist_groups) || [])
         .map((group) => String(group.artist || '').trim())
-        .filter((artist) => artist && artist !== selectedArtist),
+        .filter((artist) => artist && artist !== selectedArtist && !nextFamilyArtists.includes(artist)),
+    );
+    const allFamilyArtists = Array.from(new Set([
+      ...(Array.isArray(state.view.related_artists) ? state.view.related_artists : [])
+        .filter((artist) => !emptiedFamilyArtists.has(String(artist || '').trim())),
+      ...nextFamilyArtists,
     ])).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
     const visibleFamilyGroups = activeRelatedSet.size
       ? allFamilyGroups.filter((group) => groupMatchesRelatedArtists(group, activeRelatedSet))
@@ -27096,6 +27122,13 @@ async function watchSaveTask(taskId, context = {}) {
     || Number(state.ui?.viewStateRevision || 0) === originatingViewStateRevision
   );
   const originatingViewRequestUrl = String(context.originatingViewRequestUrl || '').trim();
+  // A content search's top artist is refreshed as the same search so its other matches stay. A search for
+  // an artist's own name keeps that artist: re-running it as a search reshuffled the open utilities.
+  const saveTaskRefreshView = () => (
+    (state.view?.search_context?.artist_name_match_artists || []).length
+      ? state.view
+      : viewForSearchRefresh(state.view)
+  );
   const currentViewMatchesOriginRequest = () => (
     Boolean(originatingViewRequestUrl)
     && typeof buildApiUrl === 'function'
@@ -27407,25 +27440,9 @@ async function watchSaveTask(taskId, context = {}) {
             && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
-              let refreshView = state.view;
-              const originSearch = context.originatingSearchContext;
-              const restoresAllSearchResults = Boolean(
-                canReconcileOriginView()
-                && structuralTagEditRequiresMountedGalleryChildReplacement
-                && originSearch?.selected_artist_source === 'auto_top_match'
-                && !(originSearch.artist_name_match_artists || []).length
-                && originatingViewRequestUrl
-                && String(state.view.query || '').trim()
-                && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
-                && !state.view.primary_filter_active
-                && !(state.view.related_filter_artists || []).length
-              );
-              if (restoresAllSearchResults) {
-                refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
-              }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await ownViewRequest(fetchAndRender(
-                buildApiUrl(refreshView, { rootFullPayload: true }),
+                buildApiUrl(saveTaskRefreshView(), { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -27451,9 +27468,6 @@ async function watchSaveTask(taskId, context = {}) {
               ) {
                 await waitForBrowserTimeout(500);
                 continue;
-              }
-              if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
-                replaceBrowserViewState(state.view);
               }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
@@ -27527,7 +27541,7 @@ async function watchSaveTask(taskId, context = {}) {
           renderView(currentRenderOptions());
         } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
-            await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
+            await fetchAndRender(buildApiUrl(saveTaskRefreshView()), false, currentViewRenderOptions());
           } catch (refreshError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but the navigated view could not be refreshed.',
@@ -27644,7 +27658,7 @@ async function watchSaveTask(taskId, context = {}) {
         if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
-              buildApiUrl(state.view),
+              buildApiUrl(saveTaskRefreshView()),
               false,
               currentViewRenderOptions(),
             );
@@ -44262,7 +44276,6 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
-  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -44452,7 +44465,6 @@ async function confirmManualTagEdit() {
       tagEditorDraft,
       originatingViewStateRevision,
       originatingViewRequestUrl,
-      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
@@ -45041,7 +45053,7 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
 // UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
 // the mounted gallery and its scroll stay; no Loading page.
 function refreshGalleryAfterVersionChange() {
-  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+  return fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, { preserveScroll: true });
 }
 
 function scheduleVersionGalleryRefresh() {
@@ -49168,6 +49180,25 @@ function rebuildAlbumIndex(groupsList) {
 
 function getIndexedAlbum(albumKey) {
   return state.gallery.albumIndex.get(String(albumKey || '').trim()) || null;
+}
+
+// A card gesture acts on the album its card shows. Invalidating a hydrated copy can drop the card's
+// key from the index while the mounted card stays, so a miss looks the key up in the current view.
+function resolveGalleryCardAlbum(albumKey) {
+  const key = String(albumKey || '').trim();
+  if (!key) return null;
+  const indexed = getIndexedAlbum(key);
+  if (indexed) return indexed;
+  const view = state.view || {};
+  for (const groups of [view.primary_artist_groups, view.family_artist_groups, view.artist_groups]) {
+    for (const group of Array.isArray(groups) ? groups : []) {
+      for (const album of Array.isArray(group?.albums) ? group.albums : []) {
+        if (getAlbumRequestKey(album) === key || getAlbumIdentity(album) === key
+            || getAlbumCardVersionKey(album) === key) return album;
+      }
+    }
+  }
+  return null;
 }
 
 var CARD_GALLERY_LAYOUT_CONFIG = Object.freeze({
@@ -55782,7 +55813,7 @@ function handleGalleryBootstrapClick(event) {
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
     const menuAlbumKey = menu?.dataset.albumKey || '';
-    const album = menu?.albumContext || getIndexedAlbum(menuAlbumKey);
+    const album = menu?.albumContext || resolveGalleryCardAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
 
@@ -56764,7 +56795,7 @@ function getAlbumCardLongPressTarget(target) {
   const card = target?.closest?.('.album-card');
   const trigger = card?.querySelector?.('[data-album-key]');
   const key = String(trigger?.getAttribute?.('data-album-key') || '').trim();
-  const album = key && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  const album = key && typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(key) : null;
   return album ? { key } : null;
 }
 
@@ -56791,7 +56822,7 @@ function beginAlbumCardLongPress(event) {
   albumCardLongPressGesture = gesture;
   gesture.timeoutId = scheduleBrowserTimeout(() => {
     if (albumCardLongPressGesture !== gesture) return;
-    const currentAlbum = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(gesture.key) : null;
+    const currentAlbum = typeof resolveGalleryCardAlbum === 'function' ? resolveGalleryCardAlbum(gesture.key) : null;
     if (!currentAlbum) {
       clearAlbumCardLongPressGesture();
       return;
@@ -60238,7 +60269,7 @@ document.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   clearAlbumCardLongPressGesture();
   const trigger = albumCard.querySelector('[data-album-key]');
-  const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
+  const album = trigger ? resolveGalleryCardAlbum(trigger.getAttribute('data-album-key') || '') : null;
   showAlbumCardContextMenu(event.clientX, event.clientY, album);
 }, true);
 

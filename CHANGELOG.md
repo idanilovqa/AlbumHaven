@@ -7,6 +7,10 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.53 - 2026-11-25
+
+- Android key attestation reads revoked certificate serials from indexed database rows instead of reading the configured status list file on every attestation. A server with a configured status list imports that file once at start-up, with logged progress, and never reads it again; until the import finishes, attestation answers "attestation unavailable" without spending the challenge. `scripts/android_attestation_revocations.py` refreshes the list (`import`) and adds or removes the operator's own revocations (`add`, `remove`).
+
 ## 0.11.52 - 2026-11-24
 
 - Cover provider answers (cover searches, MusicBrainz release lists, Cover Art Archive results) are kept in indexed database rows instead of one JSON file that every refresh loaded and every new answer rewrote. An app that may write imports an existing file once, after start-up readiness, with logged progress; the file stays on disk. Cover refreshes in one process share one answer store per database, so a provider miss is not searched again by the next refresh; answers a browse-only app cannot store are kept in memory, capped at 4096.

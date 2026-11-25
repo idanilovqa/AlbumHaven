@@ -8547,6 +8547,7 @@
       ],
       "owners": [
         "music_app/routes/android_artifacts_asgi.py",
+        "music_app/services/android_artifact_access.py",
         "music_app/services/android_key_attestation.py"
       ],
       "rules": [
@@ -8563,15 +8564,18 @@
       "budgets": {
         "filesystem_enumerations": 0,
         "stat_calls": 0,
-        "open_calls": 1
+        "open_calls": 1,
+        "sql_statements": 8,
+        "returned_rows": 6,
+        "pool_leases": 4
       },
       "growth": {
-        "metric": "open_calls",
+        "metric": "sql_statements",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_android_key_attestation.py::test_attestation_roots_contract_reads_the_bundled_roots_once_per_process",
-      "testIdentity": "test_attestation_roots_contract_reads_the_bundled_roots_once_per_process",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "command": "python -m pytest tests/py/test_android_attestation_revocations.py::test_attest_contract_reads_roots_once_and_revocations_with_one_keyed_select",
+      "testIdentity": "test_attest_contract_reads_roots_once_and_revocations_with_one_keyed_select",
+      "rollback": "Revert the revocation-rows commit; attest then reads the status file again."
     },
     {
       "id": "py:routes/android_artifacts_asgi.py#android_artifact_challenge",

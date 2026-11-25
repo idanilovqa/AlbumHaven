@@ -306,7 +306,8 @@ for (const method of ['waitForReady', 'waitForSelectedDetailSelection']) {
         selectors = expected;
       },
     };
-    const owner = { utilityProblematicFilesTab: tab };
+    // A real actions object, so waitForReady reaches its condition through its own helper.
+    const owner = Object.assign(Object.create(UtilityProblematicFilesActions.prototype), { utilityProblematicFilesTab: tab });
     const args = method === 'waitForReady'
       ? { requirePopulated: true }
       : { expectedKey: 'album-key', expectedTitle: 'Album' };

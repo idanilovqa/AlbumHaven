@@ -229,6 +229,38 @@ test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details w
       expect(row.reasons.some(reason => /duplicate/iu.test(reason))).toBe(true);
     }
   });
+  // Owner (2026-11-25): the owner sees the album's folder and the unique folders its duplicates live in.
+  const ownedFolder = name => path.join(fixture.owner, name);
+  await stepLogger.step('Name the album folder and each duplicate folder once, one per line', async () => {
+    const { rendered, payload } = await utilityProblematicFilesActions.readSelectedDetailFolders();
+    expect(payload.hasAlbumFolders && payload.hasDuplicateFolders, 'the owner receives the folders').toBe(true);
+    expect(rendered.album.folders).toContain(ownedFolder('Real Album'));
+    expect(rendered.album.folders).not.toContain(ownedFolder('Random songs'));
+    expect(rendered.album.folders).not.toContain(ownedFolder('Orphan'));
+    expect(rendered.album.label).toBe(rendered.album.folders.length === 1 ? 'Path:' : 'Paths:');
+    const duplicates = rendered.duplicates.folders;
+    expect(rendered.duplicates.label).toBe(duplicates.length === 1 ? 'Duplicate files path:' : 'Duplicate files paths:');
+    expect(new Set(duplicates).size, 'each duplicate folder appears once').toBe(duplicates.length);
+    expect(duplicates).toEqual(expect.arrayContaining([ownedFolder('Random songs'), ownedFolder('Orphan')]));
+    for (const value of duplicates) {
+      expect([ownedFolder('Random songs'), ownedFolder('Orphan'), ownedFolder('Complete copy'), ownedFolder('Real Album')]).toContain(value);
+    }
+  });
+  await stepLogger.step('Show no duplicate line for an entry without a duplicate problem', async () => {
+    const items = await utilityProblematicFilesActions.readVisibleListItems();
+    let checked = 0;
+    for (let index = 0; index < items.length; index += 1) {
+      await utilityProblematicFilesActions.selectListItemByIndex(index);
+      const summary = await utilityProblematicFilesActions.readSelectedDetailSummary();
+      if (summary.problemReasons.some(reason => /duplicate/iu.test(reason))) continue;
+      const { rendered, payload } = await utilityProblematicFilesActions.readSelectedDetailFolders();
+      expect(payload.hasDuplicateFolders, `${summary.title} carries no duplicate folders`).toBe(false);
+      expect(rendered.duplicates, `${summary.title} shows no duplicate line`).toBeUndefined();
+      expect(rendered.album?.folders?.length, `${summary.title} names its folder`).toBeGreaterThan(0);
+      checked += 1;
+    }
+    expect(checked, 'the fixture lists an entry without a duplicate problem').toBeGreaterThan(0);
+  });
   await stepLogger.step('Preserve membership after browser reload', async () => { await page.reload(); await inspectAlbum(); });
   await stepLogger.step('Reconstruct the same membership after a full physical rescan', async () => {
     await appBarActions.triggerFullRescanAndWait();

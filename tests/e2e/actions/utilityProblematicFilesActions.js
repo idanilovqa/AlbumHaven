@@ -492,6 +492,11 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
     };
   }
 
+  /** The folder rows of the open entry's info block, by kind, and the folders its payload carries. */
+  async readSelectedDetailFolders() {
+    return this.utilityProblematicFilesTab.readDetailFolders();
+  }
+
   async readSelectedDetailLinks() {
     const links = await this.utilityProblematicFilesTab.detailLinks.all();
     return (await Promise.all(links.map(async (link) => (

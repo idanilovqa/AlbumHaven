@@ -9165,3 +9165,29 @@ test('a merge completed from a hydrated destination declares every merged track 
     assert.deepEqual(new Set(merged.track_paths), new Set(merged.tracks.map((track) => track.path)));
   }
 });
+
+// Owner (2026-11-25): the open entry's info block names its folders, one per line, and the unique
+// duplicate folders with a duplicate problem. The server sends them only to path readers.
+test('the Problematic Files detail header names the album and duplicate folders it was sent', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.buildUtilityAlbumArtbox = () => '<div class="album-artbox"></div>';
+  context.buildAlbumDisplayCoverUrl = () => '';
+  context.getAvailableAlbumMoveActions = () => [];
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/problematic-album-helpers.js'), 'utf8'), context);
+  context.state.utility.selectedProblemFilters = [];
+  const album = {
+    key: 'real', name: 'Real Album', album_artist: 'Artist', year: 2026, tracks: [], problem_reasons: ['Duplicate files'],
+    album_folders: ['D:\Music\Real Album'], duplicate_folders: ['D:\Music\Orphan', 'D:\Music\Random songs'],
+    album_problem_rows: [], track_problem_rows: [], allowed_actions: {},
+  };
+  const folderRows = html => [...html.matchAll(/data-problematic-detail-folders="(\w+)">([^:]*):((?:<br><span data-problematic-detail-folder>[^<]*<\/span>)*)/g)]
+    .map(match => [match[1], match[2], [...match[3].matchAll(/folder>([^<]*)</g)].map(folder => folder[1])]);
+  assert.deepEqual(folderRows(context.buildProblematicAlbumDetail(album)), [
+    ['album', 'Path', ['D:\Music\Real Album']],
+    ['duplicates', 'Duplicate files paths', ['D:\Music\Orphan', 'D:\Music\Random songs']],
+  ]);
+  const { album_folders: _albumFolders, duplicate_folders: _duplicateFolders, ...memberAlbum } = album;
+  assert.deepEqual(folderRows(context.buildProblematicAlbumDetail(memberAlbum)), []);
+  assert.deepEqual(folderRows(context.buildProblematicAlbumDetail({ ...album, duplicate_folders: undefined })),
+    [['album', 'Path', ['D:\Music\Real Album']]]);
+});

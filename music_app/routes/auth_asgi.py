@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.app_copy import app_copy_enabled
+from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
 from music_app.services.auth_login_postgres import LoginOutcome, PostgresLoginAuthService
 from music_app.services.auth_password_reset_request_postgres import (
@@ -394,7 +395,22 @@ def _generic_unavailable() -> HTMLResponse:
 
 @router.get("/login", response_class=HTMLResponse)
 async def get_login(request: Request) -> HTMLResponse:
+    # Someone already signed in opens the app (or the page they were sent from) instead of the form.
+    # The form's own token refresh asks for JSON and always gets a token.
+    if not _wants_json(request) and await _signed_in(request):
+        return _no_store(RedirectResponse(_safe_return_path(request.query_params.get("return_to")), status_code=303))
     return await _login_page(request, status_code=200, failed=False)
+
+
+async def _signed_in(request: Request) -> bool:
+    """Whether the request carries a live session; any failure to tell shows the form."""
+    if not request.cookies.get(_SESSION_COOKIE):
+        return False
+    try:
+        actor = await current_actor_from_request(request)
+    except Exception:
+        return False
+    return bool(actor.is_authenticated)
 
 
 async def _expired_login_page(request: Request, payload: Mapping[str, str]) -> Response:

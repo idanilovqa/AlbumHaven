@@ -306,6 +306,39 @@ def test_get_login_mints_hidden_one_time_token_and_hardened_cookie(auth_asgi):
     assert "Domain=" not in cookie
 
 
+class FakeActorResolver:
+    """A session cookie naming 'live' is signed in; any other is a session that ended."""
+
+    def resolve(self, raw_session_token):
+        from music_app.services.current_actor import ActorState, CurrentActor
+        if raw_session_token == "live":
+            return CurrentActor(state=ActorState.ACTIVE, account_id=41, session_id=8)
+        return CurrentActor(state=ActorState.ANONYMOUS)
+
+
+def test_get_login_sends_someone_signed_in_to_the_app_and_shows_the_form_otherwise(auth_asgi):
+    app, preauth, _login = _app(auth_asgi)
+    app.state.current_actor_resolver = FakeActorResolver()
+
+    status, headers, _body = _request(app, "GET", headers={"cookie": f"{SESSION_COOKIE}=live"})
+    assert status == 303 and dict(headers)["location"] == "/"
+    assert "no-store" in dict(headers)["cache-control"]
+    assert preauth.issued == [CSRF, NEXT_CSRF], "no sign-in token is issued for someone signed in"
+    status, headers, _body = _request(app, "GET", headers={"cookie": f"{SESSION_COOKIE}=live"},
+                                      query="return_to=%2Falbums%3Fview%3Dgrid")
+    assert status == 303 and dict(headers)["location"] == "/albums?view=grid"
+    status, headers, _body = _request(app, "GET", headers={"cookie": f"{SESSION_COOKIE}=live"},
+                                      query="return_to=%2F%2Fevil.example")
+    assert status == 303 and dict(headers)["location"] == "/"
+
+    # A session that ended, no session, and the form's own token refresh all get the form.
+    preauth.issued = [CSRF] * 3
+    for headers in ({"cookie": f"{SESSION_COOKIE}=ended"}, {},
+                    {"cookie": f"{SESSION_COOKIE}=live", "accept": "application/json"}):
+        status, _headers, _body = _request(app, "GET", headers=headers)
+        assert status == 200
+
+
 def test_get_login_names_the_copy_worker_only_while_the_copy_is_on(auth_asgi, monkeypatch):
     """IAR-W12: the sign-in page installs the copy's worker, so the library page after it is kept."""
     worker_meta = '<meta name="album-haven-app-copy-worker" content="/app-copy-worker.js?mode=web">'

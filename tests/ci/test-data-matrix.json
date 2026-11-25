@@ -13445,15 +13445,159 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
-    "case": "Tab walks each notification card and then its delete button, and Shift+Tab walks back",
+    "case": "Tab walks each notification card, then its Retry when present, then its delete button, and Shift+Tab walks back",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "notification-card-then-delete-tab-order",
+      "notification-card-retry-delete-tab-order",
       "no-extra-card-tab-stops",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each completed notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each completed with no covers notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each art chosen notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each failed notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each interrupted notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each canceled notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each queued notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each searching notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
+      "reverse-shift-tab-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupDrawerKeyboard.spec.js",
+    "case": "Tab reaches each downloading the chosen art notification card and every visible button on it in visual order",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "notification-card-visible-buttons-tab-order",
       "reverse-shift-tab-order"
     ],
     "ownerApproval": "approved"

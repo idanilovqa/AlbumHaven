@@ -2173,8 +2173,7 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
             ariaLabel: 'Retry lookup',
             title: 'Retry lookup',
             className: 'cover-lookup-task-retry',
-            // A card's Tab stops are its opener and its delete (or stop) button only.
-            attributes: { 'data-retry-cover-lookup-task': task.id || '', tabindex: '-1' },
+            attributes: { 'data-retry-cover-lookup-task': task.id || '' },
           })
           : ''}
         ${isActiveCoverLookupSearchTask(task)

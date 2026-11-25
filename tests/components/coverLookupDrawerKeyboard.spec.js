@@ -28,13 +28,14 @@ async function mountClosedDrawer(page, tasks = ['First', 'Second'].map(album => 
         elapsedTimer: 0,
         modal: { taskId: '' },
         pollingTimer: 0,
-        tasks: tasks.map(({ album, status }, index) => ({
+        tasks: tasks.map(({ album, status, ...task }, index) => ({
           id: `task-${index}`,
           status,
           progress: 100,
           artist: 'Artist',
           album,
           album_payload: { album_artist: 'Artist', name: album },
+          ...task,
         })),
       },
       tagEditor: {},
@@ -117,8 +118,8 @@ test('Escape closes a pointer-opened notifications drawer and keeps focus on its
   await expect(trigger).toBeFocused();
 });
 
-test('Tab walks each notification card and then its delete button, and Shift+Tab walks back', async ({ page }) => {
-  // A failed lookup also renders Retry: it is not a Tab stop of its own.
+test('Tab walks each notification card, then its Retry when present, then its delete button, and Shift+Tab walks back', async ({ page }) => {
+  // A failed lookup also renders Retry, which stays in reach between its card and its delete button.
   const { trigger, close } = await mountClosedDrawer(page, [
     { album: 'First', status: 'completed' },
     { album: 'Second', status: 'failed' },
@@ -135,9 +136,10 @@ test('Tab walks each notification card and then its delete button, and Shift+Tab
     const taskId = card?.querySelector('[data-open-cover-lookup-task]')?.getAttribute('data-open-cover-lookup-task');
     if (!taskId) return active?.getAttribute('aria-label') || active?.id || '';
     return active.matches('[data-open-cover-lookup-task]') ? `card:${taskId}`
+      : active.matches('[data-retry-cover-lookup-task]') ? `retry:${taskId}`
       : active.matches('[data-clear-cover-lookup-task]') ? `delete:${taskId}` : `other:${taskId}:${active.getAttribute('aria-label')}`;
   });
-  const expected = ['card:task-0', 'delete:task-0', 'card:task-1', 'delete:task-1', 'card:task-2', 'delete:task-2'];
+  const expected = ['card:task-0', 'delete:task-0', 'card:task-1', 'retry:task-1', 'delete:task-1', 'card:task-2', 'delete:task-2'];
   const forward = [];
   for (let index = 0; index < expected.length; index += 1) {
     await page.keyboard.press('Tab');
@@ -152,3 +154,60 @@ test('Tab walks each notification card and then its delete button, and Shift+Tab
   }
   expect(backward).toEqual(expected.slice(0, -1).reverse());
 });
+
+// Every card state the renderer produces: its card and each visible, enabled button are Tab stops in visual order.
+const CARD_STATES = [
+  ['completed', { status: 'completed' }],
+  ['completed with no covers', { status: 'completed', result_kind: 'no-results' }],
+  ['art chosen', { status: 'completed', notification_action_taken: true }],
+  ['failed', { status: 'failed' }],
+  ['interrupted', { status: 'failed', result_kind: 'interrupted' }],
+  ['canceled', { status: 'canceled' }],
+  ['queued', { status: 'pending' }],
+  ['searching', { status: 'running', progress: 40 }],
+  ['downloading the chosen art', { status: 'running', job_kind: 'save_remote_selection' }],
+];
+
+for (const [label, task] of CARD_STATES) {
+  test(`Tab reaches each ${label} notification card and every visible button on it in visual order`, async ({ page }) => {
+    const { trigger, close } = await mountClosedDrawer(page, ['First', 'Second', 'Third'].map(album => ({ album, ...task })));
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    expect(await focusIsInsideDrawer(page)).toBe(true);
+    await expect(page.locator('.cover-lookup-task-card')).toHaveCount(3);
+    // Clear completed precedes Close in the header when it is enabled; the walk starts after the header.
+    await close.focus();
+
+    // Expected stops come from what is on screen: each card, then its visible enabled buttons, ordered top-to-bottom, left-to-right.
+    const expected = await page.evaluate(() => Array.from(document.querySelectorAll('.cover-lookup-task-card')).flatMap((card) => {
+      const opener = card.querySelector('[data-open-cover-lookup-task]');
+      const buttons = Array.from(card.querySelectorAll('button')).filter(button => {
+        const style = getComputedStyle(button);
+        return !button.disabled && button.getClientRects().length > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      }).sort((a, b) => {
+        const ra = a.getBoundingClientRect(); const rb = b.getBoundingClientRect();
+        return Math.abs(ra.top - rb.top) > 2 ? ra.top - rb.top : ra.left - rb.left;
+      });
+      return [opener, ...buttons].map(node => `${opener.getAttribute('data-open-cover-lookup-task')}:${node.getAttribute('aria-label')}`);
+    }));
+    expect(expected.length).toBeGreaterThanOrEqual(3);
+
+    const focusedStop = () => page.evaluate(() => {
+      const active = document.activeElement;
+      const taskId = active?.closest('.cover-lookup-task-card')?.querySelector('[data-open-cover-lookup-task]')?.getAttribute('data-open-cover-lookup-task');
+      return `${taskId || 'outside'}:${active?.getAttribute('aria-label')}`;
+    });
+    const forward = [];
+    for (let index = 0; index < expected.length; index += 1) {
+      await page.keyboard.press('Tab');
+      forward.push(await focusedStop());
+    }
+    expect(forward).toEqual(expected);
+    const backward = [];
+    for (let index = 0; index < expected.length - 1; index += 1) {
+      await page.keyboard.press('Shift+Tab');
+      backward.push(await focusedStop());
+    }
+    expect(backward).toEqual(expected.slice(0, -1).reverse());
+  });
+}

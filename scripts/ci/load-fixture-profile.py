@@ -2194,16 +2194,24 @@ def validate_synthetic_scale(profile: str, definition: dict, preset: str | None)
 
 
 def prepare_relation_projection(database_url: str) -> None:
-    """Publish what a production server starts with: relationships, then the common gallery scopes.
+    """Publish what a production server starts with: relationships, the common gallery scopes, the
+    Loose Tracks store and the duplicate results deploy step.
 
     Without the gallery headers the app's first start builds root and New Arrivals after relation
     readiness, and a measured read answers gallery_projection_pending meanwhile (FTC-COVERS-019P).
+    Without the Loose Tracks store its one-time start-up build reads every track while the first
+    measured interactions run (FTC-GALLERY-STARTUP-005Q, FTC-COVERS-019P). Without the deploy step
+    (scripts/prepare_duplicate_results.py) every app start evaluates the whole Problematic Files index
+    before it may serve, past the managed start-up timeout on hosted runners.
     """
     validate_database_url(database_url)
     repository_root = str(Path(__file__).resolve().parents[2])
     if repository_root not in sys.path:
         sys.path.insert(0, repository_root)
+    from music_app.services import problematic_index
     from music_app.services.gallery_projection_postgres import initialize_gallery_membership
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.loose_track_store import LooseTrackStoreOwner
     from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
 
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": database_url}
@@ -2211,7 +2219,11 @@ def prepare_relation_projection(database_url: str) -> None:
     if not result.get("ready"):
         raise RuntimeError("Fixture relation projection did not become ready")
     initialize_gallery_membership(config)
+    if LooseTrackStoreOwner(config).prepare_now() is not None:
+        raise RuntimeError("Fixture Loose Tracks store did not become ready")
+    problematic_index.prepare_for_serving(PostgresLibraryBrowseRepository(config))
     print(json.dumps({"fixture_relation_projection": "ready", "fixture_gallery_scopes": "ready",
+                      "fixture_loose_tracks": "ready", "fixture_duplicate_results": "ready",
                       "preparation_ms": result.get("duration_ms")}))
 
 

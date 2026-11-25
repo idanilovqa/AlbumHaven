@@ -14266,6 +14266,10 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
         "load_non_album_candidates",
         lambda **kwargs: calls.append(kwargs) or [],
     )
+    from music_app.services import loose_track_store
+
+    # No Loose Tracks store yet: scoped reads go through the loader.
+    monkeypatch.setattr(loose_track_store, "load_state", lambda _connection: None)
 
     repository._load_non_album_entries(
         view_state={},
@@ -14305,6 +14309,57 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
             "connection": calls[2]["connection"],
         },
     ]
+    browse.invalidate_postgres_utility_projection_cache()
+
+
+@pytest.mark.parametrize("case", ["current", "marks waiting", "at the cap"])
+def test_selected_artist_non_album_read_uses_the_current_loose_track_store(monkeypatch, case):
+    import music_app.services.library_browse_postgres as browse
+    from music_app.services import loose_track_store
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "non-album-selected-store-test"}
+    )
+    browse.invalidate_postgres_utility_projection_cache()
+    monkeypatch.setattr(
+        browse,
+        "_duplicate_inventory_fingerprint",
+        lambda _connection: {"fingerprint": (1, 1, 1, 1, 1, 1, 1), "observed_at": 1},
+    )
+    monkeypatch.setattr(browse, "_non_album_entries_from_inventory_candidates", lambda rows, **_kwargs: list(rows))
+    stored = [{"track_id": 7, "artist_name": "Broadcast"}] * (
+        browse.MAX_NON_ALBUM_CANDIDATE_LIMIT if case == "at the cap" else 1
+    )
+    waiting = 1 if case == "marks waiting" else 0
+    loader_calls, drains = [], []
+    monkeypatch.setattr(
+        repository._inventory_repository,
+        "load_non_album_candidates",
+        lambda **kwargs: loader_calls.append(kwargs) or [{"track_id": 8}],
+    )
+    monkeypatch.setattr(loose_track_store, "load_state", lambda _connection: {
+        "status": "ready", "builder_version": loose_track_store.BUILDER_VERSION,
+    })
+    monkeypatch.setattr(loose_track_store, "waiting_marks", lambda _connection, **_kwargs: waiting)
+    monkeypatch.setattr(loose_track_store, "read_candidates", lambda _connection, **_kwargs: stored)
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", drains.append)
+
+    entries = repository._load_non_album_entries(
+        view_state={}, alias_to_canonical={}, canonical_to_aliases={},
+        visible_artist_names=["Broadcast"], query="", connection=_NoLooseRulesConnection(),
+    )
+
+    if case != "current":
+        # Marked tracks wait for the background drain, and at the cap the artist's rows may lie past it;
+        # the loader answers then, and nothing commits on the caller's connection.
+        assert entries == [{"track_id": 8}]
+        assert [call["artist_names"] for call in loader_calls] == [["Broadcast"]]
+        assert drains == (["loose-tracks"] if waiting else [])
+    else:
+        # A current store answers from its stored rows; the loader's whole-library path scan never runs.
+        assert entries == stored
+        assert loader_calls == []
+        assert drains == []
     browse.invalidate_postgres_utility_projection_cache()
 
 

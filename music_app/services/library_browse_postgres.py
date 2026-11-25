@@ -928,6 +928,24 @@ class PostgresLibraryBrowseRepository:
             }
 
 
+    def _current_stored_loose_candidates(self, connection: Any) -> list[dict[str, object]] | None:
+        """The Loose Tracks store's candidate rows (case 64), or None while they are not complete and current.
+
+        Read on the caller's connection, which may hold a snapshot, so nothing is drained or committed here:
+        waiting marks are left to the background drain and the caller reads through the loader meanwhile.
+        """
+        from music_app.services import loose_track_store
+
+        if not loose_track_store.is_ready(loose_track_store.load_state(connection)):
+            return None
+        if loose_track_store.waiting_marks(connection, at_most=1):
+            if not self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+                self.queue_utility_projection_prewarm("loose-tracks")  # the background drain, never a build
+            return None
+        rows = loose_track_store.read_candidates(connection, limit=MAX_NON_ALBUM_CANDIDATE_LIMIT)
+        # At the cap, the artist's own rows may lie past it: the loader filters by artist before its cap.
+        return rows if len(rows) < MAX_NON_ALBUM_CANDIDATE_LIMIT else None
+
     def _load_non_album_entries(
         self,
         *,
@@ -959,11 +977,23 @@ class PostgresLibraryBrowseRepository:
         options = {"track_ids": cached["track_ids"]} if reuse else {}
         if scope_inventory_query:
             options["artist_names"] = scoped_artist_names
+        # An artist's loose tracks come from the case 64 store's rows when they are current: the loader's
+        # artist filter matches every track file's path, a whole-library scan on each request.
+        stored = (
+            self._current_stored_loose_candidates(connection)
+            if scope_inventory_query and connection is not None
+            else None
+        )
         # Exact SQL text filtering can discard fuzzy and canonical-alias matches.
         # Keep bounded eligibility/artist reads; the Python matcher owns text search.
-        rows = [] if reuse and not options["track_ids"] else self._inventory_repository.load_non_album_candidates(
-            limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=connection, **options,
-        )
+        if stored is not None:
+            rows = stored
+        elif reuse and not options["track_ids"]:
+            rows = []
+        else:
+            rows = self._inventory_repository.load_non_album_candidates(
+                limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=connection, **options,
+            )
         if fingerprint and not scope_inventory_query and not reuse:
             _cache_compact_inventory_payload(connection, self, kind, fingerprint, {
                 "track_ids": sorted({_coerce_int(row.get("track_id")) for row in rows} - {0}),

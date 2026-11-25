@@ -22,6 +22,8 @@ BOOTSTRAP_PATH = Path(__file__).parents[2] / "scripts" / "ci" / "bootstrap-windo
 @pytest.mark.parametrize("ready", [True, False])
 def test_prepare_relation_projection_uses_product_readiness_and_requires_success(monkeypatch, ready):
     from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import loose_track_store
+    from music_app.services import problematic_index
     from music_app.services import relation_projection_postgres as projection
 
     loader = _load_fixture_loader_module()
@@ -33,11 +35,18 @@ def test_prepare_relation_projection_uses_product_readiness_and_requires_success
     monkeypatch.setattr(gallery, "initialize_gallery_membership", lambda config: (
         calls.append(("gallery", config)) or {"built": 2}
     ))
+    monkeypatch.setattr(loose_track_store.LooseTrackStoreOwner, "prepare_now", lambda owner: (
+        calls.append(("loose", owner._config))
+    ))
+    monkeypatch.setattr(problematic_index, "prepare_for_serving", lambda repository: (
+        calls.append(("deploy step", repository._config))
+    ))
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": database_url}
     if ready:
         loader.prepare_relation_projection(database_url)
-        # The app starts on published common scopes, as production does (FTC-COVERS-019P).
-        assert calls == [("relations", config), ("gallery", config)]
+        # The app starts as production does: published common scopes, a built Loose Tracks store and the
+        # deploy step done (FTC-COVERS-019P, FTC-GALLERY-STARTUP-005Q).
+        assert calls == [("relations", config), ("gallery", config), ("loose", config), ("deploy step", config)]
     else:
         with pytest.raises(RuntimeError, match="did not become ready"):
             loader.prepare_relation_projection(database_url)
@@ -46,27 +55,43 @@ def test_prepare_relation_projection_uses_product_readiness_and_requires_success
 
 def test_prepare_relation_projection_rejects_non_fixture_database_before_builder(monkeypatch):
     from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import loose_track_store
+    from music_app.services import problematic_index
     from music_app.services import relation_projection_postgres as projection
 
     loader = _load_fixture_loader_module()
     monkeypatch.setattr(projection, "ensure_relation_projection_ready", lambda config: pytest.fail("unsafe builder call"))
     monkeypatch.setattr(gallery, "initialize_gallery_membership", lambda config: pytest.fail("unsafe gallery call"))
+    monkeypatch.setattr(loose_track_store.LooseTrackStoreOwner, "prepare_now", lambda owner: pytest.fail("unsafe store call"))
+    monkeypatch.setattr(problematic_index, "prepare_for_serving", lambda repository: pytest.fail("unsafe deploy step"))
     with pytest.raises(ValueError):
         loader.prepare_relation_projection("postgresql://postgres@localhost/album_haven_core")
 
 
-@pytest.mark.parametrize("failing", ["relations", "gallery"])
+@pytest.mark.parametrize("failing", ["relations", "gallery", "loose", "deploy step"])
 def test_prepare_relation_projection_propagates_product_failure(monkeypatch, failing):
     from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import loose_track_store
+    from music_app.services import problematic_index
     from music_app.services import relation_projection_postgres as projection
 
-    def fail(config):
+    def fail(_value):
         raise RuntimeError("publication failed")
 
     monkeypatch.setattr(projection, "ensure_relation_projection_ready",
                         fail if failing == "relations" else lambda config: {"ready": True})
+    order = ["relations", "gallery", "loose", "deploy step"]
+
+    def after_failure(step):
+        return lambda _value: pytest.fail(f"{step} after a failed publication") if order.index(step) > order.index(
+            failing) else None
+
     monkeypatch.setattr(gallery, "initialize_gallery_membership",
-                        fail if failing == "gallery" else lambda config: pytest.fail("gallery after failed relations"))
+                        fail if failing == "gallery" else after_failure("gallery"))
+    monkeypatch.setattr(loose_track_store.LooseTrackStoreOwner, "prepare_now",
+                        fail if failing == "loose" else after_failure("loose"))
+    monkeypatch.setattr(problematic_index, "prepare_for_serving",
+                        fail if failing == "deploy step" else after_failure("deploy step"))
     with pytest.raises(RuntimeError, match="publication failed"):
         _load_fixture_loader_module().prepare_relation_projection(
             "postgresql://album_haven_migrator_123@localhost/album_haven_ci_123"

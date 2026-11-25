@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -27,6 +28,7 @@ BUILD_BATCH = 500
 FAILED_BUILD_RETRY_SECONDS = 300
 
 _LOGGER = logging.getLogger("music_app")
+_PREPARE_LOCK = threading.Lock()
 
 _LIBRARY_SQL = """(
   select libraries.id
@@ -284,11 +286,15 @@ class LooseTrackStoreOwner:
 
         return PostgresLibraryBrowseRepository(self._config)
 
+    def prepare_now(self) -> float | None:
+        """Prepare on the caller's thread and raise its failure (fixture loading publishes the store)."""
+        repository = self._repository()
+        return prepare(repository._inventory_repository, repository._owned_connection_context)
+
     def run_once(self) -> float | None:
         """One owner pass: prepare, and return how long until a failed build's retry (None: nothing failed)."""
-        repository = self._repository()
         try:
-            return prepare(repository._inventory_repository, repository._owned_connection_context)
+            return self.prepare_now()
         except Exception:
             self._logger.exception("Loose Tracks store preparation failed; its retry waits for its backoff.")
             return float(FAILED_BUILD_RETRY_SECONDS)
@@ -320,16 +326,19 @@ class LooseTrackStoreOwner:
 def prepare(inventory: Any, connect: Any) -> float | None:
     """The background owner: build when start-up preparation needs it, then drain every waiting mark. Returns
     how long a failed build still waits for its retry, or None once the store is ready and drained."""
-    with connect() as connection:
-        state = load_state(connection)
-    wait = _seconds_until_retry(state)
-    if wait:
-        return wait  # a failed build whose retry time has not come
-    if needs_build(state):
-        build(inventory, connect)
-    while True:
+    # The start-up owner and a queued drain both prepare. One at a time: a second caller reading this
+    # process's own "building" state as an interrupted build would read every track a second time.
+    with _PREPARE_LOCK:
         with connect() as connection:
-            cleared = drain(inventory, connection)
-            connection.commit()
-        if not cleared:
-            return None
+            state = load_state(connection)
+        wait = _seconds_until_retry(state)
+        if wait:
+            return wait  # a failed build whose retry time has not come
+        if needs_build(state):
+            build(inventory, connect)
+        while True:
+            with connect() as connection:
+                cleared = drain(inventory, connection)
+                connection.commit()
+            if not cleared:
+                return None

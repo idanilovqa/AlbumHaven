@@ -9102,15 +9102,13 @@ def test_live_relation_snapshot_decodes_stay_on_start_up_and_saves_never_rebuild
         root_id="repair-main", active_file_entries={regrouped["path"]: regrouped})
     assert decodes == [], "a deferred save publishes its gallery membership without a whole snapshot decode"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        members = connection.execute("""
-            select distinct entries.artist_id from library.gallery_membership_entries entries
-            join library.local_albums albums on albums.album_key = entries.album_key
-            where albums.id = (select min(id) from library.local_albums)
-        """).fetchall()
-        assert members and all("regrouped" in str(row["artist_id"]).casefold() for row in members), members
+        members = {(row["album_key"], row["artist_id"]) for row in connection.execute(
+            "select distinct album_key, artist_id from library.gallery_membership_entries "
+            "where album_key like '%%album one'").fetchall()}
+        # Under its new artist only, in every published scope: the old album key left with its old grouping.
+        assert members == {("regrouped::album one", "name:regrouped")}, members
         assert connection.execute("select count(*) as n from library.local_relation_dirty_albums").fetchone()["n"], (
             "the relation publication stays journaled for the replay")
-    RelationReconciliationOwner(fixture.config, reconciled=lambda: None).run_once()
 
     # An index never initialized: a structural save leaves its albums journaled for the start-up owner.
     with isolatedPostgres._connect(fixture.setup_url) as connection:

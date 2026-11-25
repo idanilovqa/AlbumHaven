@@ -16485,6 +16485,23 @@
       "proof": "static"
     },
     {
+      "id": "py:services/scoped_relation_projection.py#_publish_own_gallery_membership",
+      "action": "Publish a deferred write's own albums' gallery membership, keyed per album, in the write's transaction",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#_publish_own_gallery_membership:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py",
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:services/state.py#_request_relation_reconciliation",
       "action": "Start the reconciliation owner from start-up readiness when tag edits would wait",
       "entrypoints": [

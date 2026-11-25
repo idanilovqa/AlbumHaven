@@ -777,8 +777,53 @@ def publish_affected_relation_projection_or_defer(connection, **options):
         if options.get('config'):
             from music_app.services.gallery_projection_postgres import queue_journaled_relation_drain
 
+            _publish_own_gallery_membership(connection, options)
             queue_journaled_relation_drain(options['config'])
         return {'relation_publication_deferred': True}
+
+
+def _publish_own_gallery_membership(connection, options):
+    """A deferred write still shows its own albums in the gallery (FTC-TAGS-045).
+
+    The membership patch normally rides inside the relation publication the savepoint just rolled back. Here
+    it runs for the write's own albums only, keyed per album, in the write's transaction (its own savepoint),
+    with no relation views: each album shows under its own album artist, and family and alias grouping settle
+    when the journal's owner replays the albums. A refusal leaves the membership to that replay.
+    """
+    from music_app.services.gallery_projection_postgres import patch_membership_per_header_in_transaction
+
+    album_ids = {int(value) for value in options.get('album_ids') or () if value}
+    album_keys = {str(value) for value in options.get('album_keys') or () if value}
+    track_paths = sorted({str(path) for path in options.get('track_paths') or () if path})
+    try:
+        with connection.transaction():
+            context = _first_row(connection.execute(_CONTEXT))
+            if context is None:
+                return
+            library_id = context['library_id']
+            rows = connection.execute(
+                '''select albums.id, albums.album_key from library.local_albums albums
+                   where albums.library_id=%(library_id)s
+                     and (albums.id=any(%(ids)s::bigint[]) or albums.album_key=any(%(keys)s::text[])
+                          or albums.id in (select tracks.album_id from library.local_track_files files
+                                           join library.local_tracks tracks on tracks.id=files.track_id
+                                           where tracks.library_id=%(library_id)s
+                                             and files.private_path=any(%(paths)s::text[])))''',
+                {'library_id': library_id, 'ids': sorted(album_ids), 'keys': sorted(album_keys),
+                 'paths': track_paths}).fetchall()
+            album_ids.update(int(row['id']) for row in rows)
+            album_keys.update(str(row['album_key']) for row in rows if row['album_key'])
+            floor = _first_row(connection.execute(
+                'select min(first_gallery_generation) as floor from library.local_relation_dirty_albums '
+                'where library_id=%s', (library_id,)))
+            patch_membership_per_header_in_transaction(
+                connection, options['config'], affected_album_ids=album_ids, affected_album_keys=album_keys,
+                alias_to_canonical={}, journal_floor_generation=(floor or {}).get('floor'),
+            )
+    except Exception as error:
+        logging.getLogger(__name__).warning(
+            'Gallery membership of a deferred write waits for the journal replay: error=%s',
+            type(error).__name__, exc_info=True)
 
 
 def _patch_entry_contract(connection, library_id, views, affected_names, *, compatibility=False):

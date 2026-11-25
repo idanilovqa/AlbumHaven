@@ -1,14 +1,13 @@
 """Background reconciliation of the scoped relation index (FTC-GALLERY-STARTUP-005Q).
 
 When start-up readiness finds the index needs reconciliation, browsing serves the stored relation rows and tag
-edits refuse with a readable message. This owner then replays the journaled albums one album at a time through
-``prepare_relation_compatibility`` and, once that holds, runs start-up readiness again so edits work.
+edits refuse with a readable message. This owner then runs start-up readiness again once it holds.
 
 Start-up readiness starts it, and a save's failed journal replay hands it over (never a request's own work).
-It never makes a whole-library pass: a missing
-projection with nothing journaled needs the explicit initialization, which stays with the owner. One owner across
-processes: the preparation takes the relation projection advisory lock. It is cancellable at shutdown and
-retries a failure with backoff.
+With the compatibility evidence current it replays the journaled albums by key, and retries a failure with
+backoff. Only missing or outdated evidence runs the whole-library compatibility backfill, once per evidence
+state with its progress in /status; a failed backfill parks (no retry). One owner across processes: both take
+the relation projection advisory lock. It is cancellable at shutdown.
 """
 from __future__ import annotations
 
@@ -37,7 +36,7 @@ class RelationReconciliationOwner:
         reconciled: Callable[[], None],
         failed: Callable[[str], None] | None = None,
         parked: Callable[[str], None] | None = None,
-        prepare: Callable[..., object] | None = None,
+        progress: Callable[[Mapping[str, object]], None] | None = None,
         logger: logging.Logger | None = None,
         backoff: Sequence[float] = RETRY_BACKOFF_SECONDS,
     ) -> None:
@@ -45,7 +44,7 @@ class RelationReconciliationOwner:
         self._reconciled = reconciled
         self._failed = failed
         self._parked = parked
-        self._prepare = prepare
+        self._progress = progress
         self._logger = logger or _LOGGER
         self._backoff = tuple(backoff) or (30.0,)
         self._stop = threading.Event()
@@ -77,17 +76,20 @@ class RelationReconciliationOwner:
             thread.join(timeout)
 
     def run_once(self) -> bool:
-        """One replay. True when the index no longer needs reconciliation; parked cases raise.
+        """One pass. True when the index no longer needs reconciliation; parked cases raise.
 
-        Nothing due (a start-up replay already caught up) costs three keyed reads. Proving missing or changed
-        compatibility evidence reads the published relation snapshot once; journaled albums replay by key.
+        Deciding costs keyed reads only. Current evidence replays the journaled albums by key (no snapshot
+        decode, no compatibility views); only missing or outdated evidence runs the one-time backfill.
         """
         from music_app.services import scoped_relation_projection as scoped
 
-        if self._prepare is None and not scoped.relation_reconciliation_due(self._config):
-            return True
-        prepare = self._prepare or scoped.prepare_relation_compatibility
-        prepare(self._config, cancel_requested=self._stop)
+        plan = scoped.relation_reconciliation_plan(self._config)
+        if plan["action"] == "replay":
+            scoped.ensure_pending_relation_projection_ready(self._config, cancel_requested=self._stop, keyed_only=True)
+        elif plan["action"] == "backfill":
+            scoped.run_relation_compatibility_backfill(
+                self._config, plan["evidence"], attempted=plan["attempted"], cancel_requested=self._stop,
+                progress=self._progress)
         return True
 
     def _run(self) -> None:

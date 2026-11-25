@@ -676,6 +676,8 @@ def create_asgi_app():
                 "relation_projection_rebuild_reason": "needs_initialization",
                 "last_error": "Library relationships need the explicit initialization: " + message,
             }),
+            # The one-time compatibility backfill's phase shows in /status (relation_projection.backfill).
+            progress=lambda update: runtime.library_state.update({"relation_compatibility_backfill": dict(update)}),
             logger=runtime.logger,
         )
         _app.state.library_warmup_thread = _start_library_warmup(

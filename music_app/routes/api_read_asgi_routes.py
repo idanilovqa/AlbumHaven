@@ -570,6 +570,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
             "startup_rebuilt": bool(library_state.get("relation_projection_startup_rebuilt")),
             "rebuild_reason": str(library_state.get("relation_projection_rebuild_reason") or ""),
             "duration_ms": float(library_state.get("relation_projection_duration_ms") or 0.0),
+            "backfill": dict(library_state.get("relation_compatibility_backfill") or {}),
         },
         "pending_cover_refresh_after_scan": bool(library_state.get("pending_cover_refresh_after_scan")),
         "last_scan_display": format_timestamp(float(library_state.get("last_scan") or 0.0)),

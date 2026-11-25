@@ -18,15 +18,15 @@ from music_app.services.relation_reconciliation import RelationReconciliationOwn
 def _owner(outcomes, reconciled, waits):
     outcomes = iter(outcomes)
 
-    def prepare(_config, *, cancel_requested):
-        assert cancel_requested is not None, "shutdown can cancel the replay"
+    def run_once():
         outcome = next(outcomes)
         if isinstance(outcome, BaseException):
             raise outcome
-        return outcome
+        return True
 
-    owner = RelationReconciliationOwner({}, reconciled=lambda: reconciled.append(True), prepare=prepare,
+    owner = RelationReconciliationOwner({}, reconciled=lambda: reconciled.append(True),
                                         logger=logging.getLogger("test"), backoff=(30.0, 60.0))
+    owner.run_once = run_once
     owner._stop = SimpleNamespace(is_set=lambda: False, wait=lambda seconds: waits.append(seconds) or False,
                                   set=lambda: None)
     return owner
@@ -73,19 +73,21 @@ def test_a_pending_write_since_the_legacy_publication_classifies_as_needs_initia
 def test_shutdown_cancels_a_running_replay_and_a_stopped_owner_never_starts():
     started, release = threading.Event(), threading.Event()
 
-    def prepare(_config, *, cancel_requested):
+    def run_once():
         started.set()
         release.wait(5)
         raise InterruptedError("cancelled")
 
-    owner = RelationReconciliationOwner({}, reconciled=lambda: None, prepare=prepare, logger=logging.getLogger("test"))
+    owner = RelationReconciliationOwner({}, reconciled=lambda: None, logger=logging.getLogger("test"))
+    owner.run_once = run_once
     assert owner.request() is True
     assert owner.request() is False, "one replay per process"
     assert started.wait(5)
     release.set()
     owner.stop(timeout=5)
     assert not owner._thread.is_alive()
-    stopped = RelationReconciliationOwner({}, reconciled=lambda: None, prepare=prepare)
+    stopped = RelationReconciliationOwner({}, reconciled=lambda: None)
+    stopped.run_once = run_once
     stopped.stop()
     assert stopped.request() is False
 
@@ -142,14 +144,14 @@ def test_a_parked_owner_is_never_requested_again_in_this_process():
 
     runs = []
 
-    def prepare(_config, **_kwargs):
+    def run_once():
         runs.append(True)
         raise relations.RelationInitializationRequired(
             "Legacy publication differs from the frozen legacy source rebuild; journal retained.")
 
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://parked-owner"}
-    owner = RelationReconciliationOwner(config, reconciled=lambda: None, prepare=prepare,
-                                        logger=logging.getLogger("test"))
+    owner = RelationReconciliationOwner(config, reconciled=lambda: None, logger=logging.getLogger("test"))
+    owner.run_once = run_once
     try:
         assert owner.request() is True
         owner._thread.join(5)
@@ -159,11 +161,77 @@ def test_a_parked_owner_is_never_requested_again_in_this_process():
     finally:
         owner.stop()
     # A restart builds a new owner, which may park again (once).
-    restarted = RelationReconciliationOwner(config, reconciled=lambda: None, prepare=prepare,
-                                            logger=logging.getLogger("test"))
+    restarted = RelationReconciliationOwner(config, reconciled=lambda: None, logger=logging.getLogger("test"))
+    restarted.run_once = run_once
     try:
         assert restarted.request() is True
         restarted._thread.join(5)
         assert runs == [True, True]
     finally:
         restarted.stop()
+
+
+def test_current_evidence_replays_the_journal_by_key_and_never_runs_the_backfill(monkeypatch):
+    from music_app.services import scoped_relation_projection as scoped
+
+    replays = []
+    monkeypatch.setattr(scoped, "relation_reconciliation_plan", lambda _config: {"action": "replay"})
+    monkeypatch.setattr(scoped, "ensure_pending_relation_projection_ready",
+                        lambda _config, **kwargs: replays.append(kwargs["keyed_only"]))
+    monkeypatch.setattr(scoped, "run_relation_compatibility_backfill",
+                        lambda *_args, **_kwargs: pytest.fail("current evidence never runs the backfill"))
+
+    assert RelationReconciliationOwner({}, reconciled=lambda: None).run_once()
+    assert replays == [True], "the job's replay refuses rather than prove the legacy contract itself"
+
+
+def test_a_failed_backfill_parks_without_a_backoff_retry(monkeypatch):
+    from music_app.services import scoped_relation_projection as scoped
+
+    evidence = {"source_fingerprint": "f", "publication_xid": "1"}
+    backfills, waits, parked = [], [], []
+    monkeypatch.setattr(scoped, "relation_reconciliation_plan",
+                        lambda _config: {"action": "backfill", "evidence": evidence, "attempted": None})
+
+    def backfill(_config, seen, **kwargs):
+        backfills.append((seen, kwargs["attempted"]))
+        raise relations.RelationInitializationRequired("The compatibility backfill failed (RuntimeError: x).")
+
+    monkeypatch.setattr(scoped, "run_relation_compatibility_backfill", backfill)
+    owner = RelationReconciliationOwner({}, reconciled=lambda: pytest.fail("not reconciled"), parked=parked.append,
+                                        failed=lambda _message: pytest.fail("a backfill is never retried"),
+                                        logger=logging.getLogger("test"))
+    owner._stop = SimpleNamespace(is_set=lambda: False, wait=lambda seconds: waits.append(seconds) or False,
+                                  set=lambda: None)
+
+    owner._run()
+
+    assert backfills == [(evidence, None)] and waits == []
+    assert parked == ["The compatibility backfill failed (RuntimeError: x)."]
+
+
+def test_a_backfill_already_recorded_for_the_state_parks_without_work_and_a_cancel_forgets_it(monkeypatch):
+    from music_app.services import scoped_relation_projection as scoped
+
+    evidence = {"source_fingerprint": "f", "publication_xid": "1"}
+    monkeypatch.setattr(scoped, "prepare_relation_compatibility",
+                        lambda *_args, **_kwargs: pytest.fail("an attempted state never prepares again"))
+    with pytest.raises(relations.RelationInitializationRequired, match="already ran.*differs"):
+        scoped.run_relation_compatibility_backfill(
+            {}, evidence, attempted={**evidence, "status": "parked", "error": "Legacy publication differs"})
+
+    records, forgotten, reported = [], [], []
+    monkeypatch.setattr(scoped, "_record_compatibility_backfill",
+                        lambda _config, _connect, _evidence, **kwargs: records.append(kwargs["status"]) or True)
+    monkeypatch.setattr(scoped, "_forget_compatibility_backfill",
+                        lambda _config, _connect, seen: forgotten.append(seen))
+
+    def cancelled(_config, *, progress, **_kwargs):
+        progress("Building current relations")
+        raise InterruptedError("cancelled")
+
+    monkeypatch.setattr(scoped, "prepare_relation_compatibility", cancelled)
+    with pytest.raises(InterruptedError):
+        scoped.run_relation_compatibility_backfill({}, evidence, progress=reported.append)
+    assert records == ["running"] and forgotten == [evidence], "a shutdown leaves the state to the next start"
+    assert [update["state"] for update in reported] == ["running", "cancelled"]

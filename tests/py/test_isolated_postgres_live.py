@@ -9031,6 +9031,30 @@ def test_live_reconciliation_owner_replays_journaled_albums_so_tag_edits_resume(
     assert relations.ensure_relation_projection_ready(fixture.config)["rebuild_reason"] == "healthy"
 
 
+def _statement_recording_connect(connect, statements):
+    """``connect`` whose connections record every statement they execute."""
+
+    class Recording:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, *exc_info):
+            return self._connection.__exit__(*exc_info)
+
+        def execute(self, query, *args, **kwargs):
+            statements.append(str(query))
+            return self._connection.execute(query, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    return lambda database_url: Recording(connect(database_url))
+
+
 def test_live_relation_snapshot_decodes_stay_on_start_up_and_saves_never_rebuild_the_whole_library(
         watcher_repair_inventory, monkeypatch):
     """FTC-GALLERY-STARTUP-005Q / FTC-TAGS-026P: the whole relation snapshot (every stored view and artist search
@@ -9091,6 +9115,66 @@ def test_live_relation_snapshot_decodes_stay_on_start_up_and_saves_never_rebuild
     RelationReconciliationOwner(fixture.config, reconciled=lambda: None).run_once()
     assert decodes == [], "with the start-up replay caught up, the reconciliation job decodes no whole snapshot"
     assert not scoped.relation_reconciliation_due(fixture.config)
+
+    # A journaled save the job replays with the compatibility evidence current: by key, with no stored legacy
+    # views decode and no compatibility views call.
+    legacy_decodes, statements = [], []
+    stored_legacy_views = scoped._stored_legacy_views
+    monkeypatch.setattr(scoped, "_stored_legacy_views", lambda *args: legacy_decodes.append(True) or stored_legacy_views(*args))
+    recording_connect = _statement_recording_connect(relations._connect, statements)
+    monkeypatch.setattr(relations, "_connect", recording_connect)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        # An old writer moves one album to the other artist: its trigger journals the album.
+        connection.execute("""
+            update library.local_albums albums set artist_id = other.id
+            from library.local_artists other
+            where albums.id = (select max(id) from library.local_albums)
+              and other.library_id = albums.library_id and other.id <> albums.artist_id
+              and other.id = (select min(id) from library.local_artists where id <> albums.artist_id
+                              and library_id = albums.library_id)
+        """)
+    assert scoped.relation_reconciliation_plan(fixture.config) == {"action": "replay"}
+    decodes.clear()
+    RelationReconciliationOwner(fixture.config, reconciled=lambda: None).run_once()
+    assert not scoped.relation_reconciliation_due(fixture.config), "the journaled album replayed"
+    assert decodes == [] and legacy_decodes == [], "the keyed replay decodes no snapshot and no stored legacy views"
+    assert not [sql for sql in statements if "local_relation_compatibility_views" in sql], (
+        "the keyed replay never builds the compatibility views")
+
+    # Missing evidence runs the backfill once for that evidence state: a failure parks it, and neither a retry
+    # nor a restarted owner runs it again; its phases show in /status.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from library.local_relation_compatibility_state")
+    preparations, reported = [], []
+
+    def failing_preparation(*_args, **_kwargs):
+        preparations.append(True)
+        raise RuntimeError("shadow check failed")
+
+    monkeypatch.setattr(scoped, "_prepare_compatibility_in_transaction", failing_preparation)
+    plan = scoped.relation_reconciliation_plan(fixture.config)
+    assert plan["action"] == "backfill" and plan["attempted"] is None
+    owner = RelationReconciliationOwner(fixture.config, reconciled=lambda: None, progress=reported.append)
+    with pytest.raises(relations.RelationInitializationRequired, match="shadow check failed"):
+        owner.run_once()
+    with pytest.raises(relations.RelationInitializationRequired, match="already ran.*shadow check failed"):
+        owner.run_once()
+    with pytest.raises(relations.RelationInitializationRequired, match="already ran"):
+        RelationReconciliationOwner(fixture.config, reconciled=lambda: None).run_once()
+    assert preparations == [True], "one backfill per evidence state, not one per retry or restart"
+    assert [update["state"] for update in reported][-1] == "parked"
+    assert [update.get("phase") for update in reported] == [
+        "Reading the published relations", "Reading the published relations"], "its phase, then where it parked"
+    assert scoped.relation_reconciliation_plan(fixture.config)["attempted"]["status"] == "parked"
+    monkeypatch.undo()
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        # The explicit initialization's outcome, for the rest of this test: evidence for the published index.
+        connection.execute("update library.libraries set metadata = metadata - 'relation_compatibility_backfill'")
+    scoped.prepare_relation_compatibility(fixture.config)
+    assert not scoped.relation_reconciliation_due(fixture.config)
+    monkeypatch.setattr(relations, "_load_relation_projection_sql", counted_snapshot_sql)
+    monkeypatch.setattr(relations, "build_relation_views_from_postgres_rows", whole_library)
+    monkeypatch.setattr(relations, "load_relation_source_rows_sql", whole_library)
 
     # The index waits for reconciliation (no compatibility evidence): a save defers its relation publication but
     # still publishes its own albums' gallery membership, by key, with no whole snapshot decode or build.

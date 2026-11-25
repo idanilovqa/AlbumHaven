@@ -24,6 +24,7 @@ _CONTEXT = """
       libraries.metadata #> '{scan_cache,relation_projection}' as metadata,
       libraries.metadata #>> '{scan_cache,relations_last_built}' as relations_last_built,
       libraries.metadata ->> 'inventory_mutation_revision' as inventory_mutation_revision,
+      libraries.metadata -> 'relation_compatibility_backfill' as compatibility_backfill,
       state.builder_version as normalized_builder_version,
       state.source_fingerprint as normalized_source_fingerprint,
       state.last_publication_xid::text as normalized_publication_xid,
@@ -562,7 +563,7 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
     return {int(row['id']) for row in rows}
 
 
-def publish_affected_relation_projection(connection, *, album_ids=(), album_keys=(), track_paths=(), reason='structural_tag_edit', config=None, cancel_requested=None, expected_gallery_generation=None, prepare_compatibility=False, compatibility_preparer=None):
+def publish_affected_relation_projection(connection, *, album_ids=(), album_keys=(), track_paths=(), reason='structural_tag_edit', config=None, cancel_requested=None, expected_gallery_generation=None, prepare_compatibility=False, compatibility_preparer=None, keyed_only=False):
     from music_app.services import relation_projection_postgres as relations
     context = _first_row(connection.execute(_CONTEXT))
     if context is None or context.get('normalized_builder_version') != relations.RELATION_PROJECTION_BUILDER_VERSION:
@@ -596,6 +597,10 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
         ids.update(row['album_id'] for row in dirty)
         keys.update(key for row in dirty for key in row['album_keys'])
         if fingerprint_changed or any(row['album_id'] < 0 for row in dirty) or prepare_compatibility:
+            if keyed_only:
+                # The reconciliation job replays by key only; proving the legacy contract is the backfill's.
+                raise relations.RelationReconciliationRequired(
+                    'Journaled changes need the compatibility backfill before they can be replayed.')
             # A legacy full publication is a token plus a complete canonical
             # contract, not permission to trust an arbitrary checksum. Capture
             # that contract before touching indexed facts and verify it again
@@ -893,16 +898,22 @@ def _store_compatibility_state(connection, library_id, metadata, relations_last_
       (library_id, LEGACY_ALIAS_POLICY, CURRENT_ALIAS_POLICY, metadata['source_fingerprint'], relations_last_built))
 
 
-def _prepare_compatibility_in_transaction(connection, context, metadata, captured_legacy_views):
+def _prepare_compatibility_in_transaction(connection, context, metadata, captured_legacy_views, *, cancel_requested=None, progress=None):
     from music_app.services.cache import serialize_relation_views
+    from music_app.services import relation_projection_postgres as relations
 
+    step = progress or (lambda _phase: None)
+    cooperate = (lambda: relations._cooperate_with_foreground(cancel_requested)) if cancel_requested is not None else None
     library_id = context['library_id']
     records = connection.execute(
         'select source_rows from library.local_relation_album_facts where library_id=%s order by album_id',
         (library_id,)).fetchall()
     rows = [source for record in records for source in record['source_rows']]
-    current = serialize_relation_views(build_postgres_relation_views(rows))
-    legacy = serialize_relation_views(build_postgres_relation_views(rows, alias_policy=LEGACY_ALIAS_POLICY))
+    step('Building current relations')
+    current = serialize_relation_views(build_postgres_relation_views(rows, cooperate=cooperate))
+    step('Building legacy relations')
+    legacy = serialize_relation_views(build_postgres_relation_views(rows, alias_policy=LEGACY_ALIAS_POLICY, cooperate=cooperate))
+    step('Checking both relation contracts')
     normalized = _first_row(connection.execute(
         'select library.local_relation_views(%s,true) as views', (library_id,)))
     if not normalized or not _relation_views_equal(normalized['views'], current):
@@ -912,6 +923,7 @@ def _prepare_compatibility_in_transaction(connection, context, metadata, capture
         # can prove a new contract, so the reconciliation owner parks this instead of retrying it.
         from music_app.services.relation_projection_postgres import RelationInitializationRequired
         raise RelationInitializationRequired('Legacy publication differs from the frozen legacy source rebuild; journal retained.')
+    step('Writing compatibility evidence')
     connection.execute('delete from library.local_relation_compatibility_entries where library_id=%s', (library_id,))
     _upsert_entries(connection, library_id, _view_entries(legacy), compatibility=True)
     from music_app.services import relation_projection_postgres as relations
@@ -1075,10 +1087,16 @@ def tag_edit_baseline_ready(config, *, connect=None, track_paths=()):
 
 
 
-def prepare_relation_compatibility(config, *, connect=None, cancel_requested=None):
-    """Prove both contracts from cached facts before enabling mixed-version writes."""
+def prepare_relation_compatibility(config, *, connect=None, cancel_requested=None, progress=None):
+    """Prove both contracts from cached facts before enabling mixed-version writes.
+
+    Whole-library work: only the one-time compatibility backfill (run_relation_compatibility_backfill) calls it,
+    never a request, a save or the job's keyed replay."""
+    from functools import partial
     from music_app.services import relation_projection_postgres as relations
 
+    step = progress or (lambda _phase: None)
+    preparer = partial(_prepare_compatibility_in_transaction, cancel_requested=cancel_requested, progress=step)
     connector = connect or relations._connect
     with connector(config['ALBUM_HAVEN_APP_DATABASE_URL']) as connection, relations._cancel_active_connection_on_request(connection, cancel_requested):
         connection.execute(relations.inventory_publication_advisory_lock_sql())
@@ -1091,12 +1109,14 @@ def prepare_relation_compatibility(config, *, connect=None, cancel_requested=Non
         pending = _first_row(connection.execute(
             'select 1 from library.local_relation_dirty_albums where library_id=%s limit 1', (library_id,)))
         if pending:
+            step('Replaying journaled albums')
             result = publish_affected_relation_projection(
                 connection, reason='pending_source_changes', config=config,
                 cancel_requested=cancel_requested, prepare_compatibility=True,
-                compatibility_preparer=_prepare_compatibility_in_transaction)
+                compatibility_preparer=preparer)
             result['compatibility_prepared'] = True
             return result
+        step('Reading the published relations')
         snapshot = relations._relation_projection_scan_cache_from_row(
             _first_row(connection.execute(relations._load_relation_projection_sql())))
         snapshot['relation_views'] = _stored_legacy_views(connection, library_id)
@@ -1114,32 +1134,146 @@ def prepare_relation_compatibility(config, *, connect=None, cancel_requested=Non
             if not shadow or not _relation_views_equal(shadow['views'], legacy_views):
                 raise RuntimeError('Legacy publication differs from proven compatibility entries; journal retained.')
             return {'compatibility_prepared': False}
-        _prepare_compatibility_in_transaction(connection, context, metadata, legacy_views)
+        preparer(connection, context, metadata, legacy_views)
         connection.execute(
             'update library.local_relation_projection_state set last_publication_xid=pg_current_xact_id() where library_id=%s',
             (library_id,))
         return {'compatibility_prepared': True}
 
 
-def relation_reconciliation_due(config, *, connect=None):
-    """Whether tag edits would refuse for want of reconciliation: journaled albums wait, or the compatibility
-    evidence is missing or no longer matches the published index. Three keyed reads."""
+def relation_reconciliation_plan(config, *, connect=None):
+    """What the reconciliation job does next, from keyed reads only (no snapshot decode):
+
+    - ``none``: nothing journaled and the compatibility evidence matches the published index;
+    - ``replay``: the evidence is current and journaled albums wait: they replay by key;
+    - ``backfill``: the evidence is missing, does not match the published index, or a library-wide change
+      waits: only the one-time compatibility backfill proves it. ``evidence`` names that state, and
+      ``attempted`` is the backfill already recorded for it (it never runs twice for one state).
+    """
     from music_app.services import relation_projection_postgres as relations
     with (connect or relations._connect)(config['ALBUM_HAVEN_APP_DATABASE_URL']) as connection:
         context = _first_row(connection.execute(_CONTEXT))
         if context is None or context.get('normalized_builder_version') != relations.RELATION_PROJECTION_BUILDER_VERSION:
-            return False
+            return {'action': 'none'}
         library_id = context['library_id']
-        if _first_row(connection.execute(
-                'select 1 from library.local_relation_dirty_albums where library_id=%s limit 1', (library_id,))):
-            return True
+        journal = _first_row(connection.execute("""select
+              exists(select 1 from library.local_relation_dirty_albums where library_id=%(id)s) as pending,
+              exists(select 1 from library.local_relation_dirty_albums where library_id=%(id)s and album_id<0) as library_wide""",
+            {'id': library_id}))
         state = _compatibility_state(connection, library_id)
-        return state is None or (
-            state['source_fingerprint'] != context.get('normalized_source_fingerprint')
-            or state['publication_xid'] != context.get('normalized_publication_xid'))
+    fingerprint = context.get('normalized_source_fingerprint')
+    metadata = context.get('metadata') or {}
+    evidence_current = state is not None and (
+        state['source_fingerprint'] == fingerprint and state['publication_xid'] == context.get('normalized_publication_xid'))
+    if evidence_current and not journal['pending']:
+        return {'action': 'none'}
+    # The same conditions that make a pending replay prove the legacy contract (publish_affected_relation_projection).
+    legacy_replay = journal['library_wide'] or (fingerprint is not None and (
+        metadata.get('source_fingerprint') != fingerprint or metadata.get('built_from_fingerprint') != fingerprint))
+    if evidence_current and not legacy_replay:
+        return {'action': 'replay'}
+    evidence = {'source_fingerprint': fingerprint, 'publication_xid': context.get('normalized_publication_xid')}
+    attempt = context.get('compatibility_backfill') or {}
+    attempted = attempt if all(attempt.get(key) == value for key, value in evidence.items()) else None
+    return {'action': 'backfill', 'evidence': evidence, 'attempted': attempted}
 
 
-def ensure_pending_relation_projection_ready(config, *, connect=None, cancel_requested=None):
+def relation_reconciliation_due(config, *, connect=None):
+    """Whether tag edits would refuse for want of reconciliation (keyed reads only)."""
+    return relation_reconciliation_plan(config, connect=connect)['action'] != 'none'
+
+
+_SAME_BACKFILL_STATE = """coalesce(metadata,'{}'::jsonb) ? 'relation_compatibility_backfill'
+    and metadata->'relation_compatibility_backfill'->>'source_fingerprint' is not distinct from %(fingerprint)s
+    and metadata->'relation_compatibility_backfill'->>'publication_xid' is not distinct from %(xid)s"""
+
+
+def _update_backfill_record(config, connect, evidence, assignment, guard, record=None):
+    from music_app.services import relation_projection_postgres as relations
+    with (connect or relations._connect)(config['ALBUM_HAVEN_APP_DATABASE_URL']) as connection:
+        row = _first_row(connection.execute(
+            'update library.libraries set metadata=' + assignment + ',updated_at=now()'
+            ' where id=(select context.library_id from (' + _CONTEXT + ') context) and ' + guard + ' returning id',
+            {'record': _jsonb(record), 'fingerprint': evidence.get('source_fingerprint'),
+             'xid': evidence.get('publication_xid')}))
+    return row is not None
+
+
+def _record_compatibility_backfill(config, connect, evidence, *, status, claim=False, **details):
+    """Persist the backfill's outcome for one evidence state on its own committed connection. With ``claim``
+    it records the start only when no attempt is recorded for that state, and returns whether it did."""
+    record = {**evidence, 'status': status, 'recorded_at': datetime.now(timezone.utc).isoformat(), **details}
+    return _update_backfill_record(
+        config, connect, evidence,
+        "coalesce(metadata,'{}'::jsonb)||jsonb_build_object('relation_compatibility_backfill',%(record)s::jsonb)",
+        ('not (' + _SAME_BACKFILL_STATE + ')') if claim else _SAME_BACKFILL_STATE, record)
+
+
+def _forget_compatibility_backfill(config, connect, evidence):
+    """A cancelled backfill (shutdown) rolled back: the next start may run it for the same state."""
+    _update_backfill_record(
+        config, connect, evidence, "metadata-'relation_compatibility_backfill'",
+        "metadata->'relation_compatibility_backfill'->>'status'='running' and " + _SAME_BACKFILL_STATE)
+
+
+# Reading or replaying, both builds, the contract check and the evidence write.
+BACKFILL_STEPS = 6
+
+
+def run_relation_compatibility_backfill(config, evidence, *, attempted=None, connect=None, cancel_requested=None, progress=None):
+    """The one-time compatibility backfill: whole-library preparation and the shadow-equality check, run by the
+    reconciliation job only when the evidence is missing or does not match the published index.
+
+    At most once per evidence state: the attempt is recorded (committed) before the work, so a retry, a later
+    request or a restart for the same state parks at once. Any failure parks with
+    ``RelationInitializationRequired`` (no backoff retry); a shutdown cancels it cooperatively and forgets the
+    attempt, since nothing was written. Each phase reports through ``progress`` for /status.
+    """
+    from music_app.services import relation_projection_postgres as relations
+
+    report = progress or (lambda _update: None)
+    if attempted is not None or not _record_compatibility_backfill(
+            config, connect, evidence, status='running', claim=True, started_at=datetime.now(timezone.utc).isoformat()):
+        earlier = (attempted or {}).get('error') or (attempted or {}).get('status') or 'another process'
+        raise relations.RelationInitializationRequired(
+            f'The compatibility backfill already ran for this library state ({earlier}); journal retained.')
+    started = perf_counter()
+    phases = []
+
+    def elapsed_ms():
+        return round((perf_counter() - started) * 1000)
+
+    def step(phase):
+        relations._raise_if_projection_cancelled(cancel_requested)
+        phases.append(phase)
+        report({'state': 'running', 'phase': phase, 'step': len(phases), 'steps': BACKFILL_STEPS,
+                'elapsed_ms': elapsed_ms()})
+
+    try:
+        result = prepare_relation_compatibility(config, connect=connect, cancel_requested=cancel_requested,
+                                                progress=step)
+    except Exception as error:
+        last_phase = phases[-1] if phases else ''
+        if isinstance(error, InterruptedError) or (cancel_requested is not None and cancel_requested.is_set()):
+            _forget_compatibility_backfill(config, connect, evidence)
+            report({'state': 'cancelled', 'phase': last_phase, 'elapsed_ms': elapsed_ms()})
+            raise InterruptedError('The compatibility backfill was cancelled.') from error
+        message = str(error) or type(error).__name__
+        _record_compatibility_backfill(config, connect, evidence, status='parked', error=message,
+                                       phase=last_phase, duration_ms=elapsed_ms())
+        report({'state': 'parked', 'phase': last_phase, 'error': message, 'elapsed_ms': elapsed_ms()})
+        if isinstance(error, relations.RelationInitializationRequired):
+            raise
+        raise relations.RelationInitializationRequired(
+            f'The compatibility backfill failed ({type(error).__name__}: {message}); journal retained.') from error
+    duration_ms = elapsed_ms()
+    _record_compatibility_backfill(config, connect, evidence, status='completed', duration_ms=duration_ms)
+    report({'state': 'completed', 'phase': 'Done', 'step': BACKFILL_STEPS, 'steps': BACKFILL_STEPS,
+            'elapsed_ms': duration_ms})
+    return result
+
+
+def ensure_pending_relation_projection_ready(config, *, connect=None, cancel_requested=None, keyed_only=False):
     """Replay journaled old-writer changes through the same atomic scoped path."""
     from music_app.services import relation_projection_postgres as relations
     connector = connect or relations._connect
@@ -1153,7 +1287,8 @@ def ensure_pending_relation_projection_ready(config, *, connect=None, cancel_req
                                      (context['library_id'],)))
         if pending is None:
             return {'initialized': True, 'updated': False}
-        result = publish_affected_relation_projection(connection, config=config, reason='pending_source_changes', cancel_requested=cancel_requested)
+        result = publish_affected_relation_projection(connection, config=config, reason='pending_source_changes',
+                                                      cancel_requested=cancel_requested, keyed_only=keyed_only)
         return {'initialized': True, 'updated': True, **result}
 
 

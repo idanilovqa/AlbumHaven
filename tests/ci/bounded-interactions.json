@@ -16470,9 +16470,25 @@
     },
     {
       "id": "py:services/scoped_relation_projection.py#relation_reconciliation_due",
-      "action": "Check with three keyed reads whether tag edits would wait for reconciliation",
+      "action": "Check with keyed reads whether tag edits would wait for reconciliation",
       "entrypoints": [
         "py:music_app/services/scoped_relation_projection.py#relation_reconciliation_due:reconciler:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#relation_reconciliation_plan",
+      "action": "Choose the reconciliation job's next step (keyed replay, one-time backfill or nothing) with keyed reads",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#relation_reconciliation_plan:reconciler:name"
       ],
       "owners": [
         "music_app/services/scoped_relation_projection.py"

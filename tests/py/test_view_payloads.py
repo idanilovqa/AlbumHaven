@@ -367,6 +367,7 @@ def test_build_status_payload_reflects_current_state_counters(app):
             "startup_rebuilt": False,
             "rebuild_reason": "not_checked",
             "duration_ms": 0.0,
+            "backfill": {},
         },
     }
 

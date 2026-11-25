@@ -274,7 +274,7 @@ async function loadNextRootGalleryPage() {
   } catch (error) {
     if (!ownsResponse() || error?.name === 'AbortError') return false;
     // The end of the kept gallery says why nothing more loads, and stays until something does.
-    if (error?.serverUnreachable) setGalleryEndOffline(serverUnreachableMessage('more albums'));
+    if (error?.serverUnreachable || isOfflineShown()) setGalleryEndOffline(serverUnreachableMessage('more albums'));
     else showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
     return false;
   } finally {
@@ -354,10 +354,9 @@ async function loadPreviousRootGalleryPage() {
     });
     return true;
   } catch (error) {
-    if (error?.name !== 'AbortError') {
-      showToast(error?.serverUnreachable
-        ? serverUnreachableMessage('earlier albums')
-        : error.message || 'Unable to load earlier albums.', 'error', 3200);
+    // While the page says Offline, that line explains it: no error alert.
+    if (error?.name !== 'AbortError' && !error?.serverUnreachable && !isOfflineShown()) {
+      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
   } finally {

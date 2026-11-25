@@ -38,6 +38,14 @@ function isServerUnreachable() {
   return serverReachability.unreachable;
 }
 
+// The page says Offline: the runtime found the server unreachable, or the page runs from its device
+// copy without an answer yet (app-copy.js). A failure then is explained by that line, not an alert.
+function isOfflineShown() {
+  if (serverReachability.unreachable) return true;
+  const notice = typeof document !== 'undefined' ? document.getElementById('app-copy-offline-notice') : null;
+  return Boolean(notice && !notice.hidden);
+}
+
 // The page's Offline line and read-only follow this state in every tab (app-copy.js).
 function tellAppCopyReachability(unreachable) {
   if (typeof window !== 'undefined') window.AlbumHavenAppCopy?.setServerUnreachable?.(unreachable);

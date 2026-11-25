@@ -7888,6 +7888,25 @@ test('IAR-W10: more albums that cannot load end the gallery with the offline lin
   assert.equal(endNotice.hidden, true, 'albums that load take the line away');
 });
 
+// While the page already says Offline (here: started from its device copy, no answer yet), a server
+// error for more albums ends the gallery with the offline line instead of a red error alert.
+test('more albums failing while the page says Offline show the offline line, not an error alert', async () => {
+  const gallery = capturedGallery(async () => jsonResponse({ error: 'unavailable' }, { status: 500 }));
+  const text = { textContent: '' };
+  const endNotice = { hidden: true, querySelector: selector => (selector === '.offline-notice__text' ? text : null) };
+  const pageNotice = { hidden: false };
+  const getElementById = gallery.context.document.getElementById;
+  gallery.context.document.getElementById = id => (
+    id === 'gallery-end-offline' ? endNotice : id === 'app-copy-offline-notice' ? pageNotice : getElementById(id));
+  gallery.context.state.view = retainedRootView(3);
+
+  assert.equal(await gallery.context.loadNextRootGalleryPage(), false);
+
+  assert.deepEqual(gallery.calls.showToast, []);
+  assert.equal(endNotice.hidden, false);
+  assert.equal(text.textContent, "Offline. Can't load more albums, check your network or try again later");
+});
+
 // ---- Recovery (after the network returns, Offline does not stay for minutes) ----
 
 // [fixture] with timers that run only when the test says, and a window that records listeners.

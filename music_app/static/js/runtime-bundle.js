@@ -2144,6 +2144,14 @@ function isServerUnreachable() {
   return serverReachability.unreachable;
 }
 
+// The page says Offline: the runtime found the server unreachable, or the page runs from its device
+// copy without an answer yet (app-copy.js). A failure then is explained by that line, not an alert.
+function isOfflineShown() {
+  if (serverReachability.unreachable) return true;
+  const notice = typeof document !== 'undefined' ? document.getElementById('app-copy-offline-notice') : null;
+  return Boolean(notice && !notice.hidden);
+}
+
 // The page's Offline line and read-only follow this state in every tab (app-copy.js).
 function tellAppCopyReachability(unreachable) {
   if (typeof window !== 'undefined') window.AlbumHavenAppCopy?.setServerUnreachable?.(unreachable);
@@ -21613,7 +21621,7 @@ async function loadNextRootGalleryPage() {
   } catch (error) {
     if (!ownsResponse() || error?.name === 'AbortError') return false;
     // The end of the kept gallery says why nothing more loads, and stays until something does.
-    if (error?.serverUnreachable) setGalleryEndOffline(serverUnreachableMessage('more albums'));
+    if (error?.serverUnreachable || isOfflineShown()) setGalleryEndOffline(serverUnreachableMessage('more albums'));
     else showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
     return false;
   } finally {
@@ -21693,10 +21701,9 @@ async function loadPreviousRootGalleryPage() {
     });
     return true;
   } catch (error) {
-    if (error?.name !== 'AbortError') {
-      showToast(error?.serverUnreachable
-        ? serverUnreachableMessage('earlier albums')
-        : error.message || 'Unable to load earlier albums.', 'error', 3200);
+    // While the page says Offline, that line explains it: no error alert.
+    if (error?.name !== 'AbortError' && !error?.serverUnreachable && !isOfflineShown()) {
+      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
   } finally {

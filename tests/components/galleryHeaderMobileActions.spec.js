@@ -111,5 +111,7 @@ test('artist controls move down before a fitting artist name is ellipsized on mo
   expect(layout.wrapping).toBe(false);
   expect(layout.nameFull).toBe(true);
   expect(layout.actionsTop).toBeGreaterThanOrEqual(layout.nameBottom - 1);
-  expect(layout.mobileSummaryTop).toBeGreaterThanOrEqual(layout.actionsBottom);
+  // Owner (ARTIST-HEADER-LABELS, 2026-11-24): the controls share line two with the count; the header stays two lines.
+  expect(layout.mobileSummaryTop).toBeGreaterThanOrEqual(layout.nameBottom);
+  expect(Math.abs((layout.actionsTop + layout.actionsBottom) / 2 - layout.countCenter)).toBeLessThanOrEqual(2);
 });

@@ -888,6 +888,47 @@ def choose_best_remaining_local_cover(
     )
 
 
+@dataclass
+class DeletedCoverCopy:
+    """A deleted selected image and the app's cover.jpg copy of it, kept until the next selection commits."""
+    deleted: dict[Path, bytes]
+    next_cover: Path | None
+
+
+def delete_selected_cover_and_its_copy(
+    *,
+    album_root: Path,
+    source_path: Path,
+    copy_path: Path,
+    chosen_next: Path | None,
+    image_extensions: set[str],
+    image_dimensions,
+    is_squareish_cover,
+    score_image,
+) -> DeletedCoverCopy:
+    """Owner (2026-11-24): the deleted picture leaves with its copy, so the next selection keeps no backup of it."""
+    deleted = {path: path.read_bytes() for path in (source_path, copy_path)}
+    with suppress_library_watch_events(tuple(deleted)):
+        for path in deleted:
+            path.unlink()
+    if chosen_next is None or chosen_next in deleted or not chosen_next.is_file():
+        chosen_next = choose_best_remaining_local_cover(
+            album_root,
+            image_extensions=image_extensions,
+            image_dimensions=image_dimensions,
+            is_squareish_cover=is_squareish_cover,
+            score_image=score_image,
+        )
+    return DeletedCoverCopy(deleted=deleted, next_cover=chosen_next)
+
+
+def restore_deleted_cover_copy(deleted: DeletedCoverCopy) -> None:
+    with suppress_library_watch_events(tuple(deleted.deleted)):
+        for path, data in deleted.deleted.items():
+            if not path.exists():
+                path.write_bytes(data)
+
+
 def delete_local_cover_and_choose_next(
     *,
     album_root: Path,

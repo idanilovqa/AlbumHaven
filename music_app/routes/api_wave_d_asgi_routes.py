@@ -5,6 +5,7 @@ from music_app.services.log_history import HistoryScope, history_scope_for_reque
 import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timezone
+import json
 import logging
 from pathlib import Path
 from threading import Event
@@ -82,8 +83,11 @@ from music_app.services.cover_workflow import (
     decode_image_bytes,
     complete_local_image_promotion,
     cover_revision_for_path,
+    DeletedCoverCopy,
     delete_local_cover_and_choose_next,
+    delete_selected_cover_and_its_copy,
     resolve_album_context,
+    restore_deleted_cover_copy,
     resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
     run_serialized_cover_selection,
@@ -1939,6 +1943,11 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     )
     if isinstance(outcome, Response):
         return outcome
+    if isinstance(outcome, DeletedCoverCopy):
+        outcome = await _select_next_cover_after_deleted_copy(request, config, logger, library_state, album,
+                                                              album_context, outcome)
+        if isinstance(outcome, Response):
+            return outcome
     updated_albums, updated_problematic_album, deleted_path = outcome
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if inventory_worker is not None:
@@ -1956,6 +1965,30 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
             ),
         }
     )
+
+
+async def _select_next_cover_after_deleted_copy(
+    request: Request,
+    config: dict[str, object],
+    logger: logging.Logger,
+    library_state: dict[str, object],
+    album: JsonDict | None,
+    album_context: CoverAlbumContext,
+    deleted: DeletedCoverCopy,
+) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
+    """The next card becomes the selection the way a click selects it, writing it into cover.jpg."""
+    selected_inventory_state = await _selected_cover_inventory_state(config, library_state, album_context.track_paths)
+    response = await run_in_threadpool(
+        _utilities_cover_lookup_local_select_response, selected_inventory_state, album_context, album, config,
+        str(deleted.next_cover), logger, library_state, await history_scope_for_request(request, required=False),
+        perf_counter(),
+    )
+    if response.status_code != 200:
+        await run_in_threadpool(restore_deleted_cover_copy, deleted)
+        return response
+    selection = json.loads(response.body)
+    source_path = next(iter(deleted.deleted))
+    return selection["updated_albums"], selection["updated_problematic_album"], source_path
 
 
 def _delete_local_cover(
@@ -2011,20 +2044,47 @@ def _delete_cover_and_repoint(
         else library_state
     )
     deleted_cover_bytes = resolved.read_bytes()
-    active_cover = active_cover_path_for_track_paths_in_state(
-        selection_state.get("file_cache", {}) or {},
-        album_context.track_paths,
-    )
-    next_cover = delete_local_cover_and_choose_next(
-        album_root=album_context.album_root,
-        source_path=resolved,
-        active_cover_path=active_cover,
-        image_extensions=set(config["IMAGE_EXTENSIONS"]),
-        image_dimensions=image_dimensions,
-        is_squareish_cover=_is_squareish_cover,
-        score_image=score_image,
-        chosen_next=chosen_next,
-    )
+    file_cache = selection_state.get("file_cache", {}) or {}
+    active_cover = active_cover_path_for_track_paths_in_state(file_cache, album_context.track_paths)
+    selected_sources = {
+        Path(str(entry.get("selected_local_cover_source_path"))).resolve(strict=False)
+        for path in album_context.track_paths
+        if isinstance(entry := file_cache.get(path), dict) and entry.get("selected_local_cover_source_path")
+    }
+    app_copy = (album_context.album_root / "cover.jpg").resolve(strict=False)
+    if (
+        active_cover is not None and active_cover != resolved
+        and Path(active_cover).resolve(strict=False) == app_copy and app_copy.is_file()
+        and resolved.resolve(strict=False) in selected_sources
+    ):
+        # Owner (2026-11-24): deleting the selected image also replaces the app's copy of it in cover.jpg.
+        deleted = delete_selected_cover_and_its_copy(
+            album_root=album_context.album_root,
+            source_path=resolved,
+            copy_path=app_copy,
+            chosen_next=chosen_next,
+            image_extensions=set(config["IMAGE_EXTENSIONS"]),
+            image_dimensions=image_dimensions,
+            is_squareish_cover=_is_squareish_cover,
+            score_image=score_image,
+        )
+        if deleted.next_cover is not None:
+            return deleted  # selected after this lock is released, by the local-select path
+        # No image remains: the selection is cleared below, as when the active cover itself is deleted.
+        active_cover, next_cover = resolved, None
+        restore_deleted = lambda: restore_deleted_cover_copy(deleted)  # noqa: E731
+    else:
+        next_cover = delete_local_cover_and_choose_next(
+            album_root=album_context.album_root,
+            source_path=resolved,
+            active_cover_path=active_cover,
+            image_extensions=set(config["IMAGE_EXTENSIONS"]),
+            image_dimensions=image_dimensions,
+            is_squareish_cover=_is_squareish_cover,
+            score_image=score_image,
+            chosen_next=chosen_next,
+        )
+        restore_deleted = lambda: resolved.write_bytes(deleted_cover_bytes)  # noqa: E731
     updated_albums: list[dict[str, object]] = []
     updated_problematic_album = None
     if active_cover == resolved:
@@ -2039,7 +2099,7 @@ def _delete_cover_and_repoint(
                 clear_selection=next_cover is None,
             )
         except Exception:
-            resolved.write_bytes(deleted_cover_bytes)
+            restore_deleted()
             raise
         updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
             album_context.track_paths,

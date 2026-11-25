@@ -11964,6 +11964,66 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumTrackTableTouch.spec.js",
+    "case": "after playback moves on, the tapped track looks exactly like an idle track on a phone",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "tapped-track-looks-idle-after-playback-moves-on"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTableTouch.spec.js",
+    "case": "keyboard focus still reveals a track's play button where the device can hover",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "keyboard-focus-reveals-track-play-button-on-hover-devices"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksPlaybackTick.spec.js",
+    "case": "a playback tick on 1,000 loose tracks changes only the playing row at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "playback-tick-changes-only-playing-row-390px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksPlaybackTick.spec.js",
+    "case": "a playback tick on 1,000 loose tracks changes only the playing row at 1000px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "playback-tick-changes-only-playing-row-1000px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/albumAdditionalArtbox.spec.js",
     "case": "two artboxes stay square inside the cover column (new Add art box)",
     "profile": null,

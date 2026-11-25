@@ -1,0 +1,92 @@
+import { expect, test } from '../support/baseFixtures.js';
+import { readGeneratedMp3TagSnapshots } from '../helpers/physicalTagHelpers.js';
+import { removeRelationCompatibilityEvidence } from '../helpers/postgresProjectionFixture.js';
+
+// FTC-TAGS-045: an edit made while the relation index waits for reconciliation is saved at once; the
+// gallery keeps the stored grouping until the background reconciliation replays the album, then shows the album
+// under its new artist through the normal refresh.
+const FIXTURE_ARTIST = 'E2E Rarity Artist';
+const FIXTURE_ALBUM = 'Two Track Rarity Fixture';
+const FIXTURE_YEAR = '2026';
+const RECONCILED_ARTIST = 'E2E Reconciled Artist';
+const FIXTURE_TRACK_COUNT = 2;
+const ROOT_GALLERY_URL = '/?surface=albums';
+// Start-up readiness waits 5 s before its relation work; the replay of one album, the gallery publication and the
+// page's status poll then take well under a second at production calibration. 20 s leaves room for a hosted runner.
+const RECONCILED_GROUPING_BOUND_MS = 20_000;
+
+async function albumArtistFrames() {
+  const snapshots = await readGeneratedMp3TagSnapshots({ artist: FIXTURE_ARTIST, album: FIXTURE_ALBUM });
+  expect(snapshots).toHaveLength(FIXTURE_TRACK_COUNT);
+  return snapshots.map(({ frames }) => frames?.TPE2);
+}
+
+async function editAlbumArtist({ galleryActions, trackModalActions, tagEditorActions }, fromArtist, toArtist) {
+  await galleryActions.selectAlbumDetailsByIdentity({ artist: fromArtist, album: FIXTURE_ALBUM, year: FIXTURE_YEAR });
+  await trackModalActions.waitForInteractiveSummary();
+  await trackModalActions.openTagEditor();
+  await tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
+  await tagEditorActions.selectAllTracks();
+  await tagEditorActions.setAlbumArtist(toArtist);
+  expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
+}
+
+test('FTC-TAGS-045 saves an edit while relations await reconciliation and regroups it after the replay', { tag: '@area:tag-edit' }, async ({
+  freshBrowserSession,
+  galleryActions,
+  managedAppLifecycle,
+  page,
+  stepLogger,
+  tagEditorActions,
+  trackModalActions,
+}) => {
+  test.setTimeout(240_000);
+
+  await stepLogger.step('Open the gallery of a library whose relation index awaits reconciliation', async () => {
+    await removeRelationCompatibilityEvidence();
+    await galleryActions.goto(ROOT_GALLERY_URL);
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FIXTURE_ALBUM);
+  });
+
+  await stepLogger.step('Save a new album artist: it shows at once in the reopened editor and in the files', async () => {
+    await editAlbumArtist({ galleryActions, trackModalActions, tagEditorActions }, FIXTURE_ARTIST, RECONCILED_ARTIST);
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
+    await tagEditorActions.selectAllTracks();
+    expect(await tagEditorActions.readEditableValues(['album_artist'])).toEqual({ album_artist: RECONCILED_ARTIST });
+    await tagEditorActions.close();
+    await trackModalActions.close();
+    expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([RECONCILED_ARTIST]));
+  });
+
+  await stepLogger.step('While reconciliation is due the gallery renders under the stored grouping and keeps its place', async () => {
+    const scrollBefore = await galleryActions.readGalleryScrollState();
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FIXTURE_ALBUM);
+    const scrollAfter = await galleryActions.readGalleryScrollState();
+    expect(Math.abs(scrollAfter.scrollTop - scrollBefore.scrollTop)).toBeLessThanOrEqual(2);
+  });
+
+  let restarted = null;
+  await stepLogger.step('After a restart the reconciliation replay regroups the album under its new artist', async () => {
+    await page.goto('about:blank');
+    await managedAppLifecycle.restart();
+    restarted = await freshBrowserSession.create();
+    await restarted.galleryActions.goto(ROOT_GALLERY_URL);
+    await restarted.galleryActions.waitForGalleryReady();
+    const startedAt = Date.now();
+    // No reload: the page's own refresh shows the replayed album under the exact new heading.
+    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM, {
+      timeout: RECONCILED_GROUPING_BOUND_MS,
+    });
+    expect(Date.now() - startedAt).toBeLessThanOrEqual(RECONCILED_GROUPING_BOUND_MS);
+  });
+
+  await stepLogger.step('Restore the album artist so no other case sees this one', async () => {
+    await editAlbumArtist(restarted, RECONCILED_ARTIST, FIXTURE_ARTIST);
+    await restarted.trackModalActions.closeIfOpen();
+    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FIXTURE_ALBUM);
+    expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([FIXTURE_ARTIST]));
+  });
+});

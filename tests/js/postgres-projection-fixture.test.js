@@ -66,3 +66,24 @@ test('projection fixture reads the stored relation family of one artist through 
   assert.match(sql, /source_family <> 'folder_derived_runtime'/u);
   assert.match(sql, /artists\.name = 'Neal O''Morse'/u);
 });
+
+test('projection fixture removes one library relation compatibility evidence through the setup role', async () => {
+  const { removeRelationCompatibilityEvidence } = await import('../e2e/helpers/postgresProjectionFixture.js');
+  const calls = [];
+  const removed = await removeRelationCompatibilityEvidence({
+    env: {
+      ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
+        'postgresql://album_haven_migrator:test-only@127.0.0.1:54329/album_haven_fake_e2e',
+    },
+    platform: 'linux',
+    execFileAsync: async (command, args) => {
+      calls.push({ command, args });
+      return { stdout: '1\n' };
+    },
+  });
+
+  assert.equal(removed, 1);
+  const sql = calls[0].args.at(-1);
+  assert.match(sql, /delete from library\.local_relation_compatibility_state/u);
+  assert.match(sql, /join app\.bootstrap_owners/u);
+});

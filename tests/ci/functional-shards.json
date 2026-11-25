@@ -1073,6 +1073,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/relationReconciliationEdit.spec.js",
+              "case": "FTC-TAGS-045 saves an edit while relations await reconciliation and regroups it after the replay",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
               "case": "FTC-ALBUM-DETAILS-029 an open Album Details whose album is split or merged elsewhere says 'This album changed—choose it again in the gallery' and returns to the gallery; a stale card opened afterwards just shows the refreshed gallery; a gallery open never shows the split chooser",
               "area": "tag-edit"

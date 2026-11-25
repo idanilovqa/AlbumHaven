@@ -13343,5 +13343,33 @@
       "settings-header-gallery-structure"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/relationReconciliationEdit.spec.js",
+    "case": "FTC-TAGS-045 saves an edit while relations await reconciliation and regroups it after the replay",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "relations:compatibility-evidence-removed"
+    ],
+    "filesystemScenarios": [
+      "media-copy:relation-reconciliation-edit"
+    ],
+    "expectedContracts": [
+      "edit-saves-while-reconciliation-due",
+      "stored-grouping-until-replay",
+      "replayed-grouping-without-reload"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:relation-reconciliation-edit",
+      "filesystemCopy": "media/cases/relation-reconciliation-edit"
+    },
+    "ownerApproval": "approved"
   }
 ]

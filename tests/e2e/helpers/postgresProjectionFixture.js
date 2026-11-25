@@ -122,3 +122,41 @@ export async function readStoredRelationFamily(artist, options = {}) {
   }
   throw new Error('No PostgreSQL client command was available.');
 }
+
+// An older writer's library: the scoped index has no compatibility evidence, so edits commit and their relation
+// publication waits in the journal until the reconciliation owner proves the evidence (FTC-GALLERY-STARTUP-005Q).
+const REMOVE_COMPATIBILITY_EVIDENCE_SQL = `
+with removed as (
+  delete from library.local_relation_compatibility_state state
+  using library.libraries libraries
+  join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
+  where state.library_id = libraries.id and libraries.library_kind = 'local'
+  returning state.library_id
+)
+select count(*) from removed;
+`;
+
+export async function removeRelationCompatibilityEvidence(options = {}) {
+  const env = options.env || process.env;
+  const connection = resolveIsolatedE2ESetupConnection(env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL);
+  const childEnv = { ...env, PGCLIENTENCODING: 'UTF8' };
+  delete childEnv.PGDATABASE;
+  if (connection.password) childEnv.PGPASSWORD = connection.password;
+  const commands = resolvePsqlCommands(env, options.platform || process.platform);
+  const execute = options.execFileAsync || execFileAsyncDefault;
+  for (let index = 0; index < commands.length; index += 1) {
+    try {
+      const result = await execute(commands[index], [
+        '--no-psqlrc', '--quiet', '--tuples-only', '--no-align',
+        `--dbname=${connection.databaseTarget}`,
+        '--set=ON_ERROR_STOP=1', '--command', REMOVE_COMPATIBILITY_EVIDENCE_SQL,
+      ], { encoding: 'utf8', env: childEnv, windowsHide: true });
+      const removed = Number.parseInt(String(result.stdout || '').trim(), 10);
+      if (removed !== 1) throw new Error(`Expected one library's compatibility evidence; removed ${removed || 0}.`);
+      return removed;
+    } catch (error) {
+      if (error?.code !== 'ENOENT' || index === commands.length - 1) throw error;
+    }
+  }
+  throw new Error('No PostgreSQL client command was available.');
+}

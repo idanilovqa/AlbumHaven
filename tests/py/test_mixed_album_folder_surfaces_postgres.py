@@ -78,6 +78,33 @@ def test_a_folder_of_covers_says_mixed_on_no_surface_and_a_real_multi_album_fold
     )
 
 
+def test_a_stale_stored_mixed_label_from_an_older_scan_says_mixed_on_no_surface(watcher_repair_inventory):
+    """Older scans stored "Mixed album metadata in one folder" in a file's scan entry for any folder of two album
+    names. The strict rule owns that reason now (owner, fix A, 2026-11-25): a stored copy of the old label in a
+    folder that is not a multi-album folder shows on no surface, and nothing rewrites the stored scan entry."""
+    fixture = watcher_repair_inventory
+    covers = [_entry(fixture, "Covers", "Post Album", 13), _entry(fixture, "Covers", "Post Album", 14),
+              _entry(fixture, "Covers", "Other Album", 1, total=2), _entry(fixture, "Covers", "Other Album", 2, total=2)]
+    fixture.seed(*covers)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        stamped = connection.execute(
+            """update library.local_track_files
+               set metadata = jsonb_set(metadata, '{scan_cache,file_entry,local_album_membership_problem}', to_jsonb(%s::text))
+               where private_path = any(%s) returning id""", (MIXED, [entry["path"] for entry in covers])).fetchall()
+    assert len(stamped) == len(covers)
+
+    for album, entries in (("Post Album", covers[:2]), ("Other Album", covers[2:])):
+        surfaces = _surfaces(fixture, album, [entry["path"] for entry in entries])
+        assert _saying_mixed(surfaces) == [], f"{album}: a stale stored label says mixed"
+    other = _surfaces(fixture, "Other Album", [entry["path"] for entry in covers[2:]])["album details"]
+    assert [track.get("is_problematic") for track in other["tracks"]] == [False, False], "the complete album has no \"!\""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        kept = connection.execute(
+            """select count(*) as kept from library.local_track_files
+               where metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' = %s""", (MIXED,)).fetchone()
+    assert kept["kept"] == len(covers), "the stored scan entries are not rewritten"
+
+
 @pytest.fixture(autouse=True)
 def _problematic_index_off(monkeypatch):
     # Problematic Files' own read (the persisted index is proven elsewhere).

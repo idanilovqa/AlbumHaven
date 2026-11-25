@@ -1290,3 +1290,70 @@ test('bounded interaction: a Cover Look Up gallery refresh reads its own album o
     },
   });
 });
+
+// Owner (sandbox2): an OTHER ART image chosen as the cover reopened in both sections until a later listing.
+// Every render of the reopened lookup shows it once, in LOCAL.
+test('an other-art image chosen as the cover reopens only in LOCAL on every render', async () => {
+  const h = harness();
+  const a = album('A');
+  const booklet = { candidate_cover_ref: '/A/booklet.jpg', is_squareish: false, width: 1200, height: 600 };
+  h.server.set('A', { ok: true, active_cover_ref: a.cover_ref, selected_source_cover_ref: a.cover_ref,
+    local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: true, is_squareish: true }],
+    other_art: [booklet] });
+  await h.open(a);
+  assert.deepEqual(Array.from(h.context.state.coverLookup.modal.otherArt, cover => cover.candidate_cover_ref), [booklet.candidate_cover_ref]);
+  h.context.markCoverLookupTaskActionTaken = () => {};
+  const saving = h.context.saveLocalCoverFromLookup(booklet.candidate_cover_ref);
+  const saved = { ...a, cover_ref: booklet.candidate_cover_ref, cover_revision: 'booklet' };
+  h.server.set('A', { ok: true, active_cover_ref: '/A/cover.jpg', selected_source_cover_ref: booklet.candidate_cover_ref,
+    local_covers: [{ ...booklet, is_active: true }, { candidate_cover_ref: a.cover_ref, is_active: false, is_squareish: true }],
+    other_art: [] });
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true, updated_albums: [saved] }) });
+  await saving;
+
+  const renders = [];
+  h.context.renderCoverLookupModal = () => {
+    const modal = h.context.state.coverLookup.modal;
+    const count = list => (list || []).filter(cover => cover.candidate_cover_ref === booklet.candidate_cover_ref).length;
+    renders.push({ local: count(modal.localCovers), other: count(modal.otherArt) });
+  };
+  await h.open(saved);
+  await nextTurn();
+  assert.ok(renders.length > 1, 'the reopening renders from its cache and then from the server');
+  assert.deepEqual(renders.filter(render => render.local !== 1 || render.other !== 0), [], JSON.stringify(renders));
+});
+
+// Owner (sandbox2): deleting the selected cover brought it back into the window. A listing that answers while
+// the delete is in flight never restores it, and the selection is on the fallback from the first render.
+test('a deleted selected cover never reappears while its delete is in flight', async () => {
+  const h = harness();
+  const a = album('A');
+  const listing = { ok: true, active_cover_ref: a.cover_ref, selected_source_cover_ref: a.cover_ref,
+    local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: true, is_squareish: true },
+      { candidate_cover_ref: '/A/second.jpg', is_squareish: true }, { candidate_cover_ref: '/A/third.jpg', is_squareish: true }] };
+  h.server.set('A', listing);
+  await h.open(a);
+  const renders = [];
+  h.context.renderCoverLookupModal = () => {
+    const modal = h.context.state.coverLookup.modal;
+    renders.push({
+      deletedShown: (modal.localCovers || []).some(cover => cover.candidate_cover_ref === a.cover_ref),
+      selected: String(modal.pendingLocalRef || modal.activeLocalSelectionRef || ''),
+    });
+  };
+  const deleting = h.context.deleteLocalCoverFromLookup(a.cover_ref);
+  await nextTurn();
+  // The folder index has not caught up yet: a refresh still lists the deleted file.
+  await h.context.refreshCoverLookupGallery(false);
+  const deleteRequest = h.requests.find(request => request.url === '/utilities/cover-lookup/local-delete');
+  const afterDelete = { ok: true, active_cover_ref: '/A/second.jpg', selected_source_cover_ref: '/A/second.jpg',
+    local_covers: [{ candidate_cover_ref: '/A/second.jpg', is_active: true, is_squareish: true },
+      { candidate_cover_ref: '/A/third.jpg', is_squareish: true }] };
+  h.server.set('A', afterDelete);
+  deleteRequest.resolve({ ok: true, json: async () => ({ ok: true,
+    updated_albums: [{ ...a, cover_ref: '/A/second.jpg' }], gallery: afterDelete }) });
+  await deleting;
+  assert.ok(renders.length >= 3, JSON.stringify(renders));
+  assert.deepEqual(renders.filter(render => render.deletedShown), [], JSON.stringify(renders));
+  assert.deepEqual([...new Set(renders.map(render => render.selected))], ['/A/second.jpg'], JSON.stringify(renders));
+});

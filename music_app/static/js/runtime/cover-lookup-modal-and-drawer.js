@@ -665,7 +665,9 @@ function applyCoverLookupCandidateSource(candidateSource) {
 
 function applyCoverLookupGalleryPayload(gallery, { confirmLocalInventory = true } = {}) {
   if (!gallery || typeof gallery !== 'object') return;
-  gallery = reconcileCoverLookupLocalInventory(state.coverLookup.modal.album, gallery, confirmLocalInventory);
+  gallery = splitCoverLookupLocalArt(
+    reconcileCoverLookupLocalInventory(state.coverLookup.modal.album, gallery, confirmLocalInventory),
+  );
   if (gallery.album && typeof gallery.album === 'object' && state.coverLookup.modal.album) {
     const album = state.coverLookup.modal.album;
     const previousId = String(album.album_id || album.id || '');
@@ -3639,9 +3641,26 @@ function suppressRedundantGeneratedCoverBackups(covers, selectedPath = '') {
   ));
 }
 
+// One card per picture: the cover and its selected source are LOCAL however they are shaped (as the server lists
+// them). A page's own pending save moves a card before the folder listing does, so every gallery it shows or
+// caches takes an OTHER ART card that became the selection into LOCAL, and never lists a picture twice.
+function splitCoverLookupLocalArt(gallery) {
+  if (!Array.isArray(gallery?.local_covers) || !Array.isArray(gallery.other_art)) return gallery;
+  const selected = String(gallery.selected_source_cover_ref || '');
+  const localRefs = new Set(gallery.local_covers.map(cover => String(cover?.candidate_cover_ref || '')));
+  const listedInLocal = cover => localRefs.has(String(cover?.candidate_cover_ref || ''));
+  const becameSelection = cover => Boolean(cover?.is_active)
+    || (Boolean(selected) && coverLookupLocalPathMatches(cover?.candidate_cover_ref, selected));
+  const moving = gallery.other_art.filter(cover => !listedInLocal(cover) && becameSelection(cover));
+  const otherArt = gallery.other_art.filter(cover => !listedInLocal(cover) && !becameSelection(cover));
+  if (otherArt.length === gallery.other_art.length) return gallery;
+  return { ...gallery, local_covers: [...moving, ...gallery.local_covers], other_art: otherArt };
+}
+
 function cacheCoverLookupGalleryPayload(album, gallery) {
   const key = buildCoverLookupGalleryCacheKey(album);
   if (!key || !gallery || typeof gallery !== 'object') return;
+  gallery = splitCoverLookupLocalArt(gallery);
   gallery = Array.isArray(gallery.local_covers)
     ? {
       ...gallery,
@@ -5167,9 +5186,18 @@ async function deleteLocalCoverFromLookup(sourceRef) {
     previousActiveLocalSelectionPath || album?.cover_ref,
     sourceRef,
   );
+  const inventoryKey = buildCoverLookupGalleryCacheKey(album);
   const present = (before) => {
     previousAlbum = before.album;
     invalidateCoverLookupGalleryCache(album);
+    // A listing that answers before the folder index catches up still names the file: hide it, and keep the
+    // fallback selected, from the first render on.
+    const inventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey)
+      || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
+    inventoryMutation.addedCovers.delete(String(sourceRef));
+    inventoryMutation.deletedPaths.add(String(sourceRef));
+    if (deletedActiveLocalSelection) inventoryMutation.selectedPath = fallbackLocalCoverPath;
+    coverLookupLocalInventoryMutations.set(inventoryKey, inventoryMutation);
     const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(previousAlbum, sourceRef, fallbackLocalCoverPath);
     if (optimisticAlbum) {
       markAlbumCoverRefsFresh([optimisticAlbum]);
@@ -5227,7 +5255,6 @@ async function deleteLocalCoverFromLookup(sourceRef) {
       || fallbackLocalCoverPath,
     );
     const showLater = rewindLaterCoverLookupMutations(mutation);
-    const inventoryKey = buildCoverLookupGalleryCacheKey(album);
     const inventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey)
       || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
     inventoryMutation.addedCovers.delete(String(sourceRef));
@@ -5256,6 +5283,8 @@ async function deleteLocalCoverFromLookup(sourceRef) {
   } catch (error) {
     const showLater = rewindLaterCoverLookupMutations(mutation);
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    if (mutation.before?.inventory) coverLookupLocalInventoryMutations.set(inventoryKey, mutation.before.inventory);
+    else coverLookupLocalInventoryMutations.delete(inventoryKey);
     if (ownsModal()) {
       state.coverLookup.modal.localCovers = previousLocalCovers;
       if (keepsSelection()) {

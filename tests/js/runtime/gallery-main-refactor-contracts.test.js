@@ -86,7 +86,7 @@ test('connected triggers paint a continuous outline without changing their box g
   );
   assert.match(
     triggerAnchorCssSource,
-    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::before\s*\{[^}]*top:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\); bottom:\s*0;/s,
+    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::before\s*\{[^}]*top:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\); bottom:\s*calc\(var\(--trigger-anchor-inset-bottom, 0px\) \+ 2px\);/s,
   );
 });
 

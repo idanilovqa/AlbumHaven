@@ -42417,8 +42417,10 @@ const pendingTagEdits = (() => {
     }
   }
 
+  // A save belongs to the one account and library that made it; an entry without a scope (an older
+  // build's) is never shown or sent by a signed-in page.
   function inScope(entry) {
-    return !scope || !entry.scope || entry.scope === scope;
+    return String(entry.scope || '') === scope;
   }
 
   function expired(entry) {
@@ -42493,7 +42495,9 @@ const pendingTagEdits = (() => {
     const resent = await fetch('/utilities/edit-tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(entry.payload),
+      // The server refuses it when its files changed after the page made it: a late resend never
+      // overwrites a newer save.
+      body: JSON.stringify({ ...entry.payload, resend: true, client_saved_at: Number(entry.created_at) || 0 }),
     });
     const result = await readJson(resent);
     if (result.code === 'duplicate_request') return 'waiting';
@@ -42518,6 +42522,7 @@ const pendingTagEdits = (() => {
     running = true;
     let reachedServer = false;
     let settledAny = false;
+    let resentAny = false;
     try {
       const waiting = entries.filter((item) => item.state !== 'failed');
       let statuses;
@@ -42548,14 +42553,15 @@ const pendingTagEdits = (() => {
             showToast(`Tag edit for “${entry.album?.name || 'an album'}” was not saved. It is in the Edit Queue.`, 'error', 5200);
           }
         } else if (entry.state !== 'finishing') {
+          resentAny ||= entry.state === 'resending';
           entry.state = 'waiting';
         }
       }
     } finally {
       running = false;
-      // T6: saves the server holds but has not finished are checked less and less often, up to a minute.
-      const onlyFinishing = entries.length > 0 && entries.every((entry) => entry.state === 'finishing');
-      delayMs = reachedServer && !onlyFinishing
+      // T6: saves the server holds but has not finished are checked less and less often, up to a minute;
+      // only a pass that settled or sent a save checks again soon.
+      delayMs = reachedServer && (settledAny || resentAny)
         ? PENDING_TAG_EDIT_FIRST_DELAY_MS
         : Math.min(delayMs * 2, PENDING_TAG_EDIT_MAX_DELAY_MS);
       publish();

@@ -63,9 +63,11 @@ from music_app.services.missing_album_removal_postgres import (
 from music_app.services.missing_album_rescan import MissingAlbumRescan
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
     get_library_roots,
     library_root_cache_identity,
     load_library_root_settings,
+    resolve_media_path_within_roots,
 )
 from music_app.services.library_settings import save_library_settings_and_start_refresh
 from music_app.services.log_history import append_log_history
@@ -1878,6 +1880,28 @@ async def tag_editor_fold_decision(request: Request) -> JSONResponse:
 
 
 _MAX_SAVE_STATUS_IDS = 500
+# A page's clock may run ahead of the server's: a file written this long before the page saved still counts as newer.
+_RESEND_CLOCK_MARGIN_SECONDS = 60.0
+
+
+def _resend_is_superseded(config: dict[str, object], updates: Mapping[str, object], saved_at_ms: object) -> bool:
+    """True when a file this resent save edits was written after the page made the save.
+
+    The server never received the save, so another save (or another tagger) may have changed
+    the same files since; sending the older values now would overwrite that newer change."""
+    if isinstance(saved_at_ms, bool) or not isinstance(saved_at_ms, (int, float)) or saved_at_ms <= 0:
+        return True  # A resend that cannot say when it was made could be older than anything.
+    newer_than = saved_at_ms / 1000.0 - _RESEND_CLOCK_MARGIN_SECONDS
+    roots = configured_library_root_paths_snapshot(config)
+    for raw_path in updates:
+        path = resolve_media_path_within_roots(str(raw_path), roots)
+        try:
+            if path is not None and path.stat().st_mtime >= newer_than:
+                return True
+        except OSError:
+            continue  # A missing file is the save pipeline's error to report.
+    return False
+
 
 
 @router.post("/utilities/edit-tags/requests/status")
@@ -1957,6 +1981,13 @@ async def _run_edit_tags_payload(
         if received_status is not None:
             return ({"ok": False, "code": "duplicate_request", "intent_status": received_status,
                      "error": "This save was already received."}, 409)
+
+    # A save the page sends again (it never got an answer) never overwrites a newer change to its files.
+    if payload.get("resend") is True and await run_in_threadpool(
+        _resend_is_superseded, _app_config(request), updates, payload.get("client_saved_at"),
+    ):
+        return ({"ok": False, "code": "superseded",
+                 "error": "These files changed after this edit was made, so it was not saved over them."}, 409)
 
     album_track_path_set, _track_error = _require_album_track_paths(album)
     requested_track_paths = (album_track_path_set or set()) | {str(path) for path in updates.keys() if str(path)}

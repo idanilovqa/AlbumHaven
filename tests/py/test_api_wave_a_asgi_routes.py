@@ -5975,6 +5975,47 @@ def test_a_resent_save_the_server_already_received_is_refused_before_any_work(mo
                                   "error": "This save was already received."}
 
 
+def _resent_save(path, saved_at_ms):
+    return {
+        # An id the journal never received.
+        "confirmed": True, "client_request_id": "5d0c1a2b-3c4d-4e5f-9a0b-1c2d3e4f5a6b", "resend": True,
+        "client_saved_at": saved_at_ms,
+        "album": {"key": "album-alpha", "name": "Album", "album_artist": "Artist", "tracks": [{"path": str(path)}]},
+        "updates": {str(path): {"title": "Older title"}},
+    }
+
+
+def test_a_late_resend_never_overwrites_files_changed_after_the_page_made_it(monkeypatch, tmp_path):
+    """A save the server never received is sent again later; a newer save of the same files may have landed
+    meanwhile, and the older values must not be written over it."""
+    import os
+    import time
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    track = tmp_path / "Artist" / "Album" / "01.mp3"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"generated-test-track")
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config["_library_root_paths_snapshot"] = (tmp_path.resolve(),)
+    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
+    monkeypatch.setattr(routes, "handle_edit_tags_request",
+                        lambda **_kwargs: pytest.fail("an older save must not be written over a newer change"))
+    saved_at_ms = (time.time() - 600) * 1000  # the page made it ten minutes ago; the file changed since
+
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body=_resent_save(track, saved_at_ms))
+
+    assert status == 409
+    assert _decode_json(body) == {"ok": False, "code": "superseded",
+                                  "error": "These files changed after this edit was made, so it was not saved over them."}
+    assert track.read_bytes() == b"generated-test-track"
+
+    # Unchanged since the page made it (allowing for a page clock a minute ahead): the resend goes ahead.
+    os.utime(track, (saved_at_ms / 1000 - 61, saved_at_ms / 1000 - 61))
+    assert routes._resend_is_superseded(asgi_app.state.config, {str(track): {}}, saved_at_ms) is False
+    # A resend that cannot say when it was made could be older than anything.
+    assert routes._resend_is_superseded(asgi_app.state.config, {str(track): {}}, None) is True
+
+
 def test_one_status_request_answers_every_waiting_save(monkeypatch):
     """6.5 (11-22): a retry pass asks about all its waiting saves in one request, read in one call."""
     from music_app.routes import api_wave_a_asgi_routes as routes

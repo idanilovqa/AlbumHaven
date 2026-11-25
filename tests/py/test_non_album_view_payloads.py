@@ -669,3 +669,15 @@ def test_album_container_lookup_work_does_not_grow_with_library_size(monkeypatch
         assert calls["count"] == len(library_state["file_cache"]) + 1
 
     assert lookup_calls == {10: 10, 10_000: 10}, "one container per edited path per lookup, at any library size"
+
+
+def test_a_stale_stored_mixed_label_is_not_a_loose_track_or_a_loose_album_group():
+    """The obsolete stored mixed-folder label (owner, fix A, 2026-11-25) puts no tagged album file in Loose Tracks."""
+    from music_app.services.non_album_view_payloads import build_non_album_album_groups, build_non_album_track_list
+
+    entry = {"path": "/library/Artist/Album/01.mp3", "album": "Album", "album_artist": "Artist", "artist": "Artist",
+             "title": "Song", "track_number": 1,
+             "local_album_membership_problem": "Mixed album metadata in one folder"}
+
+    assert build_non_album_track_list([entry], configured_root_paths=()) == []
+    assert build_non_album_album_groups([entry]) == []

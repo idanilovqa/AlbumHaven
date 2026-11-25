@@ -511,6 +511,7 @@ export class TrackModal extends BasePage {
       const view = box(scroller);
       return {
         scrollTop: scroller.scrollTop,
+        maxScrollTop: scroller.scrollHeight - scroller.clientHeight,
         viewTop: view.top,
         viewBottom: view.bottom,
         headingText: heading.textContent.trim(),

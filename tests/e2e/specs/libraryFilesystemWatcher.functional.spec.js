@@ -1133,7 +1133,10 @@ test('FTC-SEARCH-NAV-038 a CD name search opens Album Details scrolled to that C
       expect(placement.headingText).toBe(`CD 2 • ${secondDiscName}`);
       expect(placement.scrollTop).toBeGreaterThan(0);
       expect(placement.headingTop).toBeGreaterThanOrEqual(placement.viewTop);
-      expect(placement.headingTop - placement.viewTop).toBeLessThanOrEqual(1);
+      // The heading reaches the top of the track area unless the list ends first: a short last CD leaves the
+      // list scrolled to its end, with the heading and every match of that CD in view.
+      expect(Math.min(placement.headingTop - placement.viewTop, placement.maxScrollTop - placement.scrollTop))
+        .toBeLessThanOrEqual(1);
       expect(placement.headingUncovered).toBe(true);
       expect(placement.rows.map(row => row.title)).toEqual(secondDiscTitles.slice(0, 2));
       for (const row of placement.rows) {

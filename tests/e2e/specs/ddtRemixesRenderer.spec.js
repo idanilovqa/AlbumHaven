@@ -339,9 +339,14 @@ test('FTC-TAGS-048 keeps every other search match on screen through a merge and 
     expect(address.get('q')).toBe(QUERY);
     expect(address.has('all_artists')).toBe(false);
   };
+  // Tracks each album holds, so the editor is used only once its track list has loaded.
+  const trackCounts = new Map([[SOURCE_ALBUM, TRACKS.length], [SECOND, 0], [THIRD, 0], [RENAMED, 0]]);
   const saveFromContextMenu = async (album, filenames, albumName) => {
     await galleryActions.openAlbumTagEditorFromContextMenu(album);
-    await tagEditorActions.waitForOpen();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: trackCounts.get(album) });
+    const moved = filenames ? filenames.length : trackCounts.get(album);
+    trackCounts.set(album, trackCounts.get(album) - moved);
+    trackCounts.set(albumName, trackCounts.get(albumName) + moved);
     if (filenames) await tagEditorActions.selectTracksByFilenames(filenames);
     else await tagEditorActions.selectAllTracks();
     await tagEditorActions.setAlbumName(albumName);

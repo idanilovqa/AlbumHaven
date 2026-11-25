@@ -7540,6 +7540,36 @@ def _text_correction_problem_reasons(corrections: object) -> Iterable[str]:
         yield text_correction_reason(field, correction.get("kind") if isinstance(correction, Mapping) else None)
 
 
+def problematic_detail_folders(detail: Mapping[str, object]) -> dict[str, list[str]]:
+    """The folders an open Problematic Files entry names, from its own payload (owner, 2026-11-25): the
+    album's folder or folders, and, with a duplicate problem, each folder its duplicates live in, once.
+    Paths are private: callers add these only for path readers."""
+    from music_app.services.library import _track_album_container
+
+    def folders(paths: Iterable[object]) -> list[str]:
+        unique: dict[str, str] = {}
+        for path in paths:
+            if folder := _track_album_container(str(path or "")):
+                unique.setdefault(normcase(folder), folder)
+        return sorted(unique.values(), key=str.casefold)
+
+    rows = [row for row in detail.get("track_problem_rows") or [] if isinstance(row, Mapping)]
+    copies = {str(row.get("path") or "") for row in rows if _OUTSIDE_COPY_REASON in (row.get("reasons") or ())}
+    tracks = [str(track.get("path") or "") for track in detail.get("tracks") or [] if isinstance(track, Mapping)]
+    result = {"album_folders": folders(path for path in tracks if path not in copies)}
+    reasons = set(detail.get("problem_reasons") or ())
+    if reasons & {_OUTSIDE_COPY_REASON, "Duplicate files"}:
+        held_twice = {str(row.get("path") or "") for row in rows if "Duplicate files" in (row.get("reasons") or ())}
+        sources = (
+            track.get("path")
+            for source in detail.get("duplicate_sources") or () if isinstance(source, Mapping)
+            for track in source.get("tracks") or () if isinstance(track, Mapping)
+        )
+        if duplicate_folders := folders([*copies, *held_twice, *sources]):
+            result["duplicate_folders"] = duplicate_folders
+    return result
+
+
 def _album_problem_tracks(
     album: Mapping[str, object], entries: list[dict[str, object]],
 ) -> dict[str, list[tuple[str, str]]]:

@@ -527,6 +527,13 @@ function buildDetectedProblemsHtml(album) {
       ${tableRows.length ? ButtonComponent.renderButton({ label: 'Apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
 }
+// Folders reach only path readers: the server sends them to no one else (owner, 2026-11-25).
+function buildProblematicFolderMeta(kind, folders, singular, plural) {
+  const values = Array.isArray(folders) ? folders.map(folder => String(folder || '')).filter(Boolean) : [];
+  if (!values.length) return '';
+  return `<div class="utility-detail-meta" data-problematic-detail-folders="${kind}">${escapeHtml(values.length === 1 ? singular : plural)}:${
+    values.map(folder => `<br><span data-problematic-detail-folder>${escapeHtml(folder)}</span>`).join('')}</div>`;
+}
 function buildProblematicAlbumDetail(album) {
   if (!album) {
     return '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
@@ -575,6 +582,8 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
         ${album.edition ? `<div class="utility-detail-meta">Edition: ${escapeHtml(album.edition)}</div>` : ''}
         <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
+        ${buildProblematicFolderMeta('album', album.album_folders, 'Path', 'Paths')}
+        ${buildProblematicFolderMeta('duplicates', album.duplicate_folders, 'Duplicate files path', 'Duplicate files paths')}
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
             ${showRepairedDisplay ? 'Displaying: converted tags' : 'Displaying: original tags'}

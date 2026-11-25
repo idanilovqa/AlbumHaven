@@ -2375,6 +2375,11 @@ function localCardImageRevision(item) {
   return item?.sha256 || item?.cover_revision || undefined;
 }
 
+// The art card's delete control, shared by local art and staged pasted images.
+function buildCoverLookupArtDeleteButton(actionAttribute, label) {
+  return `<button class="cover-lookup-art-delete" type="button" ${actionAttribute} aria-label="${label}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>`;
+}
+
 function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
@@ -2493,8 +2498,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
             </svg>
           </button>
           ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
-          ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.candidate_cover_ref || '')}" aria-label="Delete local cover art"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>` : ''}
-          ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
+          ${kind === 'local' ? buildCoverLookupArtDeleteButton(`data-delete-local-cover="${escapeHtml(item.candidate_cover_ref || '')}"`, 'Delete local cover art') : ''}
+          ${isPastedKind ? buildCoverLookupArtDeleteButton(`data-remove-pasted-cover="${escapeHtml(item.id || '')}"`, 'Remove staged image') : ''}
         </span>
         <span class="cover-lookup-art-meta">
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>

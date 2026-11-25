@@ -17,18 +17,20 @@ const ROOT_GALLERY_URL = '/?surface=albums';
 // under a second at production calibration. 20 s leaves room for a hosted runner.
 const RECONCILED_GROUPING_BOUND_MS = 20_000;
 
-async function albumArtistFrames() {
+async function creditFrames() {
   const snapshots = await readGeneratedMp3TagSnapshots({ artist: FIXTURE_ARTIST, album: FIXTURE_ALBUM });
   expect(snapshots).toHaveLength(FIXTURE_TRACK_COUNT);
-  return snapshots.map(({ frames }) => frames?.TPE2);
+  return snapshots.map(({ frames }) => [frames?.TPE1, frames?.TPE2]);
 }
 
-async function editAlbumArtist({ galleryActions, trackModalActions, tagEditorActions }, fromArtist, toArtist) {
+// Both credits: a track artist left behind keeps the album in that artist's view as a featured credit.
+async function editCredits({ galleryActions, trackModalActions, tagEditorActions }, fromArtist, toArtist) {
   await galleryActions.selectAlbumDetailsByIdentity({ artist: fromArtist, album: FIXTURE_ALBUM, year: FIXTURE_YEAR });
   await trackModalActions.waitForInteractiveSummary();
   await trackModalActions.openTagEditor();
   await tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
   await tagEditorActions.selectAllTracks();
+  await tagEditorActions.setArtist(toArtist);
   await tagEditorActions.setAlbumArtist(toArtist);
   expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
 }
@@ -52,14 +54,15 @@ test('FTC-TAGS-045 saves edits while relations await reconciliation and parks th
   });
 
   await stepLogger.step('Save a new album artist: it shows at once in the reopened editor and in the files', async () => {
-    await editAlbumArtist({ galleryActions, trackModalActions, tagEditorActions }, FIXTURE_ARTIST, RECONCILED_ARTIST);
+    await editCredits({ galleryActions, trackModalActions, tagEditorActions }, FIXTURE_ARTIST, RECONCILED_ARTIST);
     await trackModalActions.openTagEditor();
     await tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
     await tagEditorActions.selectAllTracks();
-    expect(await tagEditorActions.readEditableValues(['album_artist'])).toEqual({ album_artist: RECONCILED_ARTIST });
+    expect(await tagEditorActions.readEditableValues(['artist', 'album_artist']))
+      .toEqual({ artist: RECONCILED_ARTIST, album_artist: RECONCILED_ARTIST });
     await tagEditorActions.close();
     await trackModalActions.close();
-    expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([RECONCILED_ARTIST]));
+    expect(await creditFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([[RECONCILED_ARTIST], [RECONCILED_ARTIST]]));
   });
 
   await stepLogger.step('Right after the save the album is under its new artist only, in place', async () => {
@@ -107,15 +110,15 @@ test('FTC-TAGS-045 saves edits while relations await reconciliation and parks th
   });
 
   await stepLogger.step('A second save while parked persists and shows once under its new artist', async () => {
-    await editAlbumArtist(restarted, RECONCILED_ARTIST, PARKED_EDIT_ARTIST);
+    await editCredits(restarted, RECONCILED_ARTIST, PARKED_EDIT_ARTIST);
     await restarted.trackModalActions.openTagEditor();
     await restarted.tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
     await restarted.tagEditorActions.selectAllTracks();
-    expect(await restarted.tagEditorActions.readEditableValues(['album_artist']))
-      .toEqual({ album_artist: PARKED_EDIT_ARTIST });
+    expect(await restarted.tagEditorActions.readEditableValues(['artist', 'album_artist']))
+      .toEqual({ artist: PARKED_EDIT_ARTIST, album_artist: PARKED_EDIT_ARTIST });
     await restarted.tagEditorActions.close();
     await restarted.trackModalActions.close();
-    expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([PARKED_EDIT_ARTIST]));
+    expect(await creditFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([[PARKED_EDIT_ARTIST], [PARKED_EDIT_ARTIST]]));
     await restarted.galleryActions.waitForAlbumVisibleUnderHeading(PARKED_EDIT_ARTIST, FIXTURE_ALBUM);
     for (const [artist, count] of [[PARKED_EDIT_ARTIST, 1], [RECONCILED_ARTIST, 0], [FIXTURE_ARTIST, 0]]) {
       expect(await restarted.galleryActions.readAlbumIdentityCardCount({

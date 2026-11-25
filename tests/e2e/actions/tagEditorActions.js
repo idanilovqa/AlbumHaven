@@ -157,6 +157,7 @@ export class TagEditorActions {
       genre: this.tagEditor.genreInput,
       year: this.tagEditor.yearInput,
       album_artist: this.tagEditor.albumArtistInput,
+      artist: this.tagEditor.artistInput,
     };
     const values = {};
     for (const field of fields) {

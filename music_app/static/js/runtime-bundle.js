@@ -29032,6 +29032,21 @@ function collectProblemIgnoreItems(rule) {
   return Array.from(byKey.values());
 }
 
+// The Rules payload lists problem exclusions in Python sorted() order of their row keys: code point
+// order, not a locale collation. Comparing code points (not UTF-16 units) keeps astral characters
+// where the server puts them.
+function compareProblemIgnoreRowKeys(left, right) {
+  const leftKey = String(left?.row_key || '').trim();
+  const rightKey = String(right?.row_key || '').trim();
+  for (let index = 0; index < leftKey.length && index < rightKey.length;) {
+    const leftPoint = leftKey.codePointAt(index);
+    const rightPoint = rightKey.codePointAt(index);
+    if (leftPoint !== rightPoint) return leftPoint < rightPoint ? -1 : 1;
+    index += leftPoint > 0xffff ? 2 : 1;
+  }
+  return leftKey.length - rightKey.length;
+}
+
 function replaceProblemIgnoreRule(rules, items) {
   const sourceRules = Array.isArray(rules) ? rules : [];
   const existingIndex = sourceRules.findIndex((rule) => rule?.key === 'problem-ignores');
@@ -29040,7 +29055,7 @@ function replaceProblemIgnoreRule(rules, items) {
     (Array.isArray(items) ? items : [])
       .map((item) => [String(item?.row_key || '').trim(), item])
       .filter(([rowKey]) => rowKey),
-  ).values());
+  ).values()).sort(compareProblemIgnoreRowKeys);
   const nextRule = {
     ...(existing || {
       key: 'problem-ignores',

@@ -8997,3 +8997,29 @@ test('a rule whose album or file is gone says it applies to nothing, beside its 
   assert.equal((html.match(/data-small-alert=/g) || []).length, 1, 'only the gone rule says so');
   assert.equal((html.match(/data-revert-problem-ignore=/g) || []).length, 2, 'each rule keeps its Revert rule button');
 });
+
+// Owner (2026-11-24): problem filters narrow the list only. An open entry shows every problem it has, as
+// album labels and per-track rows, whatever the filters, and never says nothing matches them.
+test('problem filters never hide an open entry\'s problems', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const path = 'C:\Music\Juha\Tales\01.flac';
+  const album = {
+    key: 'tales', tracks: [{ path }], problem_reasons: ['Album name mismatch', 'Duplicate files', 'Missing year'],
+    album_problem_rows: [{ reason: 'Album name mismatch', row_key: 'a' }, { reason: 'Duplicate files', row_key: 'b' }],
+    track_problem_rows: [{ path, reasons: ['Missing year'], ignorable_reasons: [{ reason: 'Missing year', row_key: 'c' }] }],
+    suggested_edits: [{ id: 'year', path, reason: 'Missing year', field: 'year', original: '', corrected: '2013' }],
+  };
+  const labels = html => [...html.matchAll(/<(?:button|span) class="alert-label[^>]*>([^<]*)</g)]
+    .map(match => match[1]).sort();
+  context.state.utility.selectedProblemFilters = [];
+  const unfiltered = context.buildDetectedProblemsHtml(album);
+  for (const filters of [['Album name mismatch'], ['Duplicate files'], ['Missing year'], ['Album name mismatch', 'Missing year']]) {
+    context.state.utility.selectedProblemFilters = filters;
+    const filtered = context.buildDetectedProblemsHtml(album);
+    assert.deepEqual(labels(filtered), labels(unfiltered), `filters ${filters.join(', ')}`);
+    assert.ok(filtered.includes(`data-problematic-track-path="${path}"`), 'the per-track row stays');
+    assert.ok(!filtered.includes('match the selected filters'));
+  }
+  assert.deepEqual(labels(unfiltered).filter(label => !label.includes('2013')),
+    ['Album name mismatch', 'Duplicate files', 'Missing year']);
+});

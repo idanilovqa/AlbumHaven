@@ -7964,10 +7964,15 @@ def _targeted_membership_context_candidates_sql() -> str:
     one) while the pass held the album's save reservation. The identity index
     folds case, spacing and accents, so it never drops an exact match; the
     physical root has its own expression index (migration 0187).
+
+    The ids reach the outer query as an array, so it fetches them by key. As
+    ``id in (...)`` the planner misjudged the candidates (16,830 estimated, 231
+    found on a 160k-file library) and hash-joined them against a parallel
+    sequential scan of every track file: 8-12 s per scan batch.
     """
     from music_app.services.album_local_membership import physical_album_root_sql
 
-    return f"""and library.local_track_files.id in (
+    return f"""and library.local_track_files.id = any(array(
           select candidate.id from library.local_track_files candidate
           where candidate.scan_cache_stale is false and candidate.scan_file_entry_is_object is true
             and library.duplicate_identity_text(candidate.scan_file_album_artist) = any(
@@ -7978,7 +7983,7 @@ def _targeted_membership_context_candidates_sql() -> str:
           select candidate.id from library.local_track_files candidate
           where candidate.scan_cache_stale is false
             and {physical_album_root_sql('candidate.private_path')} = any(%(physical_roots)s::text[])
-        ) """
+        )) """
 
 
 def _load_file_entries_sql(*, targeted_albums: bool = False, targeted_paths: bool = False) -> str:

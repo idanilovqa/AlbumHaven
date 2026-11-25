@@ -823,3 +823,51 @@ def test_live_a_header_whose_patch_is_refused_is_left_to_the_drain_while_the_oth
     assert {header["scope_key"] for header in holding} - {behind} <= showing, (
         "A refusal of one header stopped the others from being patched.")
     assert behind not in showing, "The refused header was patched anyway."
+
+# Search during a scan (owner approved 11-25): a targeted publication (a scan batch or a watcher pass) reads the
+# membership context of the albums it touches. Its candidate set is index-driven, but the planner misjudged it
+# (16,830 rows estimated, 231 actual on the production-calibration library) and hash-joined it against a
+# parallel sequential scan of every track file: 8-12 s per batch, while searches waited on the database.
+
+CONTEXT_LIBRARY_ALBUMS = 6000
+
+
+def _track_file_seq_scans(fixture):
+    """Sequential scans of library.local_track_files so far, once every backend's statistics have flushed."""
+    previous = None
+    for _ in range(60):
+        with isolatedPostgres._connect(fixture.setup_url) as reader:
+            reader.execute("select pg_stat_clear_snapshot()")
+            current = int(reader.execute(
+                """select coalesce(seq_scan, 0) as n from pg_stat_user_tables
+                   where schemaname = 'library' and relname = 'local_track_files'""").fetchone()["n"])
+        if current == previous:
+            return current
+        previous = current
+        time.sleep(0.25)
+    return previous
+
+
+def test_live_a_targeted_publication_never_sequentially_scans_the_track_files(library, monkeypatch):
+    from types import SimpleNamespace
+
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = library
+    _hold_background_owners(monkeypatch)
+    _seed_albums(fixture, CONTEXT_LIBRARY_ALBUMS)
+    edited = {**fixture.tracks[0], "title": "Retitled In Place"}
+    reconciler = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {**edited, "path": str(path)}, wait=lambda _seconds: None,
+    )
+    before = _track_file_seq_scans(fixture)
+
+    result = reconciler.reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(Path(edited["path"]),), deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+
+    assert result.revision > 0, "The targeted publication did not commit."
+    scans = _track_file_seq_scans(fixture) - before
+    assert scans == 0, (
+        f"A targeted publication sequentially scanned the {CONTEXT_LIBRARY_ALBUMS + 3:,} track files {scans} time(s).")

@@ -68,3 +68,40 @@ def test_live_a_year_entry_opens_from_its_own_stored_album_not_the_emptied_base(
     detail = repository.build_problematic_file_detail_payload(year_key)
     assert detail is not None, "the listed year entry opens"
     assert _detail_reasons(detail) == set(listed[year_key]["problem_reasons"])
+
+
+def test_live_same_title_albums_years_apart_each_open_with_only_their_own_tracks(watcher_repair_inventory):
+    """Owner (2026-11-24): the same artist and title years apart are different albums (an original and a
+    re-recording). The list and every detail keep them apart, also once the owner separated the releases."""
+    from music_app.services import problematic_index
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    paths = {}
+    entries = []
+    for year, folder, count in ((1993, "1993 - Crown", 3), (2021, "2021 - Crown (RE)", 2)):
+        for number in range(1, count + 1):
+            entry = fixture.entry(f"Owner/{folder}/{number:02d}.flac", album="Crown")
+            entry.update(year=year, track_number=number + 1, title=f"Crown {year} {number}")  # no track 1
+            entries.append(entry)
+            paths.setdefault(year, set()).add(entry["path"])
+    fixture.seed(*entries)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = {row["release_year"]: row for row in connection.execute(
+            "select album_key, library_id, release_year from library.local_albums where title = 'Crown'").fetchall()}
+        base_key = albums[1993]["album_key"].split("::year::")[0]
+        connection.execute("insert into library.separate_releases(library_id, release_key) values (%s, %s)",
+                           (albums[1993]["library_id"], base_key))
+
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    _ready_problematic_index(database_url)
+    problematic_index.wait_for_background_work()
+    listed = {item["key"]: item for item in _indexed_problematic_items(database_url, limit=50)}
+    repository = PostgresLibraryBrowseRepository({**fixture.config, problematic_index.ENABLED_KEY: "1"})
+    for year in (1993, 2021):
+        key = f"{base_key}::year::{year}"
+        assert set(listed[key]["track_paths"]) == paths[year], f"{year}: the list entry holds only its album"
+        detail = repository.build_problematic_file_detail_payload(key)
+        assert detail is not None, f"{year}: the listed entry opens"
+        assert {track["path"] for track in detail["tracks"]} == paths[year], f"{year}: only its own tracks"
+        assert _detail_reasons(detail) == set(listed[key]["problem_reasons"]), f"{year}: the list's problems"

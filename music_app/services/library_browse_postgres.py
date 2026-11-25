@@ -3781,9 +3781,11 @@ class PostgresLibraryBrowseRepository:
                             identity.get("album_edition"),
                         ) == normalized_album_key
                     ]
+                # No matching album has no duplicate identity: read no candidates (the empty-key call
+                # would load the whole library's identity index).
                 duplicate_album_ids = _load_duplicate_candidate_album_ids(
                     active_connection, candidate_keys, repository=self,
-                )
+                ) if candidate_keys else []
                 cursor = execute(
                     lambda path_columns: _problematic_files_sql(duplicate_candidates=True, path_columns=path_columns),
                     {"album_ids": duplicate_album_ids},

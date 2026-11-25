@@ -59,10 +59,18 @@ async function measureAnchorJoin(page, anchor, surface) {
       }
       return found === null ? null : found / scale;
     };
+    // Down to the panel's top line where the panel only meets the trigger's corner.
+    const cornerRows = below ? rows(trigger.bottom - 2, panel.top) : rows(panel.bottom, trigger.top + 2);
+    const fill = getComputedStyle(document.querySelector(surfaceSelector)).backgroundColor
+      .match(/[\d.]+/g).slice(0, 3).map(Number);
+    const isStroke = (x, y) => {
+      const offset = (y * image.width + x) * 4;
+      return fill.some((channel, index) => Math.abs(data[offset + index] - channel) > 12);
+    };
     const sides = {};
     for (const side of ['left', 'right']) {
       const flush = Math.abs(panel[side] - trigger[side]) <= 4;
-      const edgeRows = flush ? [...triggerRows, ...joinRows] : [...triggerRows, ...rows(trigger.bottom - 2, panel.top)];
+      const edgeRows = [...triggerRows, ...(flush ? joinRows : cornerRows)];
       const missingRows = edgeRows.filter(y => outerEdge(side, y) === null).map(y => y / scale);
       const triggerEdges = triggerRows.map(y => outerEdge(side, y)).filter(value => value !== null);
       const panelEdges = flush ? panelRows.map(y => outerEdge(side, y)).filter(value => value !== null) : [];
@@ -70,23 +78,22 @@ async function measureAnchorJoin(page, anchor, surface) {
       // Where the panel extends past the trigger, its top line meets the trigger's outline.
       const outward = side === 'left' ? -1 : 1;
       const lineY = below ? panel.top : panel.bottom;
-      const fill = getComputedStyle(document.querySelector(surfaceSelector)).backgroundColor
-        .match(/[\d.]+/g).slice(0, 3).map(Number);
-      const isStroke = (x, y) => {
-        const offset = (y * image.width + x) * 4;
-        return fill.some((channel, index) => Math.abs(data[offset + index] - channel) > 12);
-      };
       const cornerGap = !flush && [2, 3, 4].some(dx => ![-2, -1, 0, 1].some(dy =>
         isStroke(px(trigger[side] + outward * dx), px(lineY) + dy)));
       sides[side] = {
         flush,
         missingRows,
         step: all.length ? Math.max(...all) - Math.min(...all) : null,
-        triggerEdge: triggerEdges.length ? triggerEdges[0] : null,
-        panelEdge: panelEdges.length ? panelEdges[0] : null,
         cornerGap,
       };
     }
+    // Inside the outline, the trigger's interior runs into the panel's: no row of
+    // the join carries a separator line.
+    const separatorRows = (below ? rows(trigger.bottom - 3, panel.top + 3) : rows(panel.bottom - 3, trigger.top + 3))
+      .filter(y => {
+        for (let x = px(trigger.left + 4); x <= px(trigger.right - 4); x += 1) if (isStroke(x, y)) return true;
+        return false;
+      }).map(y => y / scale);
     // The trigger's own top (or bottom) edge stays outlined across its width.
     const capY = below ? trigger.top : trigger.bottom;
     const capGaps = [];
@@ -98,6 +105,7 @@ async function measureAnchorJoin(page, anchor, surface) {
       panel: { left: panel.left, right: panel.right, top: panel.top, bottom: panel.bottom },
       sides,
       capGaps,
+      separatorRows,
     };
   }, { base64: screenshot.toString('base64'), anchorSelector: ids.anchor, surfaceSelector: ids.surface });
 }
@@ -117,6 +125,7 @@ function expectContinuousJoin(expect, result, { flushSides, label }) {
     }
   }
   expect(result.capGaps, `${label}: trigger outline is closed across its far edge`).toEqual([]);
+  expect(result.separatorRows, `${label}: no separator line between trigger and panel`).toEqual([]);
 }
 
 module.exports = { measureAnchorJoin, expectContinuousJoin };

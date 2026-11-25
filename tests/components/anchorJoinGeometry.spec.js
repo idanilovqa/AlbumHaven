@@ -31,6 +31,13 @@ function appStylesheets() {
 }
 
 const template = file => fs.readFileSync(path.join(templates, file), 'utf8');
+// The phone Settings page header's section picker (partials/gallery-bar.html) and its menu (index.html).
+const sectionControlHtml = template('partials/gallery-bar.html')
+  .match(/<div class="ui-dropdown-control[^"]*mobile-settings-section-control">[\s\S]*?<\/div>/)[0];
+const editTagsDropdownHtml = template('partials/primary-modals.html')
+  .match(/<div class="tag-editor-exception-field"[\s\S]*?<\/div><\/div><\/div>/)[0];
+const sectionMenuHtml = template('index.html')
+  .match(/<div class="gallery-anchored-menu" id="mobile-settings-subsection-menu"[^>]*><\/div>/)[0];
 const sourcesMenuHtml = template('index.html')
   .match(/<div class="gallery-anchored-menu" id="gallery-sources-menu"[\s\S]*?<\/div>/)[0];
 
@@ -56,6 +63,10 @@ async function mountApp(page, width) {
         <div class="toolbar-right" data-toolbar-right></div>
       </header>
       <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content">
+        <header class="gallery-bar mobile-page-header" data-gallery-bar data-gallery-bar-instance="page" data-section-picker-host>
+          <div class="gallery-bar__context"><h1 class="gallery-bar__title">Appearance</h1></div>
+          <div class="gallery-bar__actions" id="mobile-settings-actions"></div>
+        </header>
         <header class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery"></header>
         <div class="albums-scroll" id="albums-scroll"><div class="albums-viewport" id="albums-viewport"><div id="artist-groups"></div></div></div>
       </main>
@@ -70,6 +81,7 @@ async function mountApp(page, width) {
         <div class="utility-search-row utility-problem-filter" data-problem-filter-host></div>
       </div><div class="utility-list"></div></aside><section class="utility-detail"></section></div>
     </div></div>
+    <div id="tag-editor-modal"><form class="tag-editor-form" data-edit-tags-host></form></div>
     <div class="confirm-modal" id="app-form-modal" hidden>
       <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="app-form-title">
         <div class="app-form-header"><h3 class="confirm-modal-title" id="app-form-title"></h3><span data-app-form-close-host></span></div>
@@ -103,7 +115,7 @@ async function mountApp(page, width) {
     window.getGalleryFamilyContextKey = () => '';
   });
   for (const script of SCRIPTS) await page.addScriptTag({ path: path.join(staticRoot, script) });
-  await page.evaluate(({ sourcesMenu }) => {
+  await page.evaluate(({ sourcesMenu, sectionControl, sectionMenu, editTagsDropdown }) => {
     const { renderActionButton } = window.ButtonComponent;
     const icon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/></svg>';
     const toolbar = document.querySelector('[data-toolbar-right]');
@@ -121,7 +133,7 @@ async function mountApp(page, width) {
     ].join('');
     toolbar.querySelectorAll('.action-button__content').forEach(content => { if (!content.innerHTML) content.innerHTML = icon; });
     attachAccountMenu(document.querySelector('[data-account-menu-component]'));
-    document.querySelector('[data-gallery-bar]').innerHTML = buildGalleryBarHtml({
+    document.querySelector('[data-gallery-bar-instance="gallery"]').innerHTML = buildGalleryBarHtml({
       contextKind: 'artist', artist: 'Harbor Lights', albumCount: 13,
     });
     document.querySelector('[data-family-host]').outerHTML = buildArtistFamilyPanelHtml({
@@ -150,7 +162,11 @@ async function mountApp(page, width) {
     });
     // bootstrap-gallery-event-handlers.js routes document clicks the same way.
     document.addEventListener('click', event => handleGalleryMainClick(event));
-  }, { sourcesMenu: sourcesMenuHtml });
+    document.getElementById('mobile-settings-actions').innerHTML = sectionControl;
+    document.body.insertAdjacentHTML('beforeend', sectionMenu);
+    document.querySelector('[data-edit-tags-host]').innerHTML = editTagsDropdown;
+  }, { sourcesMenu: sourcesMenuHtml, sectionControl: sectionControlHtml, sectionMenu: sectionMenuHtml,
+    editTagsDropdown: editTagsDropdownHtml });
 }
 
 // The filter owner (utility-list-builders.js renderProblemFilterControls) opens
@@ -190,6 +206,19 @@ async function openLogHistoryPeriod(page) {
   });
 }
 
+// mobile-navigation.js fills the menu with the section's choices and opens it
+// through the gallery surface owner (handleMobileSettingsClick).
+async function openAppearanceSections(page) {
+  await page.evaluate(() => {
+    const trigger = document.getElementById('mobile-settings-section-button');
+    const menu = document.getElementById('mobile-settings-subsection-menu');
+    trigger.value = 'Main elements';
+    menu.innerHTML = ['Main elements', 'Player & Seekbar', 'Selection & Hover', 'Alerts', 'Album page']
+      .map((label, index) => `<button class="gallery-menu-action" type="button" aria-pressed="${index === 0}">${escapeHtml(label)}</button>`).join('');
+    openGalleryMainSurface('settings-subsection', trigger, menu);
+  });
+}
+
 const dropdowns = [
   { name: 'Album Types', flush: ['right'], open: page => page.locator('[data-gallery-bar-action="album-types"]').click(),
     anchor: '[data-gallery-bar-action="album-types"]', surface: '#gallery-album-types-menu' },
@@ -205,6 +234,8 @@ const dropdowns = [
     anchor: '#utility-problem-filter-button', surface: '#utility-problem-filter-menu' },
   { name: 'PF filter with a selection', flush: ['right'], open: page => openProblemFilter(page, { selected: ['Album not found'] }),
     anchor: '#utility-problem-filter-button', surface: '#utility-problem-filter-menu' },
+  { name: 'Appearance sections', flush: ['right'], open: openAppearanceSections,
+    anchor: '.mobile-settings-section-control', surface: '#mobile-settings-subsection-menu' },
   { name: 'Log History filter after a PF filter', flush: [], open: openLogHistoryPeriod,
     anchor: '#utility-problem-filter-button', surface: '#app-form-modal .confirm-modal-dialog' },
   // On a phone the calendar is wider than the room left of its trigger, so it extends both ways.
@@ -233,3 +264,24 @@ for (const width of [1440, 390]) {
     });
   }
 }
+
+test('the Appearance section picker is the shared dropdown component an Edit Tags dropdown uses', async ({ page }) => {
+  await mountApp(page, 390);
+  const read = selector => page.locator(selector).evaluate(input => {
+    const style = getComputedStyle(input);
+    return {
+      wrapper: input.parentElement.classList.contains('ui-dropdown-control'),
+      tag: input.tagName, type: input.type, role: input.getAttribute('role'), readOnly: input.readOnly,
+      // Presentation comes from the component, not a page-local class on its field.
+      fieldClasses: input.className,
+      radius: ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'].map(corner => style[`border${corner}Radius`]),
+      borderWidth: style.borderTopWidth, borderStyle: style.borderTopStyle, borderColor: style.borderTopColor,
+      background: style.backgroundColor, color: style.color,
+    };
+  });
+  const editTags = await read('#tag-editor-exception-input');
+  const appearance = await read('#mobile-settings-section-button');
+  expect(editTags).toMatchObject({ wrapper: true, tag: 'INPUT', role: 'combobox', readOnly: true, fieldClasses: '' });
+  expect(appearance).toEqual(editTags);
+}
+);

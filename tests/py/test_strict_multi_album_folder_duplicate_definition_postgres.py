@@ -100,18 +100,21 @@ def test_the_strict_rule_in_sql_and_in_python_agree_on_every_case(seeded):
 
 
 def test_the_membership_label_in_sql_and_in_python_agree_and_no_formed_album_track_says_mixed(seeded):
-    from music_app.services.album_local_membership import rejected_local_album_paths
+    from music_app.services.album_local_membership import physical_album_folder, rejected_local_album_paths
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository, _row_json_mapping, _row_mapping
 
     fixture, cases = seeded
     every = [entry for _folder, _strict, entries in cases.values() for entry in entries]
     python_labels = rejected_local_album_paths(every)
+    # A real multi-album folder's tracks say so by the strict rule; the membership label never does.
+    strict_folders = {physical_album_folder(entries[0]["path"]) for _folder, strict, entries in cases.values() if strict}
     repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     sql_labels, mixed_on_album_tracks = {}, []
     for _album_id, album_key in _album_ids(fixture).values():
         detail = repository.build_album_detail_payload(album_key) or {}
         for track in detail.get("tracks") or []:
-            if MIXED in (track.get("problem_reasons") or []):
+            if MIXED in (track.get("problem_reasons") or []) and physical_album_folder(
+                    str(track.get("path") or "")) not in strict_folders:
                 mixed_on_album_tracks.append(track.get("path"))
         for row in map(_row_mapping, repository._load_album_detail_rows(album_key)):
             entry = _row_json_mapping(row.get("file_entry"))
@@ -119,7 +122,7 @@ def test_the_membership_label_in_sql_and_in_python_agree_and_no_formed_album_tra
             if path and entry.get("local_album_membership_problem"):
                 sql_labels[str(path)] = entry["local_album_membership_problem"]
 
-    assert mixed_on_album_tracks == [], "a track of a formed album says its folder is mixed"
+    assert mixed_on_album_tracks == [], "a track of a formed album outside a multi-album folder says mixed"
     formed = set(sql_labels) | {path for path in python_labels if path in sql_labels}
     assert {path: sql_labels.get(path) for path in formed} == {path: python_labels.get(path) for path in formed}
 

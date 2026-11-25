@@ -64,7 +64,7 @@ for (const width of [360, 390, 412]) {
       });
       for (const tab of ['problematic-files', 'rules']) {
         await stepLogger.step(`Settings: ${tab}`, async () => {
-          await galleryActions.goto(`/?settings=${tab}`);
+          await galleryActions.goto(`/?mobile_page=utilities&utility_tab=${tab}`);
           await expect(page.locator('#mobile-settings-button')).toBeVisible();
           await expect(page.locator('#mobile-page-title')).not.toBeEmpty();
           slots[tab] = await readHeaderSlots(page);

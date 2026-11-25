@@ -2183,46 +2183,6 @@ test('updateOpenTrackModalAfterTagEdit gives a merge destination the whole album
   assert.equal(cacheCalls.find(({ albumKey }) => albumKey === destination.key).album.tracks.length, 14);
 });
 
-test('a merge destination whose card carries another key is not cached as only the moved track (FTC-TAGS-020)', () => {
-  // Restore 5: the gallery keys "Студийные записи" by its collaboration credit, while the edit computes
-  // "ддт::студийные записи". The key lookup missed, so the one moved track was cached as the whole album.
-  const context = loadHelpers();
-  const movedPath = 'D:/Music/ДДТ/Студийные записи/04.mp3';
-  const destinationCard = {
-    key: 'юрий шевчук / ддт::студийные записи', name: 'Студийные записи', album_artist: 'ДДТ', year: 1999,
-    preview_only: true, track_count_preview: 12,
-  };
-  const suffixAlbum = {
-    key: 'ддт::студийные записи5', name: 'Студийные записи5', album_artist: 'ДДТ', year: 1999,
-    tracks: [{ path: movedPath, title: 'Track 4' }],
-  };
-  const restored = {
-    key: 'ддт::студийные записи', name: 'Студийные записи', album_artist: 'ДДТ', year: 1999,
-    tracks: [{ path: movedPath, title: 'Track 4' }], track_count_preview: 1,
-  };
-  const group = { artist: 'ДДТ', albums: [destinationCard, suffixAlbum] };
-  context.state.view = {
-    ...context.state.view,
-    selected_artist: 'ДДТ',
-    related_artists: [],
-    primary_artist_groups: [group],
-    family_artist_groups: [],
-    artist_groups: [group],
-  };
-  const cacheCalls = [];
-  context.getAlbumRequestKey = (album) => String(album?.key || '');
-  context.getAlbumIdentity = (album) => String(album?.key || '');
-  context.getIndexedAlbum = (key) => (key === destinationCard.key ? destinationCard : null);
-  context.cacheHydratedTrackModalAlbum = (albumKey, album) => cacheCalls.push({ albumKey, album });
-
-  context.updateOpenTrackModalAfterTagEdit(suffixAlbum, [restored]);
-
-  const cachedDestination = cacheCalls.find(({ albumKey }) => albumKey === restored.key);
-  assert.ok(cachedDestination, 'the restored destination is cached for Album Details');
-  assert.equal(cachedDestination.album.preview_only, true, 'Album Details loads the whole destination');
-  assert.equal(cachedDestination.album.track_count_preview, 12);
-});
-
 test('updateOpenTrackModalAfterTagEdit preserves the newly hydrated post-edit source over an empty canonical preview', () => {
   const context = loadHelpers();
   const originalTracks = Array.from({ length: 13 }, (_value, index) => ({

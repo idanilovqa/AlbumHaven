@@ -60,12 +60,18 @@ test('FTC-TAGS-045 saves an edit while relations await reconciliation and regrou
     expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([RECONCILED_ARTIST]));
   });
 
-  await stepLogger.step('While reconciliation is due the gallery renders the saved album under its new artist in place', async () => {
-    // The gallery groups albums by their own album artist, so it follows the saved edit at once; only the
-    // relation index (artist families and aliases) waits for the reconciliation replay.
+  await stepLogger.step('Right after the save the album is under its new artist only, in place', async () => {
+    // The save publishes its own albums' gallery membership even while the relation publication waits for the
+    // reconciliation replay; family and alias grouping settle after the replay.
     const scrollBefore = await galleryActions.readGalleryScrollState();
     await galleryActions.waitForGalleryReady();
     await galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM);
+    expect(await galleryActions.readAlbumIdentityCardCount({
+      artist: RECONCILED_ARTIST, album: FIXTURE_ALBUM, year: FIXTURE_YEAR,
+    })).toBe(1);
+    expect(await galleryActions.readAlbumIdentityCardCount({
+      artist: FIXTURE_ARTIST, album: FIXTURE_ALBUM, year: FIXTURE_YEAR,
+    })).toBe(0);
     const scrollAfter = await galleryActions.readGalleryScrollState();
     expect(Math.abs(scrollAfter.scrollTop - scrollBefore.scrollTop)).toBeLessThanOrEqual(2);
   });
@@ -84,8 +90,17 @@ test('FTC-TAGS-045 saves an edit while relations await reconciliation and regrou
     ).toBe('healthy');
     expect(Date.now() - startedAt).toBeLessThanOrEqual(RECONCILED_GROUPING_BOUND_MS);
     expect((await restarted.galleryActions.readRelationProjectionReadiness()).ready).toBe(true);
-    // The same page, with no reload, still shows the album under the exact new heading.
+    // The same page, with no reload, shows the album exactly once under the settled grouping, in place.
+    const scrollBefore = await restarted.galleryActions.readGalleryScrollState();
     await restarted.galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM);
+    expect(await restarted.galleryActions.readAlbumIdentityCardCount({
+      artist: RECONCILED_ARTIST, album: FIXTURE_ALBUM, year: FIXTURE_YEAR,
+    })).toBe(1);
+    expect(await restarted.galleryActions.readAlbumIdentityCardCount({
+      artist: FIXTURE_ARTIST, album: FIXTURE_ALBUM, year: FIXTURE_YEAR,
+    })).toBe(0);
+    const scrollAfter = await restarted.galleryActions.readGalleryScrollState();
+    expect(Math.abs(scrollAfter.scrollTop - scrollBefore.scrollTop)).toBeLessThanOrEqual(2);
   });
 
   await stepLogger.step('Restore the album artist so no other case sees this one', async () => {

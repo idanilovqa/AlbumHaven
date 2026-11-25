@@ -4240,6 +4240,99 @@ def test_remote_card_preview_is_downscaled_and_cached_apart_from_the_original(ap
     assert fetches == [url]
 
 
+class _RemotePreviewRows:
+    """A stand-in for `library.remote_cover_previews`: one row per key, read and written by key only."""
+
+    def __init__(self):
+        self.rows = {}
+        self.statements = []
+
+    def __call__(self, _database_url, **_kwargs):
+        rows = self
+
+        class _Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def execute(self, sql, params):
+                rows.statements.append(" ".join(sql.split()))
+                if sql.lstrip().startswith("select"):
+                    row = rows.rows.get(params[0])
+                    return SimpleNamespace(fetchone=lambda: None if row is None else {"payload": row[0], "mime_type": row[1]})
+                rows.rows[params[0]] = (params[1], params[2])
+                return SimpleNamespace(fetchone=lambda: None)
+
+        return _Connection()
+
+
+def test_remote_card_preview_after_an_app_restart_is_read_from_its_stored_row_not_the_provider(app, monkeypatch):
+    """COVER-LOOKUP-FIRST-OPEN: the first Cover Look Up after a restart waited seconds on every provider."""
+    import io
+    from collections import OrderedDict
+
+    from PIL import Image
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_runtime
+
+    original = io.BytesIO()
+    Image.new("RGB", (1200, 1200), (200, 40, 40)).save(original, "JPEG", quality=90)
+    fetches = []
+
+    def fetch(image_url, **_kwargs):
+        fetches.append(image_url)
+        return original.getvalue(), "image/jpeg"
+
+    rows = _RemotePreviewRows()
+    monkeypatch.setattr(asgi_routes, "fetch_remote_cover_bytes", fetch)
+    monkeypatch.setattr(cover_lookup_runtime, "leased_connection", rows, raising=False)
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://app@127.0.0.1:1/remote_previews"
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    url = "https://coverartarchive.org/release/slow/front-500.jpg"
+
+    def card():
+        return _run_asgi_request(asgi_app, "GET", "/utilities/cover-lookup/remote-image", query={"url": url, "size": "480"})
+
+    first_status, _headers, first_body = card()
+    # The restart: this process remembers nothing.
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_IMAGE_CACHE", OrderedDict())
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_IMAGE_CACHE_BYTES", 0)
+    restarted_status, restarted_headers, restarted_body = card()
+
+    assert (first_status, restarted_status) == (200, 200)
+    assert restarted_body == first_body
+    assert restarted_headers["content-type"] == "image/jpeg"
+    assert fetches == [url], "the restarted app asked the provider again"
+    assert len(rows.rows) == 1
+    assert all("where cache_key = %s" in sql or "on conflict (cache_key)" in sql for sql in rows.statements)
+
+
+def test_remote_card_preview_in_a_browse_only_app_reads_rows_but_never_writes(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_runtime
+
+    rows = _RemotePreviewRows()
+    monkeypatch.setattr(asgi_routes, "fetch_remote_cover_bytes", lambda image_url, **_kwargs: (b"tiny", "image/png"))
+    monkeypatch.setattr(cover_lookup_runtime, "leased_connection", rows, raising=False)
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://app@127.0.0.1:1/remote_previews"
+    app.config["SHARED_LIBRARY_BROWSE_ONLY"] = True
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/cover-lookup/remote-image",
+        query={"url": "https://images.example/browse-only.png", "size": "480"},
+    )
+
+    assert (status, body) == (200, b"tiny")
+    assert rows.rows == {}
+    assert all(sql.startswith("select") for sql in rows.statements)
+
+
 def test_remote_candidate_image_download_does_not_block_cover_lookup_api(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 

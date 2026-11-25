@@ -6,8 +6,10 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import replace
 from functools import partial
 from datetime import datetime, timezone
+import hashlib
 import inspect
 from io import BytesIO
+import logging
 from types import MethodType
 import os
 from pathlib import Path
@@ -35,6 +37,7 @@ from music_app.services.cover_lookup_tasks import (
     update_cover_lookup_task,
     wait_for_cover_lookup_workers,
 )
+from music_app.services.cover_provider_cache import cover_cache_writable
 from music_app.services.cover_provider_candidates import (
     SelectedRemoteImage,
     normalize_remote_image_url,
@@ -59,8 +62,10 @@ from music_app.services.cover_workflow import (
     rollback_local_image_promotion,
     run_serialized_cover_selection,
 )
+from music_app.services.postgres_connections import leased_connection
 
 
+_LOGGER = logging.getLogger(__name__)
 _COVER_LOOKUP_EXECUTOR = create_daemon_executor(max_workers=4, thread_name_prefix="albumhaven-cover-lookup")
 _COVER_LOOKUP_SAVE_EXECUTOR = create_daemon_executor(
     max_workers=2,
@@ -512,6 +517,112 @@ def remember_remote_cover_image(
         while _REMOTE_IMAGE_CACHE_BYTES > _REMOTE_IMAGE_CACHE_MAX_BYTES and len(_REMOTE_IMAGE_CACHE) > 1:
             _evicted_key, evicted = _REMOTE_IMAGE_CACHE.popitem(last=False)
             _REMOTE_IMAGE_CACHE_BYTES -= len(evicted[0])
+
+
+# The memory above empties when the app restarts, so every card of the next Cover Look Up waited on its
+# provider again (seconds each). Card previews are also kept as one Postgres row per image (migration 0301),
+# read by key; a browse-only app reads them but never writes. A preview Pillow could not shrink (animated,
+# undecodable) is served as it came but never stored, so a row stays card-sized.
+_STORED_REMOTE_PREVIEW_MAX_BYTES = 1024 * 1024
+_SELECT_REMOTE_PREVIEW_SQL = "select payload, mime_type from library.remote_cover_previews where cache_key = %s"
+_UPSERT_REMOTE_PREVIEW_SQL = """
+    insert into library.remote_cover_previews (cache_key, payload, mime_type, updated_at)
+    values (%s, %s, %s, now())
+    on conflict (cache_key) do update
+    set payload = excluded.payload, mime_type = excluded.mime_type, updated_at = excluded.updated_at
+"""
+
+
+def _remote_preview_row_key(image_url: str) -> str:
+    return hashlib.sha256(normalize_remote_image_url(image_url).encode("utf-8")).hexdigest()
+
+
+def _stored_remote_cover_preview(database_url: str, image_url: str, connect) -> tuple[bytes, str | None] | None:
+    try:
+        with connect(database_url) as connection:
+            row = connection.execute(_SELECT_REMOTE_PREVIEW_SQL, (_remote_preview_row_key(image_url),)).fetchone()
+    except Exception:
+        _LOGGER.warning("Remote cover preview read failed", exc_info=True)
+        return None
+    if row is None:
+        return None
+    payload, mime_type = (row["payload"], row["mime_type"]) if isinstance(row, Mapping) else row
+    return bytes(payload), mime_type
+
+
+def _store_remote_cover_preview(database_url: str, image_url: str, preview: tuple[bytes, str | None], connect) -> None:
+    try:
+        with connect(database_url) as connection:
+            connection.execute(_UPSERT_REMOTE_PREVIEW_SQL, (_remote_preview_row_key(image_url), *preview))
+    except Exception:
+        _LOGGER.warning("Remote cover preview write failed", exc_info=True)
+
+
+def remote_cover_card_preview(
+    image_url: str,
+    *,
+    config: Mapping[str, object],
+    connect=None,
+    fetch=None,
+) -> tuple[bytes | None, str | None]:
+    """A remote candidate's card preview: from this process, else its stored row, else its provider."""
+    cached = cached_remote_cover_image(image_url, preview=True)
+    if cached is not None:
+        return cached
+    database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    connect = connect or leased_connection
+    stored = _stored_remote_cover_preview(database_url, image_url, connect) if database_url else None
+    if stored is not None:
+        remember_remote_cover_image(image_url, *stored, preview=True)
+        return stored
+    original = cached_remote_cover_image(image_url)
+    if original is None:
+        original = (fetch or fetch_remote_cover_bytes)(
+            image_url, config=config, user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        )
+        if original[0] is None:
+            return None, None
+        # The lightbox opens this original after its card, so it stays remembered too.
+        remember_remote_cover_image(image_url, *original)
+    preview = remote_cover_preview(*original)
+    remember_remote_cover_image(image_url, *preview, preview=True)
+    if database_url and cover_cache_writable(config) and len(preview[0]) <= _STORED_REMOTE_PREVIEW_MAX_BYTES:
+        _store_remote_cover_preview(database_url, image_url, preview, connect)
+    return preview
+
+
+_REMOTE_PREVIEW_PREPARATION_EXECUTOR = create_daemon_executor(
+    max_workers=2,
+    thread_name_prefix="albumhaven-cover-preview",
+)
+
+
+def _remote_card_image_urls(candidates) -> list[str]:
+    """The image each REMOTE card shows, as the gallery asks for it (its thumbnail, else its original)."""
+    urls = []
+    for candidate in candidates or ():
+        if not isinstance(candidate, Mapping):
+            continue
+        url = str(candidate.get("thumbnail_url") or candidate.get("url") or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def prepare_remote_cover_card_previews(candidates, *, config: Mapping[str, object]) -> None:
+    """After a lookup finishes, its cards' previews are stored in the background, so the first opening of
+    its notification reads rows instead of waiting on every provider. Failures are left to that opening."""
+    if not str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip() or not cover_cache_writable(config):
+        return
+    for url in _remote_card_image_urls(candidates):
+        _REMOTE_PREVIEW_PREPARATION_EXECUTOR.submit(_prepare_remote_cover_card_preview, url, config)
+
+
+def _prepare_remote_cover_card_preview(image_url: str, config: Mapping[str, object]) -> None:
+    try:
+        remote_cover_card_preview(image_url, config=config)
+    except Exception:
+        _LOGGER.debug("Remote cover preview preparation failed", exc_info=True)
 
 
 def _callback_accepts_parameter(callback, parameter_name: str) -> bool:
@@ -1210,6 +1321,8 @@ def _run_cover_lookup_task(
             timings=phase_timings,
             counts=phase_counts,
         )
+        if candidate_snapshot_published:
+            prepare_remote_cover_card_previews(combined_candidates, config=config)
     except Exception as exc:
         close_candidate_publication()
         if candidate_publisher is not None and candidate_snapshot_published:

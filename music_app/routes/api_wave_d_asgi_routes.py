@@ -51,7 +51,7 @@ from music_app.services.cover_lookup_runtime import (
     queue_cover_lookup_save_remote_task,
     queue_cover_lookup_task,
     remember_remote_cover_image,
-    remote_cover_preview,
+    remote_cover_card_preview,
 )
 from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
@@ -2593,26 +2593,23 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
     if not image_url:
         return _json_response(({"ok": False, "error": "Missing remote image URL"}, 400))
     config = _app_config(request)
-    preview = request.query_params.get("size") == str(REMOTE_COVER_PREVIEW_EDGE)
-    cached = cached_remote_cover_image(image_url, preview=preview)
-    if cached is not None:
-        payload, mime_type = cached
-    else:
-        original = cached_remote_cover_image(image_url) if preview else None
-        payload, mime_type = original or await run_in_threadpool(
-            fetch_remote_cover_bytes,
-            image_url,
-            config=config,
-            user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+    if request.query_params.get("size") == str(REMOTE_COVER_PREVIEW_EDGE):
+        payload, mime_type = await run_in_threadpool(
+            remote_cover_card_preview, image_url, config=config, fetch=fetch_remote_cover_bytes
         )
+    else:
+        payload, mime_type = cached_remote_cover_image(image_url) or (None, None)
         if payload is None:
-            return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
-        if original is None:
-            # The lightbox opens this original after its card, so it stays remembered too.
-            remember_remote_cover_image(image_url, payload, mime_type)
-        if preview:
-            payload, mime_type = await run_in_threadpool(remote_cover_preview, payload, mime_type)
-            remember_remote_cover_image(image_url, payload, mime_type, preview=True)
+            payload, mime_type = await run_in_threadpool(
+                fetch_remote_cover_bytes,
+                image_url,
+                config=config,
+                user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+            )
+            if payload is not None:
+                remember_remote_cover_image(image_url, payload, mime_type)
+    if payload is None:
+        return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
     return Response(payload, media_type=mime_type, headers={"Cache-Control": "private, max-age=3600"})
 
 

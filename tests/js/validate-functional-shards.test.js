@@ -19,10 +19,10 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual-1', 36],
-  ['gallery-search-visual-2', 47],
+  ['gallery-search-visual-2', 49],
   ['cover-providers-1', 27],
   ['cover-providers-2', 19],
-  ['metadata-mutations', 30],
+  ['metadata-mutations', 31],
   ['playback-utilities-1', 16],
   ['playback-utilities-2', 17],
   ['playback-utilities-3', 14],
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 206-case assignment', () => {
+test('functional shard contract pins the approved eight-way 209-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 206-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 206);
+  assert.equal(total, 209);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -505,8 +505,8 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
   const checkpointCalls = calls.filter((call) => call.args[0].endsWith('functional-fixture-checkpoint.py'));
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-  const invocationCount = 29;
-  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 30);
+  const invocationCount = 30;
+  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 31);
     assert.equal(checkpointCalls.length, invocationCount + 2);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
@@ -699,7 +699,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
     assert.ok(globalMutations.length <= 1);
     for (const ownedCase of cases) waveByCase.set(ownedCase.case, wave.wave);
   }
-  assert.equal(waveByCase.size, 30);
+  assert.equal(waveByCase.size, 31);
   for (const caseName of [
     'FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards',
     'FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split',
@@ -985,10 +985,10 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual-1', { cases: 36, waves: [1, 2] }],
-    ['gallery-search-visual-2', { cases: 47, waves: [1, 2, 3, 4] }],
+    ['gallery-search-visual-2', { cases: 49, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 27, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 19, waves: [1, 2] }],
-    ['metadata-mutations', { cases: 30, waves: [1, 2, 3] }],
+    ['metadata-mutations', { cases: 31, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 16, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 17, waves: [1, 2, 5] }],
     ['playback-utilities-3', { cases: 14, waves: [1, 2] }],

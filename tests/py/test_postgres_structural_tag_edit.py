@@ -910,6 +910,9 @@ class _CommitSuppressingConnection:
         # A nested transaction is a savepoint: it never commits the wrapped connection.
         return self._connection.transaction()
 
+    def pipeline(self):
+        return self._connection.pipeline()
+
     def commit(self):
         raise AssertionError("The live restore contract must suppress adapter commits.")
 
@@ -3643,13 +3646,17 @@ def _album_titles_by_track(fixture, entries):
 
 
 def _save_album_edit(fixture, entries, paths, album):
-    """One Edit Tags save of the Album field, persisted as the route does (no inline relation publication)."""
+    _save_tag_edit(fixture, entries, paths, album=album)
+
+
+def _save_tag_edit(fixture, entries, paths, **values):
+    """One Edit Tags save of these fields, persisted as the route does (no inline relation publication)."""
     previous = {path: dict(entries[path]) for path in paths}
-    updated = {path: {**entries[path], "album": album} for path in paths}
+    updated = {path: {**entries[path], **values} for path in paths}
     fixture.adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
-        updated_file_entries=updated, changed_field_names={"album"})
+        updated_file_entries=updated, changed_field_names=set(values))
     fixture.adapter.persist_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
-        updated_file_entries=updated, changed_field_names={"album"})
+        updated_file_entries=updated, changed_field_names=set(values))
     entries.update(updated)
 
 
@@ -3714,6 +3721,72 @@ def test_live_postgres_split_merge_split_never_strands_the_relation_index(watche
     _refresh_after_save(fixture, "merge both halves")
     assert set(_album_titles_by_track(fixture, entries).values()) == {"Ремиксы"}
     assert scheduled, "Each structural save must still schedule its background refresh."
+
+
+def _album_credits(fixture, entries):
+    """Each album holding these tracks: its credited artists and kinds, its featured names, and
+    every artist the gallery membership lists for it."""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = connection.execute("""select distinct albums.id, albums.album_key, albums.metadata
+            from library.local_track_files files join library.local_tracks tracks on tracks.id=files.track_id
+            join library.local_albums albums on albums.id=tracks.album_id
+            where files.private_path=any(%s::text[])""", (sorted(entries),)).fetchall()
+        result = {}
+        for album in albums:
+            credits = connection.execute("""select artists.name, credits.featured_kind
+                from library.local_album_featured_artists credits
+                join library.local_artists artists on artists.id=credits.artist_id
+                where credits.album_id=%s""", (album["id"],)).fetchall()
+            members = connection.execute("""select distinct artist_display from library.gallery_membership_entries
+                where album_key=%s""", (album["album_key"],)).fetchall()
+            result[album["album_key"]] = {
+                "credits": {(row["name"], row["featured_kind"]) for row in credits},
+                "featured_artists": album["metadata"].get("featured_artists"),
+                "gallery_artists": {row["artist_display"] for row in members},
+            }
+    return result
+
+
+def test_live_postgres_album_artist_split_and_restore_credit_only_each_albums_own_artists(
+    watcher_repair_inventory, monkeypatch,
+):
+    """Owner report (2026-11-24): giving some of an album's tracks a new Album Artist and then the
+    old one back left the new artist credited as an owner of the old album, so the artist tree kept
+    the new artist with an empty gallery; the split also credited the old artist as an owner of the
+    new album, which showed it in the old artist's gallery twice."""
+    from music_app.services import gallery_projection_postgres
+
+    monkeypatch.setattr(gallery_projection_postgres, "_schedule_gallery_projection_refresh", lambda *a, **k: None)
+    fixture = watcher_repair_inventory
+    entries = {}
+    for number, title in enumerate(("Grey Shore", "North Gate", "Glass Field", "Last Signal"), start=1):
+        entry = fixture.entry(f"Fen Hollow/1999 - Grey Shore/{number:02d}. {title}.flac", artist="Fen Hollow",
+                              album="Grey Shore")
+        entry.update(album_artist="Fen Hollow", title=title, track_number=number)
+        entries[entry["path"]] = entry
+    fixture.seed(*entries.values())
+    moved = sorted(entries)[1:3]
+
+    _save_tag_edit(fixture, entries, moved, album_artist="Fen Hollow2")
+    _refresh_after_save(fixture, "split")
+    assert _album_credits(fixture, entries) == {
+        "fen hollow::grey shore": {
+            "credits": {("Fen Hollow", "owner")}, "featured_artists": [], "gallery_artists": {"Fen Hollow"},
+        },
+        "fen hollow2::grey shore": {
+            "credits": {("Fen Hollow2", "owner"), ("Fen Hollow", "featured_track_artist")},
+            "featured_artists": ["Fen Hollow"],
+            "gallery_artists": {"Fen Hollow2", "Fen Hollow"},
+        },
+    }
+
+    _save_tag_edit(fixture, entries, moved, album_artist="Fen Hollow")
+    _refresh_after_save(fixture, "restore")
+    assert _album_credits(fixture, entries) == {
+        "fen hollow::grey shore": {
+            "credits": {("Fen Hollow", "owner")}, "featured_artists": [], "gallery_artists": {"Fen Hollow"},
+        },
+    }
 
 
 def test_live_postgres_merge_carries_a_split_half_card_onto_the_whole_merged_album(watcher_repair_inventory, monkeypatch):

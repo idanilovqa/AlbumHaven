@@ -13676,5 +13676,86 @@
       "reverse-shift-tab-order"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+    "case": "FTC-SEARCH-NAV-003 a reloaded exact-artist search shows the same tree as the typed search when only another artist's file name matches",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "reloaded-search-tree",
+    "databaseScenarios": [
+      "search:owned-file-name-credit"
+    ],
+    "filesystemScenarios": [
+      "media-copy:reloaded-search-tree"
+    ],
+    "expectedContracts": [
+      "reloaded-search-tree-equals-typed"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:reloaded-search-tree",
+      "filesystemCopy": "media/cases/reloaded-search-tree"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+    "case": "FTC-TAGS-045 an Album Artist edit of some tracks shows the new artist with its album, and restoring it leaves no empty artist behind",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-artist-split-restore",
+    "databaseScenarios": [
+      "tag-edit:owned-album-artist-split"
+    ],
+    "filesystemScenarios": [
+      "media-copy:album-artist-split-restore"
+    ],
+    "expectedContracts": [
+      "restored-album-artist-leaves-no-empty-artist"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:album-artist-split-restore",
+      "filesystemCopy": "media/cases/album-artist-split-restore"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
+    "case": "FTC-GALLERY-034 an album whose Album Artist repeats one artist is that artist's own album, never Featured On",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "repeated-album-artist-credit",
+    "databaseScenarios": [
+      "gallery:owned-repeated-album-artist"
+    ],
+    "filesystemScenarios": [
+      "media-copy:repeated-album-artist-credit"
+    ],
+    "expectedContracts": [
+      "repeated-album-artist-is-own-album"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:repeated-album-artist-credit",
+      "filesystemCopy": "media/cases/repeated-album-artist-credit"
+    },
+    "ownerApproval": "approved"
   }
 ]

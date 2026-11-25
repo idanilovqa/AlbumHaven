@@ -22,7 +22,7 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.library_reachability import missing_reasons
 from music_app.services.missing_album_auto_removal import remove_untouched_deleted
 from music_app.services.album_ratings_postgres import tag_disc_rating_candidates
-from music_app.services.artist_credits import track_artist_credit_members
+from music_app.services.artist_credits import deduplicate_repeated_album_artist_members, track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
 )
@@ -964,99 +964,11 @@ class PostgresScanCacheAdapter:
                     "new_track_paths": new_track_paths,
                     **({"identity_conflicts": identity_conflicts} if identity_conflicts else {}),
                 }
-            # A logical album can span different containers and configured
-            # roots. Replace scan-owned credits using all its retained active
-            # members, not just the paths selected by this watcher event.
-            synchronized_featured_album_keys = []
-            if affected_album_keys:
-                complete_rows = connection.execute(
-                    _load_file_entries_sql(targeted_albums=True),
-                    {"source": _SOURCE, "album_keys": sorted(affected_album_keys)},
-                ).fetchall()
-                files_by_album: dict[str, dict[str, dict[str, object]]] = {}
-                owner_keys: dict[str, str] = {}
-                for raw_row in complete_rows:
-                    row = _row_mapping(raw_row)
-                    file_entry = _targeted_surviving_file_entry(row)
-                    if file_entry is None:
-                        continue
-                    files_by_album.setdefault(str(row["album_key"]), {})[str(row["private_path"])] = file_entry
-                    owner_keys[str(row["album_key"])] = str(row.get("album_owner_key") or "")
-                # Entirely missing albums retain their historical credits.
-                # A deletion that leaves active members reconciles those members.
-                synchronized_featured_album_keys = sorted(files_by_album)
-                featured_artist_rows = []
-                aggregate_rows = []
-                published_albums = []
-                for album_key, complete_cache in files_by_album.items():
-                    complete_albums = self._build_albums(
-                        _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
-                    )
-                    published_albums.extend(complete_albums)
-                    complete_artists, complete_album_rows, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
-                    _execute_pipeline_batches(
-                    connection, _upsert_local_artist_sql(preserve_existing_identity=True), complete_artists,
-                )
-                    member_names = _deduped_artist_names([
-                        name for album in complete_albums
-                        for name in (getattr(album, "artists", []) or [])
-                    ])
-                    artist_names = {row["artist_key"]: row["name"] for row in complete_artists}
-                    featured_names = _deduped_artist_names([
-                        artist_names[row["artist_key"]]
-                        for row in complete_featured
-                        if row["artist_key"] != owner_keys[album_key]
-                        and row["artist_key"] in artist_names
-                    ])
-                    cover_row = next(
-                        (row for row in complete_album_rows if row["cover_path"]),
-                        complete_album_rows[0] if complete_album_rows else {},
-                    )
-                    cover_metadata = _jsonb_compatible(cover_row.get("metadata") or {})
-                    aggregate_rows.append({
-                        "album_key": album_key,
-                        "release_year": next((row["release_year"] for row in complete_album_rows if row.get("release_year") is not None), None),
-                        "cover_path": cover_row.get("cover_path"),
-                        "cover_metadata": _jsonb({
-                            field: cover_metadata.get(field)
-                            for field in _ALBUM_COVER_METADATA_FIELDS
-                            if field != "cover_selection_repair_previous" or field in cover_metadata
-                        }),
-                        "metadata": _jsonb({
-                            "artists": member_names,
-                            "featured_artists": featured_names,
-                            "is_compilation": any(bool(getattr(album, "is_compilation", False)) for album in complete_albums),
-                            "root_provenance": summarize_root_provenance_payloads([
-                                build_root_provenance_payload(entry.get("library_root_id"), entry.get("library_root_category"))
-                                for entry in complete_cache.values()
-                            ]),
-                        }),
-                    })
-                    for featured_row in complete_featured:
-                        featured_row["album_key"] = album_key
-                        if featured_row["featured_kind"] == "owner" and owner_keys[album_key]:
-                            featured_row["artist_key"] = owner_keys[album_key]
-                    featured_artist_rows.extend(complete_featured)
-                _execute_pipeline_batches(connection, _update_targeted_album_aggregate_sql(), aggregate_rows)
-                _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
-                _seed_missing_tag_ratings(connection, self._config, published_albums)
-            connection.execute(
-                _synchronize_targeted_local_album_featured_artists_sql(),
-                {
-                    "affected_album_keys": synchronized_featured_album_keys,
-                    "current_featured_rows": _jsonb(
-                        [
-                            {
-                                "album_key": row["album_key"],
-                                "artist_key": row["artist_key"],
-                                "featured_kind": row["featured_kind"],
-                            }
-                            for row in featured_artist_rows
-                        ]
-                    ),
-                    "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
-                },
+            published_albums = _publish_album_credits(
+                connection, self._build_albums, separate_release_keys, affected_album_keys,
+                with_cover_and_year=True,
             )
+            _seed_missing_tag_ratings(connection, self._config, published_albums)
             revision_row = _first_row(
                 connection.execute(_increment_inventory_mutation_revision_sql())
             )
@@ -2157,6 +2069,14 @@ class PostgresScanCacheAdapter:
                     allow_same_year_separate_release_merge=(
                         normalized_changed_fields == frozenset({"album"})
                     ),
+                )
+            with persistence_stage("album_credit_refresh"):
+                # Moved tracks change who the albums they leave and join credit: an artist whose
+                # last track left is no longer credited, and neither album inherits the other's.
+                _publish_album_credits(
+                    connection, self._build_albums, active_separate_release_keys,
+                    _structural_edit_album_keys(connection, (source_album_id, destination_album_id), normalized_paths),
+                    with_cover_and_year=False,
                 )
             with persistence_stage("album_metadata_refresh"):
                 _refresh_edited_album_metadata(connection, self._build_albums,
@@ -4573,6 +4493,10 @@ def _inventory_rows_from_albums(
                 return classified_owner
             if _is_various_artist(tagged_owner):
                 return None
+            repeated_members = deduplicate_repeated_album_artist_members(tagged_owner)
+            if len(repeated_members) == 1:
+                # "X / X" credits one artist: the album is X's own.
+                tagged_owner = repeated_members[0]
             tagged_members = split_album_artist_members(tagged_owner)
             if (
                 classified_owner is not None
@@ -8327,6 +8251,136 @@ def _upsert_local_album_sql(
             excluded.artist_id, excluded.title, {release_year_update},
             {cover_path_update}, {metadata_update}
           );
+    """
+
+
+def _publish_album_credits(connection, build_albums, separate_release_keys, album_keys, *, with_cover_and_year):
+    """Replace each album's scan-owned credits (its member and featured artists) from all of its
+    retained active members, not just the paths a watcher event or a save named: a logical album
+    can span containers and roots. An entirely missing album keeps its historical credits.
+
+    ``with_cover_and_year`` also republishes the album's cover and year from those members.
+    Returns the published albums."""
+    files_by_album: dict[str, dict[str, dict[str, object]]] = {}
+    owner_keys: dict[str, str] = {}
+    if album_keys:
+        for raw_row in connection.execute(
+            _load_file_entries_sql(targeted_albums=True),
+            {"source": _SOURCE, "album_keys": sorted(album_keys)},
+        ).fetchall():
+            row = _row_mapping(raw_row)
+            file_entry = _targeted_surviving_file_entry(row)
+            if file_entry is None:
+                continue
+            files_by_album.setdefault(str(row["album_key"]), {})[str(row["private_path"])] = file_entry
+            owner_keys[str(row["album_key"])] = str(row.get("album_owner_key") or "")
+    if not files_by_album:
+        return []
+    featured_artist_rows = []
+    aggregate_rows = []
+    published_albums = []
+    for album_key, complete_cache in files_by_album.items():
+        complete_albums = build_albums(
+            _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
+        )
+        published_albums.extend(complete_albums)
+        complete_artists, complete_album_rows, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
+        _execute_pipeline_batches(
+            connection, _upsert_local_artist_sql(preserve_existing_identity=True), complete_artists,
+        )
+        artist_names = {row["artist_key"]: row["name"] for row in complete_artists}
+        credit_metadata = {
+            "artists": _deduped_artist_names([
+                name for album in complete_albums
+                for name in (getattr(album, "artists", []) or [])
+            ]),
+            "featured_artists": _deduped_artist_names([
+                artist_names[row["artist_key"]]
+                for row in complete_featured
+                if row["artist_key"] != owner_keys[album_key]
+                and row["artist_key"] in artist_names
+            ]),
+            "is_compilation": any(bool(getattr(album, "is_compilation", False)) for album in complete_albums),
+            "root_provenance": summarize_root_provenance_payloads([
+                build_root_provenance_payload(entry.get("library_root_id"), entry.get("library_root_category"))
+                for entry in complete_cache.values()
+            ]),
+        }
+        aggregate_row = {"album_key": album_key, "metadata": _jsonb(credit_metadata)}
+        if with_cover_and_year:
+            cover_row = next(
+                (row for row in complete_album_rows if row["cover_path"]),
+                complete_album_rows[0] if complete_album_rows else {},
+            )
+            cover_metadata = _jsonb_compatible(cover_row.get("metadata") or {})
+            aggregate_row.update({
+                "release_year": next((row["release_year"] for row in complete_album_rows if row.get("release_year") is not None), None),
+                "cover_path": cover_row.get("cover_path"),
+                "cover_metadata": _jsonb({
+                    field: cover_metadata.get(field)
+                    for field in _ALBUM_COVER_METADATA_FIELDS
+                    if field != "cover_selection_repair_previous" or field in cover_metadata
+                }),
+            })
+        aggregate_rows.append(aggregate_row)
+        for featured_row in complete_featured:
+            featured_row["album_key"] = album_key
+            if featured_row["featured_kind"] == "owner" and owner_keys[album_key]:
+                featured_row["artist_key"] = owner_keys[album_key]
+        featured_artist_rows.extend(complete_featured)
+    _execute_pipeline_batches(
+        connection,
+        _update_targeted_album_aggregate_sql() if with_cover_and_year else _update_album_credit_metadata_sql(),
+        aggregate_rows,
+    )
+    _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
+    connection.execute(
+        _synchronize_targeted_local_album_featured_artists_sql(),
+        {
+            "affected_album_keys": sorted(files_by_album),
+            "current_featured_rows": _jsonb([
+                {"album_key": row["album_key"], "artist_key": row["artist_key"], "featured_kind": row["featured_kind"]}
+                for row in featured_artist_rows
+            ]),
+            "synchronized_sources": _SYNCHRONIZED_FEATURED_ARTIST_SOURCES,
+        },
+    )
+    return published_albums
+
+
+def _structural_edit_album_keys(connection, album_ids, paths) -> set[str]:
+    """The current keys of a structural edit's source and destination albums and of the
+    albums its tracks now belong to (an album merge can move them again)."""
+    return {
+        str(_row_mapping(row)["album_key"])
+        for row in connection.execute(
+            """
+            select albums.album_key
+            from library.local_albums albums
+            where albums.id = any(%(album_ids)s::bigint[])
+            union
+            select albums.album_key
+            from library.local_track_files files
+            join library.local_tracks tracks on tracks.id = files.track_id
+            join library.local_albums albums on albums.id = tracks.album_id
+            where files.private_path = any(%(paths)s::text[])
+            """,
+            {"album_ids": [album_id for album_id in album_ids if album_id], "paths": sorted(paths)},
+        ).fetchall()
+    }
+
+
+def _update_album_credit_metadata_sql() -> str:
+    return """
+        update library.local_albums as album
+        set metadata = album.metadata || %(metadata)s
+        from library.libraries as owned_library, app.bootstrap_owners as owner
+        where album.library_id = owned_library.id
+          and owned_library.owner_account_id = owner.account_id
+          and owned_library.name = 'Local Library'
+          and owned_library.library_kind = 'local'
+          and owner.owner_key = 'local-bootstrap-owner'
+          and album.album_key = %(album_key)s;
     """
 
 

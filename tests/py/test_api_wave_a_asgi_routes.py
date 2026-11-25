@@ -5489,6 +5489,70 @@ def test_non_album_media_edit_reserves_source_album_and_track_path(
     assert releases == ["released"]
 
 
+@pytest.mark.parametrize("missing_tracks", [False, True])
+def test_postgres_media_edit_reads_the_tags_it_compares_only_once_it_holds_its_albums(
+    asgi_app,
+    monkeypatch,
+    missing_tracks,
+):
+    # Owner report (2026-11-24): a save sent while another save of the same tracks was still
+    # running compared against the tags read before that save finished, called the change
+    # already saved, and answered success without writing it.
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+
+    track_path = "C:/Music/Artist/Album/song.mp3"
+    events: list[str] = []
+
+    class Lease:
+        def release(self):
+            events.append("released")
+
+    async def acquire(_resource_keys):
+        events.append("reserved")
+        return Lease()
+
+    def load_edit_state(_request, _payload):
+        events.append("read tags")
+        if missing_tracks:
+            raise asgi_routes.EditTagsTracksNotInLibrary("song")
+        return {"file_cache": {track_path: {"path": track_path, "album_artist": "Artist"}}}
+
+    def handle(**kwargs):
+        events.append("compared")
+        assert kwargs["get_state"]()["file_cache"][track_path]["album_artist"] == "Artist"
+        kwargs["structural_tag_edit_reservation"].release()
+        return {"ok": True, "changed_files": [], "changed_count": 0}
+
+    monkeypatch.setattr(asgi_routes, "acquire_structural_tag_edit_reservation_async", acquire)
+    monkeypatch.setattr(asgi_routes, "_is_selected_postgres_library_browse_request", lambda _request: True)
+    monkeypatch.setattr(asgi_routes, "_postgres_exception_only_edit_state", load_edit_state)
+    monkeypatch.setattr(asgi_routes, "handle_edit_tags_request", handle)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/edit-tags",
+        json_body={
+            "confirmed": True,
+            "album": {
+                "key": "artist::album",
+                "name": "Album",
+                "album_artist": "Artist",
+                "tracks": [{"path": track_path}],
+            },
+            "updates": {track_path: {"album_artist": "Artist 2"}},
+        },
+    )
+
+    if missing_tracks:
+        assert status == 409
+        assert _decode_json(body)["code"] == "tracks_not_in_library"
+        assert events == ["reserved", "read tags", "released"]
+    else:
+        assert status == 200
+        assert events == ["reserved", "read tags", "compared", "released"]
+
+
 def test_media_edit_reservation_includes_destination_album_identity_changes():
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
     from music_app.services import save_tasks as save_tasks_module

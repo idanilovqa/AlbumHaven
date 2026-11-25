@@ -318,6 +318,7 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "pending_cover_refresh_after_scan": True,
         "last_scan": 1716000000.0,
         "last_error": "scan warning",
+        "covers_last_error": "cover refresh warning",
         "albums": [SimpleNamespace(key="album-1")],
     })
 
@@ -358,6 +359,7 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "pending_cover_refresh_after_scan": True,
         "last_scan_display": format_timestamp(1716000000.0),
         "last_error": "scan warning",
+        "covers_last_error": "cover refresh warning",
         "album_total": 1,
         "inventory_mutation_revision": 0,
         "watcher_health": {"state": "healthy", "problems": []},

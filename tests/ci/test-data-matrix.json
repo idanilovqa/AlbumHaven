@@ -13348,7 +13348,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/relationReconciliationEdit.spec.js",
-    "case": "FTC-TAGS-045 saves an edit while relations await reconciliation and regroups it after the replay",
+    "case": "FTC-TAGS-045 saves edits while relations await reconciliation and parks the replay for initialization",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -13364,7 +13364,7 @@
     "expectedContracts": [
       "edit-saves-while-reconciliation-due",
       "gallery-follows-saved-edit-at-once",
-      "relation-index-settles-after-replay-without-reload"
+      "replay-parked-for-initialization-saves-continue"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:relation-reconciliation-edit",

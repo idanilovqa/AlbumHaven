@@ -36,6 +36,7 @@ class RelationReconciliationOwner:
         *,
         reconciled: Callable[[], None],
         failed: Callable[[str], None] | None = None,
+        parked: Callable[[str], None] | None = None,
         prepare: Callable[..., object] | None = None,
         logger: logging.Logger | None = None,
         backoff: Sequence[float] = RETRY_BACKOFF_SECONDS,
@@ -43,19 +44,23 @@ class RelationReconciliationOwner:
         self._config = config
         self._reconciled = reconciled
         self._failed = failed
+        self._parked = parked
         self._prepare = prepare
         self._logger = logger or _LOGGER
         self._backoff = tuple(backoff) or (30.0,)
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        # Set once a refusal only the explicit initialization reconciles was logged: no further run in this
+        # process (no timer, no re-request from saves or readiness). A restart parks again with one log line.
+        self._parked_reason: str | None = None
         with _OWNERS_LOCK:
             _OWNERS[str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")] = self
 
     def request(self) -> bool:
         """Start a replay unless one is running or the owner stopped. Returns whether this call started it."""
         with self._lock:
-            if (self._thread is not None and self._thread.is_alive()) or self._stop.is_set():
+            if (self._thread is not None and self._thread.is_alive()) or self._stop.is_set() or self._parked_reason:
                 return False
             self._thread = threading.Thread(target=self._run, name="albumhaven-relation-reconciliation", daemon=True)
             self._thread.start()
@@ -94,8 +99,12 @@ class RelationReconciliationOwner:
                 self.run_once()
             except InterruptedError:
                 return
-            except RelationInitializationRequired as parked:
-                self._logger.warning("Relation reconciliation needs the explicit initialization: %s", parked)
+            except RelationInitializationRequired as refusal:
+                # Parked, not retried: only the explicit initialization (the owner's decision) reconciles it.
+                self._logger.warning("Relation reconciliation needs the explicit initialization: %s", refusal)
+                self._parked_reason = str(refusal)
+                if self._parked is not None:
+                    self._parked(str(refusal))
                 return
             except Exception as error:
                 wait = self._backoff[min(attempt, len(self._backoff) - 1)]

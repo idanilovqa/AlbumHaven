@@ -670,6 +670,12 @@ def create_asgi_app():
                 "relation_projection_rebuild_reason": "reconciliation_retrying",
                 "last_error": message,
             }),
+            # Parked for the explicit initialization: browsing and saves go on; tag edits' relation updates
+            # stay journaled until then.
+            parked=lambda message: runtime.library_state.update({
+                "relation_projection_rebuild_reason": "needs_initialization",
+                "last_error": "Library relationships need the explicit initialization: " + message,
+            }),
             logger=runtime.logger,
         )
         _app.state.library_warmup_thread = _start_library_warmup(

@@ -16502,10 +16502,10 @@
       "proof": "static"
     },
     {
-      "id": "py:services/state.py#_request_relation_reconciliation",
-      "action": "Start the reconciliation owner from start-up readiness when tag edits would wait",
+      "id": "py:services/state.py#_relation_reconciliation_due",
+      "action": "Decide at start-up readiness whether tag edits would wait for reconciliation",
       "entrypoints": [
-        "py:music_app/services/state.py#_request_relation_reconciliation:reconciler:name"
+        "py:music_app/services/state.py#_relation_reconciliation_due:reconciler:name"
       ],
       "owners": [
         "music_app/services/state.py"

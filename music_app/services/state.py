@@ -810,7 +810,8 @@ def ensure_runtime_relation_projection_ready(
         result["rebuild_reason"] = str(
             result.get("last_rebuild_reason") or result.get("rebuild_reason") or "healthy"
         )
-    if result.get("ready") and _request_relation_reconciliation(app, result):
+    reconciliation_due = bool(result.get("ready")) and _relation_reconciliation_due(app, result)
+    if reconciliation_due:
         result["rebuild_reason"] = "reconciliation_required"
     library_state["relation_views"] = dict(result.get("relation_views") or {})
     library_state["relation_projection_ready"] = bool(result.get("ready"))
@@ -826,6 +827,10 @@ def ensure_runtime_relation_projection_ready(
     library_state["relation_projection_duration_ms"] = float(
         result.get("duration_ms") or 0.0
     )
+    # Requested only after the state above is written, so the owner's own status (retrying, parked) wins.
+    owner = getattr(app, "relation_reconciliation", None)
+    if reconciliation_due and owner is not None:
+        owner.request()
     if not (result.get("ready") and str(app.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()):
         return result
     if app.config.get("SHARED_LIBRARY_BROWSE_ONLY"):
@@ -845,22 +850,18 @@ def ensure_runtime_relation_projection_ready(
     return result
 
 
-def _request_relation_reconciliation(app, result: Mapping[str, object]) -> bool:
-    """Start-up only: when tag edits would refuse for want of reconciliation, start its background owner.
-    Browsing keeps serving the stored relation rows meanwhile. Returns whether reconciliation is due."""
+def _relation_reconciliation_due(app, result: Mapping[str, object]) -> bool:
+    """Start-up only: whether tag edits would wait for reconciliation (start-up then starts its owner).
+    Browsing keeps serving the stored relation rows meanwhile."""
     from music_app.services.scoped_relation_projection import relation_reconciliation_due
 
-    due = result.get("rebuild_reason") == "reconciliation_required"
-    if not due:
-        try:
-            due = relation_reconciliation_due(app.config)
-        except Exception:
-            app.logger.exception("Relation reconciliation check failed; tag edits report their own refusal.")
-            return False
-    owner = getattr(app, "relation_reconciliation", None)
-    if due and owner is not None:
-        owner.request()
-    return due
+    if result.get("rebuild_reason") == "reconciliation_required":
+        return True
+    try:
+        return relation_reconciliation_due(app.config)
+    except Exception:
+        app.logger.exception("Relation reconciliation check failed; tag edits report their own refusal.")
+        return False
 
 
 def _run_scheduled_relation_projection_rebuild(

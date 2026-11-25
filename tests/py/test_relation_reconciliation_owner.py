@@ -9,6 +9,8 @@ import logging
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from music_app.services import relation_projection_postgres as relations
 from music_app.services.relation_reconciliation import RelationReconciliationOwner
 
@@ -44,13 +46,28 @@ def test_a_failed_replay_retries_with_backoff_then_readiness_runs_again():
     assert reconciled == [True], "readiness runs again once the journal is replayed"
 
 
-def test_a_case_only_initialization_reconciles_is_parked_without_retrying():
-    reconciled, waits = [], []
-    owner = _owner([relations.RelationInitializationRequired("Legacy publication is not ready.")], reconciled, waits)
+@pytest.mark.parametrize("message", [
+    "Legacy publication is not ready for compatibility preparation.",
+    "Legacy publication differs from the frozen legacy source rebuild; journal retained.",
+])
+def test_a_case_only_initialization_reconciles_is_parked_once_without_retrying(message):
+    reconciled, waits, parked, failed = [], [], [], []
+    owner = _owner([relations.RelationInitializationRequired(message), {"unreachable": True}], reconciled, waits)
+    owner._parked, owner._failed = parked.append, failed.append
 
     owner._run()
 
-    assert waits == [] and reconciled == []
+    assert waits == [] and reconciled == [] and failed == [], "no retry and no readiness run"
+    assert parked == [message], "parked once, distinct from retrying"
+
+
+def test_a_pending_write_since_the_legacy_publication_classifies_as_needs_initialization():
+    from music_app.services import scoped_relation_projection as scoped
+
+    source = open(scoped.__file__, encoding="utf-8").read()
+    marker = "Legacy publication differs from the frozen legacy source rebuild; journal retained."
+    statement = source[source.rindex("raise", 0, source.index(marker)):source.index(marker)]
+    assert "RelationInitializationRequired" in statement
 
 
 def test_shutdown_cancels_a_running_replay_and_a_stopped_owner_never_starts():
@@ -78,17 +95,24 @@ def test_start_up_readiness_requests_the_replay_only_when_edits_would_refuse(mon
     from music_app.services import state
 
     requests = []
-    app = SimpleNamespace(config={}, logger=logging.getLogger("test"),
-                          relation_reconciliation=SimpleNamespace(request=lambda: requests.append(True)))
+    reasons_at_request = []
+    app = SimpleNamespace(config={}, logger=logging.getLogger("test"), library_state={})
+    app.relation_reconciliation = SimpleNamespace(request=lambda: (
+        requests.append(True), reasons_at_request.append(app.library_state.get("relation_projection_rebuild_reason"))))
+    monkeypatch.setattr(state, "ensure_relation_projection_ready", lambda _config, **_kwargs: relations._projection_result(
+        {"artists": ["A"]}, {}, startup_rebuilt=False, reason="healthy", duration_ms=1))
+    monkeypatch.setattr(state, "PostgresLibraryBrowseRepository", lambda _config: SimpleNamespace(
+        queue_settings_projection_prewarm=lambda: None))
 
     monkeypatch.setattr(scoped, "relation_reconciliation_due", lambda _config: False)
-    assert state._request_relation_reconciliation(app, {"rebuild_reason": "healthy"}) is False
+    state.ensure_runtime_relation_projection_ready(app)
     assert requests == []
 
     monkeypatch.setattr(scoped, "relation_reconciliation_due", lambda _config: True)
-    assert state._request_relation_reconciliation(app, {"rebuild_reason": "healthy"}) is True
-    assert state._request_relation_reconciliation(app, {"rebuild_reason": "reconciliation_required"}) is True
-    assert requests == [True, True]
+    state.ensure_runtime_relation_projection_ready(app)
+    # The owner starts only after start-up wrote its state, so its own status (retrying, parked) is never
+    # overwritten by start-up.
+    assert requests == [True] and reasons_at_request == ["reconciliation_required"]
 
 
 def test_a_start_up_refusal_with_no_stored_rows_hands_the_replay_to_the_owner(monkeypatch):
@@ -110,3 +134,36 @@ def test_a_start_up_refusal_with_no_stored_rows_hands_the_replay_to_the_owner(mo
     assert requests == [True]
     assert app.library_state["relation_projection_rebuild_reason"] == "reconciliation_required"
     assert "before editing tags" in app.library_state["last_error"]
+
+
+def test_a_parked_owner_is_never_requested_again_in_this_process():
+    """No loop once parked: neither a later save's hand-over nor a readiness check runs it again."""
+    from music_app.services import relation_reconciliation
+
+    runs = []
+
+    def prepare(_config, **_kwargs):
+        runs.append(True)
+        raise relations.RelationInitializationRequired(
+            "Legacy publication differs from the frozen legacy source rebuild; journal retained.")
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://parked-owner"}
+    owner = RelationReconciliationOwner(config, reconciled=lambda: None, prepare=prepare,
+                                        logger=logging.getLogger("test"))
+    try:
+        assert owner.request() is True
+        owner._thread.join(5)
+        assert relation_reconciliation.request_relation_reconciliation(config) is False
+        assert owner.request() is False
+        assert runs == [True]
+    finally:
+        owner.stop()
+    # A restart builds a new owner, which may park again (once).
+    restarted = RelationReconciliationOwner(config, reconciled=lambda: None, prepare=prepare,
+                                            logger=logging.getLogger("test"))
+    try:
+        assert restarted.request() is True
+        restarted._thread.join(5)
+        assert runs == [True, True]
+    finally:
+        restarted.stop()

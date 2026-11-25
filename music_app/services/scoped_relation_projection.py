@@ -908,7 +908,10 @@ def _prepare_compatibility_in_transaction(connection, context, metadata, capture
     if not normalized or not _relation_views_equal(normalized['views'], current):
         raise RuntimeError('Cached source facts differ from current normalized relations; journal retained.')
     if not _relation_views_equal(captured_legacy_views, legacy):
-        raise RuntimeError('Legacy publication differs from the frozen legacy source rebuild; journal retained.')
+        # The pending writes changed the sources since the legacy publication: only the explicit initialization
+        # can prove a new contract, so the reconciliation owner parks this instead of retrying it.
+        from music_app.services.relation_projection_postgres import RelationInitializationRequired
+        raise RelationInitializationRequired('Legacy publication differs from the frozen legacy source rebuild; journal retained.')
     connection.execute('delete from library.local_relation_compatibility_entries where library_id=%s', (library_id,))
     _upsert_entries(connection, library_id, _view_entries(legacy), compatibility=True)
     from music_app.services import relation_projection_postgres as relations

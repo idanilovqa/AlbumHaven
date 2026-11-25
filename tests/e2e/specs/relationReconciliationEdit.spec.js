@@ -3,12 +3,14 @@ import { readGeneratedMp3TagSnapshots } from '../helpers/physicalTagHelpers.js';
 import { removeRelationCompatibilityEvidence } from '../helpers/postgresProjectionFixture.js';
 
 // FTC-TAGS-045: an edit made while the relation index waits for reconciliation is saved at once with the normal
-// message, shows in the editor, the files and the gallery, and the background reconciliation then settles the
-// relation index after a restart without a reload.
+// message and shows in the editor, the files and the gallery under its new artist. After a restart the
+// reconciliation owner parks the index for the explicit initialization, and saves keep working meanwhile.
+// The case owns its database and media copy, so the parked index stays with it.
 const FIXTURE_ARTIST = 'E2E Rarity Artist';
 const FIXTURE_ALBUM = 'Two Track Rarity Fixture';
 const FIXTURE_YEAR = '2026';
 const RECONCILED_ARTIST = 'E2E Reconciled Artist';
+const PARKED_EDIT_ARTIST = 'E2E Parked Edit Artist';
 const FIXTURE_TRACK_COUNT = 2;
 const ROOT_GALLERY_URL = '/?surface=albums';
 // Start-up readiness waits 5 s before its relation work; the reconciliation replay of one album then takes well
@@ -31,7 +33,7 @@ async function editAlbumArtist({ galleryActions, trackModalActions, tagEditorAct
   expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
 }
 
-test('FTC-TAGS-045 saves an edit while relations await reconciliation and regroups it after the replay', { tag: '@area:tag-edit' }, async ({
+test('FTC-TAGS-045 saves edits while relations await reconciliation and parks the replay for initialization', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   managedAppLifecycle,
@@ -77,20 +79,20 @@ test('FTC-TAGS-045 saves an edit while relations await reconciliation and regrou
   });
 
   let restarted = null;
-  await stepLogger.step('After a restart the reconciliation replay settles the relation index without a reload', async () => {
+  await stepLogger.step('After a restart the reconciliation parks for the explicit initialization', async () => {
     await page.goto('about:blank');
     await managedAppLifecycle.restart();
     restarted = await freshBrowserSession.create();
     await restarted.galleryActions.goto(ROOT_GALLERY_URL);
     await restarted.galleryActions.waitForGalleryReady();
-    const startedAt = Date.now();
+    // The pending edit changed the sources since the legacy publication: only the explicit initialization can
+    // prove the relation compatibility, so the owner parks once instead of retrying, and /status says so.
     await expect.poll(
       async () => (await restarted.galleryActions.readRelationProjectionReadiness()).rebuildReason,
       { timeout: RECONCILED_GROUPING_BOUND_MS },
-    ).toBe('healthy');
-    expect(Date.now() - startedAt).toBeLessThanOrEqual(RECONCILED_GROUPING_BOUND_MS);
+    ).toBe('needs_initialization');
     expect((await restarted.galleryActions.readRelationProjectionReadiness()).ready).toBe(true);
-    // The same page, with no reload, shows the album exactly once under the settled grouping, in place.
+    // Browsing is unaffected: the same page shows the album once under its new artist, in place.
     const scrollBefore = await restarted.galleryActions.readGalleryScrollState();
     await restarted.galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM);
     expect(await restarted.galleryActions.readAlbumIdentityCardCount({
@@ -103,10 +105,23 @@ test('FTC-TAGS-045 saves an edit while relations await reconciliation and regrou
     expect(Math.abs(scrollAfter.scrollTop - scrollBefore.scrollTop)).toBeLessThanOrEqual(2);
   });
 
-  await stepLogger.step('Restore the album artist so no other case sees this one', async () => {
-    await editAlbumArtist(restarted, RECONCILED_ARTIST, FIXTURE_ARTIST);
-    await restarted.trackModalActions.closeIfOpen();
-    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FIXTURE_ALBUM);
-    expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([FIXTURE_ARTIST]));
+  await stepLogger.step('A second save while parked persists and shows once under its new artist', async () => {
+    await editAlbumArtist(restarted, RECONCILED_ARTIST, PARKED_EDIT_ARTIST);
+    await restarted.trackModalActions.openTagEditor();
+    await restarted.tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
+    await restarted.tagEditorActions.selectAllTracks();
+    expect(await restarted.tagEditorActions.readEditableValues(['album_artist']))
+      .toEqual({ album_artist: PARKED_EDIT_ARTIST });
+    await restarted.tagEditorActions.close();
+    await restarted.trackModalActions.close();
+    expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([PARKED_EDIT_ARTIST]));
+    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(PARKED_EDIT_ARTIST, FIXTURE_ALBUM);
+    for (const [artist, count] of [[PARKED_EDIT_ARTIST, 1], [RECONCILED_ARTIST, 0], [FIXTURE_ARTIST, 0]]) {
+      expect(await restarted.galleryActions.readAlbumIdentityCardCount({
+        artist, album: FIXTURE_ALBUM, year: FIXTURE_YEAR,
+      })).toBe(count);
+    }
+    expect((await restarted.galleryActions.readRelationProjectionReadiness()).rebuildReason)
+      .toBe('needs_initialization');
   });
 });

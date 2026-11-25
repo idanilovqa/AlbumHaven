@@ -192,7 +192,7 @@ def build_non_album_album_groups(entries: list[dict[str, object]]) -> list[dict[
     for entry in entries:
         exception_type = normalize_exception_value(entry.get("exception_type"))
         album_name = repair_display_text(str(entry.get("album") or "")) or str(entry.get("album") or "")
-        if not exception_type and not current_membership_label(entry.get("local_album_membership_problem")) and has_meaningful_album_name(album_name) and not is_loose_track_album_value(album_name):
+        if not exception_type and not entry.get("local_album_membership_problem") and has_meaningful_album_name(album_name) and not is_loose_track_album_value(album_name):
             continue
         artist = _normalized_artist(entry)
         exception_label = exception_type or "Loose Tracks"
@@ -308,13 +308,15 @@ def build_non_album_track_list(
             root_paths,
         )
         is_direct_artist_file = len(rel_parts) == 2
+        # Every entry here has no album: any stored label keeps it listed, so a file never vanishes; the obsolete
+        # mixed-folder label is shown as no reason (album_local_membership.current_membership_label).
         membership_label = current_membership_label(entry.get("local_album_membership_problem"))
         if (
             has_meaningful_album_name(album_value)
             and not is_loose_track_album_value(album_value)
             and not exception_type
             and not is_direct_artist_file
-            and not membership_label
+            and not entry.get("local_album_membership_problem")
         ):
             continue
         year = _normalized_year(entry.get("year"))

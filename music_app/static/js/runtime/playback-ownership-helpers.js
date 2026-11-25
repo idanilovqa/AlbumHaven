@@ -511,6 +511,8 @@ async function playbackOwnershipTrack(track, previous = null) {
     }
     playbackRef = refs.tracks[0].playbackRef;
     previous = { referenceExpiresAt: refs.expiresAt };
+    // The saved player names this song by its resume token (player-saved-tokens.js).
+    if (typeof rememberPlaybackResumeToken === 'function') rememberPlaybackResumeToken(track.path, refs.tracks[0].resumeToken);
   }
   return { path: track.path, referenceExpiresAt: previous.referenceExpiresAt,
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };

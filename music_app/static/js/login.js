@@ -4,7 +4,7 @@
   // Signed out: what this device kept of the account goes, but not the songs kept for offline play:
   // the places Back would return to (return-place.js), the saved player, the app's queue, recent searches
   // and this tab's playback claim.
-  const ACCOUNT_LOCAL_KEYS = ["album-haven-return-places", "albumhaven.playerState.v1", "albumhaven.androidNativeQueue.v1"];
+  const ACCOUNT_LOCAL_KEYS = ["album-haven-return-places", "albumhaven.playerState.v1", "albumhaven.playerState.v2", "albumhaven.androidNativeQueue.v1", "albumhaven.androidNativeQueue.v2"];
   const ACCOUNT_SESSION_KEYS = ["albumhaven.playerTabState.v1", "albumhaven.recentSearches.v1",
     "albumhaven.playbackHandoff.v1", "albumhaven.playbackSameTab.v1"];
   for (const [storage, keys] of [["localStorage", ACCOUNT_LOCAL_KEYS], ["sessionStorage", ACCOUNT_SESSION_KEYS]]) {

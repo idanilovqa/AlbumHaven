@@ -452,9 +452,10 @@ test('the sign-in page takes what the device kept of the account, but not songs 
   };
   const { STORAGE_KEY } = require('../../../music_app/static/js/return-place.js');
 
+  // Also what versions that kept paths saved, on a device that signs out before loading the app again.
   assert.deepEqual(removed.local, [STORAGE_KEY,
-    named('core-state-and-helpers.js', 'PLAYER_STATE_STORAGE_KEY'),
-    named('android-bridge-client.js', 'ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY')]);
+    'albumhaven.playerState.v1', named('core-state-and-helpers.js', 'PLAYER_STATE_STORAGE_KEY'),
+    'albumhaven.androidNativeQueue.v1', named('android-bridge-client.js', 'ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY')]);
   assert.deepEqual(removed.session, [
     named('player-state-persistence-helpers.js', 'PLAYER_TAB_STATE_STORAGE_KEY'),
     named('bootstrap-gallery-event-handlers.js', 'RECENT_SEARCH_STORAGE_KEY'),

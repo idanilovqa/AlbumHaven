@@ -75,6 +75,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/utility-loaders-and-cover-lookup.js',
   'js/runtime/cover-lookup-modal-and-drawer.js',
   'js/runtime/tag-editor-and-optimistic-updates.js',
+  'js/runtime/player-saved-tokens.js',
   'js/runtime/player-state-persistence-helpers.js',
   'js/runtime/player-listen-session-helpers.js',
   'js/runtime/gallery-cover-preview-cache.js',

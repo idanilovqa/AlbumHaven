@@ -70,6 +70,11 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
     fetch: async (url, init) => {
       fetches.push({ url, init, body: JSON.parse(init.body) });
       const body = fetches.at(-1).body;
+      // A kept queue's tokens (savedTrack) name the fixture tracks back by their index.
+      if (url === '/playback/refs/resume') {
+        return { ok: true, json: async () => ({ protocol: 1, tracks: body.tracks.map(track => ({
+          clientKey: track.clientKey, playbackRef: 'opaque-ref', path: tracks[Number(track.resumeToken.split('-').pop())]?.path ?? null })) }) };
+      }
       const issued = refs ? refs(body) : {
         protocol: 1,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
@@ -88,7 +93,7 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
   vm.createContext(context);
   loadCapabilityUi(context);
   // The listen helpers name the track identity a queue item's listen key is derived from.
-  const files = ['player-streaming-engine.js', 'android-bridge-client.js', 'playback-engine.js', 'player-listen-session-helpers.js',
+  const files = ['player-saved-tokens.js', 'player-streaming-engine.js', 'android-bridge-client.js', 'playback-engine.js', 'player-listen-session-helpers.js',
     ...(listen ? ['playback-ownership-helpers.js'] : [])];
   for (const file of files) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
@@ -479,25 +484,31 @@ test('a loaded queue is remembered for the next document of the origin', async (
   const { api, context } = createHarness();
   const { storage } = withPlayer(context);
   await api.start({ ...tracks[1], year: '1999' });
-  const record = JSON.parse(storage.get('albumhaven.androidNativeQueue.v1'));
+  const record = JSON.parse(storage.get('albumhaven.androidNativeQueue.v2'));
   // The next document's queue keeps the album year the media card shows.
   assert.equal(record.tracks[1].year, '1999');
   assert.equal(record.clientId, handshakePayload.playback.clientId);
   assert.equal(record.queueRevision, 1);
-  assert.deepEqual(record.tracks.map(track => track.path), tracks.map(track => track.path));
+  // Each track is kept by its resume token: no path or stream address is on the device.
+  assert.deepEqual(record.tracks.map(track => track.resumeToken).sort(), tracks.map((_track, index) => `opaque-resume-${index}`));
+  assert.ok(record.tracks.every(track => !('path' in track) && !('src' in track)));
 });
+
+// The queue as the device keeps it: each fixture track by a token naming its index.
+const savedTrack = ({ path: _path, src: _src, ...shown }, index) => ({ ...shown, resumeToken: `kept-resume-${index}` });
 
 test('a reloaded document re-attaches its UI to the queue Android kept playing', async () => {
   const live = { state: 'playing', queueRevision: 7, currentIndex: 1, positionMs: 61500, durationMs: 180000 };
   const { api, bridge, fetches, context } = createHarness({ respond: liveHandshake(live) });
   const { storage, player } = withPlayer(context);
-  storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({
-    clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks,
+  storage.set('albumhaven.androidNativeQueue.v2', JSON.stringify({
+    clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks: tracks.map(savedTrack),
   }));
 
   assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), true);
   assert.equal(commands(bridge, 'playback.loadQueue').length, 0);
-  assert.equal(fetches.length, 0);
+  // The one request asks the server for the kept tokens' paths.
+  assert.deepEqual(fetches.map(fetched => fetched.url), ['/playback/refs/resume']);
   assert.deepEqual(player.tracks.map(([trackPath]) => trackPath), [tracks[1].path]);
   // Android's listen of the playing item continues; the document starts none.
   assert.deepEqual(player.sessions, []);
@@ -522,14 +533,14 @@ test('a queue another client or revision applied is never adopted', async () => 
       respond: liveHandshake({ state: 'playing', queueRevision: 7, currentIndex: 0, positionMs: 1000 }),
     });
     const { storage, player } = withPlayer(context);
-    storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({ ...record, tracks }));
+    storage.set('albumhaven.androidNativeQueue.v2', JSON.stringify({ ...record, tracks }));
     assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), false);
     assert.equal(player.tracks.length, 0);
     assert.equal(bridge.sent.filter(message => message.name !== 'bridge.handshake').length, 0);
   }
   const { context } = createHarness({ respond: liveHandshake({ state: 'idle', queueRevision: 7, currentIndex: 0 }) });
   const { storage } = withPlayer(context);
-  storage.set('albumhaven.androidNativeQueue.v1', JSON.stringify({
+  storage.set('albumhaven.androidNativeQueue.v2', JSON.stringify({
     clientId: handshakePayload.playback.clientId, queueRevision: 7, tracks,
   }));
   assert.equal(await vm.runInContext('attachAndroidNativePlayback({})', context), false);

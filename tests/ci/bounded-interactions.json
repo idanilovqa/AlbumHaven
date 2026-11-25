@@ -15068,6 +15068,32 @@
       ],
       "workClass": "background-batch",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-saved-tokens.js#savedPlayerTokens",
+      "action": "The saved player names songs by resume token: one batch for songs saved before their token arrived, and one exchange of the saved tokens for paths when the page restores the player",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-saved-tokens.js#playerTracksFromDevice:request:fetch",
+        "js:music_app/static/js/runtime/player-saved-tokens.js#requestPlaybackResumeTokens:request:fetch",
+        "js:music_app/static/js/runtime/player-state-persistence-helpers.js#restorePlayerState:event:pageshow"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-saved-tokens.js",
+        "music_app/static/js/runtime/player-state-persistence-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/refs",
+          "/playback/refs/resume"
+        ],
+        "forbidden": []
+      }
     }
   ]
 }

@@ -227,8 +227,12 @@ function persistPlayerState(force = false, options = {}) {
       state.player.lastPersistedSnapshot = '';
       return;
     }
+    // The device keeps resume tokens, never paths (player-saved-tokens.js); until the current song's
+    // token arrives the last saved player stays.
+    const record = typeof playerStateForDevice === 'function' ? playerStateForDevice(payload) : payload;
+    if (!record) return;
     const account = pagePlaybackAccount();
-    snapshot = JSON.stringify(account ? { ...payload, account } : payload);
+    snapshot = JSON.stringify(account ? { ...record, account } : record);
     if (!force && snapshot === state.player.lastPersistedSnapshot) return;
     setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
     if (options.allowAfterUnload && typeof setSessionStorageItem === 'function') {
@@ -283,6 +287,37 @@ function restorePlayerState() {
     if (!resumesThisTab) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
     return;
   }
+  if (typeof playerStateFromDevice !== 'function') {
+    restoreSavedPlayer(parsed, resumesThisTab, null);
+    return;
+  }
+  // Registered before the paths are asked for: a playing tab goes on at the page's pageshow, which
+  // may come before the server answers.
+  const pageShown = typeof window !== 'undefined' && typeof window.addEventListener === 'function'
+    ? new Promise(resolve => window.addEventListener('pageshow', resolve, { once: true }))
+    : null;
+  const restoreFromDevice = () => playerStateFromDevice(parsed).then((inMemory) => {
+    // A record that names paths, another key's tokens, or a song no longer in the library.
+    if (!inMemory) {
+      removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+      return;
+    }
+    // A song chosen meanwhile wins over the saved one.
+    if (state.player.current) return;
+    restoreSavedPlayer(inMemory, resumesThisTab, pageShown);
+  }, () => {
+    // No answer: the saved player comes back once the server does.
+    if (typeof onServerReachableAgain !== 'function') return;
+    const stop = onServerReachableAgain(() => {
+      stop();
+      void restoreFromDevice();
+    });
+  });
+  void restoreFromDevice();
+}
+
+// [pageShown] resolves at the page's pageshow when the player was restored after it was registered.
+function restoreSavedPlayer(parsed, resumesThisTab, pageShown) {
   const track = parsed?.track;
   if (!track || !track.src) return;
   const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
@@ -362,7 +397,9 @@ function restorePlayerState() {
     if (typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
     const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
       ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
-    const restoredRolePromise = !savedPaused
+    const restoredRolePromise = !savedPaused && pageShown
+      ? pageShown.then(startRestoredRole)
+      : !savedPaused
       && typeof window !== 'undefined'
       && typeof window.addEventListener === 'function'
       ? new Promise((resolve, reject) => {

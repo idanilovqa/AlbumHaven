@@ -6307,7 +6307,7 @@ const state = {
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';
-const PLAYER_STATE_STORAGE_KEY = 'albumhaven.playerState.v1';
+const PLAYER_STATE_STORAGE_KEY = 'albumhaven.playerState.v2';
 
 
 function getDetectedBrowserTimeZone() {
@@ -14740,7 +14740,7 @@ const ANDROID_NATIVE_REFERENCE_CACHE_LIMIT = 512;
 const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
 // The shell keeps playback in a media session that outlives the document (playback.media_session.v1).
 const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
-const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
+const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v2';
 // The shell persists each item's path-free resume token, so its media card can resume playback
 // after the session, the process or the device restarted (playback.resumption.v1).
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
@@ -14880,6 +14880,8 @@ async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
   const expiresAtMs = Date.parse(result.expiresAt);
   missing.forEach(({ index, path }, position) => {
     refs[index] = issuedRefs[position];
+    // The kept queue and player name songs by resume token (player-saved-tokens.js).
+    if (typeof rememberPlaybackResumeToken === 'function') rememberPlaybackResumeToken(path, issuedRefs[position].resumeToken);
     if (!(expiresAtMs > Date.now())) return;
     const cache = androidNativePlayback.refs;
     cache.delete(path);
@@ -15030,19 +15032,27 @@ function androidNativeStoredTrack(track) {
 
 // The queue this document handed Android, kept beside the persisted player state so the next
 // document of this origin can name the tracks Android is still playing.
+// Each track is kept by its resume token, never its path; a queue with a track whose token is
+// unknown is not kept, and no older queue stays in its place.
 function saveAndroidNativeAttachment(revision, items) {
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  const tracks = items.map(androidNativeStoredTrack).map(savedPlayerTrack);
+  if (!tracks.every(Boolean)) {
+    if (typeof removeLocalStorageItem === 'function') removeLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY);
+    return;
+  }
   const account = typeof pageAccountKey === 'function' ? pageAccountKey() : '';
   setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
     ...(account ? { account } : {}),
     clientId: getAndroidNativePlaybackClientId(),
     queueRevision: revision,
-    tracks: items.map(androidNativeStoredTrack),
+    tracks,
   }));
 }
 
-// Only the exact native client and revision that queue was applied as can be adopted.
-function readAndroidNativeAttachment(live) {
+// Only the exact native client and revision that queue was applied as can be adopted; its tracks'
+// paths come from the server (player-saved-tokens.js).
+async function readAndroidNativeAttachment(live) {
   if (typeof getLocalStorageItem !== 'function') return null;
   let record = null;
   try {
@@ -15054,9 +15064,9 @@ function readAndroidNativeAttachment(live) {
   if ((record?.account || '') !== (typeof pageAccountKey === 'function' ? pageAccountKey() : '')) return null;
   const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
   if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
-  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
-      || !tracks.every(track => track?.path && track.src)) return null;
-  return tracks;
+  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]) return null;
+  const inMemory = await playerTracksFromDevice(tracks).catch(() => null);
+  return inMemory?.every(Boolean) ? inMemory : null;
 }
 
 // Null outside the APK, so ordinary browsers restore exactly as before.
@@ -15067,13 +15077,14 @@ function attachAndroidNativePlayback(persistedState = null) {
 
 // A reloaded document of the same origin takes over the queue Android kept playing instead of
 // restarting it: the same tracks, item, position and revision. Android's listen continues.
-function adoptAndroidNativePlayback(persistedState) {
+async function adoptAndroidNativePlayback(persistedState) {
   const native = androidNativePlayback;
   const live = androidBridge.info?.playback;
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || native.revision !== 0
       || !ANDROID_NATIVE_ATTACHABLE_STATES.has(live?.state)) return false;
-  const tracks = readAndroidNativeAttachment(live);
-  if (!tracks) return false;
+  const tracks = await readAndroidNativeAttachment(live);
+  // A queue this document started while the paths were asked for wins.
+  if (!tracks || native.revision !== 0) return false;
   const track = tracks[live.currentIndex];
   const playing = live.state !== 'paused';
   native.revision = live.queueRevision;
@@ -16191,6 +16202,8 @@ async function playbackOwnershipTrack(track, previous = null) {
     }
     playbackRef = refs.tracks[0].playbackRef;
     previous = { referenceExpiresAt: refs.expiresAt };
+    // The saved player names this song by its resume token (player-saved-tokens.js).
+    if (typeof rememberPlaybackResumeToken === 'function') rememberPlaybackResumeToken(track.path, refs.tracks[0].resumeToken);
   }
   return { path: track.path, referenceExpiresAt: previous.referenceExpiresAt,
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
@@ -42741,6 +42754,131 @@ async function confirmProblemSuggestions() {
 
 // END js/runtime/tag-editor-and-optimistic-updates.js
 
+// BEGIN js/runtime/player-saved-tokens.js
+
+// The saved player never keeps a music file's path on the device. The player names songs by path in
+// memory; what is written to storage names each song by its resume token instead (signed by the
+// server, account-bound, path-free) beside what the player shows, and the paths come back from the
+// server when the page restores it (`/playback/refs/resume` with `includePath`).
+//
+// Tokens come from `/playback/refs` answers. A song saved before its token arrived is asked for in
+// one batch (`prepare: false`, so the server reads no audio for it), and the player is saved again
+// once the tokens are in; until then the last saved player stays as it was.
+const playbackResumeTokens = new Map();
+// The saved player and app queue of earlier versions named paths: they are not kept.
+try {
+  for (const key of ['albumhaven.playerState.v1', 'albumhaven.androidNativeQueue.v1']) window.localStorage?.removeItem(key);
+} catch (_error) {
+  // Storage is switched off.
+}
+const playbackResumeTokenFailures = new Set();
+let playbackResumeTokenRequest = null;
+
+function rememberPlaybackResumeToken(path, token) {
+  const key = String(path || '');
+  if (key && typeof token === 'string' && token) playbackResumeTokens.set(key, token);
+}
+
+function requestPlaybackResumeTokens(paths) {
+  const missing = [...new Set(paths.map(value => String(value || '')))]
+    .filter(path => path && !playbackResumeTokens.has(path) && !playbackResumeTokenFailures.has(path))
+    .slice(0, 100);
+  if (!missing.length || playbackResumeTokenRequest || typeof fetch !== 'function') return;
+  playbackResumeTokenRequest = fetch('/playback/refs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ protocol: 1, prepare: false,
+      tracks: missing.map((path, index) => ({ clientKey: String(index), path })) }),
+  })
+    .then(response => (response.ok ? response.json() : null))
+    .catch(() => null)
+    .then((answer) => {
+      for (const issued of Array.isArray(answer?.tracks) ? answer.tracks : []) {
+        rememberPlaybackResumeToken(missing[Number(issued?.clientKey)], issued?.resumeToken);
+      }
+      // A batch the server refused (a song no longer in the library) is not asked for again.
+      for (const path of missing) if (!playbackResumeTokens.has(path)) playbackResumeTokenFailures.add(path);
+    })
+    .finally(() => {
+      playbackResumeTokenRequest = null;
+      if (typeof persistPlayerState === 'function') persistPlayerState();
+    });
+}
+
+function savedPlayerTrack(track) {
+  const resumeToken = playbackResumeTokens.get(String(track?.path || ''));
+  if (!resumeToken) return null;
+  const { src: _src, path: _path, ...shown } = track;
+  return { ...shown, resumeToken };
+}
+
+// Saved songs as the player keeps them in memory, each with its path from the server; null in place
+// of a song no longer in the library. Null when any song names a path (saved before this rule) or
+// the server refuses the tokens; a network failure rejects, so the caller can ask again later.
+async function playerTracksFromDevice(saved) {
+  if (!saved.every(track => typeof track?.resumeToken === 'string' && track.resumeToken && !('path' in track))) return null;
+  const response = await fetch('/playback/refs/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ protocol: 1, includePath: true,
+      tracks: saved.map((track, index) => ({ clientKey: String(index), resumeToken: track.resumeToken })) }),
+  });
+  if (!response.ok) return null;
+  const answer = await response.json();
+  const paths = new Map((answer?.tracks || []).map(item => [Number(item?.clientKey), item?.path]));
+  return saved.map((track, index) => {
+    const path = paths.get(index);
+    if (typeof path !== 'string' || !path) return null;
+    rememberPlaybackResumeToken(path, track.resumeToken);
+    const { resumeToken: _token, ...shown } = track;
+    return { ...shown, src: `/track?path=${encodeURIComponent(path)}`, path };
+  });
+}
+
+// [payload] (buildPersistedPlayerState) as the device keeps it, or null while the current song's
+// token is still on its way.
+function playerStateForDevice(payload) {
+  const queue = payload.playbackQueue;
+  requestPlaybackResumeTokens([payload.track?.path, ...(queue?.tracks || []).map(track => track?.path)]);
+  const track = savedPlayerTrack(payload.track);
+  if (!track) return null;
+  let playbackQueue = null;
+  if (queue) {
+    const current = queue.tracks[queue.currentIndex];
+    const kept = queue.tracks.map(item => ({ item, saved: savedPlayerTrack(item) })).filter(entry => entry.saved);
+    const currentIndex = kept.findIndex(entry => entry.item === current);
+    const albumRef = String(queue.albumRef || '');
+    if (currentIndex >= 0) {
+      playbackQueue = {
+        tracks: kept.map(entry => entry.saved),
+        currentIndex,
+        // An album named by its folder or files is not kept; the restored song finds its album again.
+        ...(albumRef && !/[\\/]/.test(albumRef)
+          && !(typeof isPathLikeAlbumKey === 'function' && isPathLikeAlbumKey(albumRef)) ? { albumRef } : {}),
+      };
+    }
+  }
+  return { ...payload, track, playbackQueue };
+}
+
+// A saved player as the player keeps it in memory: each song's path from the server, songs no longer
+// in the library left out. Null when the current song is gone or the server cannot be asked; a record
+// that names paths (saved before this rule) is never used.
+async function playerStateFromDevice(record) {
+  const queueTracks = Array.isArray(record?.playbackQueue?.tracks) ? record.playbackQueue.tracks : [];
+  const all = await playerTracksFromDevice([record?.track, ...queueTracks]);
+  const track = all?.[0];
+  if (!track) return null;
+  const restored = all.slice(1);
+  const currentIndex = restored.slice(0, record.playbackQueue?.currentIndex + 1).filter(Boolean).length - 1;
+  const tracks = restored.filter(Boolean);
+  const playbackQueue = tracks[currentIndex]?.path === track.path
+    ? { ...record.playbackQueue, tracks, currentIndex } : null;
+  return { ...record, track, playbackQueue };
+}
+
+// END js/runtime/player-saved-tokens.js
+
 // BEGIN js/runtime/player-state-persistence-helpers.js
 
 function buildPersistedPlaybackQueue(currentTrackPath) {
@@ -42972,8 +43110,12 @@ function persistPlayerState(force = false, options = {}) {
       state.player.lastPersistedSnapshot = '';
       return;
     }
+    // The device keeps resume tokens, never paths (player-saved-tokens.js); until the current song's
+    // token arrives the last saved player stays.
+    const record = typeof playerStateForDevice === 'function' ? playerStateForDevice(payload) : payload;
+    if (!record) return;
     const account = pagePlaybackAccount();
-    snapshot = JSON.stringify(account ? { ...payload, account } : payload);
+    snapshot = JSON.stringify(account ? { ...record, account } : record);
     if (!force && snapshot === state.player.lastPersistedSnapshot) return;
     setLocalStorageItem(PLAYER_STATE_STORAGE_KEY, snapshot);
     if (options.allowAfterUnload && typeof setSessionStorageItem === 'function') {
@@ -43028,6 +43170,37 @@ function restorePlayerState() {
     if (!resumesThisTab) removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
     return;
   }
+  if (typeof playerStateFromDevice !== 'function') {
+    restoreSavedPlayer(parsed, resumesThisTab, null);
+    return;
+  }
+  // Registered before the paths are asked for: a playing tab goes on at the page's pageshow, which
+  // may come before the server answers.
+  const pageShown = typeof window !== 'undefined' && typeof window.addEventListener === 'function'
+    ? new Promise(resolve => window.addEventListener('pageshow', resolve, { once: true }))
+    : null;
+  const restoreFromDevice = () => playerStateFromDevice(parsed).then((inMemory) => {
+    // A record that names paths, another key's tokens, or a song no longer in the library.
+    if (!inMemory) {
+      removeLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
+      return;
+    }
+    // A song chosen meanwhile wins over the saved one.
+    if (state.player.current) return;
+    restoreSavedPlayer(inMemory, resumesThisTab, pageShown);
+  }, () => {
+    // No answer: the saved player comes back once the server does.
+    if (typeof onServerReachableAgain !== 'function') return;
+    const stop = onServerReachableAgain(() => {
+      stop();
+      void restoreFromDevice();
+    });
+  });
+  void restoreFromDevice();
+}
+
+// [pageShown] resolves at the page's pageshow when the player was restored after it was registered.
+function restoreSavedPlayer(parsed, resumesThisTab, pageShown) {
   const track = parsed?.track;
   if (!track || !track.src) return;
   const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
@@ -43107,7 +43280,9 @@ function restorePlayerState() {
     if (typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
     const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
       ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
-    const restoredRolePromise = !savedPaused
+    const restoredRolePromise = !savedPaused && pageShown
+      ? pageShown.then(startRestoredRole)
+      : !savedPaused
       && typeof window !== 'undefined'
       && typeof window.addEventListener === 'function'
       ? new Promise((resolve, reject) => {

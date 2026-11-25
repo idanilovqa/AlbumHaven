@@ -280,7 +280,7 @@ const ANDROID_NATIVE_REFERENCE_CACHE_LIMIT = 512;
 const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
 // The shell keeps playback in a media session that outlives the document (playback.media_session.v1).
 const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
-const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
+const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v2';
 // The shell persists each item's path-free resume token, so its media card can resume playback
 // after the session, the process or the device restarted (playback.resumption.v1).
 const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
@@ -420,6 +420,8 @@ async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
   const expiresAtMs = Date.parse(result.expiresAt);
   missing.forEach(({ index, path }, position) => {
     refs[index] = issuedRefs[position];
+    // The kept queue and player name songs by resume token (player-saved-tokens.js).
+    if (typeof rememberPlaybackResumeToken === 'function') rememberPlaybackResumeToken(path, issuedRefs[position].resumeToken);
     if (!(expiresAtMs > Date.now())) return;
     const cache = androidNativePlayback.refs;
     cache.delete(path);
@@ -570,19 +572,27 @@ function androidNativeStoredTrack(track) {
 
 // The queue this document handed Android, kept beside the persisted player state so the next
 // document of this origin can name the tracks Android is still playing.
+// Each track is kept by its resume token, never its path; a queue with a track whose token is
+// unknown is not kept, and no older queue stays in its place.
 function saveAndroidNativeAttachment(revision, items) {
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  const tracks = items.map(androidNativeStoredTrack).map(savedPlayerTrack);
+  if (!tracks.every(Boolean)) {
+    if (typeof removeLocalStorageItem === 'function') removeLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY);
+    return;
+  }
   const account = typeof pageAccountKey === 'function' ? pageAccountKey() : '';
   setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
     ...(account ? { account } : {}),
     clientId: getAndroidNativePlaybackClientId(),
     queueRevision: revision,
-    tracks: items.map(androidNativeStoredTrack),
+    tracks,
   }));
 }
 
-// Only the exact native client and revision that queue was applied as can be adopted.
-function readAndroidNativeAttachment(live) {
+// Only the exact native client and revision that queue was applied as can be adopted; its tracks'
+// paths come from the server (player-saved-tokens.js).
+async function readAndroidNativeAttachment(live) {
   if (typeof getLocalStorageItem !== 'function') return null;
   let record = null;
   try {
@@ -594,9 +604,9 @@ function readAndroidNativeAttachment(live) {
   if ((record?.account || '') !== (typeof pageAccountKey === 'function' ? pageAccountKey() : '')) return null;
   const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
   if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
-  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
-      || !tracks.every(track => track?.path && track.src)) return null;
-  return tracks;
+  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]) return null;
+  const inMemory = await playerTracksFromDevice(tracks).catch(() => null);
+  return inMemory?.every(Boolean) ? inMemory : null;
 }
 
 // Null outside the APK, so ordinary browsers restore exactly as before.
@@ -607,13 +617,14 @@ function attachAndroidNativePlayback(persistedState = null) {
 
 // A reloaded document of the same origin takes over the queue Android kept playing instead of
 // restarting it: the same tracks, item, position and revision. Android's listen continues.
-function adoptAndroidNativePlayback(persistedState) {
+async function adoptAndroidNativePlayback(persistedState) {
   const native = androidNativePlayback;
   const live = androidBridge.info?.playback;
   if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || native.revision !== 0
       || !ANDROID_NATIVE_ATTACHABLE_STATES.has(live?.state)) return false;
-  const tracks = readAndroidNativeAttachment(live);
-  if (!tracks) return false;
+  const tracks = await readAndroidNativeAttachment(live);
+  // A queue this document started while the paths were asked for wins.
+  if (!tracks || native.revision !== 0) return false;
   const track = tracks[live.currentIndex];
   const playing = live.state !== 'paused';
   native.revision = live.queueRevision;

@@ -117,8 +117,10 @@ async def playback_refs(request: Request) -> JSONResponse:
         result = await reference_call(request, lambda service: service.issue_batch(
             request.state.current_actor, tracks, on_media=media.append))
     # The queue's tracks are what plays next: their MP3 maps are read now, in the background, so a
-    # start or a jump to any of them streams at once instead of scanning the file first.
-    _prepare_streams(media)
+    # start or a jump to any of them streams at once instead of scanning the file first. A browser
+    # asking only for resume tokens to keep (`prepare: false`) reads nothing.
+    if payload.get("prepare") is not False:
+        _prepare_streams(media)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -141,11 +143,11 @@ def _prepare_streams(paths: list[Path]) -> None:
 
 @router.post("/playback/refs/resume")
 async def resume_playback_refs(request: Request) -> JSONResponse:
-    """Fresh references for the resume tokens a native player persisted instead of references."""
+    """Fresh references for the resume tokens a player persisted instead of references or paths."""
     async with timed_playback_step("refs resume"):
         payload = await playback_payload(request)
         result = await reference_call(request, lambda service: service.exchange_resume_tokens(
-            request.state.current_actor, payload.get("tracks")))
+            request.state.current_actor, payload.get("tracks"), include_path=payload.get("includePath") is True))
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 

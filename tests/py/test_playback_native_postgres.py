@@ -2227,6 +2227,11 @@ def test_resume_exchange_skips_a_removed_file_and_rechecks_membership(playback_i
     ])["tracks"]
     assert exchanged[0] == {"clientKey": "removed", "playbackRef": None}
     assert str(service.resolve(fixture.actor, exchanged[1]["playbackRef"])) == fixture.paths[0]
+    # A browser keeps tokens, never paths, and learns each library path back from the exchange.
+    with_paths = service.exchange_resume_tokens(fixture.actor, [
+        {"clientKey": "removed", "resumeToken": tokens[0]}, {"clientKey": "kept", "resumeToken": tokens[1]},
+    ], include_path=True)["tracks"]
+    assert [item["path"] for item in with_paths] == [None, fixture.paths[0]]
     with pytest.raises(ValueError) as missing:
         service.resolve_artwork(fixture.actor, tokens[0])
     assert missing.value.status_code == 404

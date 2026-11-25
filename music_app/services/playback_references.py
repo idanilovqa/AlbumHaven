@@ -131,11 +131,13 @@ class PlaybackReferenceService:
     def _reference(self, library_id, file_id, expires):
         return self._sign(_REFERENCE_DOMAIN, [1, self._version, library_id, file_id, int(expires.timestamp())])
 
-    def exchange_resume_tokens(self, actor, tracks):
-        """Fresh references for tracks a native player persisted by resume token.
+    def exchange_resume_tokens(self, actor, tracks, *, include_path=False):
+        """Fresh references for tracks a player persisted by resume token.
 
         A token this key did not sign for this account and library refuses the whole batch (403);
         a track whose file is no longer current answers a null reference, so the others can resume.
+        [include_path] also answers each track's library path, which a browser names tracks by in
+        memory but never keeps on the device.
         """
         if not isinstance(tracks, list) or not 1 <= len(tracks) <= 100:
             raise PlaybackContractError()
@@ -152,11 +154,14 @@ class PlaybackReferenceService:
             _, library_id = require_playback_membership(connection, actor)
             for track, file_id in zip(tracks, file_ids):
                 try:
-                    self._file(connection, library_id, file_id=file_id)
+                    row = self._file(connection, library_id, file_id=file_id)
                     reference = self._reference(library_id, file_id, expires)
                 except PlaybackContractError:
-                    reference = None
-                results.append({"clientKey": track["clientKey"], "playbackRef": reference})
+                    row, reference = None, None
+                result = {"clientKey": track["clientKey"], "playbackRef": reference}
+                if include_path:
+                    result["path"] = row["private_path"] if row is not None else None
+                results.append(result)
         return {"protocol": 1, "expiresAt": expires.isoformat(), "tracks": results}
 
     def resolve_artwork(self, actor, resume_token):

@@ -246,6 +246,29 @@ test('native events drive the existing player facade callbacks and stale revisio
   assert.equal(api.snapshot().ended, true);
 });
 
+// Your words: the tracklist and player still showed the first song while the app played on. A page
+// that missed an advance follows the item Android reports instead of waiting for the next one.
+test('a page that missed an advance shows the item Android plays', async () => {
+  const { api, bridge, context } = createHarness();
+  const { player } = withPlayer(context);
+  await api.start(tracks[0]);
+  // The player shows the song it started (setCurrentPlayerTrack runs beside the engine's start).
+  context.state.player.current = tracks[0];
+  bridge.event('playback.state', state(1, 'playing', 1000));
+
+  bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 2), reason: 'advance' });
+  assert.deepEqual(player.tracks.map(([trackPath]) => trackPath).slice(-1), [tracks[2].path]);
+  bridge.event('playback.state', state(1, 'playing', 5000, 1));
+  assert.deepEqual(player.tracks.map(([trackPath]) => trackPath).slice(-1), [tracks[1].path], 'a state naming another item moves the page too');
+  assert.equal(api.snapshot().currentTime, 5);
+
+  // A song the page selected itself, before Android plays it, stays shown.
+  const shown = player.tracks.length;
+  context.state.player.current = tracks[0];
+  bridge.event('playback.state', state(1, 'playing', 6000, 2));
+  assert.equal(player.tracks.length, shown);
+});
+
 test('transport commands name the applied revision and continuity reuses the native queue', async () => {
   const { api, bridge } = createHarness();
   await api.start(tracks[0]);
@@ -465,7 +488,7 @@ function withPlayer(context) {
   Object.assign(context, {
     getLocalStorageItem: key => storage.get(key) || '',
     setLocalStorageItem: (key, value) => { storage.set(key, value); return true; },
-    setCurrentPlayerTrack: (track, options) => player.tracks.push([track.path, options]),
+    setCurrentPlayerTrack: (track, options) => { player.tracks.push([track.path, options]); context.state.player.current = track; },
     beginStreamingPlayerListenSession: (track, startSeconds) => player.sessions.push([track.path, startSeconds]),
     pausePlayerPlaybackForHandoff: snapshot => { player.pauses.push(snapshot); return context.pauseStreamingPlayback(); },
     togglePlayerPlayback: options => player.toggles.push(options),

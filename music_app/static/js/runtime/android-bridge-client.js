@@ -945,9 +945,23 @@ function androidNativeReportedSeconds(payload) {
   return hold.seconds;
 }
 
+// Android moved to another item of the applied queue without the page hearing it (an advance
+// reported while the page could not read it): the page selects the item Android plays. A song the
+// page selected itself (pressed, or a queue Android has not applied yet) is left alone.
+function catchUpAndroidNativeItem(payload) {
+  const native = androidNativePlayback;
+  const shown = String(state.player.current?.path || '');
+  if (!Number.isInteger(payload.currentIndex) || payload.currentIndex === native.index
+      || payload.queueRevision !== native.appliedRevision || native.revision !== native.appliedRevision
+      || !shown || shown !== String(native.items[native.index]?.path || '')) return false;
+  followAndroidNativeSystemStep(payload);
+  return true;
+}
+
 function handleAndroidNativeState(payload) {
   const native = androidNativePlayback;
   const snapshot = native.snapshot;
+  catchUpAndroidNativeItem(payload);
   if (payload.initiator === 'system') followAndroidNativeSystemState(payload);
   const trackPath = String(native.items[native.index]?.path || '');
   const nativeState = payload.state;
@@ -1011,8 +1025,13 @@ function handleAndroidNativeCurrentItem(payload) {
     followAndroidNativeSystemStep(payload);
     return;
   }
-  // The web's own loads name items it already selected; only a natural advance is new.
-  if (payload.reason !== 'advance' || payload.currentIndex !== native.index + 1) return;
+  // The web's own loads name items it already selected; only a natural advance is new. An advance
+  // past the next item means the page missed one: it catches up to the item Android plays.
+  if (payload.reason !== 'advance') return;
+  if (payload.currentIndex !== native.index + 1) {
+    catchUpAndroidNativeItem(payload);
+    return;
+  }
   const outgoing = native.items[native.index];
   const incoming = native.items[payload.currentIndex];
   if (!outgoing || !incoming) return;

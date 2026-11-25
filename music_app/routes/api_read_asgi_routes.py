@@ -860,6 +860,7 @@ def _unsupported_postgres_selected_artist_browse_response(request: Request) -> J
 def _is_postgres_album_search_request(request: Request) -> bool:
     allowed_search_params = {
         "q",
+        "keep_artist",
         "payload_tier",
         "surface",
         "all_artists",

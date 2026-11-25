@@ -2842,6 +2842,7 @@ class PostgresLibraryBrowseRepository:
         grouping_subphase_started_at = perf_counter()
         selected_artist = "" if requested_all_artists else _top_search_selected_artist(
             artist_groups, query=query, canonical_to_aliases=canonical_to_aliases,
+            kept_artist=str(params.get("keep_artist") or "").strip(),
         )
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
@@ -10076,8 +10077,13 @@ def _top_search_selected_artist(
     *,
     query: str,
     canonical_to_aliases: Mapping[str, object] | None = None,
+    kept_artist: str = "",
 ) -> str:
     """The artist a search auto-selects.
+
+    A refresh of a search names the artist it had selected (``kept_artist``):
+    while that artist still matches, the search keeps it, so a tag save that
+    changes which owner ranks first does not move the search to another artist.
 
     A query naming an artist keeps the ranked best match. A title-only query
     ("Divine Comedy") names nobody, so every group ties and the alphabetical
@@ -10091,6 +10097,11 @@ def _top_search_selected_artist(
     artists = [artist for artist in artists if artist]
     if not artists:
         return ""
+    kept_key = _artist_display_dedupe_key(kept_artist) if str(kept_artist or "").strip() else ""
+    if kept_key:
+        for artist in artists:
+            if _artist_display_dedupe_key(artist) == kept_key:
+                return artist
     aliases_by_artist = canonical_to_aliases or {}
 
     def aliases(artist: str) -> list[object]:

@@ -4014,6 +4014,11 @@ for (const scenario of [
     const refreshed = context.parseBrowserUrlState(refreshCalls[0].url);
     assert.equal(refreshed.all_artists_active, false);
     assert.equal(refreshed.selected_artist, scenario.reselects ? '' : 'Various Artists');
+    // The same search names the artist it had picked, so an edit that reorders owners keeps it.
+    assert.equal(
+      new URL(refreshCalls[0].url, 'http://localhost').searchParams.get('keep_artist'),
+      scenario.reselects ? 'Various Artists' : null,
+    );
     assert.equal(refreshed.query, scenario.changedQuery ? 'Another query' : 'Collection');
     assert.deepEqual(Array.from(refreshed.visible_library_categories), ['main_library']);
     assert.equal(refreshCalls[0].push, false);

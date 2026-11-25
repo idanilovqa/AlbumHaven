@@ -5,12 +5,15 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 const source = fs.readFileSync(path.join(root, 'music_app/static/js/runtime/virtual-artist-grid.js'), 'utf8');
 const gridClass = source.slice(source.indexOf('class VirtualArtistGrid'), source.indexOf('const virtualGrid ='));
+// The grid groups an artist's releases by the gallery's own release types.
+const galleryMainState = path.join(root, 'music_app/static/js/runtime/gallery-main-state.js');
 
 for (const width of [390, 1280]) {
   test(`presentation changes preserve the visible album during pending scrolling at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await page.setContent('<div id="albums-scroll" style="height:300px;width:320px;overflow:auto;overflow-anchor:none"><div id="albums-spacer-top"></div><div id="artist-groups"></div><div id="albums-spacer-bottom"></div></div>');
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/non-album-and-player.css') });
+    await page.addScriptTag({ path: galleryMainState });
     await page.addScriptTag({ content: `${source.slice(0, source.indexOf('const virtualGrid ='))}; window.Grid = VirtualArtistGrid;` });
     const result = await page.evaluate(async () => {
       // Component fixture: real grid rendering and browser geometry, not an app E2E.
@@ -68,6 +71,7 @@ test(`deep presentation changes retain the visible release through every layout 
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css/gallery-main.css') });
     await page.addScriptTag({ path: path.join(root, 'music_app/static/js/runtime/gallery-main-components.js') });
   }
+  await page.addScriptTag({ path: galleryMainState });
   await page.addScriptTag({ content: `${source.slice(0, source.indexOf('const virtualGrid ='))}; window.Grid = VirtualArtistGrid;` });
   const result = await page.evaluate(async (showArtistSectionHeaders) => {
     // Isolated layout regression; the full-app test remains the acceptance gate.
@@ -142,6 +146,7 @@ test(`deep presentation changes retain the visible release through every layout 
 test('virtual row spacers retain row positions and section extent in browser layout', async ({ page }) => {
   await page.setContent('<main id="fixture"></main>');
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/non-album-and-player.css') });
+  await page.addScriptTag({ path: galleryMainState });
   await page.addScriptTag({ content: `${gridClass}; window.Grid = VirtualArtistGrid;` });
   const measurements = await page.evaluate(() => {
     // Isolated component fixture: mount production row rendering with fixed-height album content.
@@ -179,6 +184,7 @@ test('virtual row spacers retain row positions and section extent in browser lay
 test('virtualizing a Featured On divider retains the following album position', async ({ page }) => {
   await page.setContent('<main id="fixture"></main>');
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/non-album-and-player.css') });
+  await page.addScriptTag({ path: galleryMainState });
   await page.addScriptTag({ content: `${gridClass}; window.Grid = VirtualArtistGrid;` });
   const measurements = await page.evaluate(() => {
     // Component proof for the real divider markup/CSS, separate from full-app acceptance.
@@ -220,6 +226,7 @@ for (const bufferSections of [0, 1]) {
  test(`prepending unmeasured groups preserves the visible album before every paint with ${bufferSections} buffered sections`, async ({ page }) => {
   await page.setContent('<div id="albums-scroll" style="height:300px;width:320px;overflow:auto;overflow-anchor:none"><div id="albums-spacer-top"></div><div id="artist-groups"></div><div id="albums-spacer-bottom"></div></div>');
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/non-album-and-player.css') });
+  await page.addScriptTag({ path: galleryMainState });
   await page.addScriptTag({ content: `${source.slice(0, source.indexOf('const virtualGrid ='))}; window.Grid = VirtualArtistGrid;` });
   const result = await page.evaluate(async bufferSections => {
     window.state = { view: {}, gallery: { mainState: { view: 'cards' } } };

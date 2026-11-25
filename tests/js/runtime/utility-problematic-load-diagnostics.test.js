@@ -407,6 +407,55 @@ test('only an opened Problematic Files tab reconciles with the complete list; a 
   assert.equal(requested.length, count, 'a reconciled list is not reloaded again on reopen');
 });
 
+test('an open tab refresh replaces its complete list in one commit, never with a bounded page first', async () => {
+  const overlay = { hidden: false };
+  const requested = [];
+  const shownDuringRequest = [];
+  const album = (index) => ({
+    key: `album-${String(index).padStart(3, '0')}`, name: `Album ${index}`, detail_loaded: false, problem_reasons: ['Missing year'],
+  });
+  const listed = Array.from({ length: 120 }, (_value, index) => album(index));
+  const artistItem = { key: 'artist::x', name: 'X', detail_loaded: false, problem_reasons: ['Artist alias'] };
+  const { context } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    async fetch(url) {
+      requested.push(String(url));
+      shownDuringRequest.push({
+        files: context.state.utility.problematicFiles.length,
+        artists: context.state.utility.problematicArtistItems.length,
+        complete: context.state.utility.problematicFilesComplete,
+      });
+      const bounded = String(url).endsWith('?limit=50');
+      const items = listed.slice(1);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return bounded
+            ? { complete: false, has_more: true, items: items.slice(0, 50) }
+            : { complete: true, items: [...items, artistItem] };
+        },
+      };
+    },
+  });
+  Object.assign(context.state.utility, {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFilesComplete: true,
+    problematicFiles: listed,
+    problematicArtistItems: [artistItem],
+    selectedProblemFilters: ['Missing year'],
+  });
+
+  await context.loadProblematicFiles(true, { render: false });
+
+  assert.deepEqual(requested, ['/utilities/problematic-files'], 'one complete read, no bounded page');
+  assert.deepEqual(shownDuringRequest, [{ files: 120, artists: 1, complete: true }], 'the shown list stays whole until the commit');
+  assert.equal(context.state.utility.problematicFiles.length, 120);
+  assert.equal(context.state.utility.problematicArtistItems.length, 0, 'the complete list carries the Artist rows');
+  assert.equal(context.state.utility.problematicFilesComplete, true);
+});
+
 test('opening the account menu prefetches Problematic Files and Settings reuses it', async () => {
   const overlay = { hidden: true };
   const requested = [];

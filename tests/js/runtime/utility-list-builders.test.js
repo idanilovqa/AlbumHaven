@@ -4499,6 +4499,28 @@ test('watchSaveTask owns Problematic Files mutation state until its matching ter
   }
 });
 
+test('a completed save that answered with its Problematic Files entry reads no whole list afterwards', async () => {
+  for (const problematicEntryApplied of [true, false]) {
+    const context = loadHelpers();
+    const reads = [];
+    context.state.utility = { activeTab: 'problematic-files', loaded: true, loading: false, problematicFiles: [] };
+    context.getUtilityModalElements = () => ({ list: { scrollTop: 0 } });
+    context.loadProblematicFiles = async (force) => { reads.push(force); return []; };
+    context.waitForBrowserTimeout = async () => {};
+    context.showRepairAlert = () => {};
+    context.settleTagEditViewMutation = () => {};
+    context.renderView = () => {};
+
+    await context.watchSaveTask('saved-task', {
+      problematicMutationOriginKey: '',
+      problematicEntryApplied,
+      terminalPayload: { ok: true, task_id: 'saved-task', status: 'completed', requires_view_refresh: false, updated_albums: [] },
+    });
+
+    assert.deepEqual(reads, problematicEntryApplied ? [] : [true]);
+  }
+});
+
 test('Problematic Files mutation follows the retained source album when a structural edit changes its key', async () => {
   const context = loadHelpers();
   const retainedTrackPath = 'C:/Music/Rarity/02 - Remain Editable.mp3';
@@ -4542,6 +4564,57 @@ test('Problematic Files mutation follows the retained source album when a struct
     retainedAlbum.key,
     'a surviving track must keep the edited logical album selected before neighbor fallback',
   );
+});
+
+test('a save entry settles a filtered Problematic Files mutation at once: the album leaves and the row above is selected', async () => {
+  const context = loadHelpers();
+  const album = (key, name, reasons) => ({
+    key,
+    name,
+    album_artist: 'Artist',
+    detail_loaded: true,
+    problem_reasons: reasons,
+    tracks: [{ path: `C:/Music/${name}/01 Track.flac` }],
+  });
+  const above = album('album-a', 'Album A', ['Missing year']);
+  const hidden = album('album-b', 'Album B', ['Missing cover']);
+  const edited = album('album-c', 'Album C', ['Missing year', 'Missing cover']);
+  const below = album('album-d', 'Album D', ['Missing year']);
+  const loadedDetails = [];
+  context.state.utility = {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFiles: [above, hidden, edited, below],
+    selectedProblemFilters: ['Missing year'],
+    selectedProblematicKey: edited.key,
+  };
+  context.getUtilityModalElements = () => ({ list: { scrollTop: 0, scrollHeight: 0, clientHeight: 0 } });
+  context.renderUtilityModalContent = () => {};
+  context.loadProblematicAlbumDetail = async (key) => { loadedDetails.push(key); };
+
+  context.claimProblematicSaveTaskMutation('year-saved', edited);
+  // The year is saved: the album keeps only its cover problem, under a key with the new year.
+  const savedEntry = { ...album('album-c-1999', 'Album C', ['Missing cover']), tracks: edited.tracks };
+  await context.settleProblematicSaveTaskMutation('year-saved', { reconcileSelection: true, problematicAlbum: savedEntry });
+
+  assert.equal(context.state.utility.problematicMutation, null);
+  assert.deepEqual(
+    Array.from(context.state.utility.problematicFiles, (item) => item.key),
+    ['album-a', 'album-b', 'album-c-1999', 'album-d'],
+  );
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), (item) => item.key), ['album-a', 'album-d']);
+  assert.equal(context.state.utility.selectedProblematicKey, 'album-a', 'the nearest row above that is still shown');
+  assert.deepEqual(loadedDetails, []);
+
+  context.state.utility.selectedProblematicKey = below.key;
+  context.claimProblematicSaveTaskMutation('year-saved-again', below);
+  await context.settleProblematicSaveTaskMutation('year-saved-again', { reconcileSelection: true, problematicAlbum: null });
+  assert.deepEqual(
+    Array.from(context.state.utility.problematicFiles, (item) => item.key),
+    ['album-a', 'album-b', 'album-c-1999'],
+    'an album with no problem left leaves the list',
+  );
+  assert.equal(context.state.utility.selectedProblematicKey, 'album-a');
 });
 
 test('pending Problematic Files mutation preserves explicit sidebar navigation and its newer scroll position', async () => {

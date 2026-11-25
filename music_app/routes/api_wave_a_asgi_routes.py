@@ -955,6 +955,36 @@ def _selected_postgres_media_write_response(value: ResponseValue) -> ResponseVal
     return response
 
 
+async def _with_problematic_files_origin_album(
+    request: Request,
+    payload: Mapping[str, object],
+    value: ResponseValue,
+) -> ResponseValue:
+    """A completed save started in Problematic Files answers with that album's own entry (``None``
+    once it has no problem left), read by its files, so the list changes at the acknowledgement
+    instead of after a read of the whole list."""
+    updates = payload.get("updates")
+    if (
+        isinstance(value, tuple)
+        or payload.get("problematic_files_origin") is not True
+        or value.get("save_task_status") != "completed"
+        or not isinstance(updates, Mapping)
+        or not updates
+    ):
+        return value
+    response = dict(value)
+    try:
+        response["updated_problematic_album"] = await run_in_threadpool(
+            PostgresLibraryBrowseRepository(_app_config(request)).build_problematic_album_payload_by_track_paths,
+            {str(path) for path in updates},
+        )
+    except Exception:
+        # The save stands; without its entry the client keeps the list until it reconciles.
+        _asgi_logger(request).warning("Problematic Files entry of a saved album could not be read.", exc_info=True)
+        response.pop("updated_problematic_album", None)
+    return response
+
+
 class _EditTagsReservation:
     """Transfer both owners through the existing finalizer release boundary."""
 
@@ -2166,7 +2196,9 @@ async def _run_edit_tags_payload(
         total_ms=(perf_counter() - request_started) * 1000.0,
     )
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
-        result = _selected_postgres_media_write_response(result)
+        result = await _with_problematic_files_origin_album(
+            request, payload, _selected_postgres_media_write_response(result),
+        )
     if isinstance(payload.get("proposal_ids"), list):
         result = _with_problem_suggestion_outcomes(result, payload["proposal_ids"])
     return result

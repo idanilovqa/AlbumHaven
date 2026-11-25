@@ -1248,6 +1248,9 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
           detailRender: mutations.some(mutation => mutation.type === 'childList' && detail === mutation.target),
           detailRenderCount: mutations.filter(mutation => mutation.type === 'childList' && detail === mutation.target).length,
           listScrollTop: Number(document.querySelector(selectors.sidebarListSelector)?.scrollTop || 0),
+          listKeys: Array.from(list?.querySelectorAll(selectors.listItemSelector) || [])
+            .map(row => String(row.getAttribute('data-problematic-album-key') || '')),
+          mutationOverlayVisible: Boolean(document.querySelector(selectors.mutationOverlaySelector)),
         });
       };
       const targets = [
@@ -1263,7 +1266,12 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
       sidebarListSelector: this.utilityProblematicFilesTab.sidebarListSelector,
       listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
+      mutationOverlaySelector: this.utilityProblematicFilesTab.mutationOverlaySelector,
     });
+  }
+
+  async isMutationOverlayShown() {
+    return (await this.utilityProblematicFilesTab.mutationOverlay.count()) > 0;
   }
 
   async finishNavigationRenderObservation() {

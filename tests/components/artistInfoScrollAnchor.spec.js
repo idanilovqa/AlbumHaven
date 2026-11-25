@@ -37,7 +37,8 @@ async function mountGallery(page, { width = 1440, height = 900, playerHeight = 6
     :root { --appearance-card: #171717; --appearance-panel-background: #171717;
       --appearance-line: #526173; --appearance-selected-accent: #55c7ff; }
     body { margin: 0; background: #090909; }
-    #shell-main-surface { position: fixed; inset: 0 0 ${playerHeight}px 0; display: flex; flex-direction: column; }
+    /* The full layout leaves the app bar's 60px above the gallery, as the shell does. */
+    #shell-main-surface { position: fixed; inset: ${fullPanel ? 60 : 0}px 0 ${playerHeight}px 0; display: flex; flex-direction: column; }
     .gallery-bar { flex: 0 0 auto; }
     #albums-scroll { flex: 1 1 auto; overflow: auto; overflow-anchor: none; padding-bottom: var(--artist-info-reveal-space, 0px); }
     .global-player { position: fixed; left: 0; right: 0; bottom: 0; height: ${playerHeight}px; background: #102430; z-index: 200; }
@@ -228,4 +229,20 @@ test('at 1200x500 the opened panel fits above the player once its reveal scroll 
   }));
   expect(geometry.panelBottom, 'panel bottom stays above the player').toBeLessThanOrEqual(geometry.playerTop + 1);
   expect(await readPanel(page)).toMatchObject({ open: true, anchorArtist: ARTISTS[1], joined: true });
+});
+
+test('at 1200x500 the panel the header "i" takes over still fits above the player', async ({ page }) => {
+  await scrollGallery(page, 40);
+  await openFromDivider(page, ARTISTS[1]);
+  // The artist's label passes under the header, which then owns the panel; more scrolling keeps it there.
+  const second = await sectionTop(page, 1);
+  for (const top of [second + 60, second + 120]) await scrollGallery(page, top);
+  await page.evaluate(() => new Promise(resolve => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(resolve)), 100)));
+  const panel = await readPanel(page);
+  expect(panel).toMatchObject({ open: true, header: ARTISTS[1], anchorInHeader: true, joined: true });
+  const geometry = await page.evaluate(() => ({
+    panelBottom: document.querySelector('[data-artist-info-overlay]').getBoundingClientRect().bottom,
+    playerTop: document.querySelector('[data-shell-slot="bottom_player"]').getBoundingClientRect().top,
+  }));
+  expect(geometry.panelBottom, 'panel bottom stays above the player').toBeLessThanOrEqual(geometry.playerTop + 1);
 });

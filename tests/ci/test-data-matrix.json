@@ -13793,5 +13793,20 @@
       "at 1200x500 the opened panel fits above the player once its reveal scroll settles"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoScrollAnchor.spec.js",
+    "case": "at 1200x500 the panel the header \"i\" takes over still fits above the player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "at 1200x500 the panel the header \"i\" takes over still fits above the player"
+    ],
+    "ownerApproval": "approved"
   }
 ]

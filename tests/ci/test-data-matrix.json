@@ -129,6 +129,33 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-038 a CD name search opens Album Details scrolled to that CD",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-long-disc-subtitle-search"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-reconciliation"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "disc-subtitle-search-match",
+      "album-details-matched-disc-scrolled-into-view",
+      "matched-disc-heading-unobscured"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-long-disc-subtitle-search",
+      "filesystemCopy": "media/cases/watcher-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/gallerySourceSwitchLoading.functional.spec.js",
     "case": "FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, never an empty Library",
     "profile": "functional-core",
@@ -4809,6 +4836,34 @@
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:watcher-reconciliation",
+      "filesystemCopy": "media/cases/watcher-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-LIBROOTS-021 Re-scan answers in the Album Details alert for each outcome",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "watcher:missing-album-rescan-deleted-unreachable-restored"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-reconciliation",
+      "junction:unplugged-stand-in-drive"
+    ],
+    "expectedContracts": [
+      "missing-album-rescan-answer-in-alert",
+      "missing-album-rescan-answer-persists",
+      "missing-album-rescan-found-success-alert",
+      "missing-album-rescan-no-toast-when-shown"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-missing-album-rescan",
       "filesystemCopy": "media/cases/watcher-reconciliation"
     },
     "ownerApproval": "approved"
@@ -12149,6 +12204,36 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "loose-tracks-keep-track-and-length-in-view-and-show-file-path-only-with-room-in-a-760px-table"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "a CD the search matched scrolls into view below the album header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a-cd-the-search-matched-scrolls-into-view-below-the-album-header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "a CD the search matched scrolls into view below a pinned page header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a-cd-the-search-matched-scrolls-into-view-below-a-pinned-page-header"
     ],
     "ownerApproval": "approved"
   },

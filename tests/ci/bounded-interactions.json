@@ -6921,6 +6921,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/track-modal-lightbox-helpers.js#revealTrackModalSearchDisc",
+      "action": "scheduleBrowserAnimationFrame timers installed by revealTrackModalSearchDisc",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/track-modal-lightbox-helpers.js#revealTrackModalSearchDisc:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/trigger-anchor.js#<top-level>",
       "action": "album-haven-appearance-change/album-haven:surface-opening/resize/scroll listeners installed by <top-level>",
       "entrypoints": [

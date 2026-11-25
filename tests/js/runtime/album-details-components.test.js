@@ -159,6 +159,25 @@ test('missing Album Details uses OnPageAlert and renders no track table', () => 
   assert.doesNotMatch(html, /album-track-table/);
 });
 
+// Owner (2026-11-24): a Re-scan's answer stays in the Album Details alert instead of a vanishing toast.
+test('a Re-scan message replaces the stored reason in the missing alert; a found album gets a success alert', () => {
+  const context = loadComponents();
+  const notFound = 'Album must have been deleted or moved out of the library. '
+    + 'Add it back to one of the library paths to see it in the app';
+  const html = context.buildMissingAlbumDetailsHtml({ canRemove: true, albumKey: 'a', reason: 'deleted', rescanMessage: notFound });
+  assert.match(html, /data-on-page-alert="error"/);
+  assert.match(html, /class="on-page-alert on-page-alert--error missing-album-rescan-result"/);
+  assert.match(html, new RegExp(`<p class="on-page-alert__message">${notFound}</p>`));
+  assert.doesNotMatch(html, /deleted from disk|library entry is still saved/);
+  assert.match(html, /data-rescan-missing-album="1"/);
+  assert.doesNotMatch(context.buildMissingAlbumDetailsHtml({ canRemove: true, albumKey: 'a' }), /missing-album-rescan-result/);
+
+  const found = context.buildMissingAlbumRescanFoundHtml('Album found and restored.');
+  assert.match(found, /class="on-page-alert on-page-alert--success missing-album-rescan-result" role="status"/);
+  assert.match(found, /<p class="on-page-alert__message">Album found and restored\.<\/p>/);
+  assert.doesNotMatch(found, /data-rescan-missing-album|on-page-alert__title/);
+});
+
 test('missing Album Details states why the album is missing', () => {
   const context = loadComponents();
   const deleted = context.buildMissingAlbumDetailsHtml({ canRemove: true, albumKey: 'a', reason: 'deleted' });

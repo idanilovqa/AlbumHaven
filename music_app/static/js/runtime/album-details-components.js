@@ -184,16 +184,24 @@ function buildMissingAlbumDetailsHtml(config = {}) {
       : { 'data-close-track-modal': '1' },
   });
   const reason = MISSING_ALBUM_REASON_TEXT[config.reason] || 'This album cannot be found under the current libraries.';
-  const message = config.canRemove
+  // A Re-scan's answer replaces the stored reason until the alert is closed.
+  const rescanMessage = String(config.rescanMessage || '').trim();
+  const message = rescanMessage || (config.canRemove
     ? `${reason} Its library entry is still saved.`
-    : `${reason} Ask an owner or administrator to remove it.`;
+    : `${reason} Ask an owner or administrator to remove it.`);
   return buildOnPageAlertHtml({
     severity: 'error',
     title: 'Album details unavailable',
     message,
+    className: rescanMessage ? 'missing-album-rescan-result' : '',
     // Remove from library is the right-most action (owner, 2026-11-25).
     actionsHtml: `${rescanButton}${keepButton}${removeButton}`,
   });
+}
+
+// A Re-scan that found the album says so where the missing alert stood.
+function buildMissingAlbumRescanFoundHtml(message) {
+  return buildOnPageAlertHtml({ severity: 'success', message, role: 'status', className: 'missing-album-rescan-result' });
 }
 
 /* Inline album metadata and the pinned Gallery Bar never own visible identity

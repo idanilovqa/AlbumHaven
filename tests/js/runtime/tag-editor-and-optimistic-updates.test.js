@@ -5845,6 +5845,55 @@ test('a Re-scan answered at once keeps its messages; a failed one says it could 
   assert.deepEqual(failed.toasts, [['Unable to re-scan this album.', 'error']]);
 });
 
+// Owner (2026-11-24): Re-scan from a missing alert answers in that alert, for every outcome; a toast only
+// carries an answer that no alert shows (Album Details closed during the search).
+for (const [answer, message, tone] of [
+  [{ status: 'missing', reason: 'deleted' }, RESCAN_NOT_FOUND, 'info'],
+  [{ status: 'missing', reason: 'unreachable' }, 'Still missing: its drive or network share cannot be reached.', 'info'],
+  [{ status: 'restored' }, 'Album found and restored.', 'success'],
+]) {
+  test(`a Re-scan from the missing alert shows its search and then "${message}" in the alert`, async () => {
+    const page = loadMissingAlbumRescan([[200, { ok: true, status: 'searching' }], [200, { ok: true, ...answer }]]);
+    const alertMessage = { textContent: 'The files of this album were deleted from disk. Its library entry is still saved.' };
+    page.button.closest = selector => (selector === '.on-page-alert'
+      ? { querySelector: inner => (inner === '.on-page-alert__message' ? alertMessage : null) } : null);
+    const seenDuringSearch = [];
+    page.context.scheduleBrowserTimeout = (callback) => {
+      seenDuringSearch.push(alertMessage.textContent, page.context.getMissingAlbumRescanResult('a')?.message);
+      Promise.resolve().then(callback);
+    };
+    let rendered = [];
+    page.context.document = { querySelectorAll: selector => (selector === '.missing-album-rescan-result' ? rendered : []) };
+    page.context.refreshMissingAlbumView = async () => {
+      const result = page.context.getMissingAlbumRescanResult('a');
+      rendered = result ? [{ checkVisibility: () => true, result: [result.message, result.tone] }] : [];
+    };
+
+    await page.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, page.button);
+
+    assert.deepEqual(seenDuringSearch, [RESCAN_SEARCHING, RESCAN_SEARCHING]);
+    assert.deepEqual(rendered.map(node => node.result), [[message, tone]], 'the refreshed alert carries the answer');
+    assert.deepEqual(page.toasts, [], 'no toast while an alert shows the answer');
+    assert.equal(page.context.getMissingAlbumRescanResult('other'), null);
+    page.context.clearMissingAlbumRescanResult();
+    assert.equal(page.context.getMissingAlbumRescanResult('a'), null);
+  });
+}
+
+test('a Re-scan answer no alert shows falls back to a toast; a failure shows in the alert', async () => {
+  const closed = loadMissingAlbumRescan([[200, { ok: true, status: 'missing', reason: 'deleted' }]]);
+  closed.context.document = { querySelectorAll: () => [] };
+  await closed.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, closed.button);
+  assert.deepEqual(closed.toasts, [[RESCAN_NOT_FOUND, 'info']]);
+
+  const failed = loadMissingAlbumRescan([[500, { ok: false }]]);
+  const alertMessage = { textContent: '' };
+  failed.button.closest = () => ({ querySelector: () => alertMessage });
+  await failed.context.rescanMissingAlbum({ key: 'a', inventory_status: 'missing' }, failed.button);
+  assert.equal(alertMessage.textContent, 'Unable to re-scan this album.');
+  assert.deepEqual(failed.toasts, []);
+});
+
 // Owner (2026-11-23): a save whose files are written is saved. A "finishing" answer keeps the edit on screen and
 // hands it to the pending-edit store, so a reload or another tab still shows it until the library holds it.
 test('a save answered "finishing" keeps the edit and hands it to the pending-edit store', async () => {

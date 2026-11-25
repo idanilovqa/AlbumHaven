@@ -447,7 +447,12 @@ function buildDetectedProblemsHtml(album) {
           ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
-      ${buildMissingAlbumDetailsHtml({ canRemove, albumKey: album.key, reason: album.missing_reason })}
+      ${buildMissingAlbumDetailsHtml({
+        canRemove,
+        albumKey: album.key,
+        reason: album.missing_reason,
+        rescanMessage: typeof getMissingAlbumRescanResult === 'function' ? getMissingAlbumRescanResult(album.key)?.message : '',
+      })}
     `;
   }
   const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));

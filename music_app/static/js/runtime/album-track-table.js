@@ -251,6 +251,8 @@ function buildAlbumTrackTableHtml(config = {}) {
       mobile: 'preserve',
     });
     const summaryHtml = perDiscLengths ? discSummaryHtml(group, groupIndex) : '';
+    // A CD whose name the search matched; Album Details opens scrolled to it.
+    const searchMatchAttribute = group?.discMatchesSearch && showLabel ? ' data-disc-search-match="true"' : '';
     const mainSummarySectionHtml = groupIndex === lastMainIndex && mainSummaryHtml
       ? `<section class="album-track-table__disc">${mainSummaryHtml}</section>` : '';
     if (collapsibleGroups && (showLabel || group?.loadingRows)) {
@@ -260,7 +262,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       const headingContent = group?.loadingRows
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
         : `<span class="album-track-table__disc-title">${escapeHtml(label)}</span>${count ? `<span class="album-track-table__disc-count">${escapeHtml(count)}</span>` : ''}${length ? `<span class="album-track-table__disc-length">${escapeHtml(length)}</span>` : ''}`;
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>${mainSummarySectionHtml}`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible"${searchMatchAttribute} open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>${mainSummarySectionHtml}`;
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -269,7 +271,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     const heading = ratingHtml
       ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
       : headingHtml;
-    return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
+    return `<section class="album-track-table__disc"${searchMatchAttribute}>${heading}${table}${summaryHtml}</section>${mainSummarySectionHtml}`;
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
   return `<div class="album-track-table"${showPath ? ' data-track-path-column' : ''}${hasProblemColumn ? ' data-track-problem-column' : ''}${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}" data-density="${density}"><div class="album-track-table__frame">${tableSections}${finalSummaryHtml}</div></div>`;
@@ -309,6 +311,36 @@ function syncAlbumTrackTablePlayback(root, { trackPath = '', playing = false, cu
       if (duration.textContent !== text) duration.textContent = text;
     }
   });
+}
+
+function findAlbumTrackTableScroller(node) {
+  for (let candidate = node?.parentElement; candidate; candidate = candidate.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(candidate).overflowY) && candidate.scrollHeight > candidate.clientHeight) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+// Brings a disc into view: when its heading or first search match is out of view, the heading moves to the
+// top of the visible track area, below anything pinned over it inside the scroller.
+function revealAlbumTrackTableDisc(disc) {
+  const heading = disc.querySelector('.album-track-table__disc-heading') || disc;
+  const scroller = findAlbumTrackTableScroller(disc);
+  if (!disc.isConnected || !scroller) return;
+  const view = scroller.getBoundingClientRect();
+  const headingBox = heading.getBoundingClientRect();
+  const firstMatch = disc.querySelector('[data-track-search-match="true"]') || heading;
+  if (headingBox.top >= view.top && firstMatch.getBoundingClientRect().bottom <= view.bottom
+    && disc.contains(document.elementFromPoint(headingBox.left + 1, headingBox.top + 1))) return;
+  // Whole pixels, rounded so the heading is never clipped at the top edge.
+  scroller.scrollTop += Math.floor(headingBox.top - view.top);
+  // A header pinned inside the scroller (the small-screen album page) still covers the top: clear it.
+  const top = heading.getBoundingClientRect();
+  const cover = document.elementFromPoint(top.left + 1, top.top + 1);
+  if (cover && !disc.contains(cover) && scroller.contains(cover)) {
+    scroller.scrollTop -= Math.ceil(cover.getBoundingClientRect().bottom - top.top);
+  }
 }
 
 function triggerAlbumTrackPlayActivation(button) {

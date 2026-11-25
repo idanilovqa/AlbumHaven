@@ -246,3 +246,27 @@ test('at 1200x500 the panel the header "i" takes over still fits above the playe
   }));
   expect(geometry.panelBottom, 'panel bottom stays above the player').toBeLessThanOrEqual(geometry.playerTop + 1);
 });
+
+test('the header-owned panel closes once its artist\'s albums have left the gallery, while the next label is still partly visible', async ({ page }) => {
+  await scrollGallery(page, await sectionTop(page, 1) - 200);
+  await expect.poll(async () => (await readPanel(page)).header).toBe(ARTISTS[0]);
+  await page.locator('[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]').click();
+  await expect.poll(async () => (await readPanel(page)).anchorInHeader).toBe(true);
+  // The next artist's label straddles the top edge: its upper half is hidden, so the
+  // header still names the earlier artist (approved label rule), whose albums are all gone.
+  const labelTop = await page.evaluate(artist => {
+    const scroll = document.getElementById('albums-scroll');
+    const label = scroll.querySelector(`[data-scroll-artist="${CSS.escape(artist)}"] .artist-name`);
+    return label.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
+  }, ARTISTS[1]);
+  await scrollGallery(page, Math.round(labelTop) + 6);
+  const state = await page.evaluate(artist => {
+    const scroll = document.getElementById('albums-scroll');
+    const section = scroll.querySelector(`[data-scroll-artist="${CSS.escape(artist)}"]`).closest('.artist-section');
+    return { previousBottom: section.getBoundingClientRect().bottom, viewportTop: scroll.getBoundingClientRect().top };
+  }, ARTISTS[0]);
+  expect(state.previousBottom, 'the earlier artist has no albums left in view').toBeLessThanOrEqual(state.viewportTop);
+  const panel = await readPanel(page);
+  expect(panel.header).toBe(ARTISTS[0]);
+  expect(panel.open, 'the panel closes with its artist').toBe(false);
+});

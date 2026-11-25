@@ -55,6 +55,10 @@ function noteServerReachable() {
   if (!serverReachability.unreachable) return;
   serverReachability.unreachable = false;
   tellAppCopyReachability(false);
+  // Scripts outside the runtime (settings sync, client-device-preferences.js) retry on it.
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('album-haven:server-reachable'));
+  }
   clearTimeout(serverReachability.timer);
   serverReachability.timer = 0;
   const recovery = { copyServed: serverReachability.copyServed };

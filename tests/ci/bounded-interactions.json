@@ -931,8 +931,9 @@
     },
     {
       "id": "js:client-device-preferences.js#createStore",
-      "action": "online/pagehide listeners installed by createStore",
+      "action": "online, server-reachable and pagehide listeners installed by createStore",
       "entrypoints": [
+        "js:music_app/static/js/client-device-preferences.js#createStore:event:album-haven:server-reachable",
         "js:music_app/static/js/client-device-preferences.js#createStore:event:online",
         "js:music_app/static/js/client-device-preferences.js#createStore:event:pagehide"
       ],

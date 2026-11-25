@@ -7,7 +7,8 @@ function harness() {
   let closes = 0;
   let active = { surface: { contains: target => target === inside },
     anchor: { contains: target => target === anchor }, isBackdrop: target => target === background, dismiss() { closes++; active = null; } };
-  const handlers = create(() => active);
+  let resolves = 0;
+  const handlers = create(() => { resolves += 1; return active; });
   function send(type, target = background, extra = {}) {
     const event = { target, pointerId: 1, isPrimary: true, button: 0, clientX: 12, clientY: 12,
       detail: 1, prevented: false, stopped: false,
@@ -16,7 +17,7 @@ function harness() {
     handlers[type](event);
     return event;
   }
-  return { handlers, send, inside, anchor, background, closes: () => closes,
+  return { handlers, send, inside, anchor, background, closes: () => closes, resolves: () => resolves,
     setActive: value => { active = value && { isBackdrop: target => target === background, ...value }; } };
 }
 
@@ -39,6 +40,35 @@ test('inside actions and the opener retain normal activation', () => {
     for (const type of ['pointerdown', 'pointerup', 'click']) assert.equal(h.send(type, target).stopped, false);
   }
   assert.equal(h.closes(), 0);
+});
+
+// sandbox5 r28 (2026-11-21): resolving the open surface walks every surface's stacking and forces a
+// layout, about 150 ms of a song press at 4x CPU. A press inside the surface resolves it once, at its
+// start, never again on its click, and still activates normally and dismisses nothing.
+test('a press inside the open surface resolves the surface once and its click activates without dismissing', () => {
+  const h = harness();
+  for (const target of [h.inside, h.anchor]) {
+    const before = h.resolves();
+    for (const type of ['pointerdown', 'pointerup', 'click']) assert.equal(h.send(type, target).stopped, false, type);
+    assert.equal(h.resolves() - before, 1, 'one resolve per press, at pointerdown');
+  }
+  assert.equal(h.closes(), 0);
+  // Outside, a tap still dismisses.
+  h.send('pointerdown'); h.send('pointerup'); h.send('click');
+  assert.equal(h.closes(), 1);
+});
+
+test('a press inside a surface that opened a menu at pointerdown still treats the menu as foreground', () => {
+  const h = harness();
+  const menuItem = {};
+  let menuCloses = 0;
+  h.send('pointerdown', h.inside);
+  // The press opened a menu; its click lands on the menu's own item.
+  h.setActive({ surface: { contains: target => target === menuItem }, dismiss() { menuCloses += 1; } });
+  assert.equal(h.send('click', h.inside).stopped, false);
+  assert.equal(menuCloses, 0, 'the click that opened it never dismisses it');
+  h.send('pointerdown', h.background); h.send('pointerup', h.background); h.send('click', h.background);
+  assert.equal(menuCloses, 1, 'an outside tap then dismisses the menu');
 });
 
 test('dragging from inside to outside never dismisses or activates background', () => {

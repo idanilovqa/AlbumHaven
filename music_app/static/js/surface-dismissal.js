@@ -45,9 +45,15 @@
         }
         const started = gesture;
         gesture = null;
-        if (event.detail !== 0 && started && !started.outside
-            && !inside(started.active, event.target)) {
-          consume(event); return;
+        if (event.detail !== 0 && started && !started.outside) {
+          if (!inside(started.active, event.target)) {
+            consume(event); return;
+          }
+          // A press that began and ended inside the open surface activates its own content and can
+          // dismiss nothing, so the surface is not resolved again: resolving walks every open
+          // surface's stacking and forces a layout, about 150 ms of a song press at 4x CPU
+          // (sandbox5 r28, 2026-11-21).
+          if (!refocusPending) return;
         }
         const active = resolve();
         if (refocusPending) {

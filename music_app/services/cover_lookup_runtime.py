@@ -686,9 +686,11 @@ def _run_cover_lookup_task(
         return candidate_publisher.display_ordered(candidates)
 
     def candidate_snapshot_changes() -> dict[str, object]:
-        if not candidate_snapshot_diagnostic:
-            return {}
-        return {"candidate_snapshot_diagnostic": candidate_snapshot_diagnostic}
+        if candidate_snapshot_diagnostic:
+            return {"candidate_snapshot_diagnostic": candidate_snapshot_diagnostic}
+        # The notification shows the snapshot's best candidate, the one the lookup suggests.
+        best_candidate_id = candidate_publisher.best_candidate_id if candidate_snapshot_published else None
+        return {"best_candidate_id": best_candidate_id} if best_candidate_id else {}
 
     provider_deadline_at = (
         float(provider_deadline_at)

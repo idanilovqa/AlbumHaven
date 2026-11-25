@@ -9693,3 +9693,66 @@ require('node:test')('a keyboard-focused notification card shows no clipped focu
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/cover-lookup-drawer-and-related.css'), 'utf8');
   assert.match(css, /:root \.cover-lookup-task-open:focus-visible[\s\S]*?\{[^}]*outline:\s*none !important/);
 });
+
+require('node:test')('the lookup highlights the candidate the notification card shows, though the task names no best candidate', () => {
+  // Completed lookups stored before the task carried its snapshot's best candidate name none: the card then
+  // shows the first cover, and the lookup must mark that same candidate (Drones-like duplicate providers).
+  const { context, bodyElement } = createDrawerHarness();
+  context.buildCoverUrl = (path) => `/cover?path=${encodeURIComponent(path)}`;
+  const matches = [
+    { id: 'deezer-1800', source: 'deezer', art_kind: 'cover', url: 'https://images.example/drones-deezer.jpg', width: 1800, height: 1800 },
+    { id: 'ytm-2400', source: 'youtube_music', art_kind: 'cover', url: 'https://images.example/drones-ytm.jpg', width: 2400, height: 2400 },
+    { id: 'apple-2400', source: 'apple_music', art_kind: 'cover', url: 'https://images.example/drones-apple.jpg', width: 2400, height: 2400 },
+    { id: 'booklet', source: 'discogs', art_kind: 'other', url: 'https://images.example/drones-booklet.jpg', width: 600, height: 285 },
+  ];
+  const task = {
+    id: 'drones-task', status: 'completed', artist: 'Muse', album: 'Drones', year: 2015,
+    notification_action_taken: false, best_candidate_id: '', possible_matches: matches,
+    search_generation: 'drones-search', candidate_updated_at: '2026-11-18T21:12:47.628306+00:00',
+  };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  const cardKey = new URLSearchParams(
+    bodyElement.innerHTML.match(/class="cover-lookup-task-cover"[^>]*data-gallery-cover-src="[^"?]*\?([^"]+)"/)[1]
+      .replaceAll('&amp;', '&'),
+  ).get('key');
+  assert.equal(cardKey, 'deezer-1800');
+
+  const local = { candidate_cover_ref: 'C:/Fixture/Drones/cover.jpg', is_active: true, width: 1000, height: 1000 };
+  Object.assign(context.state.coverLookup.modal, {
+    taskId: task.id,
+    album: { key: 'muse::drones', name: 'Drones', cover_ref: local.candidate_cover_ref, cover_selection_origin: 'automatic' },
+    localCovers: [local], activeLocalSelectionRef: local.candidate_cover_ref,
+    selectedRemoteId: '', pendingLocalRef: '', pendingPastedImageId: '',
+  });
+  context.applyCoverLookupCandidateSource(context.getCoverLookupCandidateSource(task, {
+    search_generation: 'drones-search', status: 'completed', updated_at: '2026-11-18T21:12:47.039810+00:00',
+    best_candidate_id: 'apple-2400', candidates: matches,
+  }));
+
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, cardKey);
+  assert.match(context.buildCoverLookupCard(matches[0], 'remote'), /\bis-suggested\b/);
+  assert.doesNotMatch(context.buildCoverLookupCard(matches[2], 'remote'), /\bis-suggested\b/);
+  assert.match(context.buildCoverLookupCard(local, 'local'), /\bis-active\b/, 'the local cover stays selected');
+});
+
+require('node:test')('the notification card and the lookup agree on a named best candidate among duplicate providers', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  const matches = [
+    { id: 'deezer-1800', source: 'deezer', art_kind: 'cover', url: 'https://images.example/drones-deezer.jpg', width: 1800, height: 1800 },
+    { id: 'apple-2400', source: 'apple_music', art_kind: 'cover', url: 'https://images.example/drones-apple.jpg', width: 2400, height: 2400 },
+  ];
+  const task = {
+    id: 'drones-task', status: 'completed', artist: 'Muse', album: 'Drones',
+    notification_action_taken: false, best_candidate_id: 'apple-2400', possible_matches: matches,
+  };
+  context.state.coverLookup.tasks = [task];
+  context.renderCoverLookupDrawer();
+  assert.match(bodyElement.innerHTML, /data-gallery-cover-src="[^"]*key=apple-2400/);
+  Object.assign(context.state.coverLookup.modal, {
+    taskId: task.id, album: { key: 'muse::drones' }, localCovers: [],
+    selectedRemoteId: '', pendingLocalRef: '', pendingPastedImageId: '',
+  });
+  context.applyCoverLookupCandidateSource(context.getCoverLookupCandidateSource(task, null));
+  assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'apple-2400');
+});

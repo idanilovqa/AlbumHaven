@@ -7591,6 +7591,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupSuggestedGlow.spec.js",
+    "case": "the lookup glows on the cover its notification shows while a local cover stays selected",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the lookup glows on the cover its notification shows while a local cover stays selected"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupSuggestedGlow.spec.js",
+    "case": "the lookup glows on the named best cover its notification shows among duplicate provider covers",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the lookup glows on the named best cover its notification shows among duplicate provider covers"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artQualityAlert.spec.js",
     "case": "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)",
     "profile": null,

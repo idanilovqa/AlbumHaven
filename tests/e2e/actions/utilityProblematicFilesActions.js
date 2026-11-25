@@ -243,7 +243,7 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
     if (await this.utilityProblematicFilesTab.trackProblemsTable.count()) {
       await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.trackProblemsTable);
       const headers = await this.utilityProblematicFilesTab.trackProblemHeaders.allTextContents();
-      assert.deepEqual(headers.map(text => text.trim()), ['Track / file', 'Problems', 'Suggested edits']);
+      assert.deepEqual(headers.map(text => text.trim()), ['Track / file', 'Problems', 'Current Value -> Suggested Value']);
     } else {
       await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.noTrackProblems);
     }
@@ -525,6 +525,11 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       problemReasons: problemReasons.map((value) => value.trim()).filter(Boolean),
       fileTypes: fileTypes.map((value) => value.trim()).filter(Boolean),
     };
+  }
+
+  /** The folder rows of the open entry's info block, by kind, and the folders its payload carries. */
+  async readSelectedDetailFolders() {
+    return this.utilityProblematicFilesTab.readDetailFolders();
   }
 
   async readSelectedDetailLinks() {

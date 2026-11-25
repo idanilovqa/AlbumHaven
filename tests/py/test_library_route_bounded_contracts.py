@@ -1451,6 +1451,24 @@ class _DetailConnection:
             rows[1]["repair_keys"] = [f"{selected[0]['file_private_path']}::problem-file::encoding-problem"]
             self.counts.pending_intent_rows += len(rows)
             return SimpleNamespace(fetchall=lambda: rows)
+        if "%(paths)s::text[]" in text and "as physical_parent" in text:
+            # The mixed rows' folders (2026-11-25), keyed by the album's own mixed files.
+            self.counts.sql_statements += 1
+            assert set(params["paths"]) <= {row["file_private_path"] for row in self.current["selected"]}
+            rows = [{"private_path": path, "library_root_id": 1, "physical_parent": path.rsplit("/", 1)[0]}
+                    for path in params["paths"]]
+            self.counts.returned_rows += len(rows)
+            return SimpleNamespace(fetchall=lambda: rows)
+        if "unnest(%(roots)s::bigint[], %(parents)s::text[])" in text:
+            # Those folders' files, read by folder: the album's own files there and one neighbour album's file.
+            self.counts.sql_statements += 1
+            rows = [
+                {"library_root_id": 1, "physical_parent": parent, "album": album, "album_artist": "Broadcast", "year": "2005"}
+                for parent in params["parents"]
+                for album in ("Tender Buttons", "Neighbour")
+            ]
+            self.counts.returned_rows += len(rows)
+            return SimpleNamespace(fetchall=lambda: rows)
         raise AssertionError(f"an unexpected statement on the detail's connection: {text[:120]}")
 
 # Mixed-folder candidates belong to the Postgres projection: only that backend has them.
@@ -1465,8 +1483,9 @@ class _DetailConnection:
 def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count(
     library_app, tmp_path, monkeypatch, route, backend, candidate_folders,
 ):
-    """The strict multi-album folder verdict comes in the keyed row read itself (2026-11-24): candidate folders,
-    however many, add no statement and no row."""
+    """The strict multi-album folder verdict comes in the keyed row read itself (2026-11-24). Mixed rows name what
+    differs across their folders (2026-11-25): two keyed statements read those folders' files, whatever the
+    library's size."""
     from music_app.routes import api_read_asgi_routes
     from music_app.services import library_browse_postgres, problematic_albums, problematic_index
 
@@ -1551,9 +1570,14 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
             assert not payload.get("album_problem_rows")
             # The index's listed-as-missing read (1 row), the alias read and the pending-intents read, with any
             # number of candidate folders. The intents read returns this album's two kept intents.
-            assert counts.sql_statements == 3
-            assert counts.returned_rows == 1
+            folder_statements = 2 if candidate_folders else 0
+            assert counts.sql_statements == 3 + folder_statements
+            # The listed-as-missing row; with mixed folders, the 12 mixed files' folders and two files per folder.
+            assert counts.returned_rows == 1 + (12 + 2 * candidate_folders if candidate_folders else 0)
             assert counts.pending_intent_rows == 2
+            if candidate_folders:
+                mixed = [row for row in payload["track_problem_rows"] if "Mixed album metadata in one folder" in row["reasons"]]
+                assert mixed and all([value["label"] for value in row["current_values"]][:1] == ["Album"] for row in mixed)
         return counts
 
     measure_scale_pair(run=run, **_registered(interaction_id))

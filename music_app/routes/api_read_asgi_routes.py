@@ -48,7 +48,7 @@ from music_app.services.album_identity_lineage_postgres import (
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
-    is_library_browse_postgres_available,
+    is_library_browse_postgres_available, problematic_detail_folders,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services import problematic_index
@@ -125,8 +125,16 @@ def _project_missing_album_actions_for_request(
         ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch", "library.paths.read"),
     )
 
+    can_read_paths = bool(allowed_actions.as_payload().get("library.paths.read"))
+
     def visit(value: object) -> None:
         if isinstance(value, dict):
+            if "track_problem_rows" in value and "album_problem_rows" in value:
+                # An open Problematic Files entry names its folders to path readers only.
+                value.pop("album_folders", None)
+                value.pop("duplicate_folders", None)
+                if can_read_paths:
+                    value.update(problematic_detail_folders(value))
             if isinstance(value.get("duplicate_sources"), list):
                 value["duplicate_source_count"] = len(value["duplicate_sources"])
                 if not allowed_actions.as_payload().get("library.paths.read"):

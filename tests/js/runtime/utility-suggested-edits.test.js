@@ -320,7 +320,7 @@ for (const hasSuggestions of [true, false]) {
     if (!hasSuggestions) album.suggested_edits = [];
     const html = context.buildProblematicAlbumDetail(album);
     const headers = Array.from(html.matchAll(/role="columnheader"[^>]*>([^<]*)</g), match => match[1]);
-    assert.deepEqual(headers, ['Track / file', 'Problems', 'Suggested edits']);
+    assert.deepEqual(headers, ['Track / file', 'Problems', 'Current Value -> Suggested Value']);
     assert.doesNotMatch(html, /data-utility-section-toggle="suggested"|ALBUM-LEVEL PROBLEMS|TRACK-LEVEL PROBLEMS/);
     assert.equal((html.match(/role="table"/g) || []).length, 1);
   });

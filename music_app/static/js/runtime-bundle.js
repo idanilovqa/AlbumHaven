@@ -25337,19 +25337,19 @@ function buildDetectedProblemsHtml(album) {
               'data-problem-exclusion-reason': normalizeProblemFilterReason(reason), 'data-problem-exclusion-row-index': rowIndex },
           });
         }).join('')}</span>`,
-        suggested: `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
+        suggested: suggestions.length ? `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
           severity: 'info', message: formatProblemSuggestionLabel(proposal), interactive: true,
           pressed: Boolean(state.utility.proposalSelections?.[proposal.id]),
           disabled: !album.allowed_actions?.['library.files.edit_tags'] || Boolean(state.utility.proposalApplyBusy),
           className: 'utility-problem-suggestion', attributes: { 'data-problem-suggestion-id': proposal.id, 'data-label-intent': 'proposal' },
-        })).join('')}</span>`,
+        })).join('')}</span>` : buildProblemCurrentValuesHtml(row.current_values),
       },
     };
   }).filter(Boolean);
   const table = tableRows.length ? buildUtilityCompactTable({
     id: 'problematic-track-problems', ariaLabel: 'Detected problems',
     columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
-    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
+    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Current Value -> Suggested Value' }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', rows: tableRows,
   }) : '';
   const separateCandidate = album?.separate_release_candidate;
@@ -25369,6 +25369,19 @@ function buildDetectedProblemsHtml(album) {
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
       ${tableRows.length ? ButtonComponent.renderButton({ label: 'Apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
+}
+// Folders reach only path readers: the server sends them to no one else (owner, 2026-11-25).
+function buildProblematicFolderMeta(kind, folders, singular, plural) {
+  const values = Array.isArray(folders) ? folders.map(folder => String(folder || '')).filter(Boolean) : [];
+  if (!values.length) return '';
+  return `<div class="utility-detail-meta" data-problematic-detail-folders="${kind}">${escapeHtml(values.length === 1 ? singular : plural)}:${
+    values.map(folder => `<br><span data-problematic-detail-folder>${escapeHtml(folder)}</span>`).join('')}</div>`;
+}
+// A row without a suggested edit shows the current tag values its problems concern (owner, 2026-11-25).
+function buildProblemCurrentValuesHtml(values) {
+  const parts = (Array.isArray(values) ? values : [])
+    .map(item => `${item?.label}: ${item?.value === null || item?.value === undefined || item?.value === '' ? 'missing' : item.value}`);
+  return parts.length ? `<span class="utility-detail-meta" data-problem-current-values>${escapeHtml(parts.join(', '))}</span>` : '';
 }
 function buildProblematicAlbumDetail(album) {
   if (!album) {
@@ -25418,6 +25431,8 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
         ${album.edition ? `<div class="utility-detail-meta">Edition: ${escapeHtml(album.edition)}</div>` : ''}
         <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
+        ${buildProblematicFolderMeta('album', album.album_folders, 'Path', 'Paths')}
+        ${buildProblematicFolderMeta('duplicates', album.duplicate_folders, 'Duplicate files path', 'Duplicate files paths')}
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
             ${showRepairedDisplay ? 'Displaying: converted tags' : 'Displaying: original tags'}

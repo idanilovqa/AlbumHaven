@@ -45,6 +45,7 @@ export class UtilityProblematicFilesTab extends BasePage {
     );
     this.detailTrackRows = page.locator(this.problematicTrackRowSelector);
     this.detailFileTypeChips = page.locator('#utility-problematic-detail .utility-file-type-chip');
+    this.detailFolderRows = page.locator('#utility-problematic-detail [data-problematic-detail-folders]');
     this.noTrackProblems = page.locator('#utility-problematic-detail .utility-detail-meta').filter({
       hasText: /^(Only album-level problems found\. )?No per-track problems( found| match the selected filters)?\.$/u,
     });
@@ -280,6 +281,22 @@ export class UtilityProblematicFilesTab extends BasePage {
 
   filenameForTrackRow(row) {
     return row.locator('[role="cell"][data-cdt-column="filename"]');
+  }
+
+  async readDetailFolders() {
+    // parity-check: allow-read-only-measurement-evaluate -- one atomic snapshot of the rendered folder rows
+    const rendered = await this.detailFolderRows.evaluateAll(rows => Object.fromEntries(rows.map(row => [
+      row.getAttribute('data-problematic-detail-folders'),
+      { label: String(row.firstChild?.textContent || '').trim(),
+        folders: Array.from(row.querySelectorAll('[data-problematic-detail-folder]'), folder => String(folder.textContent || '')) },
+    ])));
+    // parity-check: allow-read-only-measurement-evaluate -- the selected entry's payload as the server sent it
+    const payload = await this.page.evaluate(() => {
+      const album = typeof getSelectedProblematicAlbum === 'function' ? getSelectedProblematicAlbum() : null;
+      return { hasAlbumFolders: Boolean(album && 'album_folders' in album),
+        hasDuplicateFolders: Boolean(album && 'duplicate_folders' in album), allowed: album?.allowed_actions || {} };
+    });
+    return { rendered, payload };
   }
 
   async readDetectedTrackRows() {

@@ -269,6 +269,36 @@ test('SMALL-SOUNDTRACK-GUEST a guest copy stays off the gallery and beside its s
     expect(stray, 'missing guest duplicate beside soundtrack source').toBeTruthy();
     expect(stray.reasons.some(reason => /duplicate/iu.test(reason))).toBe(true);
   });
+  // Owner (2026-11-25): the owner sees the entry's folder and each folder its duplicates live in, once.
+  const ownedFolder = name => path.join(fixture.owner, name);
+  await stepLogger.step('Name the album folder and each duplicate folder once, one per line', async () => {
+    const { rendered, payload } = await utilityProblematicFilesActions.readSelectedDetailFolders();
+    expect(payload.hasAlbumFolders && payload.hasDuplicateFolders, 'the owner receives the folders').toBe(true);
+    expect(rendered.album.folders).toContain(ownedFolder('Soundtrack'));
+    expect(rendered.album.label).toBe(rendered.album.folders.length === 1 ? 'Path:' : 'Paths:');
+    const duplicates = rendered.duplicates.folders;
+    expect(rendered.duplicates.label).toBe(duplicates.length === 1 ? 'Duplicate files path:' : 'Duplicate files paths:');
+    expect(new Set(duplicates).size, 'each duplicate folder appears once').toBe(duplicates.length);
+    expect(duplicates).toContain(ownedFolder('Soundtrack stray'));
+    for (const value of duplicates) expect([ownedFolder('Soundtrack'), ownedFolder('Soundtrack stray')]).toContain(value);
+  });
+  await stepLogger.step('Show no duplicate line for an entry without a duplicate problem', async () => {
+    await utilityProblematicFilesActions.search(fixture.artist);
+    await utilityProblematicFilesActions.waitForSearchResults(fixture.artist);
+    const items = await utilityProblematicFilesActions.readVisibleListItems();
+    let checked = 0;
+    for (let index = 0; index < items.length; index += 1) {
+      await utilityProblematicFilesActions.selectListItemByIndex(index);
+      const summary = await utilityProblematicFilesActions.readSelectedDetailSummary();
+      if (summary.problemReasons.some(reason => /duplicate/iu.test(reason))) continue;
+      const { rendered, payload } = await utilityProblematicFilesActions.readSelectedDetailFolders();
+      expect(payload.hasDuplicateFolders, `${summary.title} carries no duplicate folders`).toBe(false);
+      expect(rendered.duplicates, `${summary.title} shows no duplicate line`).toBeUndefined();
+      expect(rendered.album?.folders?.length, `${summary.title} names its folder`).toBeGreaterThan(0);
+      checked += 1;
+    }
+    expect(checked, 'the fixture lists an entry without a duplicate problem').toBeGreaterThan(0);
+  });
 });
 
 test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder', { tag: '@area:cover-providers' }, async ({

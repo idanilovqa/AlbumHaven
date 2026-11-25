@@ -9089,5 +9089,5 @@ def test_live_relation_snapshot_decodes_stay_on_start_up_and_saves_never_rebuild
     assert start_up() <= 2, "two snapshot decodes when a replay runs"
     decodes.clear()
     RelationReconciliationOwner(fixture.config, reconciled=lambda: None).run_once()
-    assert decodes == [], "the reconciliation job decodes no whole snapshot"
+    assert decodes == [], "with the start-up replay caught up, the reconciliation job decodes no whole snapshot"
     assert not scoped.relation_reconciliation_due(fixture.config)

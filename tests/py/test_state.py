@@ -5850,6 +5850,14 @@ def test_startup_persistence_recovery_preserves_journal_and_exclusion_migration_
     assert calls == [("recover", runtime), ("migrate", config)]
 
 
+def _index_not_initialized(monkeypatch):
+    """An index never initialized: the queued relation work falls back to start-up readiness."""
+    from music_app.services import scoped_relation_projection
+
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda config, **_kwargs: {"initialized": False})
+
+
 def test_relation_projection_rebuild_scheduler_is_bounded_and_non_blocking(monkeypatch):
     submitted: list[tuple[object, tuple[object, ...]]] = []
     rebuilt: list[dict[str, object]] = []
@@ -5860,6 +5868,7 @@ def test_relation_projection_rebuild_scheduler_is_bounded_and_non_blocking(monke
             return object()
 
     monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
+    _index_not_initialized(monkeypatch)
     monkeypatch.setattr(
         state_module,
         "ensure_relation_projection_ready",
@@ -5915,6 +5924,7 @@ def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_duri
         return {"ready": True}
 
     monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
+    _index_not_initialized(monkeypatch)
     monkeypatch.setattr(state_module, "ensure_relation_projection_ready", rebuild)
     monkeypatch.setattr(state_module, "_RELATION_REBUILD_PENDING", False, raising=False)
     monkeypatch.setattr(

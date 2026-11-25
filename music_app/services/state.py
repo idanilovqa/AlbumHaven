@@ -875,7 +875,12 @@ def _run_scheduled_relation_projection_rebuild(
         try:
             if logger is not None:
                 logger.info("Deferred relation projection rebuild started: %s", reason)
-            ensure_relation_projection_ready(config, logger=logger)
+            # An initialized scoped index replays the journaled albums of the save (keyed work, no whole
+            # relation snapshot); only an index never initialized falls back to the start-up readiness.
+            from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
+
+            if not ensure_pending_relation_projection_ready(config).get("initialized"):
+                ensure_relation_projection_ready(config, logger=logger)
         except Exception:
             if logger is not None:
                 logger.exception("Deferred relation projection rebuild failed: %s", reason)

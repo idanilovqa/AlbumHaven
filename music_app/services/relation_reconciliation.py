@@ -54,9 +54,15 @@ class RelationReconciliationOwner:
             thread.join(timeout)
 
     def run_once(self) -> bool:
-        """One replay. True when the index no longer needs reconciliation; parked cases raise."""
+        """One replay. True when the index no longer needs reconciliation; parked cases raise.
+
+        Nothing due (a start-up replay already caught up) costs three keyed reads. Proving missing or changed
+        compatibility evidence reads the published relation snapshot once; journaled albums replay by key.
+        """
         from music_app.services import scoped_relation_projection as scoped
 
+        if self._prepare is None and not scoped.relation_reconciliation_due(self._config):
+            return True
         prepare = self._prepare or scoped.prepare_relation_compatibility
         prepare(self._config, cancel_requested=self._stop)
         return True

@@ -3184,6 +3184,10 @@ class TrackModalTestElement {
       slot.classList.add('track-modal-cover-image-slot');
       this._slot = slot;
       this.children.push(slot);
+    } else if (this._innerHTML.includes('track-modal-cover-visual')) {
+      const slot = new TrackModalTestElement('span');
+      slot.parentElement = this;
+      slot.outerHTML = this._innerHTML;
     }
   }
 
@@ -3208,6 +3212,7 @@ class TrackModalTestElement {
       image.setAttribute(match[1], match[2]);
     }
     visual.children = [image];
+    visual._image = image;
     owner.children = [visual];
     owner._slot = null;
     owner._image = image;
@@ -3236,8 +3241,13 @@ class TrackModalTestElement {
   replaceWith(replacement) {
     const owner = this._replaceOwner || this.parentElement;
     if (!(owner instanceof TrackModalTestElement)) return;
+    const setConnected = (node, connected) => {
+      node.isConnected = connected;
+      node.children.forEach(child => setConnected(child, connected));
+    };
+    setConnected(this, false);
     replacement.parentElement = owner;
-    replacement.isConnected = owner.isConnected;
+    setConnected(replacement, owner.isConnected);
     owner.children = [replacement];
     owner._slot = null;
     owner._image = replacement instanceof TrackModalTestImage
@@ -3333,6 +3343,7 @@ function createTrackModalCoverContext(options = {}) {
     HTMLImageElement: TrackModalTestImage,
     document: {
       body: documentBody,
+      images: [],
       createElement(tagName) {
         return String(tagName).toLowerCase() === 'img'
           ? new TrackModalTestImage()
@@ -4005,6 +4016,152 @@ test('same-source track-modal refresh retains an in-flight cover and its loading
   assert.equal(retainedImage.isConnected, true);
   assert.equal(retainedVisual.classList.contains('is-loading'), true);
   assert.equal(loaderCalls.length, 1, 'the retained in-flight image must keep its original shared load');
+});
+
+test('a same-source refresh during the first load still shows that cover when it arrives', async () => {
+  const pending = createDeferred();
+  const { context, cover } = createTrackModalCoverContext({ resolvePreview: () => pending.promise });
+  const album = context.state.modalReleases[0];
+  context.renderTrackModalRelease(album);
+  context.renderTrackModalRelease({ ...album });
+
+  pending.resolve({ displayUrl: 'blob:first-load' });
+  await flushTrackModalCoverWork();
+
+  assert.equal(cover.querySelector('img').getAttribute('src'), 'blob:first-load');
+});
+
+async function openDecodedTrackModalCover() {
+  const previews = [];
+  const harness = createTrackModalCoverContext({
+    resolvePreview: () => {
+      const preview = createDeferred();
+      previews.push(preview);
+      return preview.promise;
+    },
+  });
+  const album = harness.context.state.modalReleases[0];
+  harness.context.renderTrackModalRelease(album);
+  const image = harness.cover.querySelector('img');
+  previews[0].resolve({ displayUrl: 'blob:current-cover' });
+  await flushTrackModalCoverWork();
+  Object.assign(image, { complete: true, naturalWidth: 480 });
+  image.setAttribute('data-cover-visual-state', 'ready');
+  image.closest('.track-modal-cover-visual').classList.remove('is-loading');
+  const showCover = (coverRef) => {
+    const next = { ...album, cover_ref: coverRef };
+    harness.context.state.modalReleases[0] = next;
+    harness.context.renderTrackModalRelease(next);
+  };
+  return { ...harness, album, image, previews, showCover };
+}
+
+function assertDecodedCoverStillShown(cover, image) {
+  assert.equal(cover.querySelector('img'), image, 'the decoded cover must stay mounted');
+  assert.equal(image.isConnected, true);
+  assert.equal(image.getAttribute('src'), 'blob:current-cover');
+  assert.equal(image.getAttribute('data-cover-visual-state'), 'ready');
+  assert.equal(image.closest('.track-modal-cover-visual').classList.contains('is-loading'), false);
+}
+
+test('a changed cover keeps the decoded one shown until its replacement has decoded', async () => {
+  const { cover, image, loaderCalls, previews, showCover } = await openDecodedTrackModalCover();
+
+  showCover('replacement-cover');
+  assertDecodedCoverStillShown(cover, image);
+
+  const replacement = loaderCalls[1].image;
+  const decoded = createDeferred();
+  replacement.decode = () => decoded.promise;
+  previews[1].resolve({ displayUrl: 'blob:replacement-cover' });
+  await flushTrackModalCoverWork();
+  assertDecodedCoverStillShown(cover, image);
+
+  Object.assign(replacement, { complete: true, naturalWidth: 480 });
+  decoded.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cover.querySelector('img'), replacement);
+  assert.equal(replacement.isConnected, true);
+  assert.equal(replacement.getAttribute('src'), 'blob:replacement-cover');
+  assert.equal(replacement.closest('.track-modal-cover-visual').classList.contains('is-loading'), false);
+});
+
+test('a changed cover already decoded on the page replaces the shown one at once', async () => {
+  const { context, cover, image, loaderCalls, showCover } = await openDecodedTrackModalCover();
+  const picked = new URL('/cover/picked-cover?size=480&v=fixture', 'http://127.0.0.1:4173/').href;
+  context.document.images.push(Object.assign(context.document.createElement('img'), {
+    currentSrc: picked, complete: true, naturalWidth: 480,
+  }));
+
+  showCover('picked-cover');
+
+  const shown = cover.querySelector('img');
+  assert.notEqual(shown, image, 'the picked cover must not wait behind an off-page load');
+  assert.equal(shown.isConnected, true);
+  assert.equal(shown.getAttribute('data-production-cover-src'), '/cover/picked-cover?size=480&v=fixture');
+  assert.equal(shown.getAttribute('src'), '/cover/picked-cover?size=480&v=fixture');
+  assert.equal(loaderCalls.length, 1, 'an already decoded cover needs no second load');
+});
+
+test('only the last of several cover changes replaces the decoded cover', async () => {
+  const { cover, image, loaderCalls, previews, showCover } = await openDecodedTrackModalCover();
+
+  showCover('second-cover');
+  showCover('third-cover');
+  assertDecodedCoverStillShown(cover, image);
+  previews[1].resolve({ displayUrl: 'blob:second-cover' });
+  await new Promise(resolve => setImmediate(resolve));
+  assertDecodedCoverStillShown(cover, image);
+
+  loaderCalls[2].image.decode = async () => {};
+  previews[2].resolve({ displayUrl: 'blob:third-cover' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cover.querySelector('img').getAttribute('src'), 'blob:third-cover');
+});
+
+test('changing back to the shown cover cancels the pending replacement', async () => {
+  const { album, cover, image, previews, showCover } = await openDecodedTrackModalCover();
+
+  showCover('replacement-cover');
+  showCover(album.cover_ref);
+  previews[1].resolve({ displayUrl: 'blob:replacement-cover' });
+  await new Promise(resolve => setImmediate(resolve));
+  assertDecodedCoverStillShown(cover, image);
+});
+
+test('a replacement that cannot decode falls back to the ordinary cover load and its error handling', async () => {
+  const { cover, image, loaderCalls, previews, showCover } = await openDecodedTrackModalCover();
+
+  showCover('broken-cover');
+  loaderCalls[1].image.decode = async () => { throw new Error('undecodable'); };
+  previews[1].resolve({ displayUrl: 'blob:broken-cover' });
+  await new Promise(resolve => setImmediate(resolve));
+
+  const fallback = cover.querySelector('img');
+  assert.notEqual(fallback, image, 'a saved cover that fails must not keep showing the old one as if it were saved');
+  assert.equal(loaderCalls.length, 3);
+  assert.equal(loaderCalls[2].image, fallback);
+  assert.equal(fallback.isConnected, true);
+});
+
+test('an unchanged cover is reused when the loader recorded its absolute URL', async () => {
+  const { album, context, cover, image, loaderCalls } = await openDecodedTrackModalCover();
+  image.setAttribute('data-production-cover-src', new URL(loaderCalls[0].productionUrl, 'http://127.0.0.1:4173/').href);
+
+  context.renderTrackModalRelease({ ...album });
+
+  assertDecodedCoverStillShown(cover, image);
+  assert.equal(loaderCalls.length, 1, 'an unchanged cover needs no second load');
+});
+
+test('another album never keeps the previous album\'s decoded cover', async () => {
+  const { context, cover, image } = await openDecodedTrackModalCover();
+  const other = { key: 'other', name: 'Other Album', album_artist: 'Artist Alpha', cover_ref: 'other-cover', tracks: [] };
+  context.state.modalReleases[0] = other;
+
+  context.renderTrackModalRelease(other);
+
+  assert.notEqual(cover.querySelector('img'), image);
 });
 
 test('a stale track-modal cover completion cannot reveal an earlier album over the current modal', async () => {

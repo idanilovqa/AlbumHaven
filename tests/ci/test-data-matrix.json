@@ -13363,8 +13363,8 @@
     ],
     "expectedContracts": [
       "edit-saves-while-reconciliation-due",
-      "stored-grouping-until-replay",
-      "replayed-grouping-without-reload"
+      "gallery-follows-saved-edit-at-once",
+      "relation-index-settles-after-replay-without-reload"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:relation-reconciliation-edit",

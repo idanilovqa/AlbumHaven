@@ -2,17 +2,17 @@ import { expect, test } from '../support/baseFixtures.js';
 import { readGeneratedMp3TagSnapshots } from '../helpers/physicalTagHelpers.js';
 import { removeRelationCompatibilityEvidence } from '../helpers/postgresProjectionFixture.js';
 
-// FTC-TAGS-045: an edit made while the relation index waits for reconciliation is saved at once; the
-// gallery keeps the stored grouping until the background reconciliation replays the album, then shows the album
-// under its new artist through the normal refresh.
+// FTC-TAGS-045: an edit made while the relation index waits for reconciliation is saved at once with the normal
+// message, shows in the editor, the files and the gallery, and the background reconciliation then settles the
+// relation index after a restart without a reload.
 const FIXTURE_ARTIST = 'E2E Rarity Artist';
 const FIXTURE_ALBUM = 'Two Track Rarity Fixture';
 const FIXTURE_YEAR = '2026';
 const RECONCILED_ARTIST = 'E2E Reconciled Artist';
 const FIXTURE_TRACK_COUNT = 2;
 const ROOT_GALLERY_URL = '/?surface=albums';
-// Start-up readiness waits 5 s before its relation work; the replay of one album, the gallery publication and the
-// page's status poll then take well under a second at production calibration. 20 s leaves room for a hosted runner.
+// Start-up readiness waits 5 s before its relation work; the reconciliation replay of one album then takes well
+// under a second at production calibration. 20 s leaves room for a hosted runner.
 const RECONCILED_GROUPING_BOUND_MS = 20_000;
 
 async function albumArtistFrames() {
@@ -60,27 +60,32 @@ test('FTC-TAGS-045 saves an edit while relations await reconciliation and regrou
     expect(await albumArtistFrames()).toEqual(Array(FIXTURE_TRACK_COUNT).fill([RECONCILED_ARTIST]));
   });
 
-  await stepLogger.step('While reconciliation is due the gallery renders under the stored grouping and keeps its place', async () => {
+  await stepLogger.step('While reconciliation is due the gallery renders the saved album under its new artist in place', async () => {
+    // The gallery groups albums by their own album artist, so it follows the saved edit at once; only the
+    // relation index (artist families and aliases) waits for the reconciliation replay.
     const scrollBefore = await galleryActions.readGalleryScrollState();
     await galleryActions.waitForGalleryReady();
-    await galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, FIXTURE_ALBUM);
+    await galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM);
     const scrollAfter = await galleryActions.readGalleryScrollState();
     expect(Math.abs(scrollAfter.scrollTop - scrollBefore.scrollTop)).toBeLessThanOrEqual(2);
   });
 
   let restarted = null;
-  await stepLogger.step('After a restart the reconciliation replay regroups the album under its new artist', async () => {
+  await stepLogger.step('After a restart the reconciliation replay settles the relation index without a reload', async () => {
     await page.goto('about:blank');
     await managedAppLifecycle.restart();
     restarted = await freshBrowserSession.create();
     await restarted.galleryActions.goto(ROOT_GALLERY_URL);
     await restarted.galleryActions.waitForGalleryReady();
     const startedAt = Date.now();
-    // No reload: the page's own refresh shows the replayed album under the exact new heading.
-    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM, {
-      timeout: RECONCILED_GROUPING_BOUND_MS,
-    });
+    await expect.poll(
+      async () => (await restarted.galleryActions.readRelationProjectionReadiness()).rebuildReason,
+      { timeout: RECONCILED_GROUPING_BOUND_MS },
+    ).toBe('healthy');
     expect(Date.now() - startedAt).toBeLessThanOrEqual(RECONCILED_GROUPING_BOUND_MS);
+    expect((await restarted.galleryActions.readRelationProjectionReadiness()).ready).toBe(true);
+    // The same page, with no reload, still shows the album under the exact new heading.
+    await restarted.galleryActions.waitForAlbumVisibleUnderHeading(RECONCILED_ARTIST, FIXTURE_ALBUM);
   });
 
   await stepLogger.step('Restore the album artist so no other case sees this one', async () => {

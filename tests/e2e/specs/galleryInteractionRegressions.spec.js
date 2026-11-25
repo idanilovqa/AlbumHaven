@@ -174,7 +174,11 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
       expect(opened.panelTop).toBeCloseTo(opened.triggerBottom-1,0);
       expect(opened.triggerOwner).toBe('divider');
       await expect(ui.headingInfo).toHaveAttribute('aria-expanded','true');
-      await expect(ui.toolbarInfo).toHaveAttribute('aria-expanded','false');
+      // The header "i" never claims the panel the divider owns. A family or Gallery summary has no "i"
+      // (renderGalleryMainContext); a header naming one artist keeps its "i", not expanded.
+      const headerKind=await page.locator('[data-gallery-bar-instance="gallery"]').getAttribute('data-gallery-context-kind');
+      if(headerKind==='family'||headerKind==='gallery')await expect(ui.toolbarInfo).toHaveCount(0);
+      else await expect(ui.toolbarInfo).toHaveAttribute('aria-expanded','false');
 
       const galleryBounds=await ui.galleryScroll.boundingBox();
       expect(galleryBounds).not.toBeNull();

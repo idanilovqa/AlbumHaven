@@ -105,6 +105,34 @@ def test_a_stale_stored_mixed_label_from_an_older_scan_says_mixed_on_no_surface(
     assert kept["kept"] == len(covers), "the stored scan entries are not rewritten"
 
 
+def test_a_file_whose_only_label_is_the_stale_mixed_one_counts_in_its_album_card_and_not_in_loose_tracks(
+    watcher_repair_inventory,
+):
+    """The obsolete stored mixed-folder label (owner, fix A, 2026-11-25) takes no file out of its album: the
+    artist gallery card counts it and Loose Tracks does not list it."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    fixture = watcher_repair_inventory
+    album = [_entry(fixture, "Plain", "Whole Album", 1, total=2), _entry(fixture, "Plain", "Whole Album", 2, total=2)]
+    fixture.seed(*album)
+    stale = album[0]["path"]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """update library.local_track_files
+               set metadata = jsonb_set(metadata, '{scan_cache,file_entry,local_album_membership_problem}', to_jsonb(%s::text))
+               where private_path = %s""", (MIXED, stale))
+
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    gallery = repository.build_selected_artist_payload(query_params={"artist": "Owner", "surface": "albums"})
+    cards = [candidate for group in gallery.get("primary_artist_groups") or gallery.get("artist_groups") or []
+             for candidate in group.get("albums") or [] if candidate.get("name") == "Whole Album"]
+    assert [card.get("track_count", card.get("track_count_preview")) for card in cards] == [2], (
+        "the album card counts the file with the stale label")
+    loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
+    loose = repository.build_library_loose_tracks_payload(query_params={})
+    assert stale not in json.dumps(loose, default=str), "Loose Tracks lists a file of a formed album"
+
+
 @pytest.fixture(autouse=True)
 def _problematic_index_off(monkeypatch):
     # Problematic Files' own read (the persisted index is proven elsewhere).

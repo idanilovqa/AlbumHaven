@@ -648,3 +648,21 @@ def test_cover_refresh_planning_contract_checks_each_cover_once_regardless_of_tr
         growth=("stat_calls", 0),
     )
     assert small == production
+
+
+def test_a_stale_stored_mixed_label_keeps_the_file_in_its_album_cover_job(tmp_path):
+    """Older scans stored "Mixed album metadata in one folder" for any folder of two album names; the strict rule
+    owns that reason now (owner, fix A, 2026-11-25), so the stored label no longer takes a file out of its album."""
+    entries = {
+        str(tmp_path / "Album" / f"{number}.mp3"): {
+            "album_artist": "Artist", "artist": "Artist", "album": "Album", "title": f"Song {number}",
+            "track_number": number, "duration_seconds": 120 + number, "album_id": 12, "cover_path": None,
+        }
+        for number in (1, 2)
+    }
+    stale = str(tmp_path / "Album" / "1.mp3")
+    entries[stale]["local_album_membership_problem"] = "Mixed album metadata in one folder"
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+
+    assert sorted(track for job in jobs for track in job["track_paths"]) == sorted(entries)

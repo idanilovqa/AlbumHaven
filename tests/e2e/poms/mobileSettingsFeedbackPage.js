@@ -67,25 +67,31 @@ export class MobileSettingsFeedbackPage extends MobileLoopsPage {
     return card.locator('.utility-list-item-title');
   }
 
-  // Scrolls the Problematic Files list with real input (a touch swipe or the mouse wheel) until no new
-  // card appears, and returns every card key seen on the way and the last card.
+  // Scrolls the Problematic Files list with real input (a finger dragged on the touch screen, or the mouse
+  // wheel) until its end card is fully on screen, at most a bounded number of times; returns every card
+  // key seen on the way and that end card.
   async scrollProblemCards(direction, input) {
     const viewport = this.page.viewportSize();
     const session = input === 'touch' ? await this.page.context().newCDPSession(this.page) : null;
+    const edgeCard = () => (direction === 'down' ? this.problemCards.last() : this.problemCards.first());
     const seen = new Set();
-    let unchanged = 0;
     try {
-      while (unchanged < 3) {
+      for (let swipe = 0; swipe < 20; swipe += 1) {
         // parity-check: allow-read-only-measurement-evaluate -- read the mounted card keys after each real scroll input
         const keys = await this.problemCards.evaluateAll(cards => cards.map(card => card.getAttribute('data-problematic-album-key')));
-        const before = seen.size;
         keys.forEach(key => seen.add(key));
-        unchanged = seen.size === before ? unchanged + 1 : 0;
-        const distance = direction === 'down' ? viewport.height * 0.6 : -viewport.height * 0.6;
+        const box = await edgeCard().boundingBox();
+        if (box && box.y >= 0 && box.y + box.height <= viewport.height) break;
+        const distance = direction === 'down' ? viewport.height * 0.4 : -viewport.height * 0.4;
         if (session) {
-          await session.send('Input.synthesizeScrollGesture', {
-            x: viewport.width / 2, y: viewport.height / 2, yDistance: -distance, gestureSourceType: 'touch', speed: 3000,
-          });
+          const x = viewport.width / 2;
+          const startY = viewport.height / 2 + distance / 2;
+          const point = y => [{ x, y, id: 1 }];
+          await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(startY) });
+          for (let step = 1; step <= 20; step += 1) {
+            await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point(startY - (distance * step) / 20) });
+          }
+          await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         } else {
           await this.page.mouse.move(viewport.width / 2, viewport.height / 2);
           await this.page.mouse.wheel(0, distance);
@@ -95,6 +101,7 @@ export class MobileSettingsFeedbackPage extends MobileLoopsPage {
     } finally {
       await session?.detach();
     }
-    return { seen, edgeCard: direction === 'down' ? this.problemCards.last() : this.problemCards.first() };
+    return { seen, edgeCard: edgeCard() };
   }
+
 }

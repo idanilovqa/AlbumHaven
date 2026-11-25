@@ -316,6 +316,7 @@ test('FTC-TAGS-047 opens Edit Tags from the context menu of an album a save just
 
 test('FTC-TAGS-048 keeps every other search match on screen through a merge and an album rename saved from the results', { tag: '@area:tag-edit' }, async ({
   galleryActions,
+  page,
   searchToolbarActions,
   stepLogger,
   tagEditorActions,
@@ -332,10 +333,14 @@ test('FTC-TAGS-048 keeps every other search match on screen through a merge and 
     .map((title) => title.trim())
     .filter(Boolean)
     .sort((left, right) => left.localeCompare(right));
-  // Every match other than the edited albums stays on screen, before and after the save settles.
+  // Every match other than the edited albums stays on screen, before and after the save settles: the
+  // search box keeps the query, the address stays the same search, and the cards are exactly the matches.
   const expectMatches = async (expected) => {
-    await searchToolbarActions.waitForQuery(QUERY);
+    await expect(searchToolbarActions.searchToolbar.input).toHaveValue(QUERY);
     await expect.poll(visibleTitles).toEqual([...expected].sort((left, right) => left.localeCompare(right)));
+    const address = new URL(page.url()).searchParams;
+    expect(address.get('q')).toBe(QUERY);
+    expect(address.has('all_artists')).toBe(false);
   };
   const saveFromContextMenu = async (album, filenames, albumName) => {
     await galleryActions.openAlbumTagEditorFromContextMenu(album);

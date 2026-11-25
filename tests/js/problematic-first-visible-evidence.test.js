@@ -266,19 +266,28 @@ test('PF bounded-page evidence captures the first response and survives later co
   const boundedOption = {
     getAttribute: (name) => name === 'data-problem-filter-value' ? boundedExpected.problemType : null,
   };
-  const boundedVisible = (complete = false) => vm.runInNewContext(
+  const boundedVisible = ({ complete = false, options = [boundedOption], rows = [boundedRow] } = {}) => vm.runInNewContext(
     `(${boundedPredicate.toString()})(expected)`,
     {
       expected: boundedExpected,
       state: { utility: { problematicFilesComplete: complete } },
       document: {
-        querySelectorAll: (selector) => selector === boundedExpected.filterOptionSelector
-          ? [boundedOption] : [boundedRow],
+        querySelectorAll: (selector) => selector === boundedExpected.filterOptionSelector ? options : rows,
       },
     },
   );
-  assert.equal(boundedVisible(false), true, 'bounded response must be rendered while incomplete');
-  assert.equal(boundedVisible(true), false, 'later complete rendering is not bounded-page evidence');
+  // The first response (complete: false, asserted by the action) is the bounded-page proof. With the
+  // indexed list the complete list can replace that page before the screen is checked (4a9e70b23), so
+  // the screen must show the filter and the row whether or not the complete list has landed.
+  assert.equal(boundedVisible(), true, 'bounded response must be rendered while incomplete');
+  assert.equal(boundedVisible({ complete: true }), true, 'a later complete list still shows the filter and row');
+  assert.equal(boundedVisible({ options: [] }), false, 'the problem filter must be rendered');
+  assert.equal(boundedVisible({ rows: [] }), false, 'the album row must be rendered');
+  assert.equal(
+    boundedVisible({ rows: [{ ...boundedRow, getClientRects: () => [] }] }),
+    false,
+    'the album row must be laid out, not just present',
+  );
   assert.deepEqual(visibleWaits, [
     ['filter', { state: 'visible', timeout: 60000 }],
     ['artist', { state: 'visible', timeout: 60000 }],

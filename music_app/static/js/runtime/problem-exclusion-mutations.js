@@ -360,14 +360,17 @@ function buildProblemExclusionItemFromAlbum(album, rowKey) {
 
 function applyOptimisticProblemExclusionCard(album, updatedAlbum) {
   const albumKey = String(album?.key || '');
-  const current = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles
-    : [];
-  const index = current.findIndex((item) => String(item?.key || '') === albumKey);
-  if (index < 0) return;
-  state.utility.problematicFiles = updatedAlbum
-    ? current.map((item, itemIndex) => (itemIndex === index ? updatedAlbum : item))
-    : current.filter((_item, itemIndex) => itemIndex !== index);
+  // The card is listed by the loaded pages, the search or filter results (BUGFIX-14), or both.
+  let listed = false;
+  for (const owner of ['problematicFiles', 'problematicServerSearchItems']) {
+    const current = Array.isArray(state.utility[owner]) ? state.utility[owner] : [];
+    if (!current.some((item) => String(item?.key || '') === albumKey)) continue;
+    listed = true;
+    state.utility[owner] = updatedAlbum
+      ? current.map((item) => (String(item?.key || '') === albumKey ? updatedAlbum : item))
+      : current.filter((item) => String(item?.key || '') !== albumKey);
+  }
+  if (!listed) return;
   if (!updatedAlbum && String(state.utility.selectedProblematicKey || '') === albumKey) {
     state.utility.selectedProblematicKey = '';
   }

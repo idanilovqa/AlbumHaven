@@ -376,7 +376,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
           .toBeLessThanOrEqual(payloadBudget.maxAllowed);
         expect(
           evaluateProblematicFilesDatasetContract(
-            { items: merged, count: merged.length },
+            { items: merged, count: merged.length, initial_detail: problematicFilesPayload.initial_detail },
             UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.datasetContract,
           ),
         ).toEqual([]);

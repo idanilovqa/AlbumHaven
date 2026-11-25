@@ -206,6 +206,18 @@ test('album exclusion removes the matching album and track reasons and drops an 
   );
 });
 
+test('an excluded card leaves the search results as well as the loaded pages', () => {
+  // The list is paged (BUGFIX-14): a searched card may be listed by the search results alone.
+  const { context } = loadMutationHelpers();
+  const album = albumFixture();
+  context.state.utility.problematicFiles = [];
+  context.state.utility.problematicServerSearchItems = [album, { key: 'other' }];
+
+  context.applyOptimisticProblemExclusionCard(album, null);
+
+  assert.deepEqual(Array.from(context.state.utility.problematicServerSearchItems, (item) => item.key), ['other']);
+});
+
 test('album exclusion preserves unrelated reasons on the same card', () => {
   const { context } = loadMutationHelpers();
 

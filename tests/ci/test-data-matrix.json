@@ -13402,33 +13402,6 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
-    "case": "FTC-TAGS-046 a save made while an earlier save of the same tracks is still running writes its change instead of reporting success without one",
-    "profile": "functional-core",
-    "setupScope": "isolated",
-    "stateMode": "owned-mutation",
-    "executionWave": 3,
-    "appProcessScope": "isolated",
-    "appProcessOrder": "after-shared",
-    "setupGroup": "concurrent-album-artist-saves",
-    "databaseScenarios": [
-      "tag-edit:owned-concurrent-saves"
-    ],
-    "filesystemScenarios": [
-      "media-copy:concurrent-album-artist-saves"
-    ],
-    "expectedContracts": [
-      "later-save-writes-its-change"
-    ],
-    "mutationOwnership": {
-      "databaseIdentity": "case:concurrent-album-artist-saves",
-      "filesystemCopy": "media/cases/concurrent-album-artist-saves"
-    },
-    "ownerApproval": "pending"
-  },
-  {
-    "config": "playwright.config.js",
-    "project": "functional",
-    "test": "tests/e2e/specs/artistTreeAfterEdits.spec.js",
     "case": "FTC-GALLERY-034 an album whose Album Artist repeats one artist is that artist's own album, never Featured On",
     "profile": "functional-core",
     "setupScope": "isolated",

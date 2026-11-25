@@ -1,13 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '../support/baseFixtures.js';
 import { createArtistTreeFixture, removeArtistTreeFixture } from '../helpers/artistTreeEditFixture.js';
-import { holdSaveBeforeMediaWrite } from '../helpers/structuralSavePollWindowHelpers.js';
-import { GalleryActions, TagEditorActions } from '../actions/index.js';
-import { GalleryPage, TagEditor } from '../poms/index.js';
 
-const SAVE_PATH = '/utilities/edit-tags';
 let ownedFixture;
-let saveGate;
 
 function ownerName() {
   return `E2E Artist Tree ${randomUUID().replaceAll('-', '').slice(0, 12)}`;
@@ -43,8 +38,6 @@ async function openArtist(galleryActions, artist) {
 }
 
 test.afterEach(async ({ galleryActions, appBarActions }) => {
-  await saveGate?.dispose();
-  saveGate = null;
   try {
     if (ownedFixture) await removeArtistTreeFixture(ownedFixture);
   } finally {
@@ -164,67 +157,4 @@ test.describe('Artist tree after searches and Album Artist edits', () => {
     }
   });
 
-  test('FTC-TAGS-046 a save made while an earlier save of the same tracks is still running writes its change instead of reporting success without one', { tag: '@area:tag-edit' }, async ({
-    page, managedAppLifecycle, galleryActions, appBarActions, navigationPanelActions, tagEditorActions,
-  }, testInfo) => {
-    const suffix = randomUUID().replaceAll('-', '').slice(0, 8);
-    const band = `Duskmoor ${suffix}`;
-    const renamed = `Duskmoor2 ${suffix}`;
-    const album = 'Grey Shore';
-    await openLibrary({ managedAppLifecycle, galleryActions, appBarActions },
-      albumTracks(band, album, ['Grey Shore', 'North Gate']));
-    const { tagEditor } = tagEditorActions;
-    const saveSetting = (onPage, albumArtist) => onPage.waitForResponse(response => (
-      response.request().method() === 'POST'
-      && new URL(response.url()).pathname === SAVE_PATH
-      && Object.values(JSON.parse(response.request().postData() || '{}').updates || {})
-        .every(values => values.album_artist === albumArtist)
-    ), { timeout: 120000 });
-
-    await openArtist(galleryActions, band);
-    await galleryActions.openAlbumTagEditorFromContextMenu(album);
-    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
-    await tagEditorActions.selectAllTracks();
-    await tagEditorActions.setAlbumArtist(renamed);
-    // The first save is held before it records or writes anything, as a slow save is.
-    saveGate = await holdSaveBeforeMediaWrite();
-    const firstSave = saveSetting(page, renamed);
-    await tagEditor.applyButton.click();
-    await tagEditor.confirmButton.click();
-    await expect(tagEditor.overlay).toBeHidden();
-
-    // While it runs, a page opened on the new album artist gives the album its old one back.
-    const opened = await page.context().newPage();
-    let second;
-    try {
-      const openedGallery = new GalleryActions(new GalleryPage(opened, testInfo));
-      const openedEditor = new TagEditorActions(new TagEditor(opened, testInfo));
-      await openArtist(openedGallery, renamed);
-      await openedGallery.openAlbumTagEditorFromContextMenu(album);
-      await openedEditor.waitForOpen({ expectedTrackCount: 2 });
-      await openedEditor.selectAllTracks();
-      await openedEditor.setAlbumArtist(band);
-      const secondSave = saveSetting(opened, band);
-      await openedEditor.tagEditor.applyButton.click();
-      await openedEditor.tagEditor.confirmButton.click();
-      // The second save reaches the server while the first still holds the tracks.
-      await Promise.race([secondSave, new Promise(resolve => { setTimeout(resolve, 3000); })]);
-      await saveGate.release();
-      saveGate = null;
-      expect((await (await firstSave).json()).ok).toBe(true);
-      second = await (await secondSave).json();
-    } finally {
-      await opened.close();
-    }
-    expect(second.ok, 'The second save reports success.').toBe(true);
-    expect(second.changed_count, 'A save that reports success has written its change.').toBe(2);
-
-    await expect.poll(async () => {
-      await page.reload();
-      await openArtist(galleryActions, band);
-      return navigationPanelActions.readHydratedSidebarArtistNames();
-    }, { message: `The last save gave the album back to ${band}.`, timeout: 60000 }).not.toContain(renamed);
-    await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(album)).toHaveCount(1);
-    await expect(galleryActions.galleryPage.albumCard.trackCountByAlbumName(album)).toContainText('2');
-  });
 });

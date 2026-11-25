@@ -16601,14 +16601,17 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     ? payload.library_non_album_tracks
     : Array.isArray(payload?.non_album_tracks) ? payload.non_album_tracks : []);
   const request = { key: requestKey, promise: null };
+  // The scope moved while this answer was on its way (on a reload the inventory revision arrives after the
+  // first ask): ask again for the current scope rather than drop the answer with nothing asking again.
+  const askCurrentScope = () => (libraryNonAlbumHydrationRequest === request
+    ? hydrateLibraryNonAlbumTracks({ resolveLibrary })
+    : state.view?.library_non_album_tracks || []);
   request.promise = (async () => {
     const probed = view.library_non_album_search_probe_scope === scopeKey;
     const payload = probed ? null : await fetchLibraryNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view));
     let tracks = libraryTracks(payload);
     const searchMatched = searching && tracks.length > 0;
-    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
-      return state.view?.library_non_album_tracks || [];
-    }
+    if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return askCurrentScope();
     if (payload?.non_album_tracks_deferred) {
       request.deferred = true;
       return tracks;
@@ -16632,9 +16635,7 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
       tracks = libraryTracks(await fetchNonAlbumPayload(
         buildLibraryNonAlbumRequestUrl(view, { withQuery: false }),
       ));
-      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
-        return state.view?.library_non_album_tracks || [];
-      }
+      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return askCurrentScope();
     }
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;

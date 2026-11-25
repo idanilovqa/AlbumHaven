@@ -990,9 +990,32 @@ def _maintain(repository: Any) -> None:
         queue_maintenance(repository)
 
 
+_WAITING_MARKS_SQL = """
+    select exists (select 1 from library.problematic_index_dirty_albums where library_id = %(library_id)s)
+        or exists (select 1 from library.problematic_loose_groups
+                   where library_id = %(library_id)s and marked_xid is not null) as marked
+"""
+
+
+def _queue_waiting_marks(repository: Any) -> None:
+    """Hand marked albums and loose groups to the background pass; a read never evaluates them."""
+    try:
+        with repository._browse_connection_context() as connection:
+            library_id = _library_id(connection)
+            marked = library_id is not None and bool(_value(
+                connection.execute(_WAITING_MARKS_SQL, {"library_id": library_id}).fetchone(), "marked",
+            ))
+    except Exception:
+        _LOGGER.warning("Problematic Files marks could not be checked.", exc_info=True)
+        return
+    if marked:
+        queue_maintenance(repository)
+
+
 def duplicate_results_readable(repository: Any) -> bool:
-    """Whether cards may read stored duplicate results now, after evaluating the last save's
-    marks unless a running pass holds them. Readiness comes first, and a read never waits.
+    """Whether cards may read stored duplicate results now. Readiness comes first, and a read
+    never waits or evaluates: a scan marks albums faster than any read could evaluate them, so
+    marks go to the background pass, and a tag save evaluates its own before it completes.
     The results' own version decides it: they stay readable while the Problematic Files
     items rebuild. False until their backfill is done; /status shows that work as pending."""
     if not _available(repository):
@@ -1011,7 +1034,7 @@ def duplicate_results_readable(repository: Any) -> bool:
             queue_maintenance(repository)
             return False
         _DUPLICATES_READY.add(database_url)
-    refresh(repository)
+    _queue_waiting_marks(repository)
     return True
 
 

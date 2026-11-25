@@ -13897,7 +13897,7 @@ def test_card_reads_never_wait_for_the_duplicate_results_backfill(monkeypatch, s
     assert waited == [], "A card read must not wait for the lock the backfill holds."
 
 
-@pytest.mark.parametrize("entry", ["card read", "maintenance"])
+@pytest.mark.parametrize("entry", ["request", "maintenance"])
 def test_index_evaluators_keep_no_session_state_on_a_pool_lease(monkeypatch, entry):
     """A request evaluates on its lease under a transaction lock it never waits for. The
     maintenance worker keeps its session lock on a connection of its own, never on a lease."""
@@ -13946,7 +13946,7 @@ def test_index_evaluators_keep_no_session_state_on_a_pool_lease(monkeypatch, ent
     monkeypatch.setattr(problematic_index, "_worker_connection", lambda _repository: own, raising=False)
     monkeypatch.setattr(problematic_index, "_index_rows", lambda *_a, **_k: pytest.fail("evaluated without the lock"))
 
-    if entry == "card read":
+    if entry == "request":
         assert problematic_index.refresh(repository)
         assert any("pg_try_advisory_xact_lock" in statement for statement in lease.statements)
         assert not any("pg_advisory_lock" in statement or "pg_try_advisory_lock" in statement

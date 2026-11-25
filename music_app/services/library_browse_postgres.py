@@ -247,11 +247,17 @@ def refresh_postgres_utility_projections_after_edit(
     Problematic Files index evaluate the albums the database marked.
 
     A tag save passes the edited files' previous entries: its duplicate projections then keep
-    every album the edit cannot affect (FTC-TAGS-015). A watcher edit invalidates them whole.
+    every album the edit cannot affect (FTC-TAGS-015), and it evaluates the few albums it marked
+    before it completes, so the next card read shows a pair it formed or broke on both cards
+    (reads never evaluate marks). A watcher edit invalidates them whole and leaves its marks
+    to the background pass.
     """
     database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
     if database_url:
-        problematic_index.queue_maintenance(PostgresLibraryBrowseRepository(dict(config)))
+        repository = PostgresLibraryBrowseRepository(dict(config))
+        if previous_entries is not None:
+            problematic_index.refresh(repository)
+        problematic_index.queue_maintenance(repository)
     if previous_entries is None or not database_url:
         invalidate_postgres_utility_projection_cache(database_url=database_url or None)
         return
@@ -656,9 +662,9 @@ class PostgresLibraryBrowseRepository:
     def _indexed_duplicate_results(self, album_keys: list[str]) -> dict[str, dict[str, object]] | None:
         """The persisted duplicate results of ``album_keys``; None while no index is readable.
 
-        Refreshing first evaluates the few albums a save just marked, so a pair it formed or
-        broke shows on both cards at once. The read uses its own connection: a caller's
-        repeatable-read snapshot may predate that evaluation.
+        A save evaluated its own marks before it completed, so a pair it formed or broke shows
+        on both cards at once. The read uses its own connection: a caller's repeatable-read
+        snapshot may predate that evaluation.
         """
         if not problematic_index.duplicate_results_readable(self):
             return None

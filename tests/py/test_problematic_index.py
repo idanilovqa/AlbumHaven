@@ -177,3 +177,77 @@ def test_every_session_lock_is_taken_in_the_function_that_opens_the_workers_own_
                if hazard["rule"] == "BI-15" and "session-state" in hazard["operation"]]
 
     assert [(hazard["function"], hazard["line"]) for hazard in hazards] == []
+
+
+def _marked_index_repository(pending, opened):
+    """A repository whose stored duplicate results are ready while ``pending`` albums are marked."""
+    from contextlib import contextmanager
+
+    class Browse:
+        def execute(self, sql, params=None):
+            if "problematic_index_dirty_albums" in sql and "limit" in sql:
+                rows = [{"album_id": index + 1, "marked_xid": "1"} for index in range(pending)]
+                return SimpleNamespace(fetchall=lambda: rows[:params[-1]], fetchone=lambda: rows[0] if rows else None)
+            if "problematic_loose_groups" in sql and "limit" in sql:
+                return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: None)
+            return SimpleNamespace(fetchone=lambda: {"marked": pending > 0}, fetchall=lambda: [])
+
+    @contextmanager
+    def browse_lease():
+        yield Browse()
+
+    def own_connection():
+        opened.append("connection")
+        raise AssertionError("a card read opened a connection to evaluate marked albums")
+
+    return SimpleNamespace(
+        _config={problematic_index.ENABLED_KEY: "1"},
+        _use_shared_connection_pool=True,
+        _database_url=f"postgresql://fixture/card-read-{pending}",
+        _browse_connection_context=browse_lease,
+        _connect_to_database=own_connection,
+    )
+
+
+@pytest.mark.parametrize("pending", [20, 2000])
+def test_a_card_read_never_evaluates_marked_albums_inline(monkeypatch, pending):
+    """Search during a scan: the scan marks albums faster than it publishes, and every gallery or
+    search card read drained up to 50 of them on a connection of its own (0.4-1 s per search on
+    the production-calibration library). A read serves the stored results and leaves the marks to
+    the background pass, however many are waiting."""
+    evaluations, opened, queued = [], [], []
+    repository = _marked_index_repository(pending, opened)
+    monkeypatch.setattr(problematic_index, "_library_id", lambda _connection: 1)
+    monkeypatch.setattr(problematic_index, "_state", lambda _connection, _library_id: "ready")
+    monkeypatch.setattr(problematic_index, "_duplicate_results_state", lambda _connection, _library_id: "ready")
+    monkeypatch.setattr(problematic_index, "_drain", lambda *_a, **_k: evaluations.append("albums"))
+    monkeypatch.setattr(problematic_index, "_drain_groups", lambda *_a, **_k: evaluations.append("groups"))
+    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda queued_repository: queued.append(queued_repository))
+    try:
+        assert problematic_index.duplicate_results_readable(repository) is True
+    finally:
+        problematic_index._DUPLICATES_READY.discard(repository._database_url)
+        problematic_index._READY.discard(repository._database_url)
+
+    assert (evaluations, opened) == ([], []), "a card read evaluated marked albums inline"
+    assert queued == [repository], "the background pass is queued for the waiting marks"
+
+
+@pytest.mark.parametrize("previous_entries", [[], None], ids=["tag save", "watcher edit"])
+def test_only_a_tag_save_evaluates_its_own_marks_before_it_completes(monkeypatch, previous_entries):
+    """FTC-TAGS-015: a pair a save forms or breaks shows on both cards in the very next read.
+    Reads no longer evaluate marks, so the save evaluates the few it made; a watcher edit,
+    like a scan, leaves its marks to the background pass."""
+    from music_app.services import library_browse_postgres as browse
+
+    calls = []
+    monkeypatch.setattr(problematic_index, "refresh", lambda _repository: calls.append("evaluate") or True)
+    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: calls.append("queue"))
+    monkeypatch.setattr(browse, "invalidate_postgres_utility_projection_cache", lambda **_kwargs: None)
+
+    browse.refresh_postgres_utility_projections_after_edit(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture/save-marks"},
+        track_paths=["Artist/Album/01.flac"], previous_entries=previous_entries,
+    )
+
+    assert calls == (["evaluate", "queue"] if previous_entries is not None else ["queue"])

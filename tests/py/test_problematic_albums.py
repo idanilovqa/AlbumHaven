@@ -1048,6 +1048,10 @@ def test_live_stored_duplicate_result_follows_a_stray_link_only_the_stray_album_
                    where id = %(album_id)s""",
                 {"link": Jsonb(link) if link else None, "album_id": stray_id},
             )
+        # A tag save writes the link, then evaluates the albums it marked before it completes.
+        browse.refresh_postgres_utility_projections_after_edit(
+            fixture.config, track_paths={stray["path"]}, previous_entries=[dict(stray)],
+        )
 
     assert owner_marked() is False
     set_stray_link({"album_id": owner_id, "album_key": owner_key})

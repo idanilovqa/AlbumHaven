@@ -12706,6 +12706,54 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/looseTracksNavigationCycles.spec.js",
+    "case": "Loose Tracks open, back and scroll cycles stay bounded at phone width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-track-navigation-cycles-bounded",
+      "loose-track-rendering-responsiveness"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksNavigationCycles.spec.js",
+    "case": "Loose Tracks open, back and scroll cycles stay bounded at desktop width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-track-navigation-cycles-bounded",
+      "loose-track-rendering-responsiveness"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksNavigationCycles.spec.js",
+    "case": "Loose Tracks open, back and scroll cycles stay bounded at crossing the phone breakpoint each cycle",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-track-navigation-cycles-bounded",
+      "loose-track-rendering-responsiveness"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
     "case": "mobile classic_bar places Gallery-style source badges for its layout at 320px",
     "profile": null,

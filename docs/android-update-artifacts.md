@@ -17,7 +17,7 @@ directory by the deployment synchronizer; see `docs/android-release-signing.md`.
 | `ALBUM_HAVEN_ANDROID_STABLE_SIGNING_CERT_SHA256` | Comma-separated hex SHA-256 (either case, keytool's `AB:CD:...` colons allowed) of the DER signing certificates whose Stable app (`org.albumhaven.app`) may attest. Empty refuses Stable. |
 | `ALBUM_HAVEN_ANDROID_SANDBOX_SIGNING_CERT_SHA256` | The same for the Sandbox app (`org.albumhaven.app.sandbox`). |
 | `ALBUM_HAVEN_ANDROID_SANDBOX_ALLOW_SOFTWARE_ATTESTATION` | `1` lets a sandbox server accept software-backed Sandbox keys, for emulators and debug testing only. Off by default; never applies to Stable. |
-| `ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE` | Optional local copy of Google's attestation status list. When set but unreadable, attestation fails closed. |
+| `ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE` | Path of a saved copy of Google's attestation status list. Attestation reads the list from Postgres, never from the file; startup imports the file once if the list has never been loaded, and attestation fails closed until it has. |
 | `ALBUM_HAVEN_ANDROID_SANDBOX_INDEX` | Sandbox servers only: the synchronizer's metadata-only index of every sandbox's build, which the Sandbox app's build picker reads. Unset serves none. |
 | `ALBUM_HAVEN_ANDROID_REBUILD_TOKEN` | Sandbox servers only: a fine-grained GitHub token limited to the application repository with Actions read and write only, used by the owner's one-tap rebuild. Unset offers the copyable command instead. Never set on production. |
 | `ALBUM_HAVEN_ANDROID_REBUILD_REPOSITORY` | The `owner/name` repository the rebuild dispatches `android-promote.yml` in. |
@@ -25,8 +25,9 @@ directory by the deployment synchronizer; see `docs/android-release-signing.md`.
 Certificate digests are public values, not secrets: they are the same as the
 manifest's `signingCertificateSha256`. Download links are signed with a key
 derived from the existing authentication HMAC secret; no new secret is needed.
-Apply migrations `0106_create_android_artifact_access.sql` and
-`0107_add_android_device_key_signer.sql` before starting a version that serves
+Apply migrations `0106_create_android_artifact_access.sql`,
+`0107_add_android_device_key_signer.sql` and
+`0299_create_android_attestation_revocations.sql` before starting a version that serves
 these routes, and restart the server after changing any of these variables.
 Removing a signing-certificate digest, or turning the software flag off, revokes
 the device keys it admitted at their next request or download.
@@ -91,7 +92,7 @@ cookie; POSTs also carry the session CSRF header. The route action is
 
 Refusals are JSON `{"detail","code"}`: `signed_out` (401 from the boundary),
 `invalid_request` (400: malformed JSON, channel or chain, or a non-empty exchange body),
-`attestation_unavailable` (503: the configured status list is unreadable or the link secret
+`attestation_unavailable` (503: the configured status list was never imported or the link secret
 is missing), `challenge_invalid`, `attestation_required` (the server does not know this key, or
 the configuration no longer allows it; the app attests a new one), `signature_invalid`, `attestation_refused` and
 `too_many_challenges`. They never echo tokens, challenges or paths. The server's
@@ -106,8 +107,30 @@ URL, replace the PEM blocks and run `tests/py/test_android_key_attestation.py`.
 
 Google publishes revoked attestation certificates at
 <https://android.googleapis.com/attestation/status>. The server makes no outbound
-request; to check revocation, refresh a local copy (for example daily) and set
-`ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE`.
+request: each attestation checks the chain's serials against
+`app.android_attestation_revocations` with one keyed query. To use Google's list,
+save a copy and set `ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE`. If the list has
+never been loaded, startup imports that file once, off the request path, logging
+`Attestation status list import finished entries=N`. After that it never reads the
+file. To refresh the list (for example daily), save a new copy and run:
+
+```
+python scripts/android_attestation_revocations.py import --file attestation-status.json
+```
+
+The import runs in one transaction with `ALBUM_HAVEN_MIGRATOR_DATABASE_URL`. It
+upserts changed serials in batches, drops serials the list no longer has, and
+records the list as loaded. An unreadable file changes nothing. Your own
+revocations are kept apart from Google's and survive every import:
+
+```
+python scripts/android_attestation_revocations.py add --serial 1F2E --reason "lost phone"
+python scripts/android_attestation_revocations.py remove --serial 1F2E
+```
+
+Revocations apply to the next attestation; no restart is needed. Upgrading from a
+version that read the file needs no manual step: the first start after `0299`
+imports it.
 
 ## Limitations
 

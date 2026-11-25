@@ -29,7 +29,13 @@ test('performance shard resolver preserves the existing fixture and target mappi
     basePort: 4213,
     targets: ['playback-start', 'gapless-playback'],
   });
-  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 19);
+  // The library-size targets run on the full-size library; the rest keep the standard one.
+  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 9);
+  assert.deepEqual(resolvePerformanceShard('synthetic-production-library').targets, [
+    'artist-family', 'search-all-artists', 'selected-artist', 'edit-tags-post-edit',
+    'cover-lookup', 'search-browse', 'artist-tree-scroll-navigation', 'notification-history',
+    'edit-tags-split-merge', 'edit-tags-api-consecutive',
+  ]);
   assert.deepEqual(resolvePerformanceShard('gallery-artwork-diversity'), {
     shard: 'gallery-artwork-diversity',
     fixtureProfile: 'synthetic-large-library',

@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 import threading
 
-from music_app.services import cover_refresh_runtime
+from music_app.services import cover_provider_cache, cover_refresh_runtime
 
 
 def test_cover_pass_snapshot_refreshes_selection_once_without_runtime_alias(monkeypatch):
@@ -332,7 +332,8 @@ def test_start_manual_cover_refresh_request_queues_with_explicit_dependencies_ou
     assert callable(submitted[0][0])
     assert submitted[0][1] is True
     assert built[0]["logger"] is logger
-    assert built[0]["cover_cache"].cache_path == runtime_config["COVER_CACHE_PATH"]
+    # The manual batch shares this process's cache, so a provider miss spares the next batch a search.
+    assert built[0]["cover_cache"] is cover_provider_cache.cover_search_cache_for(runtime_config)
     assert library_state["cover_generation"] == 1
     assert library_state["covers_in_progress"] is True
 

@@ -2870,7 +2870,6 @@ def persist_preloaded_fixture_library_root(
 
 def seed_functional_cover_search_cache(
     setup_database_url: str,
-    cache_path: Path,
     *,
     connect=None,
     updated_at: float | None = None,
@@ -2969,7 +2968,7 @@ def seed_functional_cover_search_cache(
 
     from music_app.services.cover_provider_cache import CoverSearchCache, cover_query_key
 
-    cache = CoverSearchCache(cache_path)
+    cache = CoverSearchCache(setup_database_url, connect=connect)
     seed_time = time.time() if updated_at is None else float(updated_at)
     seeded_keys: set[str] = set()
     for artist, album, year, edition in cache_rows:
@@ -4206,7 +4205,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         port: int,
         cover_specs: list[dict[str, Any]],
         *,
-        cover_cache_path: Path | None = None,
+        cover_cache_database_url: str | None = None,
         derivative_root: Path | None = None,
         itunes_search_delay_seconds: float = 0,
     ) -> None:
@@ -4451,7 +4450,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.problematic_complete_list_gate.set()
         self.cover_lookup_mode = "no-results"
         self.cover_lookup_mode_lock = threading.Lock()
-        self.cover_cache_path = cover_cache_path
+        self.cover_cache_database_url = cover_cache_database_url
         self.cover_lookup_evidence_lock = threading.Lock()
         self.cover_lookup_evidence = {
             "apple_search_requests": 0,
@@ -4670,8 +4669,12 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             raise ValueError(f"Unsupported cover lookup fixture mode: {normalized_mode}")
         with self.cover_lookup_mode_lock:
             self.cover_lookup_mode = normalized_mode
-        if self.cover_cache_path is not None:
-            self.cover_cache_path.unlink(missing_ok=True)
+        if self.cover_cache_database_url:
+            # A new lookup mode starts without remembered provider answers.
+            import psycopg
+
+            with psycopg.connect(self.cover_cache_database_url) as connection:
+                connection.execute("delete from library.cover_provider_cache_entries")
 
     def get_cover_lookup_mode(self) -> str:
         with self.cover_lookup_mode_lock:
@@ -5678,14 +5681,14 @@ class ProviderFixtureService:
         port: int,
         cover_specs: list[dict[str, Any]],
         *,
-        cover_cache_path: Path | None = None,
+        cover_cache_database_url: str | None = None,
         derivative_root: Path | None = None,
         itunes_search_delay_seconds: float = 0,
     ) -> None:
         self._server = _ProviderFixtureServer(
             port,
             cover_specs,
-            cover_cache_path=cover_cache_path,
+            cover_cache_database_url=cover_cache_database_url,
             derivative_root=derivative_root,
             itunes_search_delay_seconds=itunes_search_delay_seconds,
         )
@@ -5947,7 +5950,6 @@ def main() -> None:
         if fixture_profile == "functional-core":
             seed_functional_cover_search_cache(
                 setup_database_url,
-                Path(os.environ["MUSIC_COVER_CACHE_PATH"]),
                 preserve_provider_scenarios=not args.seed_all_functional_cover_misses,
             )
         if not is_preloaded_fixture and not reuse_state:
@@ -5983,7 +5985,7 @@ def main() -> None:
         provider_service = ProviderFixtureService(
             provider_port,
             cover_specs,
-            cover_cache_path=Path(os.environ["MUSIC_COVER_CACHE_PATH"]),
+            cover_cache_database_url=setup_database_url,
             derivative_root=temp_root / "provider-artwork",
         )
         provider_service.start()

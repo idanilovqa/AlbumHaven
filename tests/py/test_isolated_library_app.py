@@ -277,16 +277,10 @@ def test_preloaded_fixture_rebases_persisted_track_and_cover_paths(tmp_path):
         assert params["new_root"] == str(new_root)
 
 
-def test_functional_core_seeds_only_the_normal_negative_cover_cache(tmp_path):
-    cache_path = tmp_path / "app-data" / "cover-search-cache.json"
-    coverless_rows = [
-        ("Fixture Artist", f"Naturally Coverless {index:02d}", 2026, "")
-        for index in range(1, 13)
-    ] + [
-        ("Mastodon", "Crack The Skye Fixture 07", 2009, ""),
-        ("Mastodon", "Crack The Skye Fixture 08", 2009, ""),
-    ]
+def _seed_functional_cover_cache(coverless_rows, **options):
+    """Runs the seed against a recording connection: the inventory read, then the cover cache rows it upserts."""
     statements: list[str] = []
+    written: dict[str, dict] = {}
 
     class Result:
         @staticmethod
@@ -301,185 +295,87 @@ def test_functional_core_seeds_only_the_normal_negative_cover_cache(tmp_path):
             return False
 
         @staticmethod
-        def execute(statement):
+        def execute(statement, params=None):
             statements.append(statement)
+            if params:
+                written.update(getattr(params[0], "obj", params[0]))
             return Result()
 
     seeded = isolatedLibraryApp.seed_functional_cover_search_cache(
-        "postgresql://fixture",
-        cache_path,
-        connect=lambda _url: Connection(),
-        updated_at=1234.5,
+        "postgresql://fixture", connect=lambda _url: Connection(), **options,
+    )
+    return seeded, statements, written
+
+
+_BASELINE_COVERLESS_ROWS = [
+    ("Fixture Artist", f"Naturally Coverless {index:02d}", 2026, "")
+    for index in range(1, 13)
+]
+_PROVIDER_SCENARIO_ROWS = [
+    ("Mastodon", "Crack The Skye Fixture 07", 2009, ""),
+    ("Mastodon", "Crack The Skye Fixture 08", 2009, ""),
+]
+
+
+def test_functional_core_seeds_only_the_normal_negative_cover_cache():
+    seeded, statements, written = _seed_functional_cover_cache(
+        _BASELINE_COVERLESS_ROWS + _PROVIDER_SCENARIO_ROWS, updated_at=1234.5,
     )
 
-    payload = json.loads(cache_path.read_text(encoding="utf-8"))
     assert seeded == 12
-    assert len(statements) == 1
+    assert len(statements) == 2
     assert statements[0].lstrip().casefold().startswith("select")
     assert not any(token in statements[0].casefold() for token in ("update ", "insert ", "delete "))
-    assert len(payload["queries"]) == 12
-    assert "mastodon::crack the skye fixture 07::::2009" not in payload["queries"]
-    assert "mastodon::crack the skye fixture 08::::2009" not in payload["queries"]
+    assert "insert into library.cover_provider_cache_entries" in statements[1]
+    assert len(written) == 12
+    assert all(entry == {"updated_at": 1234.5, "missing": True} for entry in written.values())
+    assert "mastodon::crack the skye fixture 07::::2009" not in written
+    assert "mastodon::crack the skye fixture 08::::2009" not in written
 
 
-def test_functional_core_cover_cache_accepts_shared_wave_growth(tmp_path):
-    cache_path = tmp_path / "app-data" / "cover-search-cache.json"
-    coverless_rows = [
-        ("Fixture Artist", f"Naturally Coverless {index:02d}", 2026, "")
-        for index in range(1, 13)
-    ] + [
-        ("New Destination Artist", "New Coverless Album", 2026, ""),
-        ("Mastodon", "Crack The Skye Fixture 07", 2009, ""),
-        ("Mastodon", "Crack The Skye Fixture 08", 2009, ""),
-    ]
-
-    class Result:
-        @staticmethod
-        def fetchall():
-            return coverless_rows
-
-    class Connection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        @staticmethod
-        def execute(_statement):
-            return Result()
-
-    seeded = isolatedLibraryApp.seed_functional_cover_search_cache(
-        "postgresql://fixture",
-        cache_path,
-        connect=lambda _url: Connection(),
+def test_functional_core_cover_cache_accepts_shared_wave_growth():
+    seeded, _statements, written = _seed_functional_cover_cache(
+        _BASELINE_COVERLESS_ROWS + [("New Destination Artist", "New Coverless Album", 2026, "")]
+        + _PROVIDER_SCENARIO_ROWS,
         updated_at=1234.5,
     )
 
-    payload = json.loads(cache_path.read_text(encoding="utf-8"))
     assert seeded == 13
-    assert len(payload["queries"]) == 13
-    assert "new destination artist::new coverless album::::2026" in payload["queries"]
-    assert "mastodon::crack the skye fixture 07::::2009" not in payload["queries"]
-    assert "mastodon::crack the skye fixture 08::::2009" not in payload["queries"]
+    assert len(written) == 13
+    assert "new destination artist::new coverless album::::2026" in written
+    assert "mastodon::crack the skye fixture 07::::2009" not in written
+    assert "mastodon::crack the skye fixture 08::::2009" not in written
 
 
-def test_functional_core_cover_cache_includes_provider_scenarios_for_non_album_rescan(tmp_path):
-    cache_path = tmp_path / "app-data" / "cover-search-cache.json"
-    coverless_rows = [
-        ("Fixture Artist", f"Naturally Coverless {index:02d}", 2026, "")
-        for index in range(1, 13)
-    ] + [
-        ("Mastodon", "Crack The Skye Fixture 07", 2009, ""),
-        ("Mastodon", "Crack The Skye Fixture 08", 2009, ""),
-    ]
-
-    class Result:
-        @staticmethod
-        def fetchall():
-            return coverless_rows
-
-    class Connection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        @staticmethod
-        def execute(_statement):
-            return Result()
-
-    seeded = isolatedLibraryApp.seed_functional_cover_search_cache(
-        "postgresql://fixture",
-        cache_path,
-        connect=lambda _url: Connection(),
-        updated_at=1234.5,
-        preserve_provider_scenarios=False,
+def test_functional_core_cover_cache_includes_provider_scenarios_for_non_album_rescan():
+    seeded, _statements, written = _seed_functional_cover_cache(
+        _BASELINE_COVERLESS_ROWS + _PROVIDER_SCENARIO_ROWS, updated_at=1234.5, preserve_provider_scenarios=False,
     )
 
-    payload = json.loads(cache_path.read_text(encoding="utf-8"))
     assert seeded == 14
-    assert "mastodon::crack the skye fixture 07::::2009" in payload["queries"]
-    assert "mastodon::crack the skye fixture 08::::2009" in payload["queries"]
+    assert "mastodon::crack the skye fixture 07::::2009" in written
+    assert "mastodon::crack the skye fixture 08::::2009" in written
 
 
-def test_functional_core_cover_cache_seeds_scan_tag_year_variants(tmp_path):
-    cache_path = tmp_path / "app-data" / "cover-search-cache.json"
-    coverless_rows = [
-        ("Fixture Artist", f"Naturally Coverless {index:02d}", 2026, "")
-        for index in range(1, 13)
-    ] + [
-        ("ДДТ", "Студийные записи", 1990, ""),
-        ("ДДТ", "Студийные записи", 1999, ""),
-    ]
-    statements: list[str] = []
-
-    class Result:
-        @staticmethod
-        def fetchall():
-            return coverless_rows
-
-    class Connection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        @staticmethod
-        def execute(statement):
-            statements.append(statement)
-            return Result()
-
-    isolatedLibraryApp.seed_functional_cover_search_cache(
-        "postgresql://fixture",
-        cache_path,
-        connect=lambda _url: Connection(),
-        updated_at=1234.5,
-        preserve_provider_scenarios=False,
-    )
-
-    payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    statement = statements[0].casefold()
+def test_functional_core_cover_cache_seeds_scan_tag_year_variants():
     from music_app.services.cover_provider_cache import cover_query_key
 
+    _seeded, statements, written = _seed_functional_cover_cache(
+        _BASELINE_COVERLESS_ROWS + [("ДДТ", "Студийные записи", 1990, ""), ("ДДТ", "Студийные записи", 1999, "")],
+        updated_at=1234.5, preserve_provider_scenarios=False,
+    )
+
+    statement = statements[0].casefold()
     assert "library.local_track_files" in statement
     assert "scan_cache" in statement
     assert "file_entry" in statement
-    assert cover_query_key("ДДТ", "Студийные записи", None, 1990) in payload["queries"]
-    assert cover_query_key("ДДТ", "Студийные записи", None, 1999) in payload["queries"]
+    assert cover_query_key("ДДТ", "Студийные записи", None, 1990) in written
+    assert cover_query_key("ДДТ", "Студийные записи", None, 1999) in written
 
 
-def test_functional_core_cover_cache_rejects_missing_baseline_rows(tmp_path):
-    cache_path = tmp_path / "app-data" / "cover-search-cache.json"
-    coverless_rows = [
-        ("Fixture Artist", f"Naturally Coverless {index:02d}", 2026, "")
-        for index in range(1, 12)
-    ]
-
-    class Result:
-        @staticmethod
-        def fetchall():
-            return coverless_rows
-
-    class Connection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        @staticmethod
-        def execute(_statement):
-            return Result()
-
+def test_functional_core_cover_cache_rejects_missing_baseline_rows():
     with pytest.raises(RuntimeError, match="at least 12 naturally coverless"):
-        isolatedLibraryApp.seed_functional_cover_search_cache(
-            "postgresql://fixture",
-            cache_path,
-            connect=lambda _url: Connection(),
-        )
+        _seed_functional_cover_cache(_BASELINE_COVERLESS_ROWS[:11])
 
 
 def decode_sample_probe(path: Path, *, frame_count: int = 256) -> dict[str, object]:
@@ -1768,10 +1664,10 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             _port,
             _cover_specs,
             *,
-            cover_cache_path=None,
+            cover_cache_database_url=None,
             derivative_root=None,
         ):
-            assert cover_cache_path == Path(os.environ["MUSIC_COVER_CACHE_PATH"])
+            assert cover_cache_database_url == "setup"
             assert derivative_root == temp_root / "provider-artwork"
             events.append("provider.create")
 
@@ -1972,10 +1868,10 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             _port,
             cover_specs,
             *,
-            cover_cache_path=None,
+            cover_cache_database_url=None,
             derivative_root=None,
         ):
-            assert cover_cache_path == Path(os.environ["MUSIC_COVER_CACHE_PATH"])
+            assert cover_cache_database_url == "setup"
             assert derivative_root == temp_root / "provider-artwork"
             events.append("provider.create")
             provider_specs.extend(dict(spec) for spec in cover_specs)
@@ -4799,14 +4695,29 @@ def test_provider_fixture_defaults_to_no_results_until_provider_scenarios_opt_in
         service.stop()
 
 
-def test_provider_fixture_mode_change_invalidates_the_scenario_cover_cache(tmp_path):
+def test_provider_fixture_mode_change_invalidates_the_scenario_cover_cache(tmp_path, monkeypatch):
     cover_path = tmp_path / "fixture.jpg"
     cover_path.write_bytes(b"fixture-image")
     other_art_path = tmp_path / "fixture-other-art.jpg"
     other_art_path.write_bytes(b"fixture-other-art-image")
-    cover_cache_path = tmp_path / "app-data" / "inert-cover-cache.json"
-    cover_cache_path.parent.mkdir(parents=True)
-    cover_cache_path.write_text('{"stale": true}', encoding="utf-8")
+    statements: list[tuple[str, str]] = []
+
+    class Connection:
+        def __init__(self, url):
+            self.url = url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement):
+            statements.append((self.url, statement))
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", Connection)
     service = isolatedLibraryApp.ProviderFixtureService(
         0,
         [{
@@ -4819,13 +4730,13 @@ def test_provider_fixture_mode_change_invalidates_the_scenario_cover_cache(tmp_p
             "width": 1200,
             "height": 1200,
         }],
-        cover_cache_path=cover_cache_path,
+        cover_cache_database_url="postgresql://fixture-setup",
     )
 
     service.start()
     try:
         service._server.set_cover_lookup_mode("automatic-scan")
-        assert not cover_cache_path.exists()
+        assert statements == [("postgresql://fixture-setup", "delete from library.cover_provider_cache_entries")]
     finally:
         service.stop()
 

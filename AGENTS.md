@@ -7,6 +7,11 @@ Owner workflows live in a separate private repository. If
 Otherwise, check `../album-haven-internal/AGENTS.md`. External contributors do
 not need the private repository to build or use Album Haven.
 
+Owner agents also read `docs/claude-project-memory/README.md` in that checkout
+at the start of every session and follow the rules it links. It is the single
+home for the owner's standing rules for agents; record new ones there, not in a
+machine-local memory folder.
+
 Owner planning, technical designs, implementation plans, mockup decision
 records, acceptance handoffs, and retained planning history are private. Create
 and update them only in `album-haven-internal`; never add or copy them into this

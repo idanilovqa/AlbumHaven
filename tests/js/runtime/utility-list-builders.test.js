@@ -3930,17 +3930,19 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
   });
 });
 
+// BUGFIX-04: an auto-selected search is refreshed as the same search, so the server picks its top artist
+// again with every other match; asking for that artist by name (or for all artists) changed the results.
 for (const scenario of [
-  { name: 'auto-selected content search', source: 'auto_top_match', allResults: true },
+  { name: 'auto-selected content search', source: 'auto_top_match', reselects: true },
   { name: 'explicit artist selection', source: 'requested_artist' },
-  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true, allResults: true },
-  { name: 'nonstructural edit', source: 'auto_top_match', field: 'title' },
-  { name: 'superseded view', source: 'auto_top_match', superseded: true },
+  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true, reselects: true },
+  { name: 'nonstructural edit', source: 'auto_top_match', field: 'title', reselects: true },
+  { name: 'superseded view', source: 'auto_top_match', superseded: true, reselects: true },
   { name: 'changed query', source: 'auto_top_match', changedQuery: true },
-  { name: 'artist-name search', source: 'auto_top_match', artistNameMatch: true },
+  { name: 'artist-name search', source: 'auto_top_match', artistNameMatch: true, reselects: true },
   { name: 'explicit family filter', source: 'auto_top_match', familyFilter: true },
   { name: 'explicit primary filter', source: 'auto_top_match', primaryFilter: true },
-  { name: 'failed refresh', source: 'auto_top_match', failedRefresh: true, allResults: true },
+  { name: 'failed refresh', source: 'auto_top_match', failedRefresh: true, reselects: true },
 ]) {
   test(`watchSaveTask preserves split search intent for ${scenario.name}`, async () => {
     const context = loadHelpers();
@@ -3965,6 +3967,7 @@ for (const scenario of [
       tracks: [originalAlbum.tracks[0]],
     };
     const originatingSearchContext = {
+      committed_query: 'Collection',
       selected_artist_source: scenario.source,
       artist_name_match_artists: scenario.artistNameMatch ? ['Various Artists'] : [],
     };
@@ -4003,27 +4006,19 @@ for (const scenario of [
     await context.watchSaveTask('split-search-task', {
       originalAlbum, optimisticAlbums: [source, destination],
       originatingViewStateRevision: 7, originatingViewRequestUrl: originUrl,
-      originatingSearchContext,
       tagEdits: { 'selected.flac': { [scenario.field || 'album']: 'Collection Split' } },
       terminalPayload: { ok: true, save_task_id: 'split-search-task', save_task_status: 'completed',
         requires_view_refresh: true, updated_albums: [] },
     });
     assert.equal(refreshCalls.length, 1);
     const refreshed = context.parseBrowserUrlState(refreshCalls[0].url);
-    assert.equal(refreshed.all_artists_active, Boolean(scenario.allResults));
-    assert.equal(refreshed.selected_artist, scenario.allResults ? '' : 'Various Artists');
+    assert.equal(refreshed.all_artists_active, false);
+    assert.equal(refreshed.selected_artist, scenario.reselects ? '' : 'Various Artists');
     assert.equal(refreshed.query, scenario.changedQuery ? 'Another query' : 'Collection');
     assert.deepEqual(Array.from(refreshed.visible_library_categories), ['main_library']);
     assert.equal(refreshCalls[0].push, false);
-    if (scenario.allResults && !scenario.failedRefresh) {
-      assert.equal(historyCalls.length, 1);
-      assert.equal(context.parseCurrentBrowserUrlState().all_artists_active, true);
-      assert.equal(context.parseCurrentBrowserUrlState().selected_artist, '');
-      assert.equal(context.parseCurrentBrowserUrlState().query, 'Collection');
-    } else {
-      assert.equal(historyCalls.length, 0);
-      if (!scenario.allResults) assert.equal(refreshCalls[0].url, currentUrl);
-    }
+    assert.equal(historyCalls.length, 0, 'the address keeps the search as the person made it');
+    if (!scenario.reselects) assert.equal(refreshCalls[0].url, currentUrl);
   });
 }
 

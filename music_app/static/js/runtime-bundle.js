@@ -2322,6 +2322,23 @@ function buildUrl(view) {
   return `${pathname}${qs ? `?${qs}` : ''}`;
 }
 
+// BUGFIX-04: the top artist of a search is the server's pick for that query, not a request. Refreshing
+// it by name returns that artist's albums only and loses the search's other matches, so a refresh asks
+// for the same search and lets the server pick again. Family filters belong to that artist and keep it.
+function viewForSearchRefresh(view) {
+  const query = String(view?.query || '').trim();
+  const searchContext = view?.search_context || {};
+  const committedQuery = String(searchContext.committed_query ?? query).trim();
+  if (
+    !query
+    || committedQuery !== query
+    || String(searchContext.selected_artist_source || '').trim() !== 'auto_top_match'
+    || view.primary_filter_active
+    || (view.related_filter_artists || []).length
+  ) return view;
+  return { ...view, selected_artist: '' };
+}
+
 function buildApiUrl(view, options = {}) {
   const resolvedSurface = resolveViewSurface(view);
   if (resolvedSurface === 'home') {
@@ -21610,13 +21627,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshView = (
-      String(state.view?.query || '').trim()
-      && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
-    )
-      ? { ...state.view, selected_artist: '' }
-      : state.view;
-    const refreshApplied = await fetchAndRender(buildApiUrl(refreshView, { rootFullPayload: true }), false, {
+    const refreshApplied = await fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view), { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
       preserveMountedGalleryChildren: true,
@@ -27221,25 +27232,9 @@ async function watchSaveTask(taskId, context = {}) {
             && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
-              let refreshView = state.view;
-              const originSearch = context.originatingSearchContext;
-              const restoresAllSearchResults = Boolean(
-                canReconcileOriginView()
-                && structuralTagEditRequiresMountedGalleryChildReplacement
-                && originSearch?.selected_artist_source === 'auto_top_match'
-                && !(originSearch.artist_name_match_artists || []).length
-                && originatingViewRequestUrl
-                && String(state.view.query || '').trim()
-                && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
-                && !state.view.primary_filter_active
-                && !(state.view.related_filter_artists || []).length
-              );
-              if (restoresAllSearchResults) {
-                refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
-              }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await ownViewRequest(fetchAndRender(
-                buildApiUrl(refreshView, { rootFullPayload: true }),
+                buildApiUrl(viewForSearchRefresh(state.view), { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -27265,9 +27260,6 @@ async function watchSaveTask(taskId, context = {}) {
               ) {
                 await waitForBrowserTimeout(500);
                 continue;
-              }
-              if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
-                replaceBrowserViewState(state.view);
               }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
@@ -27341,7 +27333,7 @@ async function watchSaveTask(taskId, context = {}) {
           renderView(currentRenderOptions());
         } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
-            await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
+            await fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, currentViewRenderOptions());
           } catch (refreshError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but the navigated view could not be refreshed.',
@@ -27458,7 +27450,7 @@ async function watchSaveTask(taskId, context = {}) {
         if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
-              buildApiUrl(state.view),
+              buildApiUrl(viewForSearchRefresh(state.view)),
               false,
               currentViewRenderOptions(),
             );
@@ -43857,7 +43849,6 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
-  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -44047,7 +44038,6 @@ async function confirmManualTagEdit() {
       tagEditorDraft,
       originatingViewStateRevision,
       originatingViewRequestUrl,
-      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
@@ -44630,7 +44620,7 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
 // UI-11 (owner): a version change updates the gallery in the background, like albums the watcher finds:
 // the mounted gallery and its scroll stay; no Loading page.
 function refreshGalleryAfterVersionChange() {
-  return fetchAndRender(buildApiUrl(state.view), false, { preserveScroll: true });
+  return fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, { preserveScroll: true });
 }
 
 function scheduleVersionGalleryRefresh() {

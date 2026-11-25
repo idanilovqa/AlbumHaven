@@ -2592,25 +2592,9 @@ async function watchSaveTask(taskId, context = {}) {
             && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
-              let refreshView = state.view;
-              const originSearch = context.originatingSearchContext;
-              const restoresAllSearchResults = Boolean(
-                canReconcileOriginView()
-                && structuralTagEditRequiresMountedGalleryChildReplacement
-                && originSearch?.selected_artist_source === 'auto_top_match'
-                && !(originSearch.artist_name_match_artists || []).length
-                && originatingViewRequestUrl
-                && String(state.view.query || '').trim()
-                && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query
-                && !state.view.primary_filter_active
-                && !(state.view.related_filter_artists || []).length
-              );
-              if (restoresAllSearchResults) {
-                refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
-              }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await ownViewRequest(fetchAndRender(
-                buildApiUrl(refreshView, { rootFullPayload: true }),
+                buildApiUrl(viewForSearchRefresh(state.view), { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -2636,9 +2620,6 @@ async function watchSaveTask(taskId, context = {}) {
               ) {
                 await waitForBrowserTimeout(500);
                 continue;
-              }
-              if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
-                replaceBrowserViewState(state.view);
               }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
@@ -2712,7 +2693,7 @@ async function watchSaveTask(taskId, context = {}) {
           renderView(currentRenderOptions());
         } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
-            await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
+            await fetchAndRender(buildApiUrl(viewForSearchRefresh(state.view)), false, currentViewRenderOptions());
           } catch (refreshError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but the navigated view could not be refreshed.',
@@ -2829,7 +2810,7 @@ async function watchSaveTask(taskId, context = {}) {
         if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
-              buildApiUrl(state.view),
+              buildApiUrl(viewForSearchRefresh(state.view)),
               false,
               currentViewRenderOptions(),
             );

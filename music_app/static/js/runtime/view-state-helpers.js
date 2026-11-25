@@ -143,6 +143,23 @@ function buildUrl(view) {
   return `${pathname}${qs ? `?${qs}` : ''}`;
 }
 
+// BUGFIX-04: the top artist of a search is the server's pick for that query, not a request. Refreshing
+// it by name returns that artist's albums only and loses the search's other matches, so a refresh asks
+// for the same search and lets the server pick again. Family filters belong to that artist and keep it.
+function viewForSearchRefresh(view) {
+  const query = String(view?.query || '').trim();
+  const searchContext = view?.search_context || {};
+  const committedQuery = String(searchContext.committed_query ?? query).trim();
+  if (
+    !query
+    || committedQuery !== query
+    || String(searchContext.selected_artist_source || '').trim() !== 'auto_top_match'
+    || view.primary_filter_active
+    || (view.related_filter_artists || []).length
+  ) return view;
+  return { ...view, selected_artist: '' };
+}
+
 function buildApiUrl(view, options = {}) {
   const resolvedSurface = resolveViewSurface(view);
   if (resolvedSurface === 'home') {

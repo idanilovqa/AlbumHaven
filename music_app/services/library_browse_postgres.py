@@ -2720,8 +2720,10 @@ class PostgresLibraryBrowseRepository:
                         *matching_sidebar_artists,
                     ],
                 )
+                # The auto-selected best match leads the gallery; the tree stays alphabetical.
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
                     sidebar_groups,
+                    alphabetical=True,
                 )
                 payload["artist_count"] = len(sidebar_groups)
                 selected_family_keys = {
@@ -3186,7 +3188,7 @@ class PostgresLibraryBrowseRepository:
             connection.execute("SET LOCAL jit = off")
             payload = self._build_problematic_files_payload_from_rows(
                 connection=connection,
-                rows=self._load_problematic_file_rows(connection=connection),
+                rows=_lay_pending_ignored_repairs(self._load_problematic_file_rows(connection=connection), connection),
             )
         return payload
 
@@ -3431,12 +3433,13 @@ class PostgresLibraryBrowseRepository:
                     {"paths": sorted(normalized_paths)},
                 ).fetchall()
             ]
-            rows = (
+            rows = _lay_pending_ignored_repairs(
                 self._load_problematic_file_rows(connection=connection, album_ids=album_ids)
                 if album_ids else
                 self._load_problematic_loose_file_rows(
                     connection=connection, limit=None, private_paths=set(normalized_paths),
-                )
+                ),
+                connection,
             )
         albums = _problematic_album_projection_payloads(rows)
         for album in albums:
@@ -3489,7 +3492,8 @@ class PostgresLibraryBrowseRepository:
             # One read covers every album holding the path; aliases are read once, on a match.
             albums = [
                 album for album in _problematic_album_projection_payloads(
-                    self._load_problematic_file_rows(album_ids=album_ids, connection=connection)
+                    _lay_pending_ignored_repairs(
+                        self._load_problematic_file_rows(album_ids=album_ids, connection=connection), connection)
                 )
                 if path in {
                     str(track.get("path") or "").strip()
@@ -3528,7 +3532,10 @@ class PostgresLibraryBrowseRepository:
             if listed_missing is not False and (detail := missing_detail()) is not None:
                 return detail
             albums = _problematic_album_projection_payloads(
-                self._load_problematic_file_rows(album_key=normalized_album_key, connection=connection)
+                _lay_pending_ignored_repairs(
+                    self._load_problematic_file_rows(album_key=normalized_album_key, connection=connection),
+                    connection,
+                )
             )
             requested_keys = set(_problematic_album_key_candidates(normalized_album_key))
             matching_albums = [album for album in albums if str(album.get("key") or "") in requested_keys]
@@ -4295,17 +4302,9 @@ class PostgresLibraryBrowseRepository:
             else None
         )
         if cached and cached.get("fingerprint") == fingerprint:
-            # A generic deepcopy of ~19k aliases cost ~140 ms per search; the maps
-            # hold only strings and string lists, so copy just those containers.
-            views = cached.get("relation_views") or {}
-            return {
-                **views,
-                "alias_to_canonical": dict(views.get("alias_to_canonical") or {}),
-                "canonical_to_aliases": {
-                    canonical: list(aliases) if isinstance(aliases, list) else aliases
-                    for canonical, aliases in (views.get("canonical_to_aliases") or {}).items()
-                },
-            }
+            # A hit shares the read-only maps and copies only the envelope, so its
+            # cost does not grow with the library's ~19k aliases.
+            return dict(cached.get("relation_views") or {})
 
         generation = 0
         if cacheable:
@@ -4421,8 +4420,7 @@ class PostgresLibraryBrowseRepository:
                 return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
 
             def album_rows(cursor: Any) -> list[object]:
-                return _lay_pending_ignored_repairs(
-                    _narrow_mixed_album_folders(active_connection, list(cursor.fetchall())), active_connection)
+                return _narrow_mixed_album_folders(active_connection, list(cursor.fetchall()))
 
             def standalone_rows() -> list[object]:
                 return self._load_problematic_loose_file_rows(
@@ -4624,7 +4622,7 @@ class PostgresLibraryBrowseRepository:
             )
             rows.append(row)
         _attach_loose_ignored_repair_keys(connection, rows)
-        return _lay_pending_ignored_repairs(rows, connection)
+        return rows
 
     def _load_utility_rules_rows(self) -> list[object]:
         with self._browse_connection_context() as connection:
@@ -7016,7 +7014,8 @@ def _attach_loose_ignored_repair_keys(connection: Any, rows: list[dict[str, obje
 
 def _lay_pending_ignored_repairs(rows: list[object], connection: Any) -> list[object]:
     """Each problem row's ignored repairs with the pending intents laid over them (6.5: overlay at read
-    time). An added album rule counts for the rows of the album it names, an added file rule for that file's
+    time). The row loaders return stored rules only, so the persisted index never stores an intent; each read
+    lays them itself. An added album rule counts for the rows of the album it names, an added file rule for that file's
     rows, as the stored rules reach rows in SQL. One indexed read of only the intents these rows' albums and
     files name, from a table that is empty unless a publication held an Ignore back."""
     from music_app.services.rule_state_postgres import ignored_repair_identity, pending_ignored_repairs

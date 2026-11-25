@@ -1664,7 +1664,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     });
     if (appliedNewInventoryRevision
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
-      invalidateAllHydratedTrackModalAlbumDetails();
+      invalidateAllHydratedTrackModalAlbumDetails(appliedInventoryMutationRevision);
       if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
         // An open album that no longer exists must not leave the applied gallery half-finished.
         const openTrackModalRefresh = refreshOpenTrackModalAfterInventoryMutation()
@@ -2372,7 +2372,7 @@ async function pollStatus() {
       && currentInventoryRevision > knownInventoryRevision;
     if (inventoryAdvanced) {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
-        invalidateAllHydratedTrackModalAlbumDetails();
+        invalidateAllHydratedTrackModalAlbumDetails(currentInventoryRevision);
       }
       const appliedViewInventoryRevision = Number(
         state.ui.appliedViewInventoryMutationRevision,
@@ -2567,7 +2567,7 @@ async function pollStatus() {
         if (!refreshApplied) {
           state.ui.pendingInventoryMutationViewRefresh = true;
         } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
-          invalidateAllHydratedTrackModalAlbumDetails();
+          invalidateAllHydratedTrackModalAlbumDetails(Number(state.status?.inventory_mutation_revision || 0));
         }
       } catch (inventoryRefreshError) {
         if (!ownsStatus()) return;

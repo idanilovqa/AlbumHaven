@@ -7,9 +7,11 @@ the ignored repairs already shows them, so a reload keeps the change.
 """
 from __future__ import annotations
 
+import json
 from time import monotonic
 
 import psycopg
+import psycopg.rows
 import pytest
 
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (live fixture)
@@ -275,8 +277,73 @@ def _failed(library):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     payload = PostgresLibraryBrowseRepository(library.fixture.config).build_utility_rules_payload()
+    # What GET /utilities/rules sends (FTC-UTIL-PROBLEMS-015: a failed intent's datetime made it a 500).
+    payload = json.loads(json.dumps(payload))
     return {item["row_key"]: item for item in payload.get("failed_ignored_repairs") or []}
 
+
+def _index_batch(library):
+    """The rows one Problematic Files index batch stores for both albums, and how often it read the intents."""
+    from music_app.services import problematic_index, rule_state_postgres
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    intent_reads = []
+    read_intents = rule_state_postgres.pending_ignored_repairs
+
+    def counted(*args, **kwargs):
+        intent_reads.append(1)
+        return read_intents(*args, **kwargs)
+
+    rule_state_postgres.pending_ignored_repairs = counted
+    try:
+        repository = PostgresLibraryBrowseRepository(library.fixture.config)
+        with psycopg.connect(library.fixture.runtime_url, row_factory=psycopg.rows.dict_row) as connection:
+            items, _duplicates, _replaced = problematic_index._index_rows(
+                repository, connection, problematic_index._library_id(connection),
+                [library.first["id"], library.second["id"]], False, duplicates=False)
+    finally:
+        rule_state_postgres.pending_ignored_repairs = read_intents
+    return items, len(intent_reads)
+
+
+def _waiting_ignore(library, monkeypatch, keys):
+    from music_app.services import ignored_repair_intents
+
+    monkeypatch.setattr(ignored_repair_intents, "queue_drain", lambda _config: None)
+    save = library.save()
+    try:
+        assert _answered(lambda: _ignore(library, keys)) == "pending"
+    finally:
+        save.rollback()
+        save.close()
+    assert _pending(library) == 1 and _shown(library) == set(keys), "the Ignore waits and reads already show it"
+
+
+def test_an_index_batch_with_a_waiting_ignore_stores_the_same_rows_as_with_none(library, monkeypatch):
+    """The persisted index holds what the library holds: a waiting Ignore is laid over reads, never stored by an
+    index batch (which would keep showing it after the intent fails). The batch reads no intents at all."""
+    keys = _keys(library)
+    without, _reads = _index_batch(library)
+    _waiting_ignore(library, monkeypatch, keys)
+
+    with_waiting, intent_reads = _index_batch(library)
+
+    assert with_waiting == without, "an index batch stored a waiting Ignore"
+    assert intent_reads == 0, f"an index batch read the waiting intents {intent_reads} times"
+
+
+def test_a_failed_ignore_is_not_stored_as_ignored_by_the_next_index_batch(library, monkeypatch):
+    keys = _keys(library)
+    without, _reads = _index_batch(library)
+    _waiting_ignore(library, monkeypatch, keys)
+    with psycopg.connect(library.fixture.setup_url) as connection:
+        connection.execute("""update library.ignored_repair_intents
+                              set failed_at = now(), failure = 'refused', failure_kind = 'error'""")
+
+    after_failure, _reads = _index_batch(library)
+
+    assert _shown(library) == set(), "a failed Ignore is not shown as made"
+    assert after_failure == without, "the next index batch stored the failed Ignore"
 
 def test_a_drain_where_one_intent_fails_applies_the_others_and_reports_the_failed_one(library, monkeypatch, caplog):
     from music_app.services import ignored_repair_intents, rule_state_postgres

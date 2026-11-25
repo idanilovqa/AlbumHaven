@@ -5004,6 +5004,54 @@ def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monke
     assert payload["show_all_artists_sidebar_link"] is False
 
 
+def test_postgres_typed_exact_search_lists_its_family_tree_alphabetically(monkeypatch):
+    """Owner (11-24): a typed search's Artist Tree is alphabetical, like the direct link's."""
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+    )
+    search_rows = [{
+        "artist_id": 1,
+        "artist_name": "Zephyr Lane",
+        "artist_sort_name": "Zephyr Lane",
+        "album_id": 10,
+        "album_key": "zephyr-lane::lane-signal",
+        "album_title": "Lane Signal",
+        "album_metadata": {"album_artist": "Zephyr Lane"},
+    }]
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Zephyr Lane": "Zephyr Lane"},
+        "canonical_to_aliases": {"Zephyr Lane": ["Zephyr Lane"]},
+        "projection_stale_reason": "",
+    })
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *_args, **_kwargs: "Zephyr Lane")
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: search_rows)
+    # The family arrives in gallery order: the best match first, then its family.
+    monkeypatch.setattr(repository, "build_selected_artist_payload", lambda **_kwargs: {
+        "selected_artist": "Zephyr Lane",
+        "primary_artist_groups": [{"artist": "Zephyr Lane", "albums": []}],
+        "family_artist_groups": [
+            {"artist": "Mira Lane", "albums": []},
+            {"artist": "Amber Lane", "albums": []},
+        ],
+        "related_filter_base_primary_groups": [{"artist": "Zephyr Lane", "albums": []}],
+        "related_filter_base_family_groups": [
+            {"artist": "Mira Lane", "albums": []},
+            {"artist": "Amber Lane", "albums": []},
+        ],
+        "related_artists": ["Mira Lane", "Amber Lane"],
+        "search_context": {},
+    })
+
+    payload = repository.build_search_payload(query_params={"q": "Zephyr Lane"})
+
+    assert [group["artist"] for group in payload["artist_groups"]] == ["Zephyr Lane", "Mira Lane", "Amber Lane"]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Amber Lane", "Mira Lane", "Zephyr Lane"]
+    assert payload["selected_artist"] == "Zephyr Lane"
+
+
 @pytest.mark.parametrize("with_alias", [False, True])
 def test_root_startup_preview_selects_the_canonical_sidebar_prefix(monkeypatch, with_alias):
     from music_app.services import library_browse_postgres as browse
@@ -9002,8 +9050,8 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    # Exact-family search keeps the tree aligned with the rendered gallery.
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse", "Cosmic Cathedral"]
+    # The gallery leads with the match; the tree stays alphabetical (owner, 11-24).
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Cosmic Cathedral", "Neal Morse"]
     assert payload["artist_count"] == 2
     assert queued_covers == [
         ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
@@ -15961,7 +16009,8 @@ class _ProblematicSnapshotConnectionStub:
         return False
 
     def execute(self, sql, params=None):
-        if _is_missing_album_query(sql):
+        # The read lays the waiting Ignore intents over the loaded rows (none here).
+        if _is_missing_album_query(sql) or "library.ignored_repair_intents" in str(sql):
             return _InventoryCursor()
         assert str(sql) in {
             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",

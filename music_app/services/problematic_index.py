@@ -1120,7 +1120,7 @@ def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str,
 
 def _with_pending_ignores(repository: Any, connection: Any, items: list[dict[str, object]]) -> list[dict[str, object]]:
     """The page with the pending ignored-repair intents laid over it (6.5: overlay at read time, scoped to the
-    page): each album item an intent names is built again from its own rows, which carry the intents
+    page): each album item an intent names is built again from its own rows with the intents laid over them
     (library_browse_postgres._lay_pending_ignored_repairs), and leaves the page once nothing in it is left
     to show. An Unignore can bring back only an item still on the page; the rest returns with the drain."""
     from music_app.services.rule_state_postgres import ignored_repair_identity, pending_ignored_repairs
@@ -1150,7 +1150,10 @@ def _with_pending_ignores(repository: Any, connection: Any, items: list[dict[str
         return items
     rebuilt = repository._build_problematic_files_payload_from_rows(
         connection=connection,
-        rows=repository._load_problematic_file_rows(connection=connection, album_ids=sorted(set(album_ids.values()))),
+        rows=_browse()._lay_pending_ignored_repairs(
+            repository._load_problematic_file_rows(connection=connection, album_ids=sorted(set(album_ids.values()))),
+            connection,
+        ),
         missing_rows=[],
         include_initial_detail=False,
     )
@@ -1197,9 +1200,9 @@ def loose_group_detail(repository: Any, item_key: str) -> dict[str, object] | No
         paths = {str(path) for path in (item or {}).get("track_paths") or [] if str(path or "").strip()}
         if not paths:
             return None
-        rows = repository._load_problematic_loose_file_rows(
+        rows = browse._lay_pending_ignored_repairs(repository._load_problematic_loose_file_rows(
             connection=connection, limit=None, album_keys={item_key}, seed_private_paths=paths,
-        )
+        ), connection)
         payload = repository._build_problematic_files_payload_from_rows(
             connection=connection, rows=rows, missing_rows=[], include_initial_detail=False, cache_albums=True,
         )

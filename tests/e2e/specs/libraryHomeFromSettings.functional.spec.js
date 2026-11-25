@@ -20,7 +20,8 @@ test('FTC-GALLERY-HOME-002 Home from the admin panel opens library Home, not the
     await home.homeLogo.click();
     await expect(home.settingsHost).toHaveCount(0);
     await expect(home.searchInput).toHaveValue('');
-    await expect.poll(() => home.viewParameters()).toEqual({ path: '/', query: null, artist: null });
+    // Library Home is the all-artists albums gallery, whose canonical address is /albums (700ccdd9b).
+    await expect.poll(() => home.viewParameters()).toEqual({ path: '/albums', query: null, artist: null });
     await expect(home.galleryTitle).not.toContainText('family');
     await expect(home.albumCards.first()).toBeVisible();
   });

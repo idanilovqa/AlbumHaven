@@ -47,6 +47,11 @@ def _surfaces(fixture, album, paths):
     }
 
 
+def _mentions(payload, path):
+    """Whether the payload names the file (as JSON text escapes a Windows path, compare escaped)."""
+    return json.dumps(path)[1:-1] in json.dumps(payload, default=str)
+
+
 def _saying_mixed(surfaces):
     return sorted(name for name, payload in surfaces.items() if MIXED in json.dumps(payload, default=str))
 
@@ -130,7 +135,7 @@ def test_a_file_whose_only_label_is_the_stale_mixed_one_counts_in_its_album_card
         "the album card counts the file with the stale label")
     loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
     loose = repository.build_library_loose_tracks_payload(query_params={})
-    assert stale not in json.dumps(loose, default=str), "Loose Tracks lists a file of a formed album"
+    assert not _mentions(loose, stale), "Loose Tracks lists a file of a formed album"
 
 
 def test_an_albumless_file_whose_only_label_is_the_stale_mixed_one_stays_in_loose_tracks(watcher_repair_inventory):
@@ -158,7 +163,7 @@ def test_an_albumless_file_whose_only_label_is_the_stale_mixed_one_stays_in_loos
     loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
     loose = repository.build_library_loose_tracks_payload(query_params={})
     listed = [track for track in loose.get("library_non_album_tracks") or []
-              if copy["path"] in json.dumps(track, default=str)]
+              if _mentions(track, copy["path"])]
     assert len(listed) == 1, "the albumless file vanished from Loose Tracks"
     assert MIXED not in json.dumps(listed, default=str)
 

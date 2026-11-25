@@ -1060,6 +1060,12 @@ def wait_for_background_work(timeout: float = 600) -> None:
         _EXECUTOR.submit(lambda: None).result(timeout=timeout)
 
 
+# A problem reason as the Problematic Files filter names it: the client's normalizeProblemFilterReason.
+_FILTER_REASON_SQL = """(case
+              when btrim({reason}) = 'Inconsistent year' or btrim({reason}) like 'Year mismatch%%' then 'Year mismatch'
+              when btrim({reason}) like 'Incomplete track order:%%' then 'Incomplete track order'
+              else btrim({reason}) end)"""
+
 # Case 55 (6.5's correction c): a page reads each branch through 0294's (library_id, root_id, sort keys)
 # index, at most a page each: album items (no root) and every active root's loose groups. Items under an
 # inactive root are never read, however many sort before the first one shown.
@@ -1068,7 +1074,10 @@ _PAGE_FILTER = """
                or (items.sort_name, items.sort_artist, items.sort_year, items.sort_key)
                   > ((%(after)s::text[])[1], (%(after)s::text[])[2],
                      (%(after)s::text[])[3], (%(after)s::text[])[4]))
-          and (%(needle)s = '' or strpos(items.search_text, %(needle)s) > 0)"""
+          and (%(needle)s = '' or strpos(items.search_text, %(needle)s) > 0)
+          and (cardinality(%(reasons)s::text[]) = 0 or exists (
+            select 1 from jsonb_array_elements_text(coalesce(items.item -> 'problem_reasons', '[]'::jsonb)) reason
+            where """ + _FILTER_REASON_SQL.format(reason="reason") + """ = any(%(reasons)s::text[])))"""
 _READ_PAGE_SQL = f"""
     with library_scope as materialized (select ({_LIBRARY_SQL}) as library_id),
     page as (
@@ -1096,8 +1105,9 @@ _READ_PAGE_SQL = f"""
 
 
 def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str, str] | None,
-              needle: str = "") -> list[dict[str, object]] | None:
-    """Up to ``limit + 1`` items (every item when None) after ``after`` matching ``needle``.
+              needle: str = "", reasons: tuple[str, ...] = ()) -> list[dict[str, object]] | None:
+    """Up to ``limit + 1`` items (every item when None) after ``after`` matching ``needle`` and, when
+    ``reasons`` are given, having one of those filter reasons.
 
     None when no ready index exists yet. Items under an inactive root are not served (a read applies
     root activity, case 55).
@@ -1108,7 +1118,7 @@ def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str,
         rows = connection.execute(
             _READ_PAGE_SQL,
             {"after": list(after) if after is not None else None, "needle": needle,
-             "limit": None if limit is None else limit + 1},
+             "reasons": list(reasons), "limit": None if limit is None else limit + 1},
         ).fetchall()
         items = [
             json.loads(item) if isinstance(item, str) else dict(item)
@@ -1116,6 +1126,25 @@ def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str,
             if (item := _value(row, "item")) is not None
         ]
         return _with_pending_ignores(repository, connection, items)
+
+
+_REASON_TYPES_SQL = f"""
+    with library_scope as materialized (select ({_LIBRARY_SQL}) as library_id)
+    select distinct {_FILTER_REASON_SQL.format(reason="reason")} as reason
+    from library_scope
+    join library.problematic_index_items items on items.library_id = library_scope.library_id
+    left join library.library_roots roots on roots.id = items.root_id
+    cross join lateral jsonb_array_elements_text(coalesce(items.item -> 'problem_reasons', '[]'::jsonb)) reason
+    where items.root_id is null or roots.is_active is true"""
+
+
+def reason_types(repository: Any) -> list[str] | None:
+    """Every filter reason an indexed item has (the filter menu offers only those); None until ready."""
+    if not refresh(repository):
+        return None
+    with repository._browse_connection_context() as connection:
+        return sorted(str(_value(row, "reason")) for row in connection.execute(_REASON_TYPES_SQL).fetchall()
+                      if str(_value(row, "reason") or ""))
 
 
 def _with_pending_ignores(repository: Any, connection: Any, items: list[dict[str, object]]) -> list[dict[str, object]]:

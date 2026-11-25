@@ -3341,14 +3341,23 @@ function renderProblemFilterControls(els) {
   }
 }
 
+// A search or a problem filter asks the server, page by page, so matches beyond the rows loaded so far
+// are found without loading the whole list. Its key names the query and the filters together.
+function problematicServerQuery() {
+  const q = String(state.utility.searchQuery || '').trim();
+  const reasons = Array.from(new Set(state.utility.selectedProblemFilters || [])).sort();
+  const key = q || reasons.length ? JSON.stringify([q.toLocaleLowerCase(), reasons]) : '';
+  return { q, reasons, key };
+}
+
 function getFilteredProblematicAlbums() {
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
-  const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
-  const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
-  if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
-  const list = query.length >= 2 && serverQuery === query
-    ? getAllProblematicList()
-    : getProblematicBaseList();
+  // A search or filter shows the server's matches with the loaded rows that match; while its request is
+  // out, nothing (the list says it is searching).
+  const serverKey = problematicServerQuery().key;
+  const settled = Boolean(serverKey) && state.utility.problematicServerSearchSettledQuery === serverKey;
+  if (serverKey && !settled && state.utility.problematicServerSearchPendingQuery === serverKey) return [];
+  const list = settled ? getAllProblematicList() : getProblematicBaseList();
   const selectedFilters = state.utility.selectedProblemFilters || [];
   if (!query && !selectedFilters.length) return list.items;
   // A view is filtered once per committed list, query and selected problem types.

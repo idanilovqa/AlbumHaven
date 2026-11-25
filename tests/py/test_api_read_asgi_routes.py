@@ -5202,7 +5202,7 @@ def test_asgi_bounded_problematic_files_page_does_not_wait_for_artist_attention(
         def __init__(self, _config):
             pass
 
-        def build_problematic_files_page(self, *, limit, cursor=""):
+        def build_problematic_files_page(self, *, limit, cursor="", reasons=()):
             assert limit == 50
             assert cursor == "page-2"
             return {
@@ -5247,7 +5247,7 @@ def test_asgi_bounded_first_problematic_files_page_carries_the_first_artist_page
         def __init__(self, _config):
             pass
 
-        def build_problematic_files_page(self, *, limit, cursor=""):
+        def build_problematic_files_page(self, *, limit, cursor="", reasons=()):
             assert (limit, cursor) == (2, "")
             return {"count": 1, "items": [{"key": "bounded-album", "name": "M Album"}],
                     "complete": False, "has_more": True, "next_cursor": "page-2"}
@@ -5329,6 +5329,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_configs: list[dict[str, object]] = []
+    page_reasons: list[tuple[str, ...]] = []
 
     class FakePostgresRepository:
         def __init__(self, config):
@@ -5356,9 +5357,10 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_page(self, *, limit, cursor=""):
+        def build_problematic_files_page(self, *, limit, cursor="", reasons=()):
             assert limit == 50
             assert cursor == ""
+            page_reasons.append(reasons)
             return {
                 "count": 1,
                 "items": [{"key": "bounded-album", "detail_loaded": False}],
@@ -5369,7 +5371,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_search(self, query, *, limit=50, cursor=""):
+        def build_problematic_files_search(self, query, *, limit=50, cursor="", reasons=()):
             assert query == "needle"
             assert limit == 50
             assert cursor == ""
@@ -5436,6 +5438,15 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     )
     assert search_status == 200
     assert json.loads(search_body)["items"] == [{"key": "needle-album", "detail_loaded": False}]
+    # A problem filter pages on the server with the reasons the filter menu names (BUGFIX-14).
+    filtered_status, _filtered_headers, _filtered_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"limit": "50", "reason": " Missing year "},
+    )
+    assert filtered_status == 200
+    assert page_reasons == [(), ("Missing year",)]
     invalid_limit_status, _invalid_limit_headers, invalid_limit_body = _run_asgi_request(
         asgi_app,
         "GET",
@@ -5551,7 +5562,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "ok": False,
         "error": "Problematic album not found.",
     }
-    assert repository_configs == [app.config] * 8
+    assert repository_configs == [app.config] * 9
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

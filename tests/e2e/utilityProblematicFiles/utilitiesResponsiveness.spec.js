@@ -85,34 +85,10 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         expect(coldPayload.projection_cache_status, 'Expected the timed API request to read the persisted index.').toBe('indexed');
         expect(coldPayload.complete).toBe(false);
         expect(coldPayload.items).toHaveLength(50);
-        const completeResponseBody = await networkEvidence.completeSummaryResponse.text();
-        const completePayload = JSON.parse(completeResponseBody);
-        const completeResponseBytes = new TextEncoder().encode(completeResponseBody).byteLength;
-        const completeResponseMs = await readCompletedResponseDurationMs(networkEvidence.completeSummaryResponse);
-        await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
-          key: 'problematic-files-complete-api',
-          label: 'Complete Problematic Files response fully received',
-          timingMs: completeResponseMs,
-          details: { responseBytes: completeResponseBytes, itemCount: completePayload.items.length },
-        });
-        utilityProblematicFilesLocalReport.recordTextCheckpoint({
-          key: 'problematic-files-complete-response-bytes',
-          label: 'Complete Problematic Files response body size',
-          valueText: `${completeResponseBytes} bytes`,
-        });
-        const payloadBudget = UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.expectations
-          .find((expectation) => expectation.key === 'problematicResponseBytes');
-        expect(completeResponseBytes, 'The approved full-fixture payload budget also applies beyond the first page')
-          .toBeLessThanOrEqual(payloadBudget.maxAllowed);
         assertCompactProblematicSummary(coldPayload);
-        assertCompactProblematicSummary(completePayload);
-        expect(networkEvidence.summaryRequestCount, 'One bounded summary and one complete summary only').toBe(2);
-        expect(
-          evaluateProblematicFilesDatasetContract(
-            completePayload,
-            UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.datasetContract,
-          ),
-        ).toEqual([]);
+        // The list is paged (owner, BUGFIX-14 / PF-FIRST-PAGE-LATEST): opening reads its first page and never
+        // the complete list. The dataset contract is checked on the pages the list loads as it scrolls.
+        expect(networkEvidence.summaryRequestCount, 'One first page only').toBe(1);
         const coldFirstSummaryItem = coldPayload.items[0];
         const coldInitialDetail = coldPayload.initial_detail;
         expect(coldFirstSummaryItem, 'Expected the cold Problematic Files payload to remain populated.').toBeTruthy();
@@ -174,9 +150,9 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         );
         const timingMs = networkEvidence.readyMs;
         firstVisibleMs = networkEvidence.firstVisibleMs;
-        problematicFilesPayload = await networkEvidence.completeSummaryResponse.json();
+        problematicFilesPayload = await networkEvidence.summaryResponse.json();
         assertCompactProblematicSummary(problematicFilesPayload);
-        expect(networkEvidence.summaryRequestCount, 'Warm opening must not duplicate summary requests').toBe(2);
+        expect(networkEvidence.summaryRequestCount, 'Warm opening must not duplicate summary requests').toBe(1);
         initialDetailRequestCount = networkEvidence.detailRequestCount;
         await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
           key: 'problematic-files-ready',
@@ -210,12 +186,6 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         expect(problematicFilesPayload, 'Expected a live Problematic Files response during the visible Settings flow.').toBeTruthy();
         expectPostgresLibraryBrowseTelemetry(problematicFilesPayload);
         expect(problematicFilesPayload.projection_cache_status).toBe('indexed');
-        expect(
-          evaluateProblematicFilesDatasetContract(
-            problematicFilesPayload,
-            UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.datasetContract,
-          ),
-        ).toEqual([]);
         const firstSummaryItem = problematicFilesPayload.items[0];
         const initialDetail = problematicFilesPayload.initial_detail;
         expect(firstSummaryItem, 'Expected the live Postgres Problematic Files payload to stay populated.').toBeTruthy();
@@ -388,6 +358,28 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
           timingMs,
         });
         return timingMs;
+      });
+
+      await stepLogger.step('Scroll the paged list to its end and verify the whole generated dataset', async () => {
+        const listed = await utilityProblematicFilesActions.scrollListToEnd();
+        expect(listed, 'Every page of the list loads as it scrolls').toBe(706);
+        const merged = await capture.summary();
+        const pagedResponseBytes = await capture.summaryBytes();
+        utilityProblematicFilesLocalReport.recordTextCheckpoint({
+          key: 'problematic-files-paged-response-bytes',
+          label: 'Problematic Files pages response body size (whole list)',
+          valueText: `${pagedResponseBytes} bytes`,
+        });
+        const payloadBudget = UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.expectations
+          .find((expectation) => expectation.key === 'problematicResponseBytes');
+        expect(pagedResponseBytes, 'The approved full-fixture payload budget also applies to the pages of the whole list')
+          .toBeLessThanOrEqual(payloadBudget.maxAllowed);
+        expect(
+          evaluateProblematicFilesDatasetContract(
+            { items: merged, count: merged.length },
+            UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.datasetContract,
+          ),
+        ).toEqual([]);
       });
 
       const problematicMountedRowCount = await stepLogger.step('Verify the 706-row list is virtualized', async () => {

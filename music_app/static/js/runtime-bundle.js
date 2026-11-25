@@ -6502,7 +6502,6 @@ const state = {
       problematicServerSearchPendingQuery: '',
       problematicServerSearchSettledQuery: '',
       problematicServerSearchHasMore: false,
-      problematicServerSearchNextOffset: 0,
       problematicServerSearchNextCursor: '',
       problematicServerSearchLoadPromise: null,
       problematicServerSearchCache: {},
@@ -27970,14 +27969,23 @@ function renderProblemFilterControls(els) {
   }
 }
 
+// A search or a problem filter asks the server, page by page, so matches beyond the rows loaded so far
+// are found without loading the whole list. Its key names the query and the filters together.
+function problematicServerQuery() {
+  const q = String(state.utility.searchQuery || '').trim();
+  const reasons = Array.from(new Set(state.utility.selectedProblemFilters || [])).sort();
+  const key = q || reasons.length ? JSON.stringify([q.toLocaleLowerCase(), reasons]) : '';
+  return { q, reasons, key };
+}
+
 function getFilteredProblematicAlbums() {
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
-  const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
-  const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
-  if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
-  const list = query.length >= 2 && serverQuery === query
-    ? getAllProblematicList()
-    : getProblematicBaseList();
+  // A search or filter shows the server's matches with the loaded rows that match; while its request is
+  // out, nothing (the list says it is searching).
+  const serverKey = problematicServerQuery().key;
+  const settled = Boolean(serverKey) && state.utility.problematicServerSearchSettledQuery === serverKey;
+  if (serverKey && !settled && state.utility.problematicServerSearchPendingQuery === serverKey) return [];
+  const list = settled ? getAllProblematicList() : getProblematicBaseList();
   const selectedFilters = state.utility.selectedProblemFilters || [];
   if (!query && !selectedFilters.length) return list.items;
   // A view is filtered once per committed list, query and selected problem types.
@@ -30481,7 +30489,13 @@ function mountAlertsAppearanceEditor(detail) {
     let frame = 0;
     let disposed = false;
     let spacerGeometry = '';
+    let footerText = '';
     const mountedRows = new Map();
+    // A status line after the last row (more results loading), kept after the trailing spacer.
+    const footer = list.ownerDocument.createElement('div');
+    footer.className = 'utility-empty-state compact';
+    footer.setAttribute('data-problematic-list-footer', '');
+    footer.setAttribute('role', 'status');
     const [before, after] = ['before', 'after'].map((position) => {
       const spacer = list.ownerDocument.createElement('div');
       spacer.className = 'problematic-virtual-spacer';
@@ -30544,6 +30558,10 @@ function mountAlertsAppearanceEditor(detail) {
         spacerGeometry = nextSpacerGeometry;
       }
       if (before.parentNode !== list) list.replaceChildren(before, after);
+      if (footerText) {
+        if (footer.textContent !== footerText) footer.textContent = footerText;
+        if (after.nextElementSibling !== footer) list.insertBefore(footer, after.nextElementSibling);
+      } else if (footer.parentNode === list) footer.remove();
       for (const [key, row] of mountedRows) {
         if (keys.has(key)) continue;
         row.remove();
@@ -30620,10 +30638,11 @@ function mountAlertsAppearanceEditor(detail) {
       schedule();
     };
 
-    const render = (nextItems, nextSelectedKey) => {
+    const render = (nextItems, nextSelectedKey, { footer: nextFooter = '' } = {}) => {
       const previousSelectedKey = selectedKey;
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
+      footerText = String(nextFooter || '');
       renderNow();
       if (selectedKey !== previousSelectedKey) {
         reveal(selectedKey);
@@ -30949,6 +30968,9 @@ function initAndroidSettings() {
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
 const problematicNavigationRowContent = new WeakMap();
+const renderedProblematicDetails = new WeakMap();
+// Under the last result while the list or its search has more pages (owner, PF-FIRST-PAGE-LATEST).
+const PROBLEMATIC_LOADING_MORE_TEXT = 'Loading more results…';
 
 let problematicFilesVirtualList = null;
 
@@ -30991,19 +31013,19 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
         onNearEnd: () => {
-          const query = String(state.utility.searchQuery || '').trim();
-          if (query.length >= 2) void loadNextProblematicServerSearchPage();
+          if (problematicServerQuery().key) void loadNextProblematicServerSearchPage();
           void loadNextProblematicFilesPage();
           void loadNextProblematicArtistPage();
         },
       });
     }
     if (problematicFilesVirtualList) {
-      problematicFilesVirtualList.render(items, selectedKey);
+      problematicFilesVirtualList.render(items, selectedKey, { footer: moreToLoad ? PROBLEMATIC_LOADING_MORE_TEXT : '' });
       // A refresh can move the track's album; keep it in view until the user scrolls.
       if (state.utility.focusedTrackPath) problematicFilesVirtualList.reveal(selectedKey);
     } else if (!retainTree) {
-      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
+      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join('')
+        + (moreToLoad ? `<div class="utility-empty-state compact" data-problematic-list-footer>${PROBLEMATIC_LOADING_MORE_TEXT}</div>` : ''));
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
       const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
@@ -31089,35 +31111,29 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
 
   const activeSearchQuery = String(state.utility.searchQuery || '').trim();
-  if (!items.length
-      && activeSearchQuery.length >= 2
-      && state.utility.problematicServerSearchPendingQuery === activeSearchQuery
-      && state.utility.problematicServerSearchSettledQuery !== activeSearchQuery) {
+  const serverQuery = problematicServerQuery();
+  // Rows still to come after the last one shown: the search's or filter's next pages, or the list's.
+  const moreToLoad = serverQuery.key
+    ? state.utility.problematicServerSearchHasMore === true
+    : Boolean(state.utility.problematicHasMore || state.utility.problematicArtistHasMore);
+  if (!items.length && serverQuery.key && state.utility.problematicServerSearchSettledQuery !== serverQuery.key) {
     replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
     return;
   }
-  if (!items.length && activeSearchQuery.length >= 2
-      && state.utility.problematicServerSearchHasMore) {
-    void loadNextProblematicServerSearchPage();
-    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
-    return;
-  }
-  if (!items.length
-      && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)) {
-    if (activeSearchQuery) void loadProblematicPagesUntilLocalQueryMatch(activeSearchQuery);
+  if (!items.length && moreToLoad) {
+    if (serverQuery.key) void loadNextProblematicServerSearchPage();
     else {
       void loadNextProblematicFilesPage();
       void loadNextProblematicArtistPage();
     }
-    replaceListContents('<div class="utility-empty-state compact">Loading more matching albums...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading more matching albums...</div>';
+    replaceListContents(`<div class="utility-empty-state compact">${PROBLEMATIC_LOADING_MORE_TEXT}</div>`);
+    els.detail.innerHTML = `<div class="utility-empty-state">${PROBLEMATIC_LOADING_MORE_TEXT}</div>`;
     return;
   }
   if (!items.length) {
-    replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
+    replaceListContents('<div class="utility-empty-state compact">Nothing found.</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Nothing found.</div>';
     return;
   }
 
@@ -31139,7 +31155,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (
     selectedProblematicMissing
     && state.utility.selectedProblematicKey
-    && state.utility.problematicFilesComplete === false
+    && state.utility.loading
   ) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
@@ -31194,11 +31210,18 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
   initializeRepairSelections(selectedAlbum);
-  els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
-  const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
-  const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
-  if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
-    void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+  const detailHtml = buildProblematicAlbumDetail(selectedAlbum);
+  const shownDetail = renderedProblematicDetails.get(els.detail);
+  // A render that would rebuild the same detail (a later page or Artist page arriving) leaves it in place:
+  // replacing it restarted its cover and looked like the album loading a second time.
+  if (!shownDetail || shownDetail.html !== detailHtml || shownDetail.node !== els.detail.firstElementChild) {
+    els.detail.innerHTML = detailHtml;
+    renderedProblematicDetails.set(els.detail, { html: detailHtml, node: els.detail.firstElementChild });
+    const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
+    const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
+    if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
+      void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+    }
   }
   if (state.utility.focusedTrackPath) {
     const focusedTrackPath = String(state.utility.focusedTrackPath);
@@ -33289,10 +33312,6 @@ async function loadProblematicFiles(force = false, options = {}) {
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
   );
-  const canRenderBoundedPage = () => (
-    !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
-  );
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
@@ -33321,21 +33340,18 @@ async function loadProblematicFiles(force = false, options = {}) {
     if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
     return;
   }
-  // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
-  const refreshesCompleteList = state.utility.loaded === true
-    && state.utility.problematicFilesComplete === true;
-  // An open tab's refresh commits the next complete list at once: a bounded page committed first
-  // showed a filtered view's few rows of it until the rest came.
-  const replacesShownList = refreshesCompleteList && problematicFilesTabOnScreen();
-  const completeOnly = options.completeOnly === true || replacesShownList;
+  // The list is paged (owner, BUGFIX-14): a load reads one page, a refresh re-reads the rows already
+  // shown in one request and replaces them in one commit, so the list never shrinks to a page and regrows.
+  const refreshesShownList = state.utility.loaded === true;
+  const pageLimit = refreshesShownList
+    ? Math.min(200, Math.max(50, (state.utility.problematicFiles || []).length))
+    : 50;
   state.utility.loading = true;
-  if (!replacesShownList) {
+  if (!refreshesShownList) {
     state.utility.problematicFilesComplete = false;
     state.utility.problematicArtistItems = [];
   }
-  // The complete list carries every Artist problem, so the paint before it must not page Artists.
-  // A refresh keeps the complete list on screen until its bounded page commits: no Artist page before then.
-  state.utility.problematicArtistHasMore = options.completeOnly !== true && !refreshesCompleteList;
+  state.utility.problematicArtistHasMore = !refreshesShownList;
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
@@ -33355,8 +33371,6 @@ async function loadProblematicFiles(force = false, options = {}) {
     let responseStatus = 0;
     let loadSucceeded = false;
     let loadError = '';
-    let boundedPayloadCommitted = false;
-    let awaitsOpenReconcile = false;
     let previousSummaryItems = [];
     try {
       const fetchSummary = async (url) => {
@@ -33447,76 +33461,27 @@ async function loadProblematicFiles(force = false, options = {}) {
           refreshChangedSelection };
       };
 
-      const commitCompleteList = (completeData) => {
-        // A bounded page's reason catalog served paging; the complete list's own reasons replace it.
-        if (!Array.isArray(completeData?.problem_reason_types)) state.utility.completeProblemReasonTypes = [];
-        const committed = commitSummary(completeData, true, true);
-        state.utility.problematicArtistItems = [];
-        state.utility.problematicHasMore = false;
-        state.utility.problematicNextCursor = '';
-        state.utility.problematicArtistHasMore = false;
-        state.utility.problematicListOutdated = false;
-        return committed;
-      };
-      let data;
-      let committedSelection;
-      if (completeOnly) {
-        // The tab opened on a list loaded in the background (its bounded page is already on screen),
-        // or a complete list on screen is refreshed.
-        data = await fetchSummary('/utilities/problematic-files');
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitCompleteList(data);
-        settleInitialSummary(state.utility.problematicFiles);
-      } else {
-        data = await fetchSummary('/utilities/problematic-files?limit=50');
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(
-          data,
-          options.preserveSelectedDetail === true || data.complete === false,
-        );
-        if (refreshesCompleteList) state.utility.problematicArtistHasMore = true;
-        boundedPayloadCommitted = data.complete === false;
-        state.utility.problematicHasMore = data.has_more === true
-          || (data.has_more === undefined && data.complete === false);
-        state.utility.problematicNextCursor = String(data.next_cursor || '');
-        state.utility.problematicListOutdated = ['stale', 'revalidated']
-          .includes(String(data?.projection_cache_status || ''));
-        settleInitialSummary(state.utility.problematicFiles);
+      const data = await fetchSummary(`/utilities/problematic-files?limit=${pageLimit}`);
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      const committedSelection = commitSummary(
+        data,
+        options.preserveSelectedDetail === true || data.complete === false,
+      );
+      // The page carries the first Artist rows; Artist paging restarts after them.
+      if (refreshesShownList) state.utility.problematicArtistItems = [];
+      state.utility.problematicArtistHasMore = true;
+      state.utility.problematicHasMore = data.has_more === true
+        || (data.has_more === undefined && data.complete === false);
+      state.utility.problematicNextCursor = String(data.next_cursor || '');
+      settleInitialSummary(state.utility.problematicFiles);
+      // Track navigation paints the page it waits on even when this load draws nothing else.
+      if (shouldRenderInitialPage()) {
+        renderProblematicFilesTab();
+        await waitForProblematicUtilityRenderFrame();
       }
-      if (boundedPayloadCommitted) {
-        state.utility.problematicFilesComplete = false;
-        scheduleProblematicServerSearch();
-        // Only an open tab reconciles with the complete list (a whole-library read); background
-        // reloads after tag edits keep paging. The complete list then supersedes paging, so
-        // reaching the bounded list's end must not request more pages.
-        const reconcile = problematicFilesTabOnScreen();
-        // A Settings-intent prefetch is reconciled by the tab about to open; paging first would only be superseded.
-        awaitsOpenReconcile = !reconcile && options.render === 'when-open';
-        if (reconcile || awaitsOpenReconcile) {
-          state.utility.problematicHasMore = false;
-          state.utility.problematicArtistHasMore = false;
-        }
-        if (state.utility.loadPromise === requestPromise) {
-          state.utility.loading = false;
-          state.utility.loadPromise = null;
-        }
-        if ((canRenderBoundedPage()
-            && shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
-            || shouldRenderInitialPage()) {
-          renderProblematicFilesTab();
-          await waitForProblematicUtilityRenderFrame();
-        }
-        if (reconcile) {
-          // Requested only after the bounded page has painted, so it can never arrive first.
-          data = await fetchSummary('/utilities/problematic-files');
-          if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-          committedSelection = commitCompleteList(data);
-        } else if (!awaitsOpenReconcile) {
-          // The complete list already carries Artist problems; only a paged list pages them.
-          scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
-        }
-      }
-      state.utility.problematicFilesComplete = !state.utility.problematicHasMore && !awaitsOpenReconcile;
+      scheduleProblematicServerSearch();
+      scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
@@ -33553,7 +33518,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
-      if (!boundedPayloadCommitted) {
+      if (!refreshesShownList) {
         state.utility.problematicFiles = [];
         state.utility.libraryWatchHealthProblems = [];
         state.utility.detailLoadPromises = {};
@@ -33628,12 +33593,18 @@ async function loadNextProblematicArtistPage() {
       const { summaryItems } = validateProblematicSummaryPayload(data);
       const known = new Set((state.utility.problematicArtistItems || []).map((item) => String(item?.key || '')));
       const additions = summaryItems.filter((item) => item?.key && !known.has(String(item.key)));
-      state.utility.problematicArtistItems = data.cursor_restarted === true
-        ? summaryItems
-        : [...(state.utility.problematicArtistItems || []), ...additions];
+      const changed = additions.length > 0 || data.cursor_restarted === true;
+      // An unchanged owner keeps its array, so the merged list is not built again.
+      if (changed) {
+        state.utility.problematicArtistItems = data.cursor_restarted === true
+          ? summaryItems
+          : [...(state.utility.problematicArtistItems || []), ...additions];
+      }
+      const hadMore = state.utility.problematicArtistHasMore;
       state.utility.problematicArtistNextCursor = String(data.next_cursor || '');
       state.utility.problematicArtistHasMore = data.has_more === true && summaryItems.length > 0;
-      if ((additions.length || data.cursor_restarted === true)
+      // The last Artist page also ends "Loading more results…".
+      if ((changed || hadMore !== state.utility.problematicArtistHasMore)
           && state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) {
         renderProblematicFilesTab();
       }
@@ -33690,49 +33661,24 @@ async function loadNextProblematicFilesPage() {
   return request;
 }
 
-async function loadProblematicPagesUntilLocalQueryMatch(query) {
-  const normalizedQuery = String(query || '').trim();
-  if (!normalizedQuery) return null;
-  while (
-    String(state.utility.searchQuery || '').trim() === normalizedQuery
-    && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)
-    && !(typeof getFilteredProblematicAlbums === 'function' && getFilteredProblematicAlbums().length)
-  ) {
-    const previousBaseCursor = String(state.utility.problematicNextCursor || '');
-    const previousArtistCursor = String(state.utility.problematicArtistNextCursor || '');
-    const previousBaseHasMore = state.utility.problematicHasMore === true;
-    const previousArtistHasMore = state.utility.problematicArtistHasMore === true;
-    await Promise.all([
-      previousBaseHasMore ? loadNextProblematicFilesPage() : null,
-      previousArtistHasMore ? loadNextProblematicArtistPage() : null,
-    ]);
-    const baseProgressed = String(state.utility.problematicNextCursor || '') !== previousBaseCursor
-      || (state.utility.problematicHasMore === true) !== previousBaseHasMore;
-    const artistProgressed = String(state.utility.problematicArtistNextCursor || '') !== previousArtistCursor
-      || (state.utility.problematicArtistHasMore === true) !== previousArtistHasMore;
-    if (!baseProgressed && !artistProgressed) break;
-  }
-  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
-  return typeof getFilteredProblematicAlbums === 'function'
-    ? getFilteredProblematicAlbums()
-    : [];
+// One page of a search or filter (problematicServerQuery) from the server.
+function problematicServerQueryUrl({ q, reasons }, cursor = '') {
+  const params = new URLSearchParams({ limit: '50' });
+  if (q) params.set('q', q);
+  reasons.forEach((reason) => params.append('reason', reason));
+  if (cursor) params.set('cursor', cursor);
+  return `/utilities/problematic-files?${params}`;
 }
 
-function problematicFilesTabOnScreen() {
-  return typeof getUtilityModalElements === 'function' && isUtilityModalOpen();
-}
-
-// Search the server so every album is covered, including matches beyond the
-// bounded local inventory.
 function scheduleProblematicServerSearch() {
   if (problematicServerSearchTimer) clearBrowserTimeout(problematicServerSearchTimer);
   problematicServerSearchTimer = 0;
-  const query = String(state.utility.searchQuery || '').trim();
-  const cacheKey = query.toLocaleLowerCase();
+  const query = problematicServerQuery();
   state.utility.problematicServerSearchRequestToken = Number(
     state.utility.problematicServerSearchRequestToken || 0,
   ) + 1;
-  if (!query && state.utility.problematicServerSearchSettledQuery) {
+  if (!query.key && state.utility.problematicServerSearchSettledQuery) {
+    // The album chosen from the results stays listed once the search is cleared.
     const selectedKey = String(state.utility.selectedProblematicKey || '');
     const selectedSearchItem = (state.utility.problematicServerSearchItems || [])
       .find((item) => String(item?.key || '') === selectedKey);
@@ -33742,29 +33688,24 @@ function scheduleProblematicServerSearch() {
       state.utility.pinnedProblematicKey = selectedKey;
     }
   }
-  if (state.utility.problematicServerSearchSettledQuery !== query) {
+  if (state.utility.problematicServerSearchSettledQuery !== query.key) {
     state.utility.problematicServerSearchItems = [];
     state.utility.problematicServerSearchSettledQuery = '';
     state.utility.problematicServerSearchHasMore = false;
-    state.utility.problematicServerSearchNextOffset = 0;
     state.utility.problematicServerSearchNextCursor = '';
   }
   state.utility.problematicServerSearchPendingQuery = '';
-  if (query.length === 1 && state.utility.problematicFilesComplete === false) {
-    void loadProblematicPagesUntilLocalQueryMatch(query);
-    return;
-  }
-  if (query.length < 2) return;
-  const cached = state.utility.problematicServerSearchCache?.[cacheKey];
+  if (!query.key) return;
+  const cached = state.utility.problematicServerSearchCache?.[query.key];
   if (cached) {
     state.utility.problematicServerSearchItems = cached.items;
-    state.utility.problematicServerSearchSettledQuery = query;
+    state.utility.problematicServerSearchSettledQuery = query.key;
     state.utility.problematicServerSearchHasMore = cached.hasMore;
     state.utility.problematicServerSearchNextCursor = cached.nextCursor;
     if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
     return;
   }
-  state.utility.problematicServerSearchPendingQuery = query;
+  state.utility.problematicServerSearchPendingQuery = query.key;
   problematicServerSearchTimer = scheduleBrowserTimeout(() => {
     problematicServerSearchTimer = 0;
     void searchProblematicFilesOnServer(query);
@@ -33776,9 +33717,7 @@ async function searchProblematicFilesOnServer(query) {
   const searchToken = Number(state.utility.problematicServerSearchRequestToken || 0);
   let data;
   try {
-    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50`, {
-      headers: { Accept: 'application/json' },
-    });
+    const response = await fetch(problematicServerQueryUrl(query), { headers: { Accept: 'application/json' } });
     if (!response.ok) return;
     data = await response.json();
   } catch (error) {
@@ -33786,17 +33725,16 @@ async function searchProblematicFilesOnServer(query) {
     return;
   }
   // A newer query or reload supersedes this answer.
-  if (String(state.utility.searchQuery || '').trim() !== query
+  if (problematicServerQuery().key !== query.key
     || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
     || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return;
   state.utility.problematicServerSearchPendingQuery = '';
-  state.utility.problematicServerSearchSettledQuery = query;
+  state.utility.problematicServerSearchSettledQuery = query.key;
   state.utility.problematicServerSearchItems = Array.isArray(data?.items) ? data.items : [];
   state.utility.problematicServerSearchHasMore = data?.has_more === true;
-  state.utility.problematicServerSearchNextOffset = Number(data?.next_offset || state.utility.problematicServerSearchItems.length);
   state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
   state.utility.problematicServerSearchCache = {
-    [query.toLocaleLowerCase()]: {
+    [query.key]: {
       items: state.utility.problematicServerSearchItems,
       hasMore: state.utility.problematicServerSearchHasMore,
       nextCursor: state.utility.problematicServerSearchNextCursor,
@@ -33806,8 +33744,8 @@ async function searchProblematicFilesOnServer(query) {
 }
 
 async function loadNextProblematicServerSearchPage() {
-  const query = String(state.utility.searchQuery || '').trim();
-  if (query.length < 2 || state.utility.problematicServerSearchSettledQuery !== query
+  const query = problematicServerQuery();
+  if (!query.key || state.utility.problematicServerSearchSettledQuery !== query.key
       || !state.utility.problematicServerSearchHasMore) return null;
   if (state.utility.problematicServerSearchLoadPromise) return state.utility.problematicServerSearchLoadPromise;
   const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
@@ -33815,12 +33753,12 @@ async function loadNextProblematicServerSearchPage() {
   const cursor = String(state.utility.problematicServerSearchNextCursor || '');
   const request = (async () => {
     try {
-      const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50&cursor=${encodeURIComponent(cursor)}`, {
+      const response = await fetch(problematicServerQueryUrl(query, cursor), {
         headers: { Accept: 'application/json' },
       });
       if (!response.ok) return null;
       const data = await response.json();
-      if (String(state.utility.searchQuery || '').trim() !== query
+      if (problematicServerQuery().key !== query.key
           || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
           || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return null;
       const knownSearch = new Set(state.utility.problematicServerSearchItems.map((item) => String(item?.key || '')));
@@ -33841,14 +33779,6 @@ async function loadNextProblematicServerSearchPage() {
   })();
   state.utility.problematicServerSearchLoadPromise = request;
   return request;
-}
-
-async function waitForProblematicFilesComplete() {
-  if (state.utility.problematicFilesComplete !== false) return true;
-  const pending = state.utility.completeLoadPromise || state.utility.loadPromise;
-  if (!pending) return false;
-  await pending;
-  return state.utility.problematicFilesComplete === true;
 }
 
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
@@ -34941,17 +34871,7 @@ function loadActiveUtilityTab(force = false) {
   }
   const freshPrefetch = state.utility.loaded
     && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
-  // A list loaded in the background (bounded, or from an outdated stored copy) reconciles
-  // with the complete list once its tab is open.
-  const reconcileOpenedList = (result) => {
-    const needsCompleteList = state.utility.loaded === true
-      && (state.utility.problematicFilesComplete === false || state.utility.problematicListOutdated === true)
-      && !state.utility.loading
-      && !state.utility.completeLoadPromise
-      && problematicFilesTabOnScreen();
-    return needsCompleteList ? loadProblematicFiles(true, { completeOnly: true }) : result;
-  };
-  return Promise.resolve(loadProblematicFiles(force && !freshPrefetch)).then(reconcileOpenedList);
+  return loadProblematicFiles(force && !freshPrefetch);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {
@@ -53905,6 +53825,7 @@ async function handleUtilityBootstrapClick(event) {
       state.utility.selectedProblemFilters = nextSelectedFilters;
       state.utility.deferProblematicAutoSelection = true;
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
+      scheduleProblematicServerSearch();
       state.utility.problemDropdownOpen = true;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
@@ -53924,6 +53845,7 @@ async function handleUtilityBootstrapClick(event) {
     state.utility.selectedProblemFilters = nextSelectedFilters;
     state.utility.deferProblematicAutoSelection = true;
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
+    scheduleProblematicServerSearch();
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
     renderUtilityModalContent();

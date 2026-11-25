@@ -356,17 +356,16 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
     };
     const initialMatch = await reveal();
     if (initialMatch) return initialMatch;
-    await this.utilityProblematicFilesTab.waitForPageCondition(
-      () => state.utility?.problematicFilesComplete === true,
-      { timeout: options.timeout || 30000 },
-      { completeInventory: true },
-    );
+    // The list is paged: load every page (or every page of the active search or filter), then look again.
+    await this.scrollListToEnd({ timeout: options.timeout || 30000 });
     const completeMatch = await reveal();
     if (completeMatch) return completeMatch;
     throw new Error(`Exact Problematic Files identity was not found: ${key || `${title} / ${meta}`}`);
   }
 
   async readCompleteListItems(options = {}) {
+    // The list is paged: its every page loads first.
+    await this.scrollListToEnd(options);
     const items = new Map();
     for await (const window of this.walkListWindows({ ...options, restoreScroll: true })) {
       for (const item of window) items.set(item.key, item);
@@ -391,6 +390,21 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       title: ((await this.utilityProblematicFilesTab.titleForListItem(activeItem).textContent()) || '').trim(),
       meta: await this.utilityProblematicFilesTab.readListItemMeta(activeItem),
     };
+  }
+
+  // Scrolls the paged list down with the wheel until its last page has loaded (no "Loading more results…"
+  // under the last row) and its last row is in view; returns the count of rows the list holds.
+  async scrollListToEnd(options = {}) {
+    const tab = this.utilityProblematicFilesTab;
+    const box = await tab.sidebar.list.boundingBox();
+    assert.ok(box, 'The Problematic Files list must be visible');
+    await tab.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(async () => {
+      await tab.page.mouse.wheel(0, 20000);
+      await expect(tab.listFooter).toHaveCount(0, { timeout: 2000 });
+      await expect(tab.listItems.last()).toBeInViewport({ timeout: 2000 });
+    }).toPass({ timeout: options.timeout || 120000 });
+    return this.readVisibleResultCount();
   }
 
   async readMountedListItemCount() {
@@ -1268,6 +1282,35 @@ Problematic Files state: ${await this.describeProblematicState(options.diagnosti
       listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
       mutationOverlaySelector: this.utilityProblematicFilesTab.mutationOverlaySelector,
     });
+  }
+
+  // Detail requests and rendered details from now on, until finished after every list load has settled.
+  async startDetailLoadObservation() {
+    const page = this.utilityProblematicFilesTab.page;
+    const detailRequests = [];
+    const recordDetailRequest = (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/utilities/problematic-files/detail') detailRequests.push(url.searchParams.get('album_key'));
+    };
+    page.on('request', recordDetailRequest);
+    await this.startNavigationRenderObservation();
+    return {
+      finish: async () => {
+        await this.utilityProblematicFilesTab.waitForPageCondition(() => (
+          !state.utility?.loadPromise && !state.utility?.problematicPageLoadPromise
+          && !state.utility?.problematicArtistLoadPromise && !Object.keys(state.utility?.detailLoadPromises || {}).length
+        ), { timeout: 30000 });
+        // The renders those loads scheduled land within two frames.
+        await page.waitForFunction(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
+        page.off('request', recordDetailRequest);
+        const records = await this.finishNavigationRenderObservation();
+        return {
+          detailRequests,
+          // Renders of a populated detail (its title shown), not of a loading state.
+          detailContentRenders: records.filter((record) => record.detailRender && record.detailTitle).length,
+        };
+      },
+    };
   }
 
   async isMutationOverlayShown() {

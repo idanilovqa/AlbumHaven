@@ -1495,7 +1495,10 @@ def utilities_problematic_files(
     q: str = Query(default="", max_length=200),
     artists: bool = Query(default=False),
     cursor: str = Query(default="", max_length=1000),
+    reason: list[str] = Query(default=[]),
 ) -> JSONResponse:
+    # Problem filters, as the filter menu names them: only albums with one of them.
+    reasons = tuple(sorted({value.strip() for value in reason if value.strip()}))
     if _is_postgres_utility_projection_request(request):
         if artists:
             artist_page = _problematic_artist_page(load_problematic_artist_items(request), limit=limit, cursor=cursor)
@@ -1507,9 +1510,9 @@ def utilities_problematic_files(
             # The first page also carries the first page of Artist rows, so their filters arrive
             # with the album filters; the client keeps one row per key when Artist paging repeats them.
             with ThreadPoolExecutor(max_workers=1) as pool:
-                artist_items = None if cursor else pool.submit(load_problematic_artist_items, request)
+                artist_items = None if cursor or reasons else pool.submit(load_problematic_artist_items, request)
                 try:
-                    payload = repository.build_problematic_files_page(limit=limit, cursor=cursor)
+                    payload = repository.build_problematic_files_page(limit=limit, cursor=cursor, reasons=reasons)
                 except ValueError as error:
                     return JSONResponse({"error": str(error)}, status_code=422)
                 _project_missing_album_actions_for_request(request, payload)
@@ -1527,6 +1530,7 @@ def utilities_problematic_files(
                         q,
                         limit=limit or 50,
                         cursor=cursor,
+                        reasons=reasons,
                     )
                 except ValueError as error:
                     return JSONResponse({"error": str(error)}, status_code=422)

@@ -49,12 +49,12 @@ test('network evidence counts repeated summary requests and releases its listene
 });
 
 
-test('browser benchmark enforces the approved payload budget on the complete response', () => {
+test('browser benchmark enforces the approved payload budget on the pages of the whole list', () => {
+  // The list is paged (BUGFIX-14): the budget the complete response carried applies to its pages.
   const fs = require('node:fs');
   const source = fs.readFileSync(path.resolve(__dirname,
     '../e2e/utilityProblematicFiles/utilitiesResponsiveness.spec.js'), 'utf8');
-  assert.match(source, /completeSummaryResponse\.text\(\)/);
-  assert.match(source, /encode\(completeResponseBody\)\.byteLength/);
-  assert.match(source, /expect\(completeResponseBytes,[\s\S]*?toBeLessThanOrEqual\(payloadBudget\.maxAllowed\)/);
+  assert.match(source, /const pagedResponseBytes = await capture\.summaryBytes\(\)/);
+  assert.match(source, /expect\(pagedResponseBytes,[\s\S]*?toBeLessThanOrEqual\(payloadBudget\.maxAllowed\)/);
   assert.match(source, /problematicResponseBytes: responseBytes/);
 });

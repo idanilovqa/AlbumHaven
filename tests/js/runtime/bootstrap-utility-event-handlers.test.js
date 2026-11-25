@@ -150,6 +150,7 @@ function createContext(stateOverrides = {}) {
   const calls = {
     pendingSyncs: 0,
     renders: 0,
+    serverQueries: 0,
     filterRenders: 0,
     keptMissingAlbums: [],
     rescannedMissingAlbums: [],
@@ -272,6 +273,9 @@ function createContext(stateOverrides = {}) {
     renderTagEditor() {},
     renderUtilityModalContent() {
       calls.renders += 1;
+    },
+    scheduleProblematicServerSearch() {
+      calls.serverQueries += 1;
     },
     runLocalPlaylistImportAnalysis() {},
     saveLastfmIntegration() {},
@@ -584,6 +588,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
   assert.equal(context.state.utility.problemDropdownOpen, true);
   assert.equal(context.state.utility.showRepairedDisplay, true);
   assert.equal(calls.renders, 1);
+  assert.equal(calls.serverQueries, 1, 'the filter asks the server for its matches');
   assert.equal(Boolean(context.getUtilityModalElements().problemFilterButton.focused), false);
   assert.equal(replacementFocused, true);
 });
@@ -637,18 +642,11 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.equal(context.state.utility.problemDropdownOpen, true);
 });
 
-test('applying a problem filter responds before the complete Problematic Files snapshot', async () => {
-  let releaseComplete;
-  const completeLoadPromise = new Promise((resolve) => { releaseComplete = resolve; });
+test('applying a problem filter on a paged list responds at once and asks the server for its matches', async () => {
   const { context, calls } = createContext({
     problematicFiles: [{ key: 'partial', problem_reasons: ['Missing cover art'] }],
     problematicFilesComplete: false,
-    completeLoadPromise,
   });
-  context.waitForProblematicFilesComplete = async () => {
-    await completeLoadPromise;
-    return context.state.utility.problematicFilesComplete;
-  };
   const filterContainer = createElement();
   const { event } = createEvent({
     '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
@@ -657,20 +655,11 @@ test('applying a problem filter responds before the complete Problematic Files s
     }),
   });
 
-  const click = context.handleUtilityBootstrapClick(event);
-  await Promise.resolve();
-  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
-  assert.equal(calls.renders, 1);
-
-  context.state.utility.problematicFiles = [
-    { key: 'canonical', problem_reasons: ['Poor art quality'] },
-  ];
-  context.state.utility.problematicFilesComplete = true;
-  releaseComplete();
-  await click;
+  await context.handleUtilityBootstrapClick(event);
 
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(calls.renders, 1);
+  assert.equal(calls.serverQueries, 1);
 });
 
 for (const initiallySelected of [false, true]) {
@@ -1641,16 +1630,16 @@ test('returning to Problematic Files from Rules reuses the loaded list without a
   const { context } = createContext({ activeTab: 'problematic-files', loaded: false, rulesLoaded: true });
   require('../helpers/pending-projection-fetch').loadPendingProjectionFetch(context);
   vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
-  // Only an open Settings modal reconciles with the complete list (e01d0d613).
   context.getUtilityModalElements().overlay = { hidden: false };
   const requests = [];
-  const summary = (complete) => ({
-    ok: true, complete, items: [{ key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: false }],
+  // One page holds the whole list here: no page follows it.
+  const summary = () => ({
+    ok: true, complete: false, has_more: false, items: [{ key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: false }],
     initial_detail: { key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: true, tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [] }, operational_items: [],
   });
   context.fetch = async (url) => {
     requests.push(String(url));
-    return { ok: true, status: 200, json: async () => summary(!String(url).includes('limit=')) };
+    return { ok: true, status: 200, json: async () => summary() };
   };
   context.scheduleBrowserAnimationFrame = callback => { callback(); return 1; };
   context.renderUtilityModalContent = () => {};

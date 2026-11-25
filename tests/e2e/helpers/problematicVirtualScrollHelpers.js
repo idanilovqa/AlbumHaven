@@ -87,11 +87,30 @@ export function expectProblematicNavigationRecords(records, expectedKey, expecte
   }
 }
 
+// The list's rows in the order the client shows them (utility-list-builders.js compareProblematicItems),
+// one per key.
+function mergeProblematicPages(...pages) {
+  const byKey = new Map();
+  for (const item of pages.flat()) if (item?.key && !byKey.has(String(item.key))) byKey.set(String(item.key), item);
+  const text = (item, field) => String(item?.[field] || '').toLowerCase();
+  return [...byKey.values()].sort((left, right) => (
+    text(left, 'name').localeCompare(text(right, 'name'))
+    || text(left, 'album_artist').localeCompare(text(right, 'album_artist'))
+    || String(left?.year || '').localeCompare(String(right?.year || ''))
+    || text(left, 'key').localeCompare(text(right, 'key'))
+  ));
+}
+
 export function observeProblematicDetails(page) {
   const details = new Map();
   const pending = new Set();
   const errors = [];
   let summary = null;
+  let albumPageItems = [];
+  // The response bytes of the album pages that make the summary (the payload budget applies to them).
+  let albumPageBytes = 0;
+  let summaryBytes = 0;
+  let artistPageItems = [];
   // Arrival order of summaries. Chrome may drop an older body before the capture
   // reads it; that is tolerated only while a newer complete summary is captured.
   let summarySequence = 0;
@@ -109,8 +128,10 @@ export function observeProblematicDetails(page) {
     const task = (async () => {
       assert.equal(response.ok(), true, 'Normal problematic data response must succeed');
       let payload;
+      let bytes = 0;
       try {
         payload = await response.json();
+        if (!isDetail && typeof response.body === 'function') bytes = (await response.body()).byteLength;
       } catch (error) {
         // Superseded detail requests and older summaries can lose their bodies before this
         // read. Callers poll for every detail they assert on; summary() requires the newest.
@@ -122,12 +143,26 @@ export function observeProblematicDetails(page) {
         remember(url.searchParams.get('album_key'), payload);
       } else {
         assert.ok(Array.isArray(payload.items), 'Normal summary must expose its complete items');
-        // A bounded first page (complete: false), a search answer (q) or an Artist page is never
-        // the complete summary.
-        const unfilteredSummary = !url.searchParams.has('q') && !url.searchParams.has('artists');
-        if (unfilteredSummary && payload.complete !== false && sequence > capturedSummarySequence) {
-          capturedSummarySequence = sequence;
-          summary = JSON.stringify(payload.items);
+        // The list is paged (BUGFIX-14): its unfiltered pages and its Artist pages, read as the list is
+        // scrolled, make the complete summary once the last album page has arrived. A search or filter
+        // answer (q, reason) is never part of it.
+        const filtered = url.searchParams.has('q') || url.searchParams.has('reason');
+        if (!filtered && url.searchParams.has('artists')) {
+          if (!url.searchParams.get('cursor')) artistPageItems = [];
+          artistPageItems.push(...payload.items);
+        } else if (!filtered) {
+          if (!url.searchParams.get('cursor')) {
+            albumPageItems = [];
+            albumPageBytes = 0;
+          }
+          albumPageItems.push(...payload.items);
+          albumPageBytes += bytes;
+          const lastPage = payload.complete !== false || payload.has_more === false;
+          if (lastPage && sequence > capturedSummarySequence) {
+            capturedSummarySequence = sequence;
+            summary = JSON.stringify(mergeProblematicPages(albumPageItems, artistPageItems));
+            summaryBytes = albumPageBytes;
+          }
         }
         assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
           'Any initial detail must belong to captured summary');
@@ -168,6 +203,7 @@ export function observeProblematicDetails(page) {
       assert.ok(capturedSummarySequence > droppedSummarySequence, 'The newest complete summary body must be captured');
       return JSON.parse(summary);
     },
+    async summaryBytes() { await settle(); return summaryBytes; },
     async detail(key) { await settle(); return details.has(key) ? JSON.parse(details.get(key)) : null; },
     async dispose() { page.off('response', responseListener); await settle(); },
   };

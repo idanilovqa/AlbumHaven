@@ -33,7 +33,13 @@
     let frame = 0;
     let disposed = false;
     let spacerGeometry = '';
+    let footerText = '';
     const mountedRows = new Map();
+    // A status line after the last row (more results loading), kept after the trailing spacer.
+    const footer = list.ownerDocument.createElement('div');
+    footer.className = 'utility-empty-state compact';
+    footer.setAttribute('data-problematic-list-footer', '');
+    footer.setAttribute('role', 'status');
     const [before, after] = ['before', 'after'].map((position) => {
       const spacer = list.ownerDocument.createElement('div');
       spacer.className = 'problematic-virtual-spacer';
@@ -96,6 +102,10 @@
         spacerGeometry = nextSpacerGeometry;
       }
       if (before.parentNode !== list) list.replaceChildren(before, after);
+      if (footerText) {
+        if (footer.textContent !== footerText) footer.textContent = footerText;
+        if (after.nextElementSibling !== footer) list.insertBefore(footer, after.nextElementSibling);
+      } else if (footer.parentNode === list) footer.remove();
       for (const [key, row] of mountedRows) {
         if (keys.has(key)) continue;
         row.remove();
@@ -172,10 +182,11 @@
       schedule();
     };
 
-    const render = (nextItems, nextSelectedKey) => {
+    const render = (nextItems, nextSelectedKey, { footer: nextFooter = '' } = {}) => {
       const previousSelectedKey = selectedKey;
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
+      footerText = String(nextFooter || '');
       renderNow();
       if (selectedKey !== previousSelectedKey) {
         reveal(selectedKey);

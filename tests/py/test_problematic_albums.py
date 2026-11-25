@@ -804,6 +804,25 @@ def _indexed_problematic_items(database_url, *, limit=2, needle=""):
     return items
 
 
+def _indexed_filtered_items(database_url, reasons, *, needle=""):
+    """Every item a filtered (and searched) index read serves, page by page."""
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+        "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    items, cursor = [], ""
+    while True:
+        page = (repository.build_problematic_files_search(needle, limit=1, cursor=cursor, reasons=reasons) if needle
+                else repository.build_problematic_files_page(limit=1, cursor=cursor, reasons=reasons))
+        assert page["projection_cache_status"] == "indexed"
+        items += page["items"]
+        cursor = page["next_cursor"]
+        if not page["has_more"]:
+            return sorted(item["key"] for item in items)
+
+
 def _ready_problematic_index(database_url):
     from music_app.services import library_browse_postgres as browse
     from music_app.services import problematic_index
@@ -867,6 +886,43 @@ def test_live_problematic_index_equals_a_full_rebuild_through_tag_saves(watcher_
     assert all("Missing year" not in item["problem_reasons"]
                for item in after_fix if item["name"] == "Карусель Эпох")
 
+
+
+def test_problem_filters_page_through_the_index_with_the_client_reasons(watcher_repair_inventory):
+    """BUGFIX-14 (owner): Problematic Files pages the list, so a problem filter is answered by the server,
+    page by page, with the reasons the filter menu names; the first page names every reason of the list."""
+    from music_app.services import library_browse_postgres as browse
+
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    no_year = fixture.entry("Drozd/Karusel/01.flac", artist="R.D.", album="Карусель Эпох")
+    no_year.update(album_artist="R.D.", year=None)
+    first = fixture.entry("Twin/One/01.flac", artist="Twin", album="Same Release")
+    second = fixture.entry("Twin/Two/01.flac", artist="Twin", album="Same Release")
+    for entry in (first, second):
+        entry["album_artist"] = "Twin"
+    untouched = fixture.entry("Other/Album/01.flac", artist="Other", album="Untouched")
+    fixture.seed(no_year, first, second, untouched)
+    _ready_problematic_index(database_url)
+    evaluated = _as_served(_evaluated_problematic_items(fixture.config))
+    reasons = sorted({browse._problematic_filter_reason(reason)
+                      for item in evaluated for reason in item["problem_reasons"]})
+    assert "Missing year" in reasons and len(reasons) > 1
+
+    first_page = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+        "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    }).build_problematic_files_page(limit=1)
+    assert first_page["problem_reason_types"] == reasons, "the menu names every reason, not the page's"
+    for reason in reasons:
+        assert _indexed_filtered_items(database_url, (reason,)) == sorted(
+            item["key"] for item in evaluated
+            if reason in {browse._problematic_filter_reason(value) for value in item["problem_reasons"]}
+        ), reason
+    assert _indexed_filtered_items(database_url, tuple(reasons)) == sorted(item["key"] for item in evaluated)
+    assert _indexed_filtered_items(database_url, ("Missing year",), needle="карусель") == sorted(
+        item["key"] for item in evaluated if item["name"] == "Карусель Эпох")
+    assert _indexed_filtered_items(database_url, ("No such problem",)) == []
 
 
 def test_live_indexed_duplicate_cards_equal_the_live_overlay_and_follow_each_save(watcher_repair_inventory, monkeypatch):

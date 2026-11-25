@@ -16,10 +16,11 @@ python -m pytest tests/py/test_library_browse_postgres.py tests/py/test_api_read
 python -m pytest tests/py/test_multi_root_duplicates.py tests/py/test_problematic_albums.py tests/py/test_problematic_detail_identity.py tests/py/test_problematic_physical_files_postgres.py tests/py/test_problematic_file_projection_migration_postgres.py tests/py/test_problematic_files_search_postgres.py -q
 ```
 
-Check bounded candidate hydration, search reaching albums beyond the first page
-without the complete list, one read snapshot, compact summary/detail
-separation, cache misses, single-flight invalidation, and indexed physical-folder
-reads. Keep real SQL EXPLAIN checks; mocked row fixtures cannot prove query cost.
+Check bounded candidate hydration, search and problem filters reaching albums
+beyond the first page without the complete list (keyset pages of the persisted
+index, with the filter reasons the client names), the first page's reason
+catalog, one read snapshot, compact summary/detail separation, cache misses,
+single-flight invalidation, and indexed physical-folder reads. Keep real SQL EXPLAIN checks; mocked row fixtures cannot prove query cost.
 
 ## JavaScript and components
 
@@ -28,9 +29,11 @@ node --test --test-concurrency=1 tests/js/runtime/utility-problematic-load-diagn
 npx playwright test problematicFilesVirtualFocus.spec.js --config=playwright.component.config.js --workers=1
 ```
 
-Require bounded first-page painting, complete-list reconciliation, obsolete
-request protection, reused initial detail, error handling, and bounded virtual
-rows with stable focus. Payload guards must inspect every row, not only row one.
+Require bounded first-page painting, paging as the list scrolls (never the
+complete list), server-side search and filters, "Loading more results…" under
+the last row while pages remain, "Nothing found." for no match, obsolete
+request protection, reused initial detail, one detail render per selection,
+error handling, and bounded virtual rows with stable focus. Payload guards must inspect every row, not only row one.
 
 ## Real application
 
@@ -50,9 +53,11 @@ npm run test:e2e:performance -- --test problematic-files-focused --headless --pe
 ```
 
 Both targets are required even when one fails. Preserve reports and traces.
-Verify cold and warm loading, compact bounded and full summaries, exactly one
-request for each summary phase, no redundant initial-detail request, populated
-visible detail, searching/filtering, and scrolling. Retain the approved readiness
+Verify cold and warm loading, compact first pages, exactly one first-page
+request per open (the list is paged; BUGFIX-14), the dataset contract on the
+pages loaded by scrolling to the list's end, no redundant initial-detail
+request, populated visible detail, server-side searching/filtering, and
+scrolling. Retain the approved readiness
 budget of 1000 ms plus 200 ms grace and all other existing benchmark budgets.
 A shell appearing without usable content is not readiness.
 

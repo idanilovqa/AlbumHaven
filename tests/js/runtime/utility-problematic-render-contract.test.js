@@ -112,9 +112,10 @@ function problematicAlbums(count, counts) {
 function openSettings(albums) {
   const counts = { itemsVisited: 0, domMutations: 0 };
   const items = problematicAlbums(albums, counts);
-  const capture = createRequestCapture(url => jsonResponse(url.endsWith('?limit=50')
-    ? { complete: false, has_more: albums > 50, items: items.slice(0, 50) }
-    : { complete: true, items }));
+  // A list paged in full: the render cost of a committed list must not depend on its length.
+  const capture = createRequestCapture(url => jsonResponse(url.includes('artists=true')
+    ? { items: [], has_more: false }
+    : { complete: false, has_more: false, items }));
   const frames = [];
   const els = {
     tabs: [], overlay: createControl(counts), list: createList(counts), detail: createControl(counts),
@@ -202,10 +203,13 @@ async function openAndRender(session, pass = 1) {
   assert.equal(context.state.utility.selectedProblematicKey, mounted[1]);
 
   const requests = capture.urls().slice(before);
-  // Reloading the complete list the open tab shows reads only the complete list (PF-NEW-PROBLEMS).
-  assert.deepEqual(requests, pass === 1
-    ? ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']
-    : ['/utilities/problematic-files']);
+  // A first open reads one page; reloading the shown list reads its rows again in one page (BUGFIX-14). A
+  // list short enough to show its end then asks for the Artist rows after the page's own.
+  assert.deepEqual(requests.filter(url => !url.includes('artists=true')), [
+    `/utilities/problematic-files?limit=${pass === 1 ? 50 : Math.min(200, Math.max(50, albums))}`,
+  ]);
+  assert.ok(requests.filter(url => url.includes('artists=true'))
+    .every(url => url === '/utilities/problematic-files?artists=true&limit=50&cursor='));
   return { requests, metrics: { itemsVisited, domMutations } };
 }
 
@@ -228,6 +232,9 @@ test('request capture: Problematic Files renders a committed list visiting a bou
     assert.ok(domMutations <= smallest.domMutations + 2 * window,
       `${albums} albums: ${domMutations} DOM mutations exceed ${smallest.domMutations} + 2 x ${window} window rows`);
   }
-  assert.equal(opened[2000].domMutations, budgets.domMutations, '2,000 albums: the same DOM work as the production size');
-  assert.equal(opened[cardinalities.production].domMutations, budgets.domMutations);
+  // One page paints once (BUGFIX-14): 48 DOM mutations where the complete-list reconciliation cost 74. The
+  // registered budget is unchanged; the work must equal at every size and stay within it.
+  assert.equal(opened[2000].domMutations, opened[cardinalities.production].domMutations,
+    '2,000 albums: the same DOM work as the production size');
+  assert.ok(opened[cardinalities.production].domMutations <= budgets.domMutations);
 });

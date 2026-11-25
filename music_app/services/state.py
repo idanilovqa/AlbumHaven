@@ -66,6 +66,7 @@ from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
     _raise_if_projection_cancelled,
+    RelationReconciliationRequired,
     ensure_relation_projection_ready,
 )
 
@@ -783,6 +784,14 @@ def ensure_runtime_relation_projection_ready(
         )
     except InterruptedError:
         raise
+    except RelationReconciliationRequired as refusal:
+        # No stored relation rows to serve: the replay owner reconciles, then readiness runs again.
+        library_state["last_error"] = str(refusal)
+        library_state["relation_projection_rebuild_reason"] = "reconciliation_required"
+        owner = getattr(app, "relation_reconciliation", None)
+        if owner is not None:
+            owner.request()
+        raise
     except Exception as exc:
         library_state["last_error"] = str(exc)
         library_state["relation_projection_rebuild_reason"] = "startup_rebuild_failed"
@@ -801,6 +810,8 @@ def ensure_runtime_relation_projection_ready(
         result["rebuild_reason"] = str(
             result.get("last_rebuild_reason") or result.get("rebuild_reason") or "healthy"
         )
+    if result.get("ready") and _request_relation_reconciliation(app, result):
+        result["rebuild_reason"] = "reconciliation_required"
     library_state["relation_views"] = dict(result.get("relation_views") or {})
     library_state["relation_projection_ready"] = bool(result.get("ready"))
     library_state["relation_projection_builder_version"] = str(
@@ -832,6 +843,24 @@ def ensure_runtime_relation_projection_ready(
             _raise_if_projection_cancelled(cancel_requested)
             PostgresLibraryBrowseRepository(app.config).queue_settings_projection_prewarm()
     return result
+
+
+def _request_relation_reconciliation(app, result: Mapping[str, object]) -> bool:
+    """Start-up only: when tag edits would refuse for want of reconciliation, start its background owner.
+    Browsing keeps serving the stored relation rows meanwhile. Returns whether reconciliation is due."""
+    from music_app.services.scoped_relation_projection import relation_reconciliation_due
+
+    due = result.get("rebuild_reason") == "reconciliation_required"
+    if not due:
+        try:
+            due = relation_reconciliation_due(app.config)
+        except Exception:
+            app.logger.exception("Relation reconciliation check failed; tag edits report their own refusal.")
+            return False
+    owner = getattr(app, "relation_reconciliation", None)
+    if due and owner is not None:
+        owner.request()
+    return due
 
 
 def _run_scheduled_relation_projection_rebuild(

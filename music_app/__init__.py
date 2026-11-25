@@ -659,6 +659,14 @@ def create_asgi_app():
 
         _app.state.loose_track_store_owner = LooseTrackStoreOwner(runtime.config, logger=runtime.logger)
         _app.state.loose_track_store_owner.start()
+        # 005Q: start-up readiness starts it when tag edits would refuse for want of reconciliation.
+        from music_app.services.relation_reconciliation import RelationReconciliationOwner
+
+        runtime.relation_reconciliation = RelationReconciliationOwner(
+            runtime.config,
+            reconciled=lambda: ensure_runtime_relation_projection_ready(runtime),
+            logger=runtime.logger,
+        )
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -692,6 +700,11 @@ def create_asgi_app():
                     "loose track store owner",
                     lambda: asyncio.to_thread(getattr(_app.state, "loose_track_store_owner", None).stop)
                     if getattr(_app.state, "loose_track_store_owner", None) is not None else None,
+                ),
+                (
+                    "relation reconciliation",
+                    lambda: asyncio.to_thread(runtime.relation_reconciliation.stop)
+                    if getattr(runtime, "relation_reconciliation", None) is not None else None,
                 ),
                 (
                     "generated preview relocation",

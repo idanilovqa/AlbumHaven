@@ -73,3 +73,52 @@ export async function journalOldWriterRelationChange(options = {}) {
   }
   throw new Error('No PostgreSQL client command was available.');
 }
+
+// The stored relation rows' family for one artist: what the selected startup view may show before the replay
+// finishes (the selected family projection reads the same links).
+function storedFamilySql(artist) {
+  const name = String(artist).replaceAll("'", "''");
+  return `
+with target as (
+  select artists.id
+  from library.local_artists artists
+  join library.libraries libraries on libraries.id = artists.library_id and libraries.library_kind = 'local'
+  where artists.name = '${name}'
+  order by artists.id
+  limit 1
+)
+select distinct family.name
+from (
+  select artist_id, related_artist_id, source_family from library.local_artist_family_links_current
+  union all
+  select artist_id, related_artist_id, source_family from library.local_artist_family_links
+) links
+join target on links.artist_id = target.id
+join library.local_artists family on family.id = links.related_artist_id
+where links.source_family <> 'folder_derived_runtime' and family.name <> '${name}'
+order by family.name;
+`;
+}
+
+export async function readStoredRelationFamily(artist, options = {}) {
+  const env = options.env || process.env;
+  const connection = resolveIsolatedE2ESetupConnection(env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL);
+  const childEnv = { ...env, PGCLIENTENCODING: 'UTF8' };
+  delete childEnv.PGDATABASE;
+  if (connection.password) childEnv.PGPASSWORD = connection.password;
+  const commands = resolvePsqlCommands(env, options.platform || process.platform);
+  const execute = options.execFileAsync || execFileAsyncDefault;
+  for (let index = 0; index < commands.length; index += 1) {
+    try {
+      const result = await execute(commands[index], [
+        '--no-psqlrc', '--quiet', '--tuples-only', '--no-align',
+        `--dbname=${connection.databaseTarget}`,
+        '--set=ON_ERROR_STOP=1', '--command', storedFamilySql(artist),
+      ], { encoding: 'utf8', env: childEnv, windowsHide: true });
+      return String(result.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean);
+    } catch (error) {
+      if (error?.code !== 'ENOENT' || index === commands.length - 1) throw error;
+    }
+  }
+  throw new Error('No PostgreSQL client command was available.');
+}

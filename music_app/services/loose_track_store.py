@@ -32,7 +32,10 @@ _LOGGER = logging.getLogger("music_app")
 _PREPARE_LOCK = threading.Lock()
 _BUSY_RECHECK_SECONDS = 1.0
 # Held by a transaction that stays open for the whole build, on a connection of its own: the "building"
-# state's owner across processes. It ends with that transaction, however the build ends.
+# state's owner across processes. It ends with that transaction, however the build ends. Known cost: that
+# open transaction pins the database's xmin horizon (vacuum keeps dead rows) for the build's duration,
+# about 14 s at production calibration, and only on the one-time build or a builder-version change. A
+# session lock would need a session_connection lease, which the store's own-connection contract forbids.
 _BUILD_LOCK_SQL = "select pg_try_advisory_xact_lock(hashtextextended('album-haven.loose-track-store.build', 0)) as held"
 
 _LIBRARY_SQL = """(

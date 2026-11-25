@@ -109,7 +109,8 @@
     "music_app/static/js/runtime/modal-and-overlay-helpers.js",
     "scripts/ci/load-fixture-profile.py",
     "tests/e2e/helpers/postgresProjectionFixture.js",
-    "migrations/postgres/0300_key_loose_track_rows_by_artist.sql"
+    "migrations/postgres/0300_key_loose_track_rows_by_artist.sql",
+    "music_app/services/relation_reconciliation.py"
   ],
   "rules": [
     {
@@ -469,6 +470,8 @@
         "scripts/ci/load-fixture-profile.py",
         "music_app/services/relation_projection_postgres.py",
         "music_app/services/scoped_relation_projection.py",
+        "music_app/services/relation_reconciliation.py",
+        "music_app/services/state.py",
         "tests/e2e/helpers/postgresProjectionFixture.js"
       ],
       "targets": ["selected-artist", "cover-lookup", "artist-family", "search-all-artists", "search-browse"]

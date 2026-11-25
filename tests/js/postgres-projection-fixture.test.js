@@ -44,3 +44,25 @@ test('projection fixture rejects non-isolated databases before launching psql', 
     /requires album_haven_fake_e2e\/album_haven_migrator/u,
   );
 });
+
+test('projection fixture reads the stored relation family of one artist through the setup role', async () => {
+  const { readStoredRelationFamily } = await import('../e2e/helpers/postgresProjectionFixture.js');
+  const calls = [];
+  const family = await readStoredRelationFamily("Neal O'Morse", {
+    env: {
+      ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
+        'postgresql://album_haven_migrator:test-only@127.0.0.1:54329/album_haven_fake_e2e',
+    },
+    platform: 'linux',
+    execFileAsync: async (command, args) => {
+      calls.push({ command, args });
+      return { stdout: 'Morse Portnoy George\r\nThe Neal Morse Band\n\n' };
+    },
+  });
+
+  assert.deepEqual(family, ['Morse Portnoy George', 'The Neal Morse Band']);
+  const sql = calls[0].args.at(-1);
+  assert.match(sql, /local_artist_family_links_current/u);
+  assert.match(sql, /source_family <> 'folder_derived_runtime'/u);
+  assert.match(sql, /artists\.name = 'Neal O''Morse'/u);
+});

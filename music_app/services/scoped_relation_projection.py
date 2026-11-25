@@ -1047,11 +1047,11 @@ def prepare_relation_compatibility(config, *, connect=None, cancel_requested=Non
             _first_row(connection.execute(relations._load_relation_projection_sql())))
         snapshot['relation_views'] = _stored_legacy_views(connection, library_id)
         if relations.relation_projection_stale_reason(snapshot):
-            raise RuntimeError('Legacy publication is not ready for compatibility preparation.')
+            raise relations.RelationInitializationRequired('Legacy publication is not ready for compatibility preparation.')
         metadata = dict(context.get('metadata') or {})
         if (metadata.get('source_fingerprint') != context.get('normalized_source_fingerprint')
                 or metadata.get('built_from_fingerprint') != context.get('normalized_source_fingerprint')):
-            raise RuntimeError('Source fingerprint changed without journal evidence; compatibility preparation refused.')
+            raise relations.RelationInitializationRequired('Source fingerprint changed without journal evidence; compatibility preparation refused.')
         legacy_views = snapshot.get('relation_views')
         if (state is not None and state['source_fingerprint'] == context.get('normalized_source_fingerprint')
                 and state['publication_xid'] == context.get('normalized_publication_xid')):
@@ -1065,6 +1065,24 @@ def prepare_relation_compatibility(config, *, connect=None, cancel_requested=Non
             'update library.local_relation_projection_state set last_publication_xid=pg_current_xact_id() where library_id=%s',
             (library_id,))
         return {'compatibility_prepared': True}
+
+
+def relation_reconciliation_due(config, *, connect=None):
+    """Whether tag edits would refuse for want of reconciliation: journaled albums wait, or the compatibility
+    evidence is missing or no longer matches the published index. Three keyed reads."""
+    from music_app.services import relation_projection_postgres as relations
+    with (connect or relations._connect)(config['ALBUM_HAVEN_APP_DATABASE_URL']) as connection:
+        context = _first_row(connection.execute(_CONTEXT))
+        if context is None or context.get('normalized_builder_version') != relations.RELATION_PROJECTION_BUILDER_VERSION:
+            return False
+        library_id = context['library_id']
+        if _first_row(connection.execute(
+                'select 1 from library.local_relation_dirty_albums where library_id=%s limit 1', (library_id,))):
+            return True
+        state = _compatibility_state(connection, library_id)
+        return state is None or (
+            state['source_fingerprint'] != context.get('normalized_source_fingerprint')
+            or state['publication_xid'] != context.get('normalized_publication_xid'))
 
 
 def ensure_pending_relation_projection_ready(config, *, connect=None, cancel_requested=None):

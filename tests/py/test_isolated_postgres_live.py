@@ -715,6 +715,9 @@ def test_live_selected_artist_keyed_store_read_matches_the_loader_track_for_trac
         loose("Broadcast/Session/05 folder only.flac", "Unknown Performer", "Unknown Performer"),
         loose("Stereolab/06 other.flac", "Stereolab", "Stereolab"),
         loose("Various/07 various.flac", "Laetitia Sadier", "Various Artists"),
+        # The alias is this file's artist, but the matcher scopes it by its album artist: the alias-expanded
+        # keys fetch the row, and only the matcher's post-filter keeps it out of Broadcast.
+        loose("Elsewhere/08 alias credit.flac", "Former Name", "Someone Else"),
     ]
     fixture.seed(fixture.entry("Owner/Album/01.flac"), *entries)
     _prepare_store(fixture)
@@ -726,6 +729,7 @@ def test_live_selected_artist_keyed_store_read_matches_the_loader_track_for_trac
         "Stereolab": ["Stereolab", "Laetitia Sadier"],
         "Various Artists": ["Various Artists"],
         "Unknown Performer": ["Unknown Performer"],
+        "Someone Else": ["Someone Else"],
     }
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
 
@@ -745,6 +749,15 @@ def test_live_selected_artist_keyed_store_read_matches_the_loader_track_for_trac
     # "Various Artists"; the featured credit, the alias and the folder-only track belong to Broadcast.
     assert tracks("Broadcast", keyed=True) == ["01 own.flac", "02 feature.flac", "04 alias.flac", "05 folder only.flac"]
     assert tracks("Various Artists", keyed=True) == ["03 compilation.flac", "07 various.flac"]
+    assert tracks("Someone Else", keyed=True) == ["08 alias credit.flac"]
+    family = browse._expanded_artist_name_list(families["Broadcast"], alias_to_canonical, canonical_to_aliases)
+    with isolatedPostgres._connect(fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+        fetched = repository._stored_loose_candidates_in_scope(
+            connection, family, alias_to_canonical, canonical_to_aliases,
+        )
+    assert "08 alias credit.flac" in {Path(str(row.get("private_path") or "")).name for row in fetched}, (
+        "the alias-expanded keys fetch the extra row the matcher must reject"
+    )
 
 
 def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size(watcher_repair_inventory, monkeypatch):
@@ -8978,3 +8991,41 @@ def test_live_pool_hands_no_session_state_to_the_next_borrower(monkeypatch):
                 sleep(0.05)
     finally:
         postgres_connections.close_pools()
+
+
+def test_live_reconciliation_owner_replays_journaled_albums_so_tag_edits_resume(watcher_repair_inventory):
+    """FTC-GALLERY-STARTUP-005Q: with the compatibility evidence missing and an old writer's album change
+    journaled, readiness serves the stored relation rows and edits wait; the background owner replays the
+    journaled album, after which nothing is due and readiness is healthy again."""
+    from music_app.services import relation_projection_postgres as relations
+    from music_app.services import scoped_relation_projection as scoped
+    from music_app.services.relation_reconciliation import RelationReconciliationOwner
+
+    fixture = watcher_repair_inventory
+    fixture.seed(
+        fixture.entry("Owner/Album One/01.flac", artist="Owner", album="Album One"),
+        fixture.entry("Guest/Album Two/01.flac", artist="Guest", album="Album Two"),
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from library.local_relation_compatibility_state")
+        connection.execute("""
+            update library.local_albums albums set artist_id = other.id
+            from library.local_artists other
+            where albums.id = (select max(id) from library.local_albums)
+              and other.library_id = albums.library_id and other.id <> albums.artist_id
+              and other.id = (select min(id) from library.local_artists where id <> albums.artist_id
+                              and library_id = albums.library_id)
+        """)
+    assert scoped.relation_reconciliation_due(fixture.config)
+
+    # Without compatibility evidence the normalized rows are not published either: readiness reports the
+    # readable refusal and start-up hands the replay to the owner.
+    with pytest.raises(relations.RelationReconciliationRequired, match="before editing tags"):
+        relations.ensure_relation_projection_ready(fixture.config)
+
+    reconciled = []
+    owner = RelationReconciliationOwner(fixture.config, reconciled=lambda: reconciled.append(True))
+    assert owner.run_once()
+
+    assert not scoped.relation_reconciliation_due(fixture.config)
+    assert relations.ensure_relation_projection_ready(fixture.config)["rebuild_reason"] == "healthy"

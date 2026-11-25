@@ -45,6 +45,10 @@ class RelationReconciliationRequired(RuntimeError):
     readiness keeps serving the stored relation rows (FTC-GALLERY-STARTUP-005Q)."""
 
 
+class RelationInitializationRequired(RelationReconciliationRequired):
+    """Nothing journaled proves the change: only the explicit (whole-library) initialization reconciles it."""
+
+
 def _raise_if_projection_cancelled(cancel_requested: object | None) -> None:
     if cancel_requested is not None and cancel_requested.is_set():
         raise InterruptedError("Relation projection readiness was cancelled.")
@@ -578,7 +582,7 @@ def _ensure_relation_projection_ready(
             ensure_pending_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
         except RelationReconciliationRequired as refusal:
             return _stored_relation_rows_result(config, connect=connect, refusal=refusal, logger=logger,
-                                                started_at=started_at)
+                                                started_at=started_at, published=scan_cache.get("relation_views"))
         with connector(database_url) as connection:
             with _cancel_active_connection_on_request(connection, cancel_requested):
                 snapshot_row = _first_row(connection.execute(_load_relation_projection_sql()))
@@ -599,6 +603,7 @@ def _ensure_relation_projection_ready(
     if scan_cache.get('normalized_relation_initialized') and not allow_initialized_rebuild:
         return _stored_relation_rows_result(
             config, connect=connect, logger=logger, started_at=started_at,
+            published=scan_cache.get("relation_views"),
             refusal=RelationReconciliationRequired(
                 'Initialized library projection requires explicit startup reconciliation: ' + reason),
         )
@@ -1017,17 +1022,22 @@ def _stored_relation_rows_result(
     refusal: RelationReconciliationRequired,
     logger: object | None,
     started_at: float,
+    published: object = None,
 ) -> dict[str, object]:
     """Readiness from the stored relation rows while the index waits for explicit reconciliation.
 
-    Browsing never waits on a whole-library rebuild here; tag edits keep refusing with the same message.
+    The normalized relation rows serve first; without them (missing compatibility evidence hides them) the
+    last published projection does. Browsing never waits on a whole-library rebuild here; tag edits keep
+    refusing with the same message.
     """
     from music_app.services.scoped_relation_projection import load_current_relation_state
 
     try:
         stored = load_current_relation_state(config, connect=connect)
     except RuntimeError:
-        raise refusal from None  # no stored relation rows to serve either
+        if not relation_projection_structure_complete(published):
+            raise refusal from None  # no stored relation rows to serve either
+        stored = {"relation_views": published}
     warning = getattr(logger, "warning", None)
     if callable(warning):
         warning("Relation index needs reconciliation; browsing serves the stored relation rows: %s", refusal)

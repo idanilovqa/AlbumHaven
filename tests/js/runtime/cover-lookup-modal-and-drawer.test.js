@@ -9845,3 +9845,8 @@ require('node:test')('bounded interaction: Cover Lookup elapsed ticks relabel on
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });
+
+require('node:test')('a keyboard-focused notification card shows no clipped focus line beside its delete button (owner, 2026-11-25)', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/cover-lookup-drawer-and-related.css'), 'utf8');
+  assert.match(css, /:root \.cover-lookup-task-open:focus-visible[\s\S]*?\{[^}]*outline:\s*none !important/);
+});

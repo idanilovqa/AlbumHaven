@@ -294,8 +294,10 @@
   gap: 10px;
   padding: 10px 4px 13px 10px;
 }
+/* Keyboard focus shows as the card's focus-within fill; the clipped button outline drew a stray line (owner, 2026-11-25). */
 :root .cover-lookup-task-open:hover,
-:root .cover-lookup-task-open:active {
+:root .cover-lookup-task-open:active,
+:root .cover-lookup-task-open:focus-visible {
   border-color: transparent !important;
   outline: none !important;
   background: transparent !important;

@@ -24466,11 +24466,17 @@ function syncAlbumTrackCreditMotion(root) {
     frame = 0;
     // Read every width before writing any class: interleaving forced one
     // synchronous layout per row.
-    const overflowing = rows.map((row) => !reduced.matches && visible.has(row)
-      && resolveRunningLineMotion({
-        clientWidth: row.clientWidth, scrollWidth: row.firstElementChild.scrollWidth,
-      }).overflowing);
-    rows.forEach((row, index) => row.classList.toggle('is-credit-overflowing', overflowing[index]));
+    const motions = rows.map((row) => (!reduced.matches && visible.has(row)
+      ? resolveRunningLineMotion({ clientWidth: row.clientWidth, scrollWidth: row.firstElementChild.scrollWidth })
+      : null));
+    // The pan's distance and duration are custom properties: without them its animation
+    // shorthand is invalid and the credit never moves.
+    rows.forEach((row, index) => {
+      const motion = motions[index];
+      row.classList.toggle('is-credit-overflowing', Boolean(motion?.overflowing));
+      if (motion?.overflowing) applyRunningLineMotion(row, motion);
+      else clearRunningLineMotion(row);
+    });
   };
   const schedule = () => {
     if (!disposed && !frame) frame = requestAnimationFrame(refresh);

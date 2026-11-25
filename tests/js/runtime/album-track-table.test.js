@@ -403,10 +403,16 @@ test('Loose Tracks credit motion reads every row before writing and pans only vi
   const log = [];
   const rows = Array.from({ length: 4 }, (_, index) => {
     const classes = new Set();
+    const properties = new Map();
     const text = { get scrollWidth() { log.push(`read-text-${index}`); return 300; } };
     return {
       index,
+      properties,
       firstElementChild: text,
+      style: {
+        setProperty(name, value) { log.push(`write-${index}`); properties.set(name, value); },
+        removeProperty(name) { log.push(`write-${index}`); properties.delete(name); },
+      },
       get clientWidth() { log.push(`read-row-${index}`); return 100; },
       classList: {
         toggle(name, force) { log.push(`write-${index}`); if (force) classes.add(name); else classes.delete(name); },
@@ -442,6 +448,14 @@ test('Loose Tracks credit motion reads every row before writing and pans only vi
   assert.ok(firstWrite > lastRead, `layout reads interleaved with class writes: ${log.join(', ')}`);
   assert.deepEqual(rows.map((row) => row.classList.contains('is-credit-overflowing')), [true, false, true, false]);
   assert.ok(!log.includes('read-row-1') && !log.includes('read-row-3'), 'off-screen rows must not be measured');
+  // The pan's keyframes and duration read these: without them the credit never moves.
+  // 200 px of overflow at 12 px/s moving over 70% of the pass.
+  assert.deepEqual(rows.map((row) => Object.fromEntries(row.properties)), [
+    { '--running-line-distance': '200px', '--running-line-duration': '23810ms' },
+    {},
+    { '--running-line-distance': '200px', '--running-line-duration': '23810ms' },
+    {},
+  ]);
 });
 
 function loadTrackTableWithRating() {

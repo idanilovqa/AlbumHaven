@@ -67,7 +67,7 @@ for (const width of [390, 960]) {
       await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });
     }
     await page.evaluate(() => {
-      document.getElementById('table').innerHTML = buildAlbumTrackTableHtml({ playingAnimation: false, groups: [{ tracks: [
+      document.getElementById('table').innerHTML = buildAlbumTrackTableHtml({ groups: [{ tracks: [
         { title: 'Track with guests', secondaryArtist: 'Featured guest artist and orchestra with a very long complete credit '.repeat(5), duration: '3:42' },
         { title: 'Short credit', secondaryArtist: 'Guest', duration: '2:10' },
       ] }] });
@@ -80,7 +80,8 @@ for (const width of [390, 960]) {
     await credit.locator('span').evaluate(node => {
       const animation = node.getAnimations()[0];
       animation.pause();
-      animation.currentTime = 11000;
+      // RunningLine sizes the duration from the overflow; 90% of one pass sits in the end hold.
+      animation.currentTime = animation.effect.getComputedTiming().duration * 0.9;
     });
     const boxes = await credit.evaluate(node => ({ outer: node.getBoundingClientRect().toJSON(), inner: node.firstElementChild.getBoundingClientRect().toJSON() }));
     expect(boxes.inner.left).toBeLessThan(boxes.outer.left);
@@ -101,6 +102,13 @@ for (const width of [390, 960]) {
     await page.evaluate(() => disposeAlbumTrackCreditMotion(document.getElementById('table')));
     await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
     await page.setViewportSize({ width: width + 20, height: 720 });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+    // Turning off album table motion (the Currently playing animation setting) also stops credit panning.
+    await page.evaluate(() => {
+      document.getElementById('table').querySelector('.album-track-table').dataset.playingAnimation = 'disabled';
+      syncAlbumTrackCreditMotion(document.getElementById('table'));
+    });
+    await expect(credit).toHaveClass(/is-credit-overflowing/);
     await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
   });
 }
@@ -271,7 +279,8 @@ for (const width of [960, 390]) {
     expect(decoration.pointerEvents).toBe('none');
     await expect(frame.getByRole('table')).toHaveCount(2);
     await expect(frame.locator('.compact-data-table-header')).toHaveCount(1);
-    await expect(frame.getByRole('heading')).toHaveText(['Bonus Disc']);
+    // INT-038 (ef3feea3e): with more than one disc every disc is headed, the main disc included.
+    await expect(frame.getByRole('heading')).toHaveText(['CD 1', 'Bonus Disc']);
     const wrappedLines = await frame.locator('.album-track-table__total > div').evaluateAll(lines => lines.filter(line => {
       const range = document.createRange();
       range.selectNodeContents(line);

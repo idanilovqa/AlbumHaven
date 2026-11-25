@@ -1275,6 +1275,8 @@ def test_manual_lookup_publishes_each_merged_provider_stage_and_completes_snapsh
             repository_configs.append(selected_config)
 
     class FakePublisher:
+        best_candidate_id = None
+
         def __init__(self, repository, *, album_id, search_generation, search_kind):
             publisher_inits.append({
                 "repository": repository,
@@ -1373,6 +1375,7 @@ def test_manual_lookup_task_lists_candidates_in_the_persisted_snapshot_order(
 
     class SnapshotOrderPublisher:
         """Cover Art Archive was persisted before Discogs, as when it answers first."""
+        best_candidate_id = None
 
         def __init__(self, *_args, **_kwargs):
             pass
@@ -1432,6 +1435,82 @@ def test_manual_lookup_task_lists_candidates_in_the_persisted_snapshot_order(
     ]
 
 
+def test_manual_lookup_task_names_the_snapshot_best_candidate(
+    config,
+    logger,
+    library_state,
+    monkeypatch,
+    tmp_path: Path,
+):
+    # The notification thumbnail and the lookup suggestion both read the task's best candidate.
+    from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
+
+    track_path = tmp_path / "song.mp3"
+    album = {**_album_payload(track_path), "id": 41}
+    updates: list[dict[str, object]] = []
+    snapshot_best: list[object] = []
+
+    class Repository:
+        def publish_generation(self, **kwargs):
+            snapshot_best.append(kwargs["best_candidate_id"])
+            return True
+
+        def finish_generation(self, **kwargs):
+            if "best_candidate_id" in kwargs:
+                snapshot_best.append(kwargs["best_candidate_id"])
+            return True
+
+    def match(source, edge):
+        return {
+            "id": source, "source": source, "art_kind": "cover",
+            "url": f"https://images.example/{source}.jpg", "width": edge, "height": edge,
+        }
+
+    monkeypatch.setattr(
+        cover_lookup_runtime, "AlbumCoverCandidateSnapshotRepository", lambda _config: Repository(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime, "AlbumCoverCandidatePublisher", AlbumCoverCandidatePublisher, raising=False,
+    )
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "COVER_LOOKUP_PROVIDER_REGISTRY",
+        _FakeCoverLookupProviderRegistry(
+            service_matches=[match("deezer", 1800)],
+            manual_matches=[],
+            bandcamp_matches=[],
+            discogs_archive_matches=([match("apple", 2400)], []),
+            artist_website_matches=[],
+        ),
+    )
+    monkeypatch.setattr(cover_lookup_runtime, "log_app_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cover_lookup_runtime, "discard_cover_lookup_future", lambda *_args: None)
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "update_cover_lookup_task",
+        lambda task_id, **kwargs: _capture_task_update(
+            updates, task_id, expected_config=config, **kwargs,
+        ),
+    )
+
+    cover_lookup_runtime._run_cover_lookup_task(
+        "manual-generation-best",
+        config,
+        logger,
+        config["MUSICBRAINZ_USER_AGENT"],
+        album,
+        {str(track_path)},
+        Event(),
+    )
+
+    assert updates[-1]["status"] == "completed"
+    assert snapshot_best and updates[-1]["best_candidate_id"] == snapshot_best[-1]
+    assert [candidate["id"] for candidate in updates[-1]["possible_matches"]].count(
+        updates[-1]["best_candidate_id"]
+    ) == 1
+
+
 def test_manual_lookup_resolves_snapshot_album_id_when_client_payload_omits_it(
     config,
     logger,
@@ -1453,6 +1532,8 @@ def test_manual_lookup_resolves_snapshot_album_id_when_client_payload_omits_it(
             return 41
 
     class FakePublisher:
+        best_candidate_id = None
+
         def __init__(self, _repository, *, album_id, **_kwargs):
             publisher_album_ids.append(album_id)
 
@@ -1603,6 +1684,8 @@ def test_run_cover_lookup_task_keeps_later_provider_failures_loud_for_acceptable
             pass
 
     class FakePublisher:
+        best_candidate_id = None
+
         def __init__(self, *_args, **_kwargs):
             pass
 
@@ -2546,6 +2629,8 @@ def test_run_cover_lookup_task_discards_unpublished_results_when_parallel_bandca
     terminal_events: list[str] = []
 
     class FakeCandidatePublisher:
+        best_candidate_id = None
+
         def __init__(self, _repository, *, album_id, search_generation, search_kind):
             assert album_id == 42
             assert search_generation == "task-canceled-during-provider"
@@ -4459,6 +4544,8 @@ def test_progressive_provider_cannot_publish_after_terminal_task(
             pass
 
     class FakePublisher:
+        best_candidate_id = None
+
         def __init__(self, _repository, **_kwargs):
             pass
 

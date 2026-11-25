@@ -343,6 +343,104 @@ def test_cover_gallery_prefers_persisted_selected_local_source_when_duplicate_ha
     assert payload["selected_source_cover_path"] == str(selected_source)
 
 
+def test_cover_gallery_keeps_the_cover_jpg_on_disk_when_the_saved_revision_names_another_file(
+    tmp_path: Path,
+):
+    # A saved revision names the picture cover.jpg held when it was saved. Once cover.jpg holds another
+    # picture, that revision no longer identifies a source: the cover.jpg card stays, active and selected.
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    active_cover = album_root / "cover.jpg"
+    earlier_cover = album_root / "cover-existing-1.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(active_cover, (20, 40, 220))
+    _write_jpeg(earlier_cover, (220, 200, 40), size=(15, 15))
+    active_hash = hashlib.sha256(active_cover.read_bytes()).hexdigest()
+    stale_revision = hashlib.sha256(earlier_cover.read_bytes()).hexdigest()
+
+    def candidate(path: Path, digest: str, edge: int) -> dict[str, object]:
+        return {
+            "path": str(path), "filename": path.name, "relative_path": path.name,
+            "width": edge, "height": edge, "resolution": f"{edge}x{edge}", "is_squareish": True,
+            "is_active": False, "area": edge * edge, "depth": 1, "sha256": digest,
+        }
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={
+            str(track_path): {
+                "cover_path": str(active_cover),
+                "cover_revision": stale_revision,
+                "cover_selection_origin": "user",
+            }
+        },
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+        local_inventory={
+            "available": True,
+            "complete": True,
+            "candidates": [
+                candidate(earlier_cover, stale_revision, 15),
+                candidate(active_cover, active_hash, 12),
+            ],
+        },
+    )
+
+    assert payload["selected_source_cover_path"] == str(active_cover)
+    assert sorted(
+        (item["candidate_cover_path"], item["is_active"], item.get("cover_revision"))
+        for item in payload["local_covers"]
+    ) == sorted([
+        (str(earlier_cover), False, None),
+        (str(active_cover), True, active_hash),
+    ])
+
+
+def test_cover_gallery_trusts_the_saved_revision_while_the_index_still_hashes_the_replaced_cover_jpg(
+    tmp_path: Path,
+):
+    # A save copied the selected file to cover.jpg before the index re-hashed cover.jpg: the file on disk
+    # matches the saved revision, so the selected file stays the one card for the picture.
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    active_cover = album_root / "cover.jpg"
+    selected_source = album_root / "front.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(selected_source, (20, 40, 220))
+    active_cover.write_bytes(selected_source.read_bytes())
+    revision = hashlib.sha256(selected_source.read_bytes()).hexdigest()
+
+    def candidate(path: Path, digest: str) -> dict[str, object]:
+        return {
+            "path": str(path), "filename": path.name, "relative_path": path.name,
+            "width": 12, "height": 12, "resolution": "12x12", "is_squareish": True,
+            "is_active": False, "area": 144, "depth": 1, "sha256": digest,
+        }
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {"cover_path": str(active_cover), "cover_revision": revision}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+        local_inventory={
+            "available": True,
+            "complete": True,
+            "candidates": [candidate(active_cover, "0" * 64), candidate(selected_source, revision)],
+        },
+    )
+
+    assert payload["selected_source_cover_path"] == str(selected_source)
+    assert [(item["candidate_cover_path"], item["is_active"]) for item in payload["local_covers"]] == [
+        (str(selected_source), True),
+    ]
+
+
 def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Path):
     album_root = (tmp_path / "Artist" / "Album").resolve()
     track_path = (album_root / "song.mp3").resolve()

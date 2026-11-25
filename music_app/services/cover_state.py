@@ -480,6 +480,14 @@ def serialize_cover_gallery_payload(
             })
         for candidate in local_candidates:
             candidate["is_active"] = bool(not active_remote_cover and active_cover_path and Path(candidate["path"]) == active_cover_path)
+        indexed_active_hash = next((item.get("sha256") for item in local_candidates if item.get("is_active")), None)
+        if active_cover_revision and indexed_active_hash and indexed_active_hash != active_cover_revision:
+            # The index or the saved revision is stale. The file decides: a revision cover.jpg no longer
+            # holds names an earlier picture, never the source of the current one.
+            try:
+                active_cover_revision = _file_sha256(active_cover_path)
+            except OSError:
+                pass
         selected_source_path = None if active_remote_cover or not active_cover_path else str(active_cover_path)
         if active_cover_revision and not active_remote_cover:
             selected_source_path = next((str(item["path"]) for item in local_candidates if not item.get("is_active") and item.get("sha256") == active_cover_revision), selected_source_path)

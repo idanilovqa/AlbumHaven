@@ -5,10 +5,21 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const performanceRunner = require('../../scripts/run-performance-playwright.cjs');
+const { listRegisteredCases } = require('../../scripts/ci/performance-quarantine.cjs');
 const { _private } = performanceRunner;
 const REAL_APP_ENV = {
   ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
 };
+const STANDARD_SYNTHETIC_COUNTS = Object.freeze({ artists: 2081, albums: 5346, tracks: 57980 });
+const CALIBRATED_SYNTHETIC_COUNTS = Object.freeze({ artists: 6345, albums: 14673, tracks: 159547 });
+
+function writeSyntheticManifest(fixtureRoot, counts) {
+  fs.mkdirSync(fixtureRoot, { recursive: true });
+  fs.writeFileSync(path.join(fixtureRoot, 'manifest.json'), JSON.stringify({
+    profiles: { 'synthetic-large-library': { counts } },
+  }));
+}
+
 const CALIBRATED_REAL_APP_ENV = {
   ...REAL_APP_ENV,
   ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
@@ -288,6 +299,7 @@ test('configured suite rejects mixed preloaded fixture profiles before setup or 
 
 test('configured suite default entry selects a fixture-compatible released library group', () => {
   const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'default-performance-fixture');
+  writeSyntheticManifest(fixtureRoot, STANDARD_SYNTHETIC_COUNTS);
   let receivedOptions = null;
 
   const exitCode = _private.runConfiguredPerformanceSuite(
@@ -1113,14 +1125,14 @@ test('buildRunnerArgs preserves search browse target metadata when selected by s
   const target = _private.resolvePerformanceTarget('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
 
   assert.equal(target.aliasNames[0], 'search-browse');
-  assert.deepEqual(target.env, REAL_APP_ENV);
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
 test('buildRunnerArgs preserves artist-family target metadata when selected by spec path', () => {
   const target = _private.resolvePerformanceTarget('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
 
   assert.equal(target.aliasNames[0], 'artist-family');
-  assert.deepEqual(target.env, REAL_APP_ENV);
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
 test('buildRunnerArgs preserves selected-artist target metadata when selected by spec path', () => {
@@ -1222,7 +1234,7 @@ test('every real-app target forces the browse selector', () => {
     assert.equal(target.coverageClass, 'real-app-library-browse-load');
     assert.deepEqual(
       target.env,
-      ['artist-tree-scroll-navigation', 'selected-artist'].includes(targetName)
+      ['artist-tree-scroll-navigation', 'selected-artist', 'artist-family', 'search-all-artists', 'search-browse'].includes(targetName)
         ? CALIBRATED_REAL_APP_ENV
         : targetName === 'problematic-files-focused'
           ? FOCUSED_PROBLEMATIC_FILES_REAL_APP_ENV
@@ -1243,14 +1255,14 @@ test('broad All Artists target forces the Postgres browse selector', () => {
 test('broad search All Artists target forces the Postgres browse selector', () => {
   assert.deepEqual(
     performanceRunner.PERFORMANCE_TARGETS['search-all-artists'].env,
-    REAL_APP_ENV
+    CALIBRATED_REAL_APP_ENV
   );
 });
 
 test('artist-family target forces Postgres browse without pre-app artist-family seed setup', () => {
   assert.deepEqual(
     performanceRunner.PERFORMANCE_TARGETS['artist-family'].env,
-    REAL_APP_ENV
+    CALIBRATED_REAL_APP_ENV
   );
 });
 
@@ -1292,7 +1304,7 @@ test('selected-artist target forces the browse selector', () => {
 test('search browse target forces the browse selector', () => {
   assert.deepEqual(
     performanceRunner.PERFORMANCE_TARGETS['search-browse'].env,
-    REAL_APP_ENV
+    CALIBRATED_REAL_APP_ENV
   );
 });
 
@@ -2918,7 +2930,17 @@ test('runTargetWithPolicy does not treat stale metrics from an earlier attempt a
   );
 });
 
+// These tests pin every default target's launch order, so they run against the registry with no
+// quarantine; the quarantine contract has its own tests.
+function withoutPerformanceQuarantine(t) {
+  const previous = performanceRunner._private.setRegisteredPerformanceCases(
+    listRegisteredCases().map((entry) => ({ ...entry, quarantine: null })),
+  );
+  t.after(() => performanceRunner._private.setRegisteredPerformanceCases(previous));
+}
+
 test('runSequentialPerformanceSuite executes the default approved performance targets when no target is provided', (t) => {
+  withoutPerformanceQuarantine(t);
   usePreloadedFixtureEnv(t, 'idle-memory');
   useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
@@ -3187,6 +3209,7 @@ test('buildAttemptEnv prevents report auto-open while preserving headed mode', (
 });
 
 test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even after earlier batches consume wall clock time', (t) => {
+  withoutPerformanceQuarantine(t);
   usePreloadedFixtureEnv(t, 'idle-memory');
   useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
@@ -3235,4 +3258,91 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   }
   assert.equal(calls[24].options.env.PLAYWRIGHT_PORT, '4178');
   assert.equal(calls[24].args.includes('--timeout=240000'), true);
+});
+
+test('a production-calibration target refuses the standard synthetic library', () => {
+  const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'standard-scale-fixture');
+  writeSyntheticManifest(fixtureRoot, STANDARD_SYNTHETIC_COUNTS);
+  assert.throws(
+    () => _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['search-browse'], fixtureRoot),
+    /requires the production-calibration synthetic-large-library fixture, but .* holds 2081 artists/,
+  );
+  _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['all-artists'], fixtureRoot);
+});
+
+test('a standard target refuses the production-calibration synthetic library', () => {
+  const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'calibrated-scale-fixture');
+  writeSyntheticManifest(fixtureRoot, CALIBRATED_SYNTHETIC_COUNTS);
+  assert.throws(
+    () => _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['all-artists'], fixtureRoot),
+    /requires the standard synthetic-large-library fixture/,
+  );
+  _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['search-browse'], fixtureRoot);
+});
+
+test('one grouped run never mixes the standard and production-calibration libraries', () => {
+  assert.throws(
+    () => _private.assertSinglePreloadedFixtureProfile([
+      performanceRunner.PERFORMANCE_TARGETS['all-artists'],
+      performanceRunner.PERFORMANCE_TARGETS['search-browse'],
+    ]),
+    /cannot combine the standard and production-calibration synthetic libraries/,
+  );
+});
+
+test('a performance quarantine drops only the cases it names and skips a target whose cases are all quarantined', (t) => {
+  const quarantine = { reason: 'Over its hard ceiling.', owner: '#65', failedRun: '1', since: '2026-11-25' };
+  const previous = _private.setRegisteredPerformanceCases(listRegisteredCases().map((entry) => ({
+    ...entry,
+    quarantine: entry.target === 'cover-lookup'
+      || entry.case.endsWith('› Stale projection keeps selected startup and superseding Home responsive')
+      ? quarantine
+      : null,
+  })));
+  t.after(() => _private.setRegisteredPerformanceCases(previous));
+  const selectedArtist = _private.listDefaultPerformanceTargets()
+    .find((target) => target.aliasNames[0] === 'selected-artist');
+  const coverLookup = _private.listDefaultPerformanceTargets()
+    .find((target) => target.aliasNames[0] === 'cover-lookup');
+
+  assert.equal(_private.isQuarantinedPattern(selectedArtist, 'FTC-GALLERY-STARTUP-005Q'), false);
+  assert.deepEqual(_private.listTargetCasePatterns(selectedArtist), [
+    'Selected artist UI reports library_browse telemetry and timing',
+    'FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family',
+  ]);
+  assert.equal(_private.isFullyQuarantinedTarget(selectedArtist), false);
+  assert.equal(_private.isFullyQuarantinedTarget(coverLookup), true);
+
+  const originalSpawnSync = childProcess.spawnSync;
+  const calls = [];
+  childProcess.spawnSync = (...args) => {
+    calls.push(args);
+    return { error: null, status: 1, stdout: '', stderr: '' };
+  };
+  t.after(() => {
+    childProcess.spawnSync = originalSpawnSync;
+  });
+  const exitCode = _private.runSequentialPerformanceSuite({
+    browser: 'chrome',
+    grep: '',
+    group: 'all',
+    headless: true,
+    repeatCount: 1,
+    targetInput: 'cover-lookup',
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('a metric case under quarantine leaves its target without an expected measurement', (t) => {
+  const quarantine = { reason: 'Over its hard ceiling.', owner: '#65', failedRun: '1', since: '2026-11-25' };
+  const previous = _private.setRegisteredPerformanceCases(listRegisteredCases().map((entry) => ({
+    ...entry,
+    quarantine: entry.case.endsWith('› Selected artist UI reports library_browse telemetry and timing') ? quarantine : null,
+  })));
+  t.after(() => _private.setRegisteredPerformanceCases(previous));
+  const selectedArtist = _private.listDefaultPerformanceTargets()
+    .find((target) => target.aliasNames[0] === 'selected-artist');
+
+  assert.equal(_private.createAttemptRecord(selectedArtist, 1, 0, null).measurementExpected, false);
 });

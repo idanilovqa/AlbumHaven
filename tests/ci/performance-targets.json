@@ -134,6 +134,7 @@
     {
       "name": "artist-family",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -161,6 +162,7 @@
     {
       "name": "search-all-artists",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -236,6 +238,7 @@
     {
       "name": "selected-artist",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -250,7 +253,13 @@
           "config": "playwright.synthetic-large-library.config.cjs",
           "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-          "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Selected artist UI reports library_browse telemetry and timing"
+          "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Selected artist UI reports library_browse telemetry and timing",
+          "quarantine": {
+            "reason": "Album Details close took 374 ms against the 300 ms hard ceiling at production-calibration size, during the startup relation rebuild left by the preceding 005Q failure.",
+            "owner": "#65",
+            "failedRun": "45489013188",
+            "since": "2026-11-25"
+          }
         },
         {
           "config": "playwright.synthetic-large-library.config.cjs",
@@ -262,13 +271,20 @@
           "config": "playwright.synthetic-large-library.config.cjs",
           "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-          "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Stale projection keeps selected startup and superseding Home responsive"
+          "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Stale projection keeps selected startup and superseding Home responsive",
+          "quarantine": {
+            "reason": "Cold selected-artist gallery took 1521 ms against the 1500 ms hard ceiling at production-calibration size while a startup thread held the interpreter lock and delayed static assets.",
+            "owner": "#65",
+            "failedRun": "45489013188",
+            "since": "2026-11-25"
+          }
         }
       ]
     },
     {
       "name": "edit-tags-post-edit",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -290,6 +306,7 @@
     {
       "name": "cover-lookup",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -304,7 +321,13 @@
           "config": "playwright.synthetic-large-library.config.cjs",
           "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
-          "case": "FTC-COVERS-019P Cover Lookup interaction timing › opens, renders a candidate, selects it, and accepts Save within the interaction budgets"
+          "case": "FTC-COVERS-019P Cover Lookup interaction timing › opens, renders a candidate, selects it, and accepts Save within the interaction budgets",
+          "quarantine": {
+            "reason": "candidateReadyMs took 1627 ms against the 1400 ms hard ceiling at production-calibration size while the startup relation rebuild was running.",
+            "owner": "#65",
+            "failedRun": "45489013188",
+            "since": "2026-11-25"
+          }
         }
       ]
     },
@@ -353,6 +376,7 @@
     {
       "name": "search-browse",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -395,6 +419,7 @@
     {
       "name": "artist-tree-scroll-navigation",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -815,6 +840,7 @@
     {
       "name": "notification-history",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,

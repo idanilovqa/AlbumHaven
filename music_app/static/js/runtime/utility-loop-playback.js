@@ -1,5 +1,10 @@
 const utilityLoopStereoLoads = new WeakMap();
 
+function isSavedLoopPaneShown() {
+  if (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden) return false;
+  return !state.utility.activeTab || state.utility.activeTab === 'loops';
+}
+
 function updateUtilityLoopStereoWaveform(loopId, audio) {
   const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
   if (!canvas || !audio) return;
@@ -17,13 +22,16 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
     drawCombinedLoopWaveform(canvas, peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
     return;
   }
-  if (cached?.loading) return;
-  const entry = { peaks: null, loading: true, retryAt: 0 };
+  if (cached?.loading || (cached?.abandoned && !isSavedLoopPaneShown())) return;
+  const entry = { peaks: null, loading: true, retryAt: 0, abandoned: false };
   utilityLoopStereoLoads.set(canvas, entry);
-  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).catch(() => null).then(peaks => {
+  const isWanted = () => canvas.isConnected && isSavedLoopPaneShown();
+  Promise.resolve(loadSavedLoopWaveformPeaks(loopId, isWanted)).catch(() => null).then(peaks => {
     entry.loading = false;
     entry.peaks = peaks;
-    entry.retryAt = Date.now() + 5000;
+    // A wait given up because the loop left the screen is not a failure to back off from.
+    entry.abandoned = !peaks && !isWanted();
+    entry.retryAt = entry.abandoned ? 0 : Date.now() + 5000;
     if (canvas.isConnected
         && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`) === canvas) {
       updateUtilityLoopStereoWaveform(loopId, audio);
@@ -860,17 +868,16 @@ async function openSavedLoopCreation(loopId) {
     durationSeconds: sessionDurationSeconds,
   };
   setSavedLoopEditorBusy(id, true);
+  const isOpenWanted = () => state.utility.savedLoopOpenEpoch[id] === openEpoch && isSavedLoopPaneShown();
   let elements = null;
   try {
     elements = mountSavedLoopControls(id);
     syncSavedLoopRange(id, { startSeconds: 0, endSeconds: sessionDurationSeconds });
     const mountedActionController = elements.actionRoot?._loopActionController;
-    const waveform = await loadSavedLoopWaveformPeaks(id);
+    const waveform = await loadSavedLoopWaveformPeaks(id, isOpenWanted);
     if (elements.actionRoot?._loopActionController !== mountedActionController) return false;
     if (!waveform) throw new Error('Failed to load saved loop waveform.');
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
-        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
-        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
+    if (!isOpenWanted()) return false;
     const currentElements = getSavedLoopRangeElements(id);
     if (currentElements.root !== elements.root) {
       elements = mountSavedLoopControls(id);
@@ -887,9 +894,7 @@ async function openSavedLoopCreation(loopId) {
     startSavedLoopExpirySession(id);
     return true;
   } catch (error) {
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
-        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
-        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
+    if (!isOpenWanted()) return false;
     setSavedLoopEditMode(id, false);
     console.error('[AlbumHaven][Loops] Failed to open saved-loop editor.', error);
     showToast(error.message || 'Failed to open loop editor.', 'error', 4200);

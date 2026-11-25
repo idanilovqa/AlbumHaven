@@ -1,12 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const performanceContract = require('../ci/performance-targets.json');
 const performanceRunner = require('../../scripts/run-performance-playwright.cjs');
 
 const { _private } = performanceRunner;
-const fixtureRoot = path.resolve(__dirname, '..', '..', 'test-results', 'performance-fixture-contract');
+// A released fixture root holds the manifest the runner reads to confirm the library's size.
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'performance-fixture-contract-'));
+fs.writeFileSync(path.join(fixtureRoot, 'manifest.json'), JSON.stringify({
+  profiles: { 'synthetic-large-library': { counts: { artists: 2081, albums: 5346, tracks: 60000 } } },
+}));
+test.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
 
 const GENERATED_ISOLATED_TARGETS = new Set([
   'playback-start',

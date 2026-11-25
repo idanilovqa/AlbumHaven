@@ -387,8 +387,8 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
     // parity-check: allow-read-only-measurement-evaluate -- inspect the rendered playing outline and pseudo-element animation
     const visualState = await playingRow.evaluate((row) => ({
       outlineColor: getComputedStyle(row).outlineColor,
-      beforeAnimation: getComputedStyle(row, '::before').animationName,
-      afterAnimation: getComputedStyle(row, '::after').animationName,
+      beforeAnimation: getComputedStyle(row.querySelector('.album-track-table__spectrum'), '::before').animationName,
+      afterAnimation: getComputedStyle(row.querySelector('.album-track-table__spectrum'), '::after').animationName,
     }));
     expect(visualState.outlineColor).not.toBe('rgb(128, 128, 128)');
     expect(visualState.beforeAnimation).toContain('album-track-perimeter-spectrum');

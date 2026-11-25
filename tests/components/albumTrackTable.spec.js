@@ -301,20 +301,13 @@ for (const scenario of [
     await expect(row).toHaveClass(/album-track-table__row--playing/);
     await expect(row).toHaveCSS('outline-style', 'solid');
     await expect(row).toHaveCSS('outline-width', '1px');
-    const spectra = await row.evaluate(element => ['::before', '::after'].map(pseudo => {
-      const style = getComputedStyle(element, pseudo);
-      return { animation: style.animationName, display: style.display, opacity: style.opacity };
-    }));
-    for (const spectrum of spectra) {
-      if (scenario.setting && scenario.motion === 'no-preference') {
-        expect(spectrum.animation).toContain('album-track-perimeter-spectrum');
-      } else {
-        if (scenario.motion === 'reduce') expect(spectrum.display).toBe('none');
-        else {
-          expect(spectrum.animation).toBe('none');
-          expect(spectrum.opacity).toBe('0');
-        }
-      }
+    const spectrum = row.locator('.album-track-table__spectrum');
+    if (scenario.setting && scenario.motion === 'no-preference') {
+      await expect(spectrum).toBeVisible();
+      const turns = await spectrum.evaluate(element => ['::before', '::after'].map(pseudo => getComputedStyle(element, pseudo).animationName));
+      expect(turns).toEqual(['album-track-perimeter-spectrum', 'album-track-perimeter-spectrum']);
+    } else {
+      await expect(spectrum).toBeHidden();
     }
     if (!scenario.setting || scenario.motion === 'reduce') {
       expect(await row.evaluate(element => element.getAnimations({ subtree: true })

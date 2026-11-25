@@ -5,6 +5,7 @@ from music_app.services.log_history import HistoryScope, history_scope_for_reque
 import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timezone
+import json
 import logging
 from pathlib import Path
 from threading import Event
@@ -82,8 +83,11 @@ from music_app.services.cover_workflow import (
     decode_image_bytes,
     complete_local_image_promotion,
     cover_revision_for_path,
+    DeletedCoverCopy,
     delete_local_cover_and_choose_next,
+    delete_selected_cover_and_its_copy,
     resolve_album_context,
+    restore_deleted_cover_copy,
     resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
     run_serialized_cover_selection,
@@ -597,6 +601,12 @@ async def _serialize_cover_gallery_from_asgi(
         else {},
         include_retained_candidates=True,
     )
+    if serialized_task_payload:
+        # The caller already holds its album; the task's stored album and track paths only slow the answer.
+        serialized_task_payload = {
+            key: value for key, value in serialized_task_payload.items()
+            if key not in {"album_payload", "track_paths"}
+        }
     local_inventory = None
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if include_local and inventory_worker is not None:
@@ -733,6 +743,12 @@ async def _cover_lookup_album_split_response(
     # gallery already shows every release the split produced.
     if not task_track_paths:
         return None
+    return _cover_lookup_lineage_split_response(lineage_choices) or await _cover_lookup_track_split_response(
+        config, task_track_paths,
+    )
+
+
+def _cover_lookup_lineage_split_response(lineage_choices: object) -> tuple[JsonDict, int] | None:
     if isinstance(lineage_choices, list) and len(lineage_choices) > 1:
         current_releases = [
             {
@@ -753,6 +769,13 @@ async def _cover_lookup_album_split_response(
                 },
                 409,
             )
+    return None
+
+
+async def _cover_lookup_track_split_response(
+    config: Mapping[str, object],
+    task_track_paths: set[str],
+) -> tuple[JsonDict, int] | None:
     if len(task_track_paths) < 2:
         return None
     try:
@@ -985,6 +1008,19 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     task_id = str(payload.get("task_id") or "").strip()
     task_payload = await run_in_threadpool(read_cover_lookup_task, task_id, config=config)
     task_track_paths = _cover_lookup_task_track_paths(task_payload)
+    # UI-5: an opening from a notification waits for this answer, so its split read runs beside the album
+    # resolution instead of after it.
+    track_split = (
+        asyncio.ensure_future(_cover_lookup_track_split_response(config, task_track_paths))
+        if task_track_paths else None
+    )
+
+    async def split_response_for(resolved_album: Mapping[str, object]) -> tuple[JsonDict, int] | None:
+        if track_split is None:
+            return None
+        lineage_split = _cover_lookup_lineage_split_response(resolved_album.get("_identity_split_choices"))
+        return lineage_split or await track_split
+
     album, album_context = await _resolve_album_payload_context(
         config,
         album,
@@ -994,11 +1030,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         indexed_gallery=True,
     )
     if album_context is None:
-        split_response = await _cover_lookup_album_split_response(
-            config,
-            task_track_paths,
-            album.get("_identity_split_choices"),
-        )
+        split_response = await split_response_for(album)
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
@@ -1009,11 +1041,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         album_context.track_paths,
     )
     if identity_error is not None:
-        split_response = await _cover_lookup_album_split_response(
-            config,
-            task_track_paths,
-            album.get("_identity_split_choices"),
-        )
+        split_response = await split_response_for(album)
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(identity_error)
@@ -1023,15 +1051,9 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         album_id=album_id,
         album_key=str(album.get("key") or album.get("album_ref") or ""),
     )
-    split_response = None
     # UI-5 (owner, 11-10): opened from its notification right after a split, the request still carries the
     # whole pre-split album (the task's own tracks), so a split is checked even when no track looks missing.
-    if task_payload and task_track_paths:
-        split_response = await _cover_lookup_album_split_response(
-            config,
-            task_track_paths,
-            album.get("_identity_split_choices"),
-        )
+    split_response = await split_response_for(album)
     valid_split_choice = _is_valid_split_choice(album, split_response, album_id)
     if split_response is not None and not valid_split_choice:
         return _json_response(split_response)
@@ -1912,12 +1934,20 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     if album_error is not None:
         return _json_response(album_error)
     source_path = str(payload.get("source_path") or "").strip()
+    next_cover_path = str(payload.get("next_cover_path") or "").strip()
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    outcome = await run_in_threadpool(_delete_local_cover, config, logger, library_state, album_context, source_path)
+    outcome = await run_in_threadpool(
+        _delete_local_cover, config, logger, library_state, album_context, source_path, next_cover_path,
+    )
     if isinstance(outcome, Response):
         return outcome
+    if isinstance(outcome, DeletedCoverCopy):
+        outcome = await _select_next_cover_after_deleted_copy(request, config, logger, library_state, album,
+                                                              album_context, outcome)
+        if isinstance(outcome, Response):
+            return outcome
     updated_albums, updated_problematic_album, deleted_path = outcome
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if inventory_worker is not None:
@@ -1937,12 +1967,37 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     )
 
 
+async def _select_next_cover_after_deleted_copy(
+    request: Request,
+    config: dict[str, object],
+    logger: logging.Logger,
+    library_state: dict[str, object],
+    album: JsonDict | None,
+    album_context: CoverAlbumContext,
+    deleted: DeletedCoverCopy,
+) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
+    """The next card becomes the selection the way a click selects it, writing it into cover.jpg."""
+    selected_inventory_state = await _selected_cover_inventory_state(config, library_state, album_context.track_paths)
+    response = await run_in_threadpool(
+        _utilities_cover_lookup_local_select_response, selected_inventory_state, album_context, album, config,
+        str(deleted.next_cover), logger, library_state, await history_scope_for_request(request, required=False),
+        perf_counter(),
+    )
+    if response.status_code != 200:
+        await run_in_threadpool(restore_deleted_cover_copy, deleted)
+        return response
+    selection = json.loads(response.body)
+    source_path = next(iter(deleted.deleted))
+    return selection["updated_albums"], selection["updated_problematic_album"], source_path
+
+
 def _delete_local_cover(
     config: dict[str, object],
     logger: logging.Logger,
     library_state: dict[str, object],
     album_context: CoverAlbumContext,
     source_path: str,
+    next_cover_path: str = "",
 ) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
     """Deletes the selected local image and repoints the album, off the event loop."""
     try:
@@ -1956,9 +2011,17 @@ def _delete_local_cover(
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+    # Owner (2026-11-24): the lookup names the card it selects next (its first remaining LOCAL card); a name
+    # that is no longer one of the album's images falls back to the best remaining one.
+    try:
+        chosen_next = validate_local_cover_source(
+            config, album_context.album_root, next_cover_path, track_paths=album_context.track_paths,
+        ) if next_cover_path else None
+    except (ValueError, FileNotFoundError):
+        chosen_next = None
     return run_serialized_cover_selection(
         album_context.album_root,
-        lambda: _delete_cover_and_repoint(config, logger, library_state, album_context, resolved),
+        lambda: _delete_cover_and_repoint(config, logger, library_state, album_context, resolved, chosen_next),
         resolved.parent,
     )
 
@@ -1969,6 +2032,7 @@ def _delete_cover_and_repoint(
     library_state: dict[str, object],
     album_context: CoverAlbumContext,
     resolved: Path,
+    chosen_next: Path | None = None,
 ) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
     if not resolved.is_file():  # another request deleted it while this one waited for the folder
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
@@ -1980,19 +2044,47 @@ def _delete_cover_and_repoint(
         else library_state
     )
     deleted_cover_bytes = resolved.read_bytes()
-    active_cover = active_cover_path_for_track_paths_in_state(
-        selection_state.get("file_cache", {}) or {},
-        album_context.track_paths,
-    )
-    next_cover = delete_local_cover_and_choose_next(
-        album_root=album_context.album_root,
-        source_path=resolved,
-        active_cover_path=active_cover,
-        image_extensions=set(config["IMAGE_EXTENSIONS"]),
-        image_dimensions=image_dimensions,
-        is_squareish_cover=_is_squareish_cover,
-        score_image=score_image,
-    )
+    file_cache = selection_state.get("file_cache", {}) or {}
+    active_cover = active_cover_path_for_track_paths_in_state(file_cache, album_context.track_paths)
+    selected_sources = {
+        Path(str(entry.get("selected_local_cover_source_path"))).resolve(strict=False)
+        for path in album_context.track_paths
+        if isinstance(entry := file_cache.get(path), dict) and entry.get("selected_local_cover_source_path")
+    }
+    app_copy = (album_context.album_root / "cover.jpg").resolve(strict=False)
+    if (
+        active_cover is not None and active_cover != resolved
+        and Path(active_cover).resolve(strict=False) == app_copy and app_copy.is_file()
+        and resolved.resolve(strict=False) in selected_sources
+    ):
+        # Owner (2026-11-24): deleting the selected image also replaces the app's copy of it in cover.jpg.
+        deleted = delete_selected_cover_and_its_copy(
+            album_root=album_context.album_root,
+            source_path=resolved,
+            copy_path=app_copy,
+            chosen_next=chosen_next,
+            image_extensions=set(config["IMAGE_EXTENSIONS"]),
+            image_dimensions=image_dimensions,
+            is_squareish_cover=_is_squareish_cover,
+            score_image=score_image,
+        )
+        if deleted.next_cover is not None:
+            return deleted  # selected after this lock is released, by the local-select path
+        # No image remains: the selection is cleared below, as when the active cover itself is deleted.
+        active_cover, next_cover = resolved, None
+        restore_deleted = lambda: restore_deleted_cover_copy(deleted)  # noqa: E731
+    else:
+        next_cover = delete_local_cover_and_choose_next(
+            album_root=album_context.album_root,
+            source_path=resolved,
+            active_cover_path=active_cover,
+            image_extensions=set(config["IMAGE_EXTENSIONS"]),
+            image_dimensions=image_dimensions,
+            is_squareish_cover=_is_squareish_cover,
+            score_image=score_image,
+            chosen_next=chosen_next,
+        )
+        restore_deleted = lambda: resolved.write_bytes(deleted_cover_bytes)  # noqa: E731
     updated_albums: list[dict[str, object]] = []
     updated_problematic_album = None
     if active_cover == resolved:
@@ -2007,7 +2099,7 @@ def _delete_cover_and_repoint(
                 clear_selection=next_cover is None,
             )
         except Exception:
-            resolved.write_bytes(deleted_cover_bytes)
+            restore_deleted()
             raise
         updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
             album_context.track_paths,

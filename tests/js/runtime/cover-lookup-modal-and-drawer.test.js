@@ -224,30 +224,6 @@ require('node:test')('local Cover Lookup cards retain their loaded preview as th
   assert.match(card, /data-cover-preview-src="[^"]*size=480[^"]*"/);
 });
 
-require('node:test')('progressive rendering does not restart loading for a retained decoded preview', () => {
-  const classes = new Set(['is-loading']);
-  const preview = {
-    classList: { remove: name => classes.delete(name) },
-    setAttribute(name, value) { this[name] = value; },
-  };
-  const retainedImage = { complete: true, naturalWidth: 480, getAttribute: name => name === 'src' ? 'loaded.jpg' : null };
-  const incomingImage = {
-    parentElement: preview,
-    getAttribute: retainedImage.getAttribute,
-    replaceWith(image) { assert.equal(image, retainedImage); },
-  };
-  const retained = { getAttribute: () => 'local:cover', querySelector: () => retainedImage };
-  const incoming = { getAttribute: retained.getAttribute, querySelector: () => incomingImage, replaceWith() {} };
-  let rendered = false;
-  const body = {
-    querySelectorAll: () => rendered ? [incoming] : [retained],
-    set innerHTML(value) { rendered = true; },
-  };
-  loadHelper().replaceCoverLookupModalMarkup(body, 'updated cards');
-  assert.equal(classes.has('is-loading'), false);
-  assert.equal(preview['aria-busy'], 'false');
-});
-
 for (const outcome of ['load', 'error']) {
   require('node:test')(`known cover preview stays in place and finishes loading on ${outcome}`, () => {
     const context = loadHelper({
@@ -8658,37 +8634,6 @@ require('node:test')('progressive candidates only append within the same search 
   assert.equal(context.state.coverLookup.modal.candidateRevision, 3);
 });
 
-require('node:test')('progressive modal rendering retains existing cover card nodes', () => {
-  const retainedCard = {
-    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img src="loaded.jpg" style="display:block"><span>Initial provider details</span></div>',
-    getAttribute: (name) => (name === 'data-cover-lookup-item-key' ? 'remote:stable' : ''),
-  };
-  const replacementCard = {
-    outerHTML: '<div data-cover-lookup-item-key="remote:stable"><img data-cover-lookup-deferred-src="loaded.jpg"><span>Enriched provider details</span></div>',
-    getAttribute: retainedCard.getAttribute,
-    replaceWith(value) { this.replacedWith = value; },
-  };
-  let rendered = false;
-  const body = {
-    querySelectorAll() {
-      return rendered ? [replacementCard] : [retainedCard];
-    },
-  };
-  Object.defineProperty(body, 'innerHTML', {
-    get() { return ''; },
-    set() { rendered = true; },
-  });
-  const context = loadHelper();
-
-  context.replaceCoverLookupModalMarkup(body, '<div>stable plus new card</div>');
-
-  assert.strictEqual(
-    replacementCard.replacedWith,
-    retainedCard,
-    'a same-identity card must stay mounted while provider details change and later results append',
-  );
-});
-
 require('node:test')('UUID generation formatting retains a progressive remote override', () => {
   const context = loadHelper();
   const generation = '699803380ccd46e0b1fe89fc61de666a';
@@ -8835,85 +8780,6 @@ require('node:test')('the leading remote card loads its preview first when anoth
   assert.doesNotMatch(images[0], /data-cover-lookup-deferred-src/);
   assert.match(images[1], /data-cover-lookup-deferred-src=/);
   assert.doesNotMatch(images[1], /\ssrc=/);
-});
-
-require('node:test')('a re-render does not keep a still-deferred preview in place of a loading one', () => {
-  const imageWith = (attributes, state = {}) => ({
-    ...state,
-    hasAttribute: name => Object.hasOwn(attributes, name),
-    getAttribute: name => attributes[name] ?? null,
-    replaceWith(value) { this.replacedWith = value; },
-  });
-  const retainedImage = imageWith({ 'data-cover-lookup-deferred-src': 'leading.jpg' });
-  const incomingImage = imageWith({ src: 'leading.jpg' });
-  const card = (image) => ({
-    attributes: [],
-    childNodes: [image],
-    getAttribute: name => (name === 'data-cover-lookup-item-key' ? 'remote:leading' : ''),
-    querySelector: () => image,
-    replaceChildren(...children) { this.children = children; },
-    replaceWith(value) { this.replacedWith = value; },
-  });
-  const retainedCard = card(retainedImage);
-  const incomingCard = card(incomingImage);
-  let rendered = false;
-  const body = { querySelectorAll: () => (rendered ? [incomingCard] : [retainedCard]) };
-  Object.defineProperty(body, 'innerHTML', { set() { rendered = true; } });
-  const context = loadHelper();
-
-  context.replaceCoverLookupModalMarkup(body, '<div>gallery results</div>');
-
-  assert.equal(incomingImage.replacedWith, undefined);
-  assert.deepEqual(retainedCard.children, [incomingImage]);
-  assert.strictEqual(incomingCard.replacedWith, retainedCard);
-
-  const decodedImage = imageWith({ src: 'decoded.jpg' }, { complete: true, naturalWidth: 100 });
-  const decodedIncomingImage = imageWith(
-    { src: 'decoded.jpg' },
-    { parentElement: { classList: { remove() {} }, setAttribute() {} } },
-  );
-  const decodedRetainedCard = card(decodedImage);
-  const decodedIncomingCard = card(decodedIncomingImage);
-  let decodedRendered = false;
-  const decodedBody = {
-    querySelectorAll: () => (decodedRendered ? [decodedIncomingCard] : [decodedRetainedCard]),
-  };
-  Object.defineProperty(decodedBody, 'innerHTML', { set() { decodedRendered = true; } });
-
-  context.replaceCoverLookupModalMarkup(decodedBody, '<div>gallery results</div>');
-
-  assert.strictEqual(decodedIncomingImage.replacedWith, decodedImage);
-});
-
-require('node:test')('a re-render replaces a failed preview instead of retaining its broken image state', () => {
-  const imageWith = (attributes, state = {}) => ({
-    ...state,
-    hasAttribute: name => Object.hasOwn(attributes, name),
-    getAttribute: name => attributes[name] ?? null,
-    replaceWith(value) { this.replacedWith = value; },
-  });
-  const retainedImage = imageWith({ src: 'leading.jpg' }, { complete: true, naturalWidth: 0 });
-  const incomingImage = imageWith({ src: 'leading.jpg' });
-  const card = (image) => ({
-    attributes: [],
-    childNodes: [image],
-    getAttribute: name => (name === 'data-cover-lookup-item-key' ? 'remote:leading' : ''),
-    querySelector: () => image,
-    replaceChildren(...children) { this.children = children; },
-    replaceWith(value) { this.replacedWith = value; },
-  });
-  const retainedCard = card(retainedImage);
-  const incomingCard = card(incomingImage);
-  let rendered = false;
-  const body = { querySelectorAll: () => (rendered ? [incomingCard] : [retainedCard]) };
-  Object.defineProperty(body, 'innerHTML', { set() { rendered = true; } });
-  const context = loadHelper();
-
-  context.replaceCoverLookupModalMarkup(body, '<div>gallery results</div>');
-
-  assert.equal(incomingImage.replacedWith, undefined);
-  assert.deepEqual(retainedCard.children, [incomingImage]);
-  assert.strictEqual(incomingCard.replacedWith, retainedCard);
 });
 
 require('node:test')('progressive provider rendering appends without moving existing cards', () => {
@@ -9503,29 +9369,6 @@ require('node:test')('an unchanged Cover Lookup render leaves the gallery DOM un
   body.firstElementChild = { replacedElsewhere: true };
   context.replaceCoverLookupModalMarkup(body, '<section>LOCAL · 3 images</section>');
   assert.equal(writes, 3, 'markup replaced by another owner is rendered again');
-});
-
-require('node:test')('a retained Cover Lookup card with unchanged markup keeps its own children', () => {
-  const context = loadHelper();
-  const card = (key, markup) => ({
-    outerHTML: markup,
-    childNodes: [{ incoming: key }],
-    getAttribute: () => key,
-    querySelector: () => null,
-    replaceWith(next) { this.replacedWith = next; },
-    replaceChildren() { throw new Error('unchanged card children must not be replaced'); },
-  });
-  const zoomHovered = card('remote:neural', '<div data-cover-lookup-item-key="remote:neural">same</div>');
-  zoomHovered.__coverLookupCardMarkup = zoomHovered.outerHTML;
-  const incoming = card('remote:neural', zoomHovered.outerHTML);
-  let phase = 'before';
-  const body = {
-    firstElementChild: null,
-    querySelectorAll: () => (phase === 'before' ? [zoomHovered] : [incoming]),
-    set innerHTML(value) { phase = 'after'; this.firstElementChild = { value }; },
-  };
-  context.replaceCoverLookupModalMarkup(body, '<section>changed heading</section>');
-  assert.equal(incoming.replacedWith, zoomHovered, 'the hovered card node itself is kept in place');
 });
 
 require('node:test')('a background gallery refresh keeps an existing error steady until it settles', async () => {

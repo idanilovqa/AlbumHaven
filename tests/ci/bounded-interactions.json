@@ -8889,8 +8889,24 @@
       "proof": "static"
     },
     {
+      "id": "py:__init__.py#_start_library_warmup.<locals>.prewarm_pools",
+      "action": "Open the warm request pools and run each one's first-request reads once per kept connection on a startup thread",
+      "entrypoints": [
+        "py:music_app/__init__.py#_start_library_warmup.<locals>.prewarm_pools:background:thread"
+      ],
+      "owners": [
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:__init__.py#_start_library_warmup.<locals>.warm_library_state",
-      "action": "Warm the connection pool and hydrate library state on a startup thread",
+      "action": "Recover persistence and hydrate library state on a startup thread",
       "entrypoints": [
         "py:music_app/__init__.py#_start_library_warmup.<locals>.warm_library_state:background:thread"
       ],

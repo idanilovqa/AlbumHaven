@@ -59451,10 +59451,12 @@ function initMobileNavigation() {
     if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
 
   });
-  // Enforce presentation restrictions at all delegated mobile action entry points.
+  // Enforce presentation restrictions at all delegated mobile action entry points. Revert rule and
+  // saved-loop Delete are hidden only on the phone page (mobile-layout.css); a mobile client wider
+  // than 900 px shows the desktop layout, where they stay usable.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], .is-mobile-page :is([data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop])')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);

@@ -482,6 +482,7 @@ def create_asgi_app():
         configure_shared_cover_search_cache,
         import_cover_search_cache_file,
     )
+    from music_app.services.mp3_stream_map import configure_stream_map_store
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
@@ -598,6 +599,7 @@ def create_asgi_app():
         else:
             _app.state.cover_preview_backfill.start()
         configure_shared_cover_search_cache(runtime.config)
+        configure_stream_map_store(runtime.config)
         _startup_timing(runtime.logger, "previews-and-cover-cache")
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,

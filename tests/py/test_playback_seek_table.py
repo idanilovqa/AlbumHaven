@@ -135,14 +135,14 @@ def test_a_stream_open_waits_for_the_scan_already_running_instead_of_reading_the
         time.sleep(0.2)
         return None
 
-    module._cached_stream_map.cache_clear()
+    module.forget_stream_maps()
     monkeypatch.setattr(module, "read_mp3_stream_map", slow_read)
     threads = [threading.Thread(target=module.mp3_stream_map, args=(path,)) for _ in range(3)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
-    module._cached_stream_map.cache_clear()
+    module.forget_stream_maps()
 
     assert len(reads) == 1
     assert module._scans == {}

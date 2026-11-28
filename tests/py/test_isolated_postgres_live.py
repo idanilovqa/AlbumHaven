@@ -2161,7 +2161,7 @@ def test_live_problematic_files_lists_cross_root_copies_as_duplicate_files(watch
     assert duplicate_items, payload["items"]
 
 
-def test_live_watcher_folder_deletion_removes_its_loose_tracks(watcher_repair_inventory):
+def test_live_watcher_folder_deletion_marks_its_main_library_loose_tracks_missing(watcher_repair_inventory):
     import shutil
 
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
@@ -2189,9 +2189,11 @@ def test_live_watcher_folder_deletion_removes_its_loose_tracks(watcher_repair_in
             "select private_path, scan_cache_stale from library.local_track_files order by private_path"
         ).fetchall()
     stale = {row["private_path"]: row["scan_cache_stale"] for row in rows}
-    # Owner 2026-11-08: untouched files that were truly deleted leave no trace, so these
-    # untouched loose tracks are removed outright (migration 0120), not kept as missing.
-    assert not any(entry["path"] in stale for entry in loose)
+    # Owner 2026-11-18 (d1c6423d9): only New Arrivals files are removed without confirmation.
+    # These loose tracks are in a Main Library root, so the deleted folder's tracks stay as
+    # missing until the owner confirms; the sibling outside the folder is untouched.
+    # test_missing_album_auto_removal_postgres.py covers the New Arrivals removal itself.
+    assert {entry["path"]: stale.get(entry["path"]) for entry in loose} == {entry["path"]: True for entry in loose}
     assert stale[kept["path"]] is False
 
 

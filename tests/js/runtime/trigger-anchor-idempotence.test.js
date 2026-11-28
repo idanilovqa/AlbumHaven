@@ -74,7 +74,7 @@ test('anchor synchronization still applies changed context, edge, side and geome
   assert.equal(surface.dataset.triggerAnchorEdge, 'bottom');
   assert.equal(anchor.dataset.triggerAnchorEdge, 'bottom');
   assert.equal(surface.dataset.triggerAnchorSide, 'right');
-  assert.equal(surface.style.getPropertyValue('--trigger-anchor-left'), '266px');
+  assert.equal(surface.style.getPropertyValue('--trigger-anchor-left'), '269px');
   assert.equal(surface.style.getPropertyValue('--trigger-anchor-gap'), '8px');
   assert.equal(mutations.includes('surface.class'), false);
   context.clearTriggerAnchor(surface);
@@ -89,7 +89,7 @@ test('an applied theme refreshes open surface paint without losing anchor identi
   applyTheme('rgb(255, 247, 229)');
   assert.equal(surface.style.getPropertyValue('--trigger-anchor-background'), 'rgb(255, 247, 229)');
   assert.equal(anchor.style.getPropertyValue('--trigger-anchor-background'), 'rgb(255, 247, 229)');
-  assert.equal(surface.style.getPropertyValue('--trigger-anchor-left'), '100px');
+  assert.equal(surface.style.getPropertyValue('--trigger-anchor-left'), '103px');
   assert.equal(surface.dataset.triggerAnchorContext, 'content');
   assert.equal(surface.classList.contains('trigger-anchor-surface'), true);
   assert.equal(mutations.some(value => value.includes('.data.') || value.endsWith('.class')), false);

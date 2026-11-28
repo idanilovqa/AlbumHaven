@@ -5318,7 +5318,7 @@ def test_asgi_bounded_problematic_files_page_does_not_wait_for_artist_attention(
         def __init__(self, _config):
             pass
 
-        def build_problematic_files_page(self, *, limit, cursor=""):
+        def build_problematic_files_page(self, *, limit, cursor="", reasons=()):
             assert limit == 50
             assert cursor == "page-2"
             return {
@@ -5363,7 +5363,7 @@ def test_asgi_bounded_first_problematic_files_page_carries_the_first_artist_page
         def __init__(self, _config):
             pass
 
-        def build_problematic_files_page(self, *, limit, cursor=""):
+        def build_problematic_files_page(self, *, limit, cursor="", reasons=()):
             assert (limit, cursor) == (2, "")
             return {"count": 1, "items": [{"key": "bounded-album", "name": "M Album"}],
                     "complete": False, "has_more": True, "next_cursor": "page-2"}
@@ -5445,6 +5445,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_configs: list[dict[str, object]] = []
+    page_reasons: list[tuple[str, ...]] = []
 
     class FakePostgresRepository:
         def __init__(self, config):
@@ -5472,9 +5473,10 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_page(self, *, limit, cursor=""):
+        def build_problematic_files_page(self, *, limit, cursor="", reasons=()):
             assert limit == 50
             assert cursor == ""
+            page_reasons.append(reasons)
             return {
                 "count": 1,
                 "items": [{"key": "bounded-album", "detail_loaded": False}],
@@ -5485,7 +5487,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_search(self, query, *, limit=50, cursor=""):
+        def build_problematic_files_search(self, query, *, limit=50, cursor="", reasons=()):
             assert query == "needle"
             assert limit == 50
             assert cursor == ""
@@ -5552,6 +5554,15 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     )
     assert search_status == 200
     assert json.loads(search_body)["items"] == [{"key": "needle-album", "detail_loaded": False}]
+    # A problem filter pages on the server with the reasons the filter menu names (BUGFIX-14).
+    filtered_status, _filtered_headers, _filtered_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"limit": "50", "reason": " Missing year "},
+    )
+    assert filtered_status == 200
+    assert page_reasons == [(), ("Missing year",)]
     invalid_limit_status, _invalid_limit_headers, invalid_limit_body = _run_asgi_request(
         asgi_app,
         "GET",
@@ -5667,7 +5678,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "ok": False,
         "error": "Problematic album not found.",
     }
-    assert repository_configs == [app.config] * 8
+    assert repository_configs == [app.config] * 9
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):
@@ -6263,3 +6274,66 @@ def test_asgi_runtime_payload_builds_keep_health_responsive(app, asgi_app, monke
     status, _headers, _body = asyncio.run(exercise())
 
     assert status == 200
+
+
+def _problematic_detail_with_copies():
+    return {
+        "key": "artist::real album", "album_artist": "Artist", "album_id": 7,
+        "problem_reasons": ["Duplicate track outside album folder", "Duplicate files"],
+        "album_problem_rows": [{"reason": "Duplicate files", "row_key": "a"}],
+        "tracks": [{"path": path} for path in (
+            "D:/Music/Real Album/CD1/1.mp3", "D:/Music/Real Album/CD2/1.mp3",
+            "D:/Music/Random songs/copied-song.mp3", "D:/Music/Orphan/copied-song.mp3")],
+        "track_problem_rows": [
+            {"path": "D:/Music/Random songs/copied-song.mp3", "reasons": ["Duplicate track outside album folder"]},
+            {"path": "D:/Music/Orphan/copied-song.mp3", "reasons": ["Duplicate track outside album folder"]},
+        ],
+        "duplicate_sources": [{"tracks": [{"path": "D:/Music/Complete copy/CD1/1.mp3"},
+                                          {"path": "D:/Music/Complete copy/CD2/1.mp3"}]}],
+        "suggested_edits": [],
+    }
+
+
+@pytest.mark.parametrize("can_read_paths", [False, True])
+def test_asgi_problematic_detail_names_folders_only_to_path_readers(app, asgi_app, monkeypatch, can_read_paths):
+    """Owner (2026-11-25): an open entry shows its album folder(s) and, with a duplicate problem, the unique
+    folders its duplicates live in; the server sends no path to anyone without library.paths.read."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, config):
+            pass
+
+        def build_problematic_file_detail_payload(self, album_key):
+            return _problematic_detail_with_copies()
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+    monkeypatch.setattr(asgi_read_routes, "_is_postgres_utility_projection_request", lambda _request: True)
+    monkeypatch.setattr(asgi_read_routes, "allowed_actions_for_request",
+                        lambda *args: SimpleNamespace(as_payload=lambda: {"library.paths.read": can_read_paths}))
+
+    for route, query in (("/utilities/problematic-files/detail", {"album_key": "artist::real album"}),
+                         ("/utilities/problematic-files/artist::real album", None)):
+        status, _headers, body = _run_asgi_request(asgi_app, "GET", route, query=query)
+        assert status == 200
+        detail = _decode_json(body)
+        if not can_read_paths:
+            assert "album_folders" not in detail and "duplicate_folders" not in detail
+            assert "Real Album" not in json.dumps(detail.get("duplicate_sources"))
+            continue
+        assert detail["album_folders"] == [str(Path("D:/Music/Real Album"))]
+        assert detail["duplicate_folders"] == [str(Path(folder)) for folder in (
+            "D:/Music/Complete copy", "D:/Music/Orphan", "D:/Music/Random songs")]
+
+
+def test_problematic_detail_folders_name_no_duplicate_folder_without_a_duplicate_problem():
+    from pathlib import Path
+
+    from music_app.services.library_browse_postgres import problematic_detail_folders
+
+    detail = {"problem_reasons": ["Missing year"], "track_problem_rows": [],
+              "tracks": [{"path": "D:/Music/A/1.mp3"}, {"path": "D:/Music/B/1.mp3"}, {"path": "D:/Music/a/2.mp3"}]}
+    assert problematic_detail_folders(detail) == {"album_folders": [str(Path("D:/Music/A")), str(Path("D:/Music/B"))]}

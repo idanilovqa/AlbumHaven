@@ -88,7 +88,10 @@
   /* Anchor geometry uses the outer border box, not the inset padding box. */
   left: -1px; right: -1px;
   border: 0; border-radius: 0; pointer-events: none; mask: none; clip-path: none;
-  background: linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) calc(var(--trigger-anchor-left) + 2px) top / calc(var(--trigger-anchor-width) - 4px) var(--trigger-top-line-width, 2px) no-repeat,
+  /* trigger-anchor.js measures the trigger's interior in this box. The line also
+     covers the trigger's ring, which the panel may paint over, and stays open
+     across the interior. */
+  background: linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) var(--trigger-anchor-left) top / var(--trigger-anchor-width) var(--trigger-top-line-width, 2px) no-repeat,
     var(--trigger-anchor-line-left) left top / var(--trigger-anchor-left) var(--trigger-top-line-width, 2px) no-repeat,
     var(--trigger-anchor-line-right) right top / var(--trigger-anchor-right) var(--trigger-top-line-width, 2px) no-repeat;
 }
@@ -103,10 +106,15 @@
   :root .trigger-anchor-surface { animation: none; transition: none; }
 }
 /* One outline spans the trigger and gap: separately rasterized borders can
-   step at fractional device pixels. Keep the join outside scrollable contents. */
+   step at fractional device pixels. Keep the join outside scrollable contents.
+   The ring lies on the trigger's border box (trigger-anchor.js sets the insets
+   from its borders), so a panel aligned with the trigger shares its outer edge;
+   it reaches the far edge of the panel's joining line (--trigger-anchor-gap). */
 :root .trigger-anchor-surface::before { display: none; }
 :root .trigger-anchor-open::after {
-  content: ''; position: absolute; left: -2px; right: -2px; top: -2px;
+  content: ''; position: absolute;
+  left: var(--trigger-anchor-inset-left, 0px); right: var(--trigger-anchor-inset-right, 0px);
+  top: var(--trigger-anchor-inset-top, 0px);
   bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px);
   /* The insets size the outline; a trigger's own pseudo-element (a selected
      filter's dot, a dropdown's chevron) must not leave a size or transform behind. */
@@ -117,7 +125,9 @@
 :root .trigger-anchor-open::before {
   /* The opaque interior extends past the outline's open end. Separate image
      clips at the same fractional pixel would otherwise leave a colored seam. */
-  content: ''; position: absolute; left: 0; right: 0; top: 0;
+  content: ''; position: absolute;
+  left: calc(var(--trigger-anchor-inset-left, 0px) + 2px); right: calc(var(--trigger-anchor-inset-right, 0px) + 2px);
+  top: calc(var(--trigger-anchor-inset-top, 0px) + 2px);
   bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 4px);
   width: auto; height: auto; transform: none;
   border: 0; border-radius: 6px 6px 0 0; z-index: 1; pointer-events: none;
@@ -129,10 +139,10 @@
   border-color: transparent !important; background: transparent !important; box-shadow: none !important; outline: none !important;
 }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after {
-  top: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px); bottom: -2px;
+  top: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px); bottom: var(--trigger-anchor-inset-bottom, 0px);
 }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::before {
-  top: calc(-1 * var(--trigger-anchor-gap, 0px) - 4px); bottom: 0;
+  top: calc(-1 * var(--trigger-anchor-gap, 0px) - 4px); bottom: calc(var(--trigger-anchor-inset-bottom, 0px) + 2px);
   border-radius: 0 0 6px 6px;
 }
 :root .trigger-anchor-surface { border-color: var(--border); }
@@ -165,7 +175,7 @@
 :root .trigger-anchor-surface[data-trigger-anchor-side]:not([data-trigger-anchor-side="none"])::before {
   display: block;
   top: 0; bottom: auto; left: var(--trigger-anchor-side-left, -1px);
-  width: var(--trigger-anchor-side-left-width, 2px); height: min(210px, 100%);
+  width: 2px; height: min(210px, 100%);
   z-index: 1;
   border: 0;
   --trigger-edge-direction: to bottom;
@@ -179,7 +189,6 @@
 }
 :root .trigger-anchor-surface[data-trigger-anchor-side="right"]:not([data-trigger-anchor-side="none"])::before {
   left: auto; right: var(--trigger-anchor-side-right, -1px);
-  width: var(--trigger-anchor-side-right-width, 2px);
 }
 :root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"][data-trigger-anchor-side]::before {
   top: auto; bottom: 0;
@@ -255,7 +264,8 @@
     text-decoration: none; text-decoration-thickness: 1px; text-underline-offset: .22em;
   }
   :root .gallery-bar :is(.action-button, .gallery-action-button, .gallery-view-choice, .gallery-view-cluster):not(.trigger-anchor-open):is(:hover, :active) { background: transparent !important; box-shadow: none !important; }
-  :root .artist-family-panel.trigger-anchor-surface { clip-path: inset(0 -80px -80px -80px) !important; }
+  /* Keep the joining line's row above the panel: the line stays 2px. */
+  :root .artist-family-panel.trigger-anchor-surface { clip-path: inset(-1px -80px -80px -80px) !important; }
 }
 
 @media (max-width: 900px) {

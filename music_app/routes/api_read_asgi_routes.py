@@ -49,7 +49,7 @@ from music_app.services.album_identity_lineage_postgres import (
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
-    is_library_browse_postgres_available,
+    is_library_browse_postgres_available, problematic_detail_folders,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services import problematic_index
@@ -126,8 +126,16 @@ def _project_missing_album_actions_for_request(
         ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch", "library.paths.read"),
     )
 
+    can_read_paths = bool(allowed_actions.as_payload().get("library.paths.read"))
+
     def visit(value: object) -> None:
         if isinstance(value, dict):
+            if "track_problem_rows" in value and "album_problem_rows" in value:
+                # An open Problematic Files entry names its folders to path readers only.
+                value.pop("album_folders", None)
+                value.pop("duplicate_folders", None)
+                if can_read_paths:
+                    value.update(problematic_detail_folders(value))
             if isinstance(value.get("duplicate_sources"), list):
                 value["duplicate_source_count"] = len(value["duplicate_sources"])
                 if not allowed_actions.as_payload().get("library.paths.read"):
@@ -1503,7 +1511,10 @@ def utilities_problematic_files(
     q: str = Query(default="", max_length=200),
     artists: bool = Query(default=False),
     cursor: str = Query(default="", max_length=1000),
+    reason: list[str] = Query(default=[]),
 ) -> JSONResponse:
+    # Problem filters, as the filter menu names them: only albums with one of them.
+    reasons = tuple(sorted({value.strip() for value in reason if value.strip()}))
     if _is_postgres_utility_projection_request(request):
         if artists:
             artist_page = _problematic_artist_page(load_problematic_artist_items(request), limit=limit, cursor=cursor)
@@ -1515,9 +1526,9 @@ def utilities_problematic_files(
             # The first page also carries the first page of Artist rows, so their filters arrive
             # with the album filters; the client keeps one row per key when Artist paging repeats them.
             with ThreadPoolExecutor(max_workers=1) as pool:
-                artist_items = None if cursor else pool.submit(load_problematic_artist_items, request)
+                artist_items = None if cursor or reasons else pool.submit(load_problematic_artist_items, request)
                 try:
-                    payload = repository.build_problematic_files_page(limit=limit, cursor=cursor)
+                    payload = repository.build_problematic_files_page(limit=limit, cursor=cursor, reasons=reasons)
                 except ValueError as error:
                     return JSONResponse({"error": str(error)}, status_code=422)
                 _project_missing_album_actions_for_request(request, payload)
@@ -1535,6 +1546,7 @@ def utilities_problematic_files(
                         q,
                         limit=limit or 50,
                         cursor=cursor,
+                        reasons=reasons,
                     )
                 except ValueError as error:
                     return JSONResponse({"error": str(error)}, status_code=422)

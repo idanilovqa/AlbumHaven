@@ -78,8 +78,10 @@
 .small-alert:focus-visible,
 .small-alert:has(.small-alert__dismiss:focus-visible),
 .album-card__artbox-trigger:focus-visible .small-alert {
-  /* Grows to exactly its icon and text: no dead space. A longer message wraps so its whole text shows. */
+  /* Grows to exactly its icon and text: no dead space. A longer message wraps so its whole text shows. The width
+     animates to the alert's own size (owner, 11-25), so it neither jumps open nor waits before closing. */
   max-width: min(320px, calc(100vw - 32px));
+  max-width: calc-size(max-content, min(size, 320px, 100vw - 32px));
   height: auto;
   min-height: 30px;
   border-radius: 15px;

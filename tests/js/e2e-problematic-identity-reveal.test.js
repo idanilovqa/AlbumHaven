@@ -23,7 +23,10 @@ function fixture({ horizontal = false, target = true, offset = 0 } = {}) {
       waits.push({ predicate, selectors });
     },
   };
-  return { view, items, wheels, waits, owner: { utilityProblematicFilesTab: tab,
+  // Every page of this list is already loaded: paging to its end only counts the call.
+  const paging = { toEnd: 0 };
+  return { view, items, wheels, waits, paging, owner: { utilityProblematicFilesTab: tab,
+    scrollListToEnd: async () => { paging.toEnd += 1; },
     readVisibleListItems: async () => items.slice(Math.floor(view.offset / 68), Math.ceil((view.offset + 200) / 68)) } };
 }
 
@@ -41,16 +44,13 @@ for (const horizontal of [false, true]) {
   });
 }
 
-test('identity reveal waits for the authoritative inventory after a bounded first page miss', async () => {
+test('identity reveal loads every page of the paged list after a first page miss', async () => {
   const { UtilityProblematicFilesActions } = await import(actionsUrl);
   let complete = false;
   const owner = {
-    utilityProblematicFilesTab: {
-      waitForPageCondition: async (predicate, options) => {
-        assert.match(predicate.toString(), /problematicFilesComplete/);
-        assert.ok(options.timeout > 0);
-        complete = true;
-      },
+    async scrollListToEnd(options) {
+      assert.ok(options.timeout > 0);
+      complete = true;
     },
     async *walkListWindows() {
       yield complete
@@ -70,11 +70,12 @@ test('identity reveal waits for the authoritative inventory after a bounded firs
 
 test('native traversal reports an absent identity at the real boundary without choosing a similar row', async () => {
   const { UtilityProblematicFilesActions } = await import(actionsUrl);
-  const { owner, view } = fixture({ target: false });
+  const { owner, view, paging } = fixture({ target: false });
   Object.setPrototypeOf(owner, UtilityProblematicFilesActions.prototype);
   await assert.rejects(UtilityProblematicFilesActions.prototype.revealListItemByIdentity.call(owner,
     { title: 'Target', meta: 'Exact artist · 2026' }), /Exact Problematic Files identity was not found/);
   assert.equal(view.offset, view.extent - view.viewport);
+  assert.equal(paging.toEnd, 1, 'the list loads its every page before the identity is called absent');
 });
 
 test('title selection scrolls the native virtual list before clicking an initially unmounted row', async () => {
@@ -128,10 +129,11 @@ test('native traversal readiness requires both delivered scroll and mounted view
 
 test('complete native inventory preserves all identities and restores the initial scroll', async () => {
   const { UtilityProblematicFilesActions } = await import(actionsUrl);
-  const { owner, view, items } = fixture({ offset: 400 });
+  const { owner, view, items, paging } = fixture({ offset: 400 });
   Object.setPrototypeOf(owner, UtilityProblematicFilesActions.prototype);
   owner.readVisibleResultCount = async () => items.length;
   assert.deepEqual(await owner.readCompleteListItems(), items);
+  assert.equal(paging.toEnd, 1, 'every page loads before the inventory is read');
   assert.equal(view.offset, 400);
   owner.readVisibleResultCount = async () => items.length + 1;
   await assert.rejects(owner.readCompleteListItems(), /visible complete result count/);
@@ -215,7 +217,8 @@ test('continuity observer exposes mutations on the same retained snapshot', asyn
       const snapshot = require('node:vm').runInNewContext(`(${callback.toString()})(selectors)`, {
         selectors, HTMLElement: Element,
         document: { querySelector: selector => selector === '#list' ? list : active, querySelectorAll: () => items },
-        MutationObserver: class { constructor(fn) { capture = fn; } observe() {} disconnect() {} },
+        // The list observer is the first; the second waits for the overlay.
+        MutationObserver: class { constructor(fn) { capture ??= fn; } observe() {} disconnect() {} },
       });
       return { evaluate: async fn => fn(snapshot) };
     } },

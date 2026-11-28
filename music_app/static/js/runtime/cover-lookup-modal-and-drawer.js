@@ -583,6 +583,14 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
   };
 }
 
+// The cover a lookup notification shows: its best candidate, or its first cover when the task names none.
+function getCoverLookupShownCandidate(candidates, bestCandidateId) {
+  const covers = (Array.isArray(candidates) ? candidates : [])
+    .filter((candidate) => String(candidate?.art_kind || 'cover').trim() === 'cover');
+  const bestId = String(bestCandidateId || '').trim();
+  return covers.find((candidate) => bestId && String(candidate?.id || '').trim() === bestId) || covers[0] || null;
+}
+
 function coverLookupCandidateTimestamp(value) {
   const timestamp = Date.parse(String(value || '').trim());
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -654,9 +662,12 @@ function applyCoverLookupCandidateSource(candidateSource) {
     possibleMatches = previousMatches;
     retainedPreviousMatches = true;
   }
-  // The suggestion is the lookup's best selectable cover. It stays marked whatever the user selects,
-  // so the card shown in Notifications is always identifiable in the gallery.
+  // The suggestion is the cover the notification shows: the lookup's best cover, or its first cover when
+  // the task names none. It stays marked whatever the user selects, so it is identifiable in the gallery.
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
+  const shownCandidateId = String(
+    getCoverLookupShownCandidate(candidateSource.candidates, bestCandidateId)?.id || '',
+  ).trim();
   // INT-028: a cover is suggested only after a recent cover search for this album that the user has not acted
   // on yet (or for an album with no cover at all), and only when it is sharper than the current cover (never
   // the same or a lower resolution).
@@ -701,7 +712,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
       }
     }
     modal.possibleMatches = possibleMatches;
-    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, bestCandidateId) ? bestCandidateId : '';
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, shownCandidateId) ? shownCandidateId : '';
     modal.selectedRemoteId = String(selectedOverride?.id || '');
     return;
   }
@@ -727,7 +738,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || modal.album?.cover_selection_origin === 'user'
     || Boolean(task && isActionedCoverLookupNotification(task))
     || Boolean(modal.pendingLocalRef || modal.pendingPastedImageId);
-  modal.suggestedRemoteId = bestCandidateIsSelectable ? bestCandidateId : '';
+  modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, shownCandidateId) ? shownCandidateId : '';
   if (hasPendingNonRemoteSelection) {
     modal.selectedRemoteId = '';
     return;
@@ -2222,13 +2233,8 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
     const currentUserCoverUrl = String(task?.current_user_cover_preview_url || '').trim()
       || payloadUserCoverUrl;
     const possibleMatches = Array.isArray(task?.possible_matches) ? task.possible_matches : [];
-    const bestCandidateId = String(task?.best_candidate_id || '').trim();
-    const bestCandidate = possibleMatches.find((candidate) => (
-      String(candidate?.id || '').trim() === bestCandidateId
-      && String(candidate?.art_kind || 'cover').trim() === 'cover'
-    )) || possibleMatches.find((candidate) => (
-      String(candidate?.art_kind || 'cover').trim() === 'cover'
-    ));
+    const bestCandidate = getCoverLookupShownCandidate(possibleMatches, task?.best_candidate_id);
+    const bestCandidateId = String(bestCandidate?.id || task?.best_candidate_id || '').trim();
     const bestCandidatePreviewUrl = String(
       task?.best_candidate_preview_url
       || bestCandidate?.thumbnail_url
@@ -2238,7 +2244,7 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
     ).trim();
     const bestCandidateCoverUrl = buildRemoteCoverLookupImageUrl(
       bestCandidatePreviewUrl,
-      bestCandidateId || bestCandidate?.id || '',
+      bestCandidateId,
       { preview: true },
     );
     const coverUrl = currentUserCoverUrl
@@ -2469,7 +2475,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   // UI-14 (owner): in the album cover's Cover Look Up, the second artbox's art is dimmed and cannot be chosen.
   const inSecondArtbox = !inFirstArtbox && typeof isCoverLookupItemInSecondArtbox === 'function' && isCoverLookupItemInSecondArtbox(item, kind);
   const inOtherArtbox = inFirstArtbox || inSecondArtbox;
-  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
+  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable-card.webp';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
@@ -4918,9 +4924,12 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.hidden = false;
     ButtonComponent.setDisabled(els.saveRemote, true);
   }
+  // The gallery request leaves before the first render and the drawer's scroll restore (a forced layout),
+  // so its round trip overlaps that work instead of following it.
+  const galleryLoaded = refreshCoverLookupGallery(false);
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
-  await refreshCoverLookupGallery(false);
+  await galleryLoaded;
   reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();

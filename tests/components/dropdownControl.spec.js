@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
 
@@ -164,4 +165,142 @@ test('exception dropdown toggles its production menu on consecutive pointer clic
   await expect(input).toHaveAttribute('aria-expanded', 'false');
   expect(closeDuration).toBeLessThan(50);
   expect(await readGeometry()).toEqual(closedGeometry);
+});
+
+// The stylesheets index.html loads, in its order, including its head partials.
+function appStylesheets() {
+  const templates = path.join(repositoryRoot, 'music_app/templates');
+  const expand = (file, seen = new Set()) => {
+    if (seen.has(file)) return '';
+    seen.add(file);
+    return fs.readFileSync(path.join(templates, file), 'utf8')
+      .replace(/{%\s*include\s+["']([^"']+)["']\s*%}/g, (_, include) => expand(include, seen));
+  };
+  return [...expand('index.html').split('<body')[0].matchAll(/<link rel="stylesheet" href="([^"]+)"/g)]
+    .map(([, href]) => href.match(/filename='([^']+)'/)?.[1] || href.replace(/^\/static\//, '').replace(/[?{].*$/, ''))
+    .filter((sheet, index, sheets) => sheets.indexOf(sheet) === index);
+}
+
+test('the Edit Tags exception dropdown opens and closes in the frame after the press, all in one step', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const exceptionField = fs.readFileSync(path.join(repositoryRoot, 'music_app/templates/partials/primary-modals.html'), 'utf8')
+    .match(/<div class="tag-editor-exception-field"[\s\S]*?<\/div><\/div><\/div>/)[0];
+  await page.setContent(`<!doctype html><html lang="en"><head></head><body>
+    <div id="tag-editor-modal"><div class="tag-editor-dialog" style="margin:200px auto;width:520px">
+      <form class="tag-editor-form" id="tag-editor-form">${exceptionField}</form>
+      <div id="tag-editor-footer" style="height:60px"></div>
+    </div></div>
+  </body></html>`);
+  for (const sheet of appStylesheets()) {
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static', sheet) });
+  }
+  await page.addScriptTag({ content: `
+    var state = { view: { non_album_tracks: [] } };
+    function escapeHtml(value) { return String(value ?? ''); }
+    function getTagEditorElements() { return { form: document.getElementById('tag-editor-form') }; }
+  ` });
+  for (const script of [
+    'js/button-component.js',
+    'js/runtime/trigger-anchor.js',
+    'js/runtime/utility-loaders-and-cover-lookup.js',
+    'js/runtime/bootstrap-utility-event-handlers.js',
+  ]) await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static', script) });
+  // The production document listener (bootstrap-event-handlers.js).
+  await page.evaluate(() => {
+    document.addEventListener('click', (event) => {
+      if (event.defaultPrevented) return;
+      handleUtilityBootstrapClick(event);
+    });
+  });
+
+  const input = page.locator('#tag-editor-exception-input');
+  const menu = page.locator('#tag-editor-exception-menu');
+  // An empty exception reads as None before any interaction.
+  await expect(input).toHaveValue('');
+  await expect(input).toHaveAttribute('placeholder', 'None');
+  expect(await input.evaluate((element) => element.matches(':placeholder-shown'))).toBe(true);
+
+  // Samples every frame from the press until the gesture has settled.
+  const startSampling = () => page.evaluate(() => {
+    const field = document.getElementById('tag-editor-exception-input');
+    const control = field.closest('.ui-dropdown-control');
+    const list = document.getElementById('tag-editor-exception-menu');
+    window.dropdownSample = { frames: [], longTasks: [], pressAt: null };
+    const sample = window.dropdownSample;
+    new PerformanceObserver((entries) => {
+      entries.getEntries().forEach((entry) => sample.longTasks.push(entry.duration));
+    }).observe({ type: 'longtask' });
+    document.addEventListener('pointerdown', () => { sample.pressAt = performance.now(); }, { once: true, capture: true });
+    const read = (timestamp) => {
+      const listStyle = getComputedStyle(list);
+      const fieldStyle = getComputedStyle(field);
+      sample.frames.push({
+        at: timestamp,
+        menuVisible: listStyle.display !== 'none' && list.getBoundingClientRect().height > 0,
+        menuOpacity: listStyle.opacity,
+        menuTransform: listStyle.transform,
+        menuClip: listStyle.clipPath,
+        expanded: field.getAttribute('aria-expanded'),
+        focused: document.activeElement === field,
+        chevron: getComputedStyle(control, '::after').transform,
+        outline: [fieldStyle.borderTopColor, fieldStyle.boxShadow, fieldStyle.borderTopLeftRadius, fieldStyle.borderBottomLeftRadius].join(' '),
+        // Anything still easing toward its end state on the field, its control, or its menu.
+        running: document.getAnimations()
+          .filter((animation) => [field, control, list].some((element) => element.contains(animation.effect?.target)))
+          .map((animation) => `${animation.transitionProperty || animation.animationName}`),
+      });
+      if (sample.frames.length < 30) requestAnimationFrame(read);
+    };
+    requestAnimationFrame(read);
+  });
+  const readSample = () => page.evaluate(() => {
+    const { frames, longTasks, pressAt } = window.dropdownSample;
+    return { longTasks, frames: frames.filter((frame) => frame.at > pressAt) };
+  });
+  const box = await input.boundingBox();
+  const chevron = { x: box.x + box.width - 16, y: box.y + box.height / 2 };
+
+  // Open: the menu, the field's focus outline and expanded state all appear in
+  // the first frame after the press, and nothing changes after that frame.
+  await startSampling();
+  await page.mouse.move(chevron.x, chevron.y);
+  await page.mouse.down();
+  await page.waitForTimeout(150);
+  const opening = await readSample();
+  const [firstOpen, ...heldOpen] = opening.frames;
+  expect(firstOpen).toMatchObject({ menuVisible: true, menuOpacity: '1', expanded: 'true', focused: true, running: [] });
+  heldOpen.forEach((frame) => expect({ ...frame, at: 0 }).toEqual({ ...firstOpen, at: 0 }));
+  expect(opening.longTasks.filter((duration) => duration > 50)).toEqual([]);
+  // Releasing the press neither closes nor redraws the open menu.
+  await page.mouse.up();
+  await expect(menu).toBeVisible();
+  await expect(input).toHaveAttribute('aria-expanded', 'true');
+  await expect(menu.getByRole('option', { name: 'None', exact: true })).toHaveAttribute('aria-selected', 'true');
+
+  // Close: a second press closes everything in the frame after it.
+  await startSampling();
+  await page.mouse.down();
+  await page.waitForTimeout(150);
+  const closing = await readSample();
+  const [firstClosed, ...heldClosed] = closing.frames;
+  expect(firstClosed).toMatchObject({ menuVisible: false, expanded: 'false', focused: true, running: [] });
+  heldClosed.forEach((frame) => expect({ ...frame, at: 0 }).toEqual({ ...firstClosed, at: 0 }));
+  expect(closing.longTasks.filter((duration) => duration > 50)).toEqual([]);
+  await page.mouse.up();
+  await expect(menu).toBeHidden();
+  await expect(input).toHaveAttribute('aria-expanded', 'false');
+
+  // Choosing an option still happens on release, and None stores no exception.
+  await page.mouse.down();
+  await page.mouse.up();
+  await menu.getByRole('option', { name: 'Interview', exact: true }).click();
+  await expect(menu).toBeHidden();
+  await expect(input).toHaveValue('Interview');
+  await page.mouse.move(chevron.x, chevron.y);
+  await page.mouse.down();
+  await expect(menu).toBeVisible();
+  await page.mouse.up();
+  await menu.getByRole('option', { name: 'None', exact: true }).click();
+  await expect(input).toHaveValue('');
+  expect(await input.evaluate((element) => element.matches(':placeholder-shown'))).toBe(true);
 });

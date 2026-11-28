@@ -824,6 +824,23 @@
       "rollback": "Test-only contract; the worklet is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its message entrypoint."
     },
     {
+      "id": "js:button-component.js#<top-level>",
+      "action": "click/mousedown listeners installed by <top-level>",
+      "entrypoints": [
+        "js:music_app/static/js/button-component.js#<top-level>:event:click",
+        "js:music_app/static/js/button-component.js#<top-level>:event:mousedown"
+      ],
+      "owners": [
+        "music_app/static/js/button-component.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:capability-ui.js#install",
       "action": "DOMContentLoaded/click listeners installed by install",
       "entrypoints": [
@@ -9231,6 +9248,7 @@
       ],
       "owners": [
         "music_app/routes/android_artifacts_asgi.py",
+        "music_app/services/android_artifact_access.py",
         "music_app/services/android_key_attestation.py"
       ],
       "rules": [
@@ -9247,15 +9265,18 @@
       "budgets": {
         "filesystem_enumerations": 0,
         "stat_calls": 0,
-        "open_calls": 1
+        "open_calls": 1,
+        "sql_statements": 8,
+        "returned_rows": 6,
+        "pool_leases": 4
       },
       "growth": {
-        "metric": "open_calls",
+        "metric": "sql_statements",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_android_key_attestation.py::test_attestation_roots_contract_reads_the_bundled_roots_once_per_process",
-      "testIdentity": "test_attestation_roots_contract_reads_the_bundled_roots_once_per_process",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "command": "python -m pytest tests/py/test_android_attestation_revocations.py::test_attest_contract_reads_roots_once_and_revocations_with_one_keyed_select",
+      "testIdentity": "test_attest_contract_reads_roots_once_and_revocations_with_one_keyed_select",
+      "rollback": "Revert the revocation-rows commit; attest then reads the status file again."
     },
     {
       "id": "py:routes/android_artifacts_asgi.py#android_artifact_challenge",
@@ -9712,9 +9733,9 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 4,
+        "sql_statements": 5,
         "filesystem_enumerations": 0,
-        "returned_rows": 13,
+        "returned_rows": 23,
         "pending_intent_rows": 2
       },
       "growth": {
@@ -9723,7 +9744,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. Index on, as the server (6.5, 11-24; supersedes the index-off 2/3): problematic_index.listed_as_missing (1 row), the relation alias read, the pending-intents read scoped to the album's key and files (pending_intent_rows 2), and with candidate folders the narrowing's one read (12 rows): 3 or 4 statements. The 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. Index on, as the server (6.5, 11-24; supersedes the index-off 2/3): problematic_index.listed_as_missing (1 row), the relation alias read, the pending-intents read scoped to the album's key and files (pending_intent_rows 2), and with mixed folders (2026-11-25) the mixed rows' folders read by key (one row per mixed file) and their files read by folder (rows bounded by those folders, 2 per folder here): 3 or 5 statements. The 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query",
@@ -9752,9 +9773,9 @@
       "budgets": {
         "membership_rows": 0,
         "candidate_rows": 12,
-        "sql_statements": 4,
+        "sql_statements": 5,
         "filesystem_enumerations": 0,
-        "returned_rows": 13,
+        "returned_rows": 23,
         "pending_intent_rows": 2
       },
       "growth": {
@@ -9763,7 +9784,7 @@
       },
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
       "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
-      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. Index on, as the server (6.5, 11-24; supersedes the index-off 2/3): problematic_index.listed_as_missing (1 row), the relation alias read, the pending-intents read scoped to the album's key and files (pending_intent_rows 2), and with candidate folders the narrowing's one read (12 rows): 3 or 4 statements. The 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait."
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album. Index on, as the server (6.5, 11-24; supersedes the index-off 2/3): problematic_index.listed_as_missing (1 row), the relation alias read, the pending-intents read scoped to the album's key and files (pending_intent_rows 2), and with mixed folders (2026-11-25) the mixed rows' folders read by key (one row per mixed file) and their files read by folder (rows bounded by those folders, 2 per folder here): 3 or 5 statements. The 2-of-52 live case is test_live_detail_reads_only_its_own_pending_intents_however_many_others_wait."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_files",
@@ -13210,6 +13231,22 @@
         "BI-08"
       ],
       "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_lookup_runtime.py#_prepare_remote_cover_card_preview",
+      "action": "Store one finished lookup's remote card previews in the background, one image per task",
+      "entrypoints": [
+        "py:music_app/services/cover_lookup_runtime.py#_prepare_remote_cover_card_preview:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_lookup_runtime.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
     },
     {

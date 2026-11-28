@@ -1452,16 +1452,11 @@ function handleGalleryMainClick(event) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
+  // A mode button only shows its tree (owner rule); a page opens when an item of that tree is chosen.
   const navigationMode = event.target.closest?.('[data-navigation-mode]');
   if (navigationMode) {
     event.preventDefault();
-    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
-    if (navigationMode.dataset.navigationMode === 'collections') {
-      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
-      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
-    } else if (pageOpen) {
-      closeNonAlbumModal();
-    }
+    showLibraryNavigationTree(navigationMode.dataset.navigationMode === 'collections' ? 'collections' : 'artists');
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
@@ -1480,6 +1475,9 @@ function handleGalleryMainClick(event) {
       openNonAlbumModal({
         libraryWide,
       });
+      // Choosing the tree item is the navigation: the phone drawer gives way to the page.
+      if (libraryWide && typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function'
+        && usesMobilePageLayout()) closeArtistsDrawer();
     }
     return true;
   }

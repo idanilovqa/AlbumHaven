@@ -2,7 +2,7 @@ const { test, expect } = require('@playwright/test');
 const path = require('node:path');
 const fs = require('node:fs');
 const { applyFixtureAppearance } = require('./appearanceFixture.js');
-const { measureAnchorJoin, expectContinuousJoin } = require('./anchorJoinMeasure.js');
+const { measureAnchorJoin, expectContinuousJoin, measureAnchorCorners, expectSquareCorners } = require('./anchorJoinMeasure.js');
 
 // Every owner-reported dropdown, opened through its production owner with the
 // production stylesheet stack, measured from the painted pixels at desktop and
@@ -314,4 +314,21 @@ for (const width of [1440, 390]) {
       expect(await box(), `icon position with ${JSON.stringify(state)}`).toEqual(closed);
     }
   });
+}
+
+// Owner-reported corners: where the trigger's side line meets the panel, both lines
+// keep one 2 px width and meet square, with no step, overshoot, notch or stub.
+for (const width of [1440, 375]) {
+  for (const name of ['Artist Family', 'PF filter', 'Log History calendar', 'Appearance sections', 'Settings']) {
+    test(`${name} trigger and panel meet at square corners at ${width} px`, async ({ page }) => {
+      const dropdown = dropdowns.find(entry => entry.name === name);
+      await mountApp(page, width);
+      await dropdown.open(page);
+      const surface = page.locator(dropdown.surface);
+      await expect(surface).toBeVisible();
+      await surface.evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
+      const result = await measureAnchorCorners(page, page.locator(dropdown.anchor), surface);
+      expectSquareCorners(expect, result, { label: `${name} @${width}`, scale: 2 });
+    });
+  }
 }

@@ -3228,26 +3228,34 @@ class PostgresLibraryBrowseRepository:
             )
         return payload
 
-    def build_problematic_files_page(self, *, limit: int, cursor: str = "") -> dict[str, object]:
+    def build_problematic_files_page(
+        self, *, limit: int, cursor: str = "", reasons: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        """A page of the list; with ``reasons``, only albums with one of those filter reasons."""
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
-        indexed = self._indexed_problematic_page(limit=limit, cursor=cursor)
+        indexed = self._indexed_problematic_page(limit=limit, cursor=cursor, reasons=reasons)
         if indexed is not None:
             return indexed
-        return self._evaluated_problematic_page(limit=limit, cursor=cursor)
+        return self._evaluated_problematic_page(limit=limit, cursor=cursor, reasons=reasons)
 
-    def _evaluated_problematic_page(self, *, limit: int, cursor: str, needle: str = "") -> dict[str, object]:
+    def _evaluated_problematic_page(
+        self, *, limit: int, cursor: str, needle: str = "", reasons: tuple[str, ...] = (),
+    ) -> dict[str, object]:
         """A page of the directly evaluated list, with the index's cursors."""
+        scope = _problematic_cursor_scope(needle, reasons)
         after: tuple[str, str, str, str] | None = None
         if cursor:
             after = (
-                _decode_problematic_search_cursor(cursor, needle) if needle
+                _decode_problematic_search_cursor(cursor, scope) if scope
                 else _decode_problematic_page_cursor(cursor)
             )[0]
         payload = self.build_problematic_files_payload()
         items = sorted(
             (item for item in payload["items"]
              if (not needle or _problematic_summary_matches_query(item, needle))
+             and (not reasons or set(reasons) & {
+                 _problematic_filter_reason(reason) for reason in item.get("problem_reasons") or ()})
              and (after is None or _problematic_summary_sort_key(item) > after)),
             key=_problematic_summary_sort_key,
         )
@@ -3257,7 +3265,7 @@ class PostgresLibraryBrowseRepository:
         if has_more and items:
             last = _problematic_summary_sort_key(items[-1])
             next_cursor = (
-                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, needle) if needle
+                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, scope) if scope
                 else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
             )
         initial_detail = payload.get("initial_detail")
@@ -3266,11 +3274,11 @@ class PostgresLibraryBrowseRepository:
             "items": items,
             "count": len(items),
             "initial_detail": (
-                initial_detail if not needle and after is None and items
+                initial_detail if not scope and after is None and items
                 and isinstance(initial_detail, Mapping) and initial_detail.get("key") == items[0].get("key")
                 else None
             ),
-            "complete": bool(needle) and not has_more,
+            "complete": bool(scope) and not has_more,
             "has_more": has_more,
             "next_cursor": next_cursor,
             "cursor_restarted": False,
@@ -3322,18 +3330,26 @@ class PostgresLibraryBrowseRepository:
             "view_data_source": _SOURCE_TELEMETRY,
         }
 
-    def _indexed_problematic_page(self, *, limit: int, cursor: str, needle: str = "") -> dict[str, object] | None:
+    def _indexed_problematic_page(
+        self, *, limit: int, cursor: str, needle: str = "", reasons: tuple[str, ...] = (),
+    ) -> dict[str, object] | None:
         """A page (or search page) read from the persisted index; None until it is ready."""
+        scope = _problematic_cursor_scope(needle, reasons)
         after: tuple[str, str, str, str] | None = None
         cursor_restarted = False
         if cursor:
             after, cursor_generation = (
-                _decode_problematic_search_cursor(cursor, needle) if needle
+                _decode_problematic_search_cursor(cursor, scope) if scope
                 else _decode_problematic_page_cursor(cursor)
             )
             if cursor_generation != _PROBLEMATIC_INDEX_CURSOR_GENERATION:
                 after, cursor_restarted = None, True
-        items = problematic_index.read_page(self, limit=limit, after=after, needle=needle)
+        opening = after is None and not scope
+        if opening:
+            read = problematic_index.read_first_page(self, limit=limit)
+            items, reason_types = read if read is not None else (None, [])
+        else:
+            items = problematic_index.read_page(self, limit=limit, after=after, needle=needle, reasons=reasons)
         if items is None:
             return self._problematic_indexing_payload()
         has_more = len(items) > limit
@@ -3342,25 +3358,23 @@ class PostgresLibraryBrowseRepository:
         if has_more and items:
             last = _problematic_summary_sort_key(items[-1])
             next_cursor = (
-                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, needle) if needle
+                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, scope) if scope
                 else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
             )
-        # The first page opens on its first album's detail (no separate detail request).
-        initial_detail = (
-            self.build_problematic_file_detail_payload(items[0]["key"])
-            if items and after is None and not needle else None
-        )
+        # The first page opens on its first album's detail (no separate detail request), and names every
+        # filter reason of the list, which no client holds in full.
+        initial_detail = self.build_problematic_file_detail_payload(items[0]["key"]) if items and opening else None
         return {
             "items": items,
             "count": len(items),
             "initial_detail": initial_detail,
-            "complete": bool(needle) and not has_more,
+            "complete": bool(scope) and not has_more,
             "has_more": has_more,
             "next_cursor": next_cursor,
             "cursor_restarted": cursor_restarted,
             "total_candidate_count": None,
             "projection_cache_status": "indexed",
-            "problem_reason_types": _problematic_filter_reason_types(items),
+            "problem_reason_types": reason_types if opening else _problematic_filter_reason_types(items),
             "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
@@ -3372,16 +3386,18 @@ class PostgresLibraryBrowseRepository:
         *,
         limit: int = 50,
         cursor: str = "",
+        reasons: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        """Every problematic album whose summary text contains ``query``, a page at a time."""
+        """Every problematic album whose summary text contains ``query`` (and, with ``reasons``, that has one
+        of those filter reasons), a page at a time."""
         needle = str(query or "").strip().lower()
         if not needle:
             raise ValueError("Problematic Files search needs a query.")
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files search limit must be between 1 and 200.")
-        page = self._indexed_problematic_page(limit=limit, cursor=cursor, needle=needle)
+        page = self._indexed_problematic_page(limit=limit, cursor=cursor, needle=needle, reasons=reasons)
         if page is None:
-            page = self._evaluated_problematic_page(limit=limit, cursor=cursor, needle=needle)
+            page = self._evaluated_problematic_page(limit=limit, cursor=cursor, needle=needle, reasons=reasons)
         page.update(query=query, search_truncated=False)
         return page
 
@@ -3582,6 +3598,10 @@ class PostgresLibraryBrowseRepository:
             )
             for album in matching_albums:
                 album["_suggestion_aliases"] = aliases
+                album["_mixed_folder_fields"] = _mixed_folder_fields(connection, [
+                    str(entry.get("path") or "") for entry in album.get("_file_entries") or ()
+                    if isinstance(entry, Mapping) and entry.get("_mixed_album_folder") is True
+                ])
                 detail = _problematic_album_detail_payload(album)
                 if detail is not None:
                     return detail
@@ -7601,6 +7621,36 @@ def _text_correction_problem_reasons(corrections: object) -> Iterable[str]:
         yield text_correction_reason(field, correction.get("kind") if isinstance(correction, Mapping) else None)
 
 
+def problematic_detail_folders(detail: Mapping[str, object]) -> dict[str, list[str]]:
+    """The folders an open Problematic Files entry names, from its own payload (owner, 2026-11-25): the
+    album's folder or folders, and, with a duplicate problem, each folder its duplicates live in, once.
+    Paths are private: callers add these only for path readers."""
+    from music_app.services.library import _track_album_container
+
+    def folders(paths: Iterable[object]) -> list[str]:
+        unique: dict[str, str] = {}
+        for path in paths:
+            if folder := _track_album_container(str(path or "")):
+                unique.setdefault(normcase(folder), folder)
+        return sorted(unique.values(), key=str.casefold)
+
+    rows = [row for row in detail.get("track_problem_rows") or [] if isinstance(row, Mapping)]
+    copies = {str(row.get("path") or "") for row in rows if _OUTSIDE_COPY_REASON in (row.get("reasons") or ())}
+    tracks = [str(track.get("path") or "") for track in detail.get("tracks") or [] if isinstance(track, Mapping)]
+    result = {"album_folders": folders(path for path in tracks if path not in copies)}
+    reasons = set(detail.get("problem_reasons") or ())
+    if reasons & {_OUTSIDE_COPY_REASON, "Duplicate files"}:
+        held_twice = {str(row.get("path") or "") for row in rows if "Duplicate files" in (row.get("reasons") or ())}
+        sources = (
+            track.get("path")
+            for source in detail.get("duplicate_sources") or () if isinstance(source, Mapping)
+            for track in source.get("tracks") or () if isinstance(track, Mapping)
+        )
+        if duplicate_folders := folders([*copies, *held_twice, *sources]):
+            result["duplicate_folders"] = duplicate_folders
+    return result
+
+
 def _album_problem_tracks(
     album: Mapping[str, object], entries: list[dict[str, object]],
 ) -> dict[str, list[tuple[str, str]]]:
@@ -7768,11 +7818,120 @@ def _iter_problematic_track_reasons(
         yield path, filename, reasons, reason_fields
 
 
+# The tag fields a row's problems concern, shown as its current values (owner, 2026-11-25).
+_CURRENT_VALUE_LABELS = {
+    "album_artist": "Album artist", "album": "Album", "year": "Year", "artist": "Artist", "title": "Title",
+    "track_number": "Track number", "album_rating": "Rating",
+}
+# What the mixed-folder rule compares (multi_album_folders._album_identity), and the release year.
+_MIXED_FOLDER_FIELDS = ("album_artist", "album", "year")
+_MIXED_REASON = "Mixed album metadata in one folder"
+
+
+def _current_tag_value(entry: Mapping[str, object], field: str) -> object:
+    if field == "album_artist":
+        return entry.get("album_artist") or entry.get("artist") or None
+    value = entry.get(field)
+    return None if value in (None, "") else value
+
+
+def _differing_fields(values: Iterable[Mapping[str, object]]) -> list[str]:
+    values = list(values)
+    return [field for field in _MIXED_FOLDER_FIELDS
+            if len({" ".join(str(value.get(field) or "").casefold().split()) for value in values}) > 1]
+
+
+def _mixed_entry_fields(
+    album: Mapping[str, object], entries_by_path: Mapping[str, Mapping[str, object]],
+) -> dict[str, list[str]]:
+    """The fields that differ across each mixed folder: from the folder read the detail laid, else from
+    the entry's own files (a loose folder group holds the whole folder)."""
+    laid = album.get("_mixed_folder_fields")
+    if isinstance(laid, Mapping) and laid:
+        return {str(path): list(fields) for path, fields in laid.items()}
+    mixed = [entry for entry in entries_by_path.values() if entry.get("_mixed_album_folder") is True
+             or entry.get("local_album_membership_problem") == _MIXED_REASON]
+    fields = _differing_fields({field: _current_tag_value(entry, field) for field in _MIXED_FOLDER_FIELDS}
+                               for entry in mixed)
+    return {str(entry.get("path") or ""): fields for entry in mixed}
+
+
+def _problem_row_current_values(
+    entry: Mapping[str, object], reasons: Iterable[str], reason_fields: Mapping[str, str],
+    mixed_fields: Mapping[str, list[str]],
+) -> list[dict[str, object]]:
+    """A row's current tag values for the fields its problems concern; a mixed-folder row shows the
+    fields that differ across its folder, or the compared identity when its folder read showed none."""
+    fields: list[str] = []
+    for reason in reasons:
+        if reason == _MIXED_REASON:
+            fields += mixed_fields.get(str(entry.get("path") or "")) or ["album_artist", "album"]
+        elif (field := reason_fields.get(reason)) in _CURRENT_VALUE_LABELS:
+            fields.append(field)
+    return [
+        {"field": field, "label": _CURRENT_VALUE_LABELS[field], "value": _current_tag_value(entry, field)}
+        for field in dict.fromkeys(fields)
+    ]
+
+
+_MIXED_FOLDER_PARENTS_SQL = """
+    select files.private_path, files.library_root_id, __PARENT__ as physical_parent
+    from library.local_track_files files
+    where files.private_path = any(%(paths)s::text[]) and files.scan_cache_stale is false
+"""
+_MIXED_FOLDER_VALUES_SQL = """
+    select folders.library_root_id, folders.physical_parent,
+      files.metadata #>> '{scan_cache,file_entry,album}' as album,
+      coalesce(nullif(files.metadata #>> '{scan_cache,file_entry,album_artist}', ''),
+               files.metadata #>> '{scan_cache,file_entry,artist}') as album_artist,
+      files.metadata #>> '{scan_cache,file_entry,year}' as year
+    from unnest(%(roots)s::bigint[], %(parents)s::text[]) as folders(library_root_id, physical_parent)
+    cross join lateral (
+      select files.metadata
+      from library.local_track_files files
+      where files.library_root_id = folders.library_root_id
+        and __FILE_PARENT__ = folders.physical_parent
+        and files.scan_cache_stale is false
+      offset 0
+    ) files
+"""
+
+
+def _mixed_folder_fields(connection: Any, paths: list[str]) -> dict[str, list[str]]:
+    """The fields that differ across the folders of ``paths``: their files, read by folder (the 0088
+    physical-parent index), never the library."""
+    paths = sorted({path for path in paths if path})
+    if not paths:
+        return {}
+    parents = {
+        str(row["private_path"]): (int(row["library_root_id"]), str(row["physical_parent"]))
+        for row in map(_row_mapping, connection.execute(
+            _MIXED_FOLDER_PARENTS_SQL.replace("__PARENT__", _physical_parent_sql("files.private_path")),
+            {"paths": paths},
+        ).fetchall())
+    }
+    folders = sorted(set(parents.values()))
+    if not folders:
+        return {}
+    values_by_folder: dict[tuple[int, str], list[dict[str, object]]] = {}
+    for row in map(_row_mapping, connection.execute(
+        _MIXED_FOLDER_VALUES_SQL.replace("__FILE_PARENT__", _physical_parent_sql("files.private_path")),
+        {"roots": [root for root, _parent in folders], "parents": [parent for _root, parent in folders]},
+    ).fetchall()):
+        values_by_folder.setdefault((int(row["library_root_id"]), str(row["physical_parent"])), []).append(dict(row))
+    fields_by_folder = {folder: _differing_fields(values) for folder, values in values_by_folder.items()}
+    return {path: fields_by_folder.get(folder, []) for path, folder in parents.items()}
+
+
 def _problematic_track_problem_rows(
     album: Mapping[str, object], *, include_repair_metadata: bool = True,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     track_order_issues = _track_order_issues(album)
+    entries_by_path = {
+        str(entry.get("path") or ""): entry for entry in album.get("_file_entries") or () if isinstance(entry, Mapping)
+    }
+    mixed_fields = _mixed_entry_fields(album, entries_by_path) if include_repair_metadata else {}
     for path, filename, reasons, reason_fields in _iter_problematic_track_reasons(
         album,
         track_order_issues=track_order_issues,
@@ -7782,6 +7941,8 @@ def _problematic_track_problem_rows(
         if reason_fields is not None:
             file_path = Path(path)
             row.update({
+                "current_values": _problem_row_current_values(
+                    entries_by_path.get(path) or {}, reasons, reason_fields, mixed_fields),
                 "file_type": file_path.suffix.lstrip(".").upper(),
                 "ignorable_reasons": [
                     {
@@ -7803,15 +7964,24 @@ def _problematic_track_problem_rows(
     return sorted(rows, key=lambda row: str(row.get("filename") or "").casefold())
 
 
+def _problematic_filter_reason(value: object) -> str:
+    """A problem reason as the filter names it (the index's _FILTER_REASON_SQL; the client's
+    normalizeProblemFilterReason)."""
+    reason = str(value or "").strip()
+    if reason == "Inconsistent year" or reason.startswith("Year mismatch"):
+        return "Year mismatch"
+    return "Incomplete track order" if reason.startswith("Incomplete track order:") else reason
+
+
+def _problematic_cursor_scope(needle: str, reasons: tuple[str, ...]) -> str:
+    """What a filtered page's cursor is bound to: its query and its filter reasons."""
+    return needle if not reasons else "\x1f".join((needle, *sorted(reasons)))
+
+
 def _problematic_filter_reasons(reasons: Iterable[object]) -> list[str]:
     filter_reasons: list[str] = []
     for value in reasons:
-        reason = str(value or "")
-        filter_reason = (
-            "Incomplete track order"
-            if reason.startswith("Incomplete track order:")
-            else reason
-        )
+        filter_reason = _problematic_filter_reason(value)
         if filter_reason and filter_reason not in filter_reasons:
             filter_reasons.append(filter_reason)
     return filter_reasons

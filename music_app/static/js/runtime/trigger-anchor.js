@@ -1,26 +1,35 @@
-// `borders` holds the trigger's and panel's left/right border widths.
-function getTriggerAnchorGeometry(anchor, surface, borders = {}) {
-  const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+function getTriggerAnchorEdge(anchor, surface) {
+  return surface.bottom <= anchor.top ? 'bottom' : 'top';
+}
+
+// The open trigger's outline is a 2px ring on its border box. The panel continues
+// it with a 2px side line on a shared side (`side-*`, in the panel's padding-box
+// coordinates) and with its joining line (the panel's ::after box) elsewhere, which
+// stays open across the trigger's interior (`left`, `width`, `right`, in that line box).
+// `reach` runs the trigger's ring from its padding box to that line, so both lines
+// end on the same pixel row. `frame` holds the trigger's (`anchor`) and panel's
+// (`surface`) border widths and the panel's line-box insets (`line`).
+function getTriggerAnchorGeometry(anchor, surface, frame = {}) {
+  const border = (owner, side) => frame[owner]?.[side] || 0;
+  const line = { left: -1, right: -1, top: 0, bottom: 0, ...frame.line };
+  const edge = getTriggerAnchorEdge(anchor, surface);
   const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
   const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
-  // The panel's side line continues the trigger's outline, drawn 2px outside the
-  // trigger's padding box. It starts at that outer edge (in the panel's padding-box
-  // coordinates) and covers the panel's own border, so neither border widths nor a
-  // rounded panel position can step the join.
-  const sideLeft = anchor.left + (borders.anchorLeft || 0) - 2 - (surface.left + (borders.surfaceLeft || 0));
-  const sideRight = surface.right - (borders.surfaceRight || 0) - (anchor.right - (borders.anchorRight || 0) + 2);
+  const lineLeft = surface.left + border('surface', 'left') + line.left;
+  const lineRight = surface.right - border('surface', 'right') - line.right;
   return {
     edge,
     side: alignedLeft && alignedRight ? 'none'
       : alignedLeft ? 'left' : alignedRight ? 'right' : 'none',
-    left: Math.max(0, anchor.left - surface.left),
-    right: Math.max(0, surface.right - anchor.right),
-    width: anchor.width,
+    left: Math.max(0, anchor.left + 2 - lineLeft),
+    right: Math.max(0, lineRight - (anchor.right - 2)),
+    width: anchor.width - 4,
     gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
-    'side-left': sideLeft,
-    'side-left-width': Math.max(2, -sideLeft),
-    'side-right': sideRight,
-    'side-right-width': Math.max(2, -sideRight),
+    reach: edge === 'top'
+      ? surface.top + border('surface', 'top') + line.top - (anchor.bottom - border('anchor', 'bottom'))
+      : anchor.top + border('anchor', 'top') - (surface.bottom - border('surface', 'bottom') - line.bottom),
+    'side-left': anchor.left - (surface.left + border('surface', 'left')),
+    'side-right': surface.right - border('surface', 'right') - anchor.right,
   };
 }
 
@@ -108,11 +117,26 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
+  const anchorBounds = visualAnchor.getBoundingClientRect();
+  // The joining line's box depends on the edge, so the edge is applied before it is read.
+  const edge = getTriggerAnchorEdge(anchorBounds, bounds);
+  if (surface.dataset.triggerAnchorEdge !== edge) surface.dataset.triggerAnchorEdge = edge;
   const anchorStyle = globalThis.getComputedStyle?.(visualAnchor);
-  const borderWidth = (style, side) => Number.parseFloat(style?.[`border${side}Width`]) || 0;
-  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds, {
-    anchorLeft: borderWidth(anchorStyle, 'Left'), anchorRight: borderWidth(anchorStyle, 'Right'),
-    surfaceLeft: borderWidth(surfaceStyle, 'Left'), surfaceRight: borderWidth(surfaceStyle, 'Right'),
+  const lineStyle = globalThis.getComputedStyle?.(surface, '::after');
+  // Lengths keyed by side, from the style properties `properties` names per side.
+  const lengths = (style, properties) => {
+    const values = {};
+    for (const [side, property] of Object.entries(properties)) {
+      const value = Number.parseFloat(style?.[property]);
+      if (Number.isFinite(value)) values[side] = value;
+    }
+    return values;
+  };
+  const borderWidths = { top: 'borderTopWidth', right: 'borderRightWidth', bottom: 'borderBottomWidth', left: 'borderLeftWidth' };
+  const anchorBorders = lengths(anchorStyle, borderWidths);
+  const geometry = getTriggerAnchorGeometry(anchorBounds, bounds, {
+    anchor: anchorBorders, surface: lengths(surfaceStyle, borderWidths),
+    line: lengths(lineStyle, { top: 'top', right: 'right', bottom: 'bottom', left: 'left' }),
   });
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
@@ -131,17 +155,19 @@ function syncTriggerAnchor(surface, anchor) {
   }
   else delete surface.dataset.triggerAnchorSearch;
   if (!visualAnchor.classList.contains('trigger-anchor-open')) visualAnchor.classList.add('trigger-anchor-open');
- if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
   if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
   // Scroll and resize resynchronize often; only changed geometry is written.
-  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-left-width', 'side-right', 'side-right-width']) {
-    const value = `${geometry[name]}px`;
-    if (surface.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
-      surface.style.setProperty(`--trigger-anchor-${name}`, value);
+  const write = (element, name, length) => {
+    const value = `${length}px`;
+    if (element.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
+      element.style.setProperty(`--trigger-anchor-${name}`, value);
     }
-  }
-  visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  };
+  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-right']) write(surface, name, geometry[name]);
+  // The trigger's ring sits on its border box and reaches the panel's joining line.
+  write(visualAnchor, 'gap', geometry.reach);
+  for (const side of Object.keys(borderWidths)) write(visualAnchor, `inset-${side}`, -(anchorBorders[side] || 0));
   if (previous?.anchor === anchor) return;
   const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
     if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);

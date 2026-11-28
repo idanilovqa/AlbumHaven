@@ -6534,7 +6534,6 @@ const state = {
       problematicServerSearchPendingQuery: '',
       problematicServerSearchSettledQuery: '',
       problematicServerSearchHasMore: false,
-      problematicServerSearchNextOffset: 0,
       problematicServerSearchNextCursor: '',
       problematicServerSearchLoadPromise: null,
       problematicServerSearchCache: {},
@@ -7379,29 +7378,38 @@ function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {
 
 // BEGIN js/runtime/trigger-anchor.js
 
-// `borders` holds the trigger's and panel's left/right border widths.
-function getTriggerAnchorGeometry(anchor, surface, borders = {}) {
-  const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+function getTriggerAnchorEdge(anchor, surface) {
+  return surface.bottom <= anchor.top ? 'bottom' : 'top';
+}
+
+// The open trigger's outline is a 2px ring on its border box. The panel continues
+// it with a 2px side line on a shared side (`side-*`, in the panel's padding-box
+// coordinates) and with its joining line (the panel's ::after box) elsewhere, which
+// stays open across the trigger's interior (`left`, `width`, `right`, in that line box).
+// `reach` runs the trigger's ring from its padding box to that line, so both lines
+// end on the same pixel row. `frame` holds the trigger's (`anchor`) and panel's
+// (`surface`) border widths and the panel's line-box insets (`line`).
+function getTriggerAnchorGeometry(anchor, surface, frame = {}) {
+  const border = (owner, side) => frame[owner]?.[side] || 0;
+  const line = { left: -1, right: -1, top: 0, bottom: 0, ...frame.line };
+  const edge = getTriggerAnchorEdge(anchor, surface);
   const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
   const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
-  // The panel's side line continues the trigger's outline, drawn 2px outside the
-  // trigger's padding box. It starts at that outer edge (in the panel's padding-box
-  // coordinates) and covers the panel's own border, so neither border widths nor a
-  // rounded panel position can step the join.
-  const sideLeft = anchor.left + (borders.anchorLeft || 0) - 2 - (surface.left + (borders.surfaceLeft || 0));
-  const sideRight = surface.right - (borders.surfaceRight || 0) - (anchor.right - (borders.anchorRight || 0) + 2);
+  const lineLeft = surface.left + border('surface', 'left') + line.left;
+  const lineRight = surface.right - border('surface', 'right') - line.right;
   return {
     edge,
     side: alignedLeft && alignedRight ? 'none'
       : alignedLeft ? 'left' : alignedRight ? 'right' : 'none',
-    left: Math.max(0, anchor.left - surface.left),
-    right: Math.max(0, surface.right - anchor.right),
-    width: anchor.width,
+    left: Math.max(0, anchor.left + 2 - lineLeft),
+    right: Math.max(0, lineRight - (anchor.right - 2)),
+    width: anchor.width - 4,
     gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
-    'side-left': sideLeft,
-    'side-left-width': Math.max(2, -sideLeft),
-    'side-right': sideRight,
-    'side-right-width': Math.max(2, -sideRight),
+    reach: edge === 'top'
+      ? surface.top + border('surface', 'top') + line.top - (anchor.bottom - border('anchor', 'bottom'))
+      : anchor.top + border('anchor', 'top') - (surface.bottom - border('surface', 'bottom') - line.bottom),
+    'side-left': anchor.left - (surface.left + border('surface', 'left')),
+    'side-right': surface.right - border('surface', 'right') - anchor.right,
   };
 }
 
@@ -7489,11 +7497,26 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
+  const anchorBounds = visualAnchor.getBoundingClientRect();
+  // The joining line's box depends on the edge, so the edge is applied before it is read.
+  const edge = getTriggerAnchorEdge(anchorBounds, bounds);
+  if (surface.dataset.triggerAnchorEdge !== edge) surface.dataset.triggerAnchorEdge = edge;
   const anchorStyle = globalThis.getComputedStyle?.(visualAnchor);
-  const borderWidth = (style, side) => Number.parseFloat(style?.[`border${side}Width`]) || 0;
-  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds, {
-    anchorLeft: borderWidth(anchorStyle, 'Left'), anchorRight: borderWidth(anchorStyle, 'Right'),
-    surfaceLeft: borderWidth(surfaceStyle, 'Left'), surfaceRight: borderWidth(surfaceStyle, 'Right'),
+  const lineStyle = globalThis.getComputedStyle?.(surface, '::after');
+  // Lengths keyed by side, from the style properties `properties` names per side.
+  const lengths = (style, properties) => {
+    const values = {};
+    for (const [side, property] of Object.entries(properties)) {
+      const value = Number.parseFloat(style?.[property]);
+      if (Number.isFinite(value)) values[side] = value;
+    }
+    return values;
+  };
+  const borderWidths = { top: 'borderTopWidth', right: 'borderRightWidth', bottom: 'borderBottomWidth', left: 'borderLeftWidth' };
+  const anchorBorders = lengths(anchorStyle, borderWidths);
+  const geometry = getTriggerAnchorGeometry(anchorBounds, bounds, {
+    anchor: anchorBorders, surface: lengths(surfaceStyle, borderWidths),
+    line: lengths(lineStyle, { top: 'top', right: 'right', bottom: 'bottom', left: 'left' }),
   });
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
@@ -7512,17 +7535,19 @@ function syncTriggerAnchor(surface, anchor) {
   }
   else delete surface.dataset.triggerAnchorSearch;
   if (!visualAnchor.classList.contains('trigger-anchor-open')) visualAnchor.classList.add('trigger-anchor-open');
- if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
   if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
   // Scroll and resize resynchronize often; only changed geometry is written.
-  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-left-width', 'side-right', 'side-right-width']) {
-    const value = `${geometry[name]}px`;
-    if (surface.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
-      surface.style.setProperty(`--trigger-anchor-${name}`, value);
+  const write = (element, name, length) => {
+    const value = `${length}px`;
+    if (element.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
+      element.style.setProperty(`--trigger-anchor-${name}`, value);
     }
-  }
-  visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  };
+  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-right']) write(surface, name, geometry[name]);
+  // The trigger's ring sits on its border box and reaches the panel's joining line.
+  write(visualAnchor, 'gap', geometry.reach);
+  for (const side of Object.keys(borderWidths)) write(visualAnchor, `inset-${side}`, -(anchorBorders[side] || 0));
   if (previous?.anchor === anchor) return;
   const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
     if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);
@@ -9164,16 +9189,11 @@ function handleGalleryMainClick(event) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
+  // A mode button only shows its tree (owner rule); a page opens when an item of that tree is chosen.
   const navigationMode = event.target.closest?.('[data-navigation-mode]');
   if (navigationMode) {
     event.preventDefault();
-    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
-    if (navigationMode.dataset.navigationMode === 'collections') {
-      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
-      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
-    } else if (pageOpen) {
-      closeNonAlbumModal();
-    }
+    showLibraryNavigationTree(navigationMode.dataset.navigationMode === 'collections' ? 'collections' : 'artists');
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
@@ -9192,6 +9212,9 @@ function handleGalleryMainClick(event) {
       openNonAlbumModal({
         libraryWide,
       });
+      // Choosing the tree item is the navigation: the phone drawer gives way to the page.
+      if (libraryWide && typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function'
+        && usesMobilePageLayout()) closeArtistsDrawer();
     }
     return true;
   }
@@ -16776,10 +16799,11 @@ function buildNonAlbumTrackLoadingMarkup() {
   });
 }
 
-// Choosing an artist or All artists in the tree leaves the Loose Tracks page.
+// Choosing an artist or All artists in the tree leaves the Loose Tracks page, on the desktop page and on a phone
+// (where the drawer's Artists mode button only shows the tree).
 function closeNonAlbumPageOnTreeNavigation(event) {
   if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
-      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+      && document.querySelector('#non-album-modal:not([hidden])')) closeNonAlbumModal();
 }
 
 // Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
@@ -16791,7 +16815,7 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
   if (page && overlay.parentElement !== main) main.appendChild(overlay);
   // Opening from the Album types menu must not leave that menu over the page.
   if (page && typeof closeGalleryMainSurface === 'function' && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
-  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  if (open) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
   else document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
   const dialog = overlay.querySelector('.non-album-modal-dialog');
   if (dialog) {
@@ -16828,7 +16852,8 @@ function syncCompactLibraryNavigation(looseTracks) {
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
-function syncLibraryNavigationMode(mode) {
+// Showing a tree changes neither the page nor the selection (the drawer's mode buttons).
+function showLibraryNavigationTree(mode) {
   const collections = mode === 'collections';
   document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
@@ -16841,7 +16866,13 @@ function syncLibraryNavigationMode(mode) {
   const artistsTree = document.getElementById('sidebar-list');
   if (collectionsTree) collectionsTree.hidden = !collections;
   if (artistsTree) artistsTree.hidden = collections;
-  collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
+}
+
+// The page's navigation: its tree shows and its item is the selection.
+function syncLibraryNavigationMode(mode) {
+  const collections = mode === 'collections';
+  showLibraryNavigationTree(mode);
+  document.getElementById('sidebar-collections')?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
   syncCompactLibraryNavigation(collections);
 }
 
@@ -25338,19 +25369,19 @@ function buildDetectedProblemsHtml(album) {
               'data-problem-exclusion-reason': normalizeProblemFilterReason(reason), 'data-problem-exclusion-row-index': rowIndex },
           });
         }).join('')}</span>`,
-        suggested: `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
+        suggested: suggestions.length ? `<span class="utility-suggestion-labels">${suggestions.map(proposal => buildAlertLabelHtml({
           severity: 'info', message: formatProblemSuggestionLabel(proposal), interactive: true,
           pressed: Boolean(state.utility.proposalSelections?.[proposal.id]),
           disabled: !album.allowed_actions?.['library.files.edit_tags'] || Boolean(state.utility.proposalApplyBusy),
           className: 'utility-problem-suggestion', attributes: { 'data-problem-suggestion-id': proposal.id, 'data-label-intent': 'proposal' },
-        })).join('')}</span>`,
+        })).join('')}</span>` : buildProblemCurrentValuesHtml(row.current_values),
       },
     };
   }).filter(Boolean);
   const table = tableRows.length ? buildUtilityCompactTable({
     id: 'problematic-track-problems', ariaLabel: 'Detected problems',
     columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
-    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
+    columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Current Value -> Suggested Value' }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', rows: tableRows,
   }) : '';
   const separateCandidate = album?.separate_release_candidate;
@@ -25370,6 +25401,19 @@ function buildDetectedProblemsHtml(album) {
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
       ${tableRows.length ? ButtonComponent.renderButton({ label: 'Apply', variant: 'primary', className: 'utility-detail-apply', disabled: !selected || !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
     </div>` : ''}`;
+}
+// Folders reach only path readers: the server sends them to no one else (owner, 2026-11-25).
+function buildProblematicFolderMeta(kind, folders, singular, plural) {
+  const values = Array.isArray(folders) ? folders.map(folder => String(folder || '')).filter(Boolean) : [];
+  if (!values.length) return '';
+  return `<div class="utility-detail-meta" data-problematic-detail-folders="${kind}">${escapeHtml(values.length === 1 ? singular : plural)}:${
+    values.map(folder => `<br><span data-problematic-detail-folder>${escapeHtml(folder)}</span>`).join('')}</div>`;
+}
+// A row without a suggested edit shows the current tag values its problems concern (owner, 2026-11-25).
+function buildProblemCurrentValuesHtml(values) {
+  const parts = (Array.isArray(values) ? values : [])
+    .map(item => `${item?.label}: ${item?.value === null || item?.value === undefined || item?.value === '' ? 'missing' : item.value}`);
+  return parts.length ? `<span class="utility-detail-meta" data-problem-current-values>${escapeHtml(parts.join(', '))}</span>` : '';
 }
 function buildProblematicAlbumDetail(album) {
   if (!album) {
@@ -25419,6 +25463,8 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
         ${album.edition ? `<div class="utility-detail-meta">Edition: ${escapeHtml(album.edition)}</div>` : ''}
         <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
+        ${buildProblematicFolderMeta('album', album.album_folders, 'Path', 'Paths')}
+        ${buildProblematicFolderMeta('duplicates', album.duplicate_folders, 'Duplicate files path', 'Duplicate files paths')}
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
             ${showRepairedDisplay ? 'Displaying: converted tags' : 'Displaying: original tags'}
@@ -26839,6 +26885,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     if (problematicAlbum && !listed.placed && !searched.placed) listed.items.push(problematicAlbum);
     state.utility.problematicFiles = listed.items;
     state.utility.problematicServerSearchItems = searched.items;
+    rememberProblematicServerSearchAnswer();
   }
   if (reconcileSelection && mutationOwnsView) {
     const items = getFilteredProblematicAlbums();
@@ -28173,31 +28220,67 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    const optionsHtml = completeReasonTypesAvailable && reasonTypes.length
-      ? reasonTypes.map((reason) => `
-          <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
-            <span class="utility-problem-filter-check" aria-hidden="true">${selectedSet.has(reason) ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>' : ''}</span>
+    const options = completeReasonTypesAvailable ? reasonTypes : [];
+    const optionsKey = JSON.stringify([completeReasonTypesAvailable, options]);
+    // List refreshes and picks re-render the controls while the menu is open: the options are rebuilt
+    // only when the reasons change, keeping the menu's scroll position either way, and a pick
+    // only re-marks them, so the picked option stays where it was.
+    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsKey) {
+      const scrollTop = els.problemFilterMenu.querySelector?.('.trigger-anchor-scroll')?.scrollTop || 0;
+      const optionsHtml = options.length
+        ? options.map((reason) => `
+          <button class="utility-problem-filter-option" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="false">
+            <span class="utility-problem-filter-check" aria-hidden="true"></span>
             <span class="utility-problem-filter-label">${escapeHtml(reason)}</span>
           </button>
         `).join('')
-      : completeReasonTypesAvailable ? '<div class="utility-problem-filter-empty">No problem types found.</div>' : '';
-    // List refreshes re-render the controls while the menu is open; rewriting
-    // unchanged options would reset its scroll position and keyboard focus.
-    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
+        : completeReasonTypesAvailable ? '<div class="utility-problem-filter-empty">No problem types found.</div>' : '';
       els.problemFilterMenu.innerHTML = `<div class="trigger-anchor-scroll">${optionsHtml}</div>`;
-      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
+      const scroller = els.problemFilterMenu.querySelector?.('.trigger-anchor-scroll');
+      if (scroller && scrollTop) scroller.scrollTop = scrollTop;
+      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsKey);
     }
+    (els.problemFilterMenu.querySelectorAll?.('[data-problem-filter-value]') || []).forEach((option) => {
+      const picked = selectedSet.has(option.getAttribute('data-problem-filter-value'));
+      if ((option.getAttribute('aria-selected') === 'true') === picked) return;
+      option.classList.toggle('is-selected', picked);
+      option.setAttribute('aria-selected', String(picked));
+      option.querySelector('.utility-problem-filter-check').innerHTML = picked
+        ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>'
+        : '';
+    });
   }
+}
+
+// A search or a problem filter asks the server, page by page, so matches beyond the rows loaded so far
+// are found without loading the whole list. Its key names the query and the filters together.
+function problematicServerQuery() {
+  const q = String(state.utility.searchQuery || '').trim();
+  const reasons = Array.from(new Set(state.utility.selectedProblemFilters || [])).sort();
+  const key = q || reasons.length ? JSON.stringify([q.toLocaleLowerCase(), reasons]) : '';
+  return { q, reasons, key };
+}
+
+// Reopening a search reuses its answer as the list now shows it, not as the server first sent it.
+function rememberProblematicServerSearchAnswer() {
+  const key = state.utility.problematicServerSearchSettledQuery;
+  state.utility.problematicServerSearchCache = key ? {
+    [key]: {
+      items: state.utility.problematicServerSearchItems,
+      hasMore: state.utility.problematicServerSearchHasMore,
+      nextCursor: state.utility.problematicServerSearchNextCursor,
+    },
+  } : {};
 }
 
 function getFilteredProblematicAlbums() {
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
-  const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
-  const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
-  if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
-  const list = query.length >= 2 && serverQuery === query
-    ? getAllProblematicList()
-    : getProblematicBaseList();
+  // A search or filter shows the server's matches with the loaded rows that match; while its request is
+  // out, nothing (the list says it is searching).
+  const serverKey = problematicServerQuery().key;
+  const settled = Boolean(serverKey) && state.utility.problematicServerSearchSettledQuery === serverKey;
+  if (serverKey && !settled && state.utility.problematicServerSearchPendingQuery === serverKey) return [];
+  const list = settled ? getAllProblematicList() : getProblematicBaseList();
   const selectedFilters = state.utility.selectedProblemFilters || [];
   if (!query && !selectedFilters.length) return list.items;
   // A view is filtered once per committed list, query and selected problem types.
@@ -29403,18 +29486,7 @@ function restoreProblematicAlbumSnapshot(operation) {
   const album = operation?.snapshot?.album;
   if (!album) return;
   const albumKey = String(album.key || '');
-  const items = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles.slice()
-    : [];
-  const currentIndex = items.findIndex((item) => String(item?.key || '') === albumKey);
-  if (currentIndex >= 0) items.splice(currentIndex, 1);
-  const insertionIndex = Math.min(
-    Math.max(Number(operation.snapshot.albumIndex || 0), 0),
-    items.length,
-  );
-  items.splice(insertionIndex, 0, cloneProblemExclusionValue(album));
-
-  let projectedAlbum = items[insertionIndex];
+  let projectedAlbum = cloneProblemExclusionValue(album);
   const journal = getProblemExclusionMutationJournal();
   const acknowledgedSuccessors = (journal.acknowledgedCreates || [])
     .filter((candidate) => (
@@ -29436,9 +29508,20 @@ function restoreProblematicAlbumSnapshot(operation) {
         candidate.items,
       ).updatedAlbum;
     });
-  if (projectedAlbum) items[insertionIndex] = projectedAlbum;
-  else items.splice(insertionIndex, 1);
-  state.utility.problematicFiles = items;
+  // Back everywhere it was listed: the loaded pages, the search or filter results, or both.
+  const { albumIndex = -1, searchIndex = -1 } = operation.snapshot;
+  const placements = [
+    ['problematicFiles', searchIndex < 0 ? Math.max(albumIndex, 0) : albumIndex],
+    ['problematicServerSearchItems', searchIndex],
+  ];
+  for (const [owner, index] of placements) {
+    if (index < 0) continue;
+    const items = (Array.isArray(state.utility[owner]) ? state.utility[owner] : [])
+      .filter((item) => String(item?.key || '') !== albumKey);
+    if (projectedAlbum) items.splice(Math.min(index, items.length), 0, projectedAlbum);
+    state.utility[owner] = items;
+  }
+  rememberProblematicServerSearchAnswer();
   state.utility.selectedProblematicKey = projectedAlbum
     ? String(operation.snapshot.selectedProblematicKey || '')
     : '';
@@ -29512,14 +29595,18 @@ function buildProblemExclusionItemFromAlbum(album, rowKey) {
 
 function applyOptimisticProblemExclusionCard(album, updatedAlbum) {
   const albumKey = String(album?.key || '');
-  const current = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles
-    : [];
-  const index = current.findIndex((item) => String(item?.key || '') === albumKey);
-  if (index < 0) return;
-  state.utility.problematicFiles = updatedAlbum
-    ? current.map((item, itemIndex) => (itemIndex === index ? updatedAlbum : item))
-    : current.filter((_item, itemIndex) => itemIndex !== index);
+  // The card is listed by the loaded pages, the search or filter results (BUGFIX-14), or both.
+  let listed = false;
+  for (const owner of ['problematicFiles', 'problematicServerSearchItems']) {
+    const current = Array.isArray(state.utility[owner]) ? state.utility[owner] : [];
+    if (!current.some((item) => String(item?.key || '') === albumKey)) continue;
+    listed = true;
+    state.utility[owner] = updatedAlbum
+      ? current.map((item) => (String(item?.key || '') === albumKey ? updatedAlbum : item))
+      : current.filter((item) => String(item?.key || '') !== albumKey);
+  }
+  if (!listed) return;
+  rememberProblematicServerSearchAnswer();
   if (!updatedAlbum && String(state.utility.selectedProblematicKey || '') === albumKey) {
     state.utility.selectedProblematicKey = '';
   }
@@ -29584,6 +29671,9 @@ async function queueProblemExclusionCreate({ album, items }) {
   const albumIndex = (state.utility.problematicFiles || []).findIndex((item) => (
     String(item?.key || '') === String(album?.key || '')
   ));
+  const searchIndex = (state.utility.problematicServerSearchItems || []).findIndex((item) => (
+    String(item?.key || '') === String(album?.key || '')
+  ));
   const projection = projectProblemExclusionFromAlbum(album, selectedItems);
   const operation = beginProblemExclusionMutation({
     kind: 'create',
@@ -29591,6 +29681,7 @@ async function queueProblemExclusionCreate({ album, items }) {
     snapshot: {
       album,
       albumIndex,
+      searchIndex,
       selectedProblematicKey: state.utility.selectedProblematicKey,
       ruleItems: collectProblemIgnoreItems(currentRule)
         .filter((item) => selectedKeys.has(String(item?.row_key || ''))),
@@ -30682,7 +30773,6 @@ function mountAlertsAppearanceEditor(detail) {
 (function registerProblematicFilesVirtualList(global) {
   const DEFAULT_ROW_STRIDE = 68;
   const DEFAULT_OVERSCAN = 6;
-  const MOBILE_BREAKPOINT = '(max-width: 720px)';
   const savedOffsets = new WeakMap();
 
   function clamp(value, minimum, maximum) {
@@ -30715,7 +30805,13 @@ function mountAlertsAppearanceEditor(detail) {
     let frame = 0;
     let disposed = false;
     let spacerGeometry = '';
+    let footerText = '';
     const mountedRows = new Map();
+    // A status line after the last row (more results loading), kept after the trailing spacer.
+    const footer = list.ownerDocument.createElement('div');
+    footer.className = 'utility-empty-state compact';
+    footer.setAttribute('data-problematic-list-footer', '');
+    footer.setAttribute('role', 'status');
     const [before, after] = ['before', 'after'].map((position) => {
       const spacer = list.ownerDocument.createElement('div');
       spacer.className = 'problematic-virtual-spacer';
@@ -30727,19 +30823,35 @@ function mountAlertsAppearanceEditor(detail) {
     list.scrollLeft = savedOffset.horizontal;
     list.scrollTop = savedOffset.vertical;
 
-    const isHorizontal = () => Boolean(global.matchMedia?.(MOBILE_BREAKPOINT)?.matches);
-    const getStride = (horizontal) => (
+    // The list's own layout names its axis and what scrolls it: a row strip scrolls itself sideways; a
+    // column scrolls itself, or, when it does not clip (the phone Settings page), moves with the page:
+    // then the screen is its viewport and any scroll may move it.
+    const listStyle = global.getComputedStyle?.(list) || null;
+    const horizontal = Boolean(listStyle && /flex/.test(listStyle.display) && listStyle.flexDirection.startsWith('row'));
+    const scrollsItself = !listStyle || /auto|scroll/.test(horizontal ? listStyle.overflowX : listStyle.overflowY);
+    const scrollTarget = scrollsItself ? list : list.ownerDocument;
+    const scrollListenerOptions = { passive: true, capture: !scrollsItself };
+    let forcedOffset = null;
+    const getStride = () => (
       horizontal ? Math.min(240, Math.max(1, Number(list.clientWidth) * 0.78)) + 8 : rowStride
     );
+    // The list's scroll offset and visible extent along its axis.
+    const readViewport = () => {
+      if (forcedOffset !== null) return { offset: forcedOffset, viewport: Number(global.innerHeight) };
+      if (scrollsItself) {
+        return horizontal
+          ? { offset: Number(list.scrollLeft), viewport: Number(list.clientWidth) }
+          : { offset: Number(list.scrollTop), viewport: Number(list.clientHeight) };
+      }
+      return { offset: Math.max(0, -list.getBoundingClientRect().top), viewport: Number(global.innerHeight) };
+    };
 
     const renderNow = () => {
       if (frame) global.cancelAnimationFrame(frame);
       frame = 0;
       if (disposed) return;
-      const horizontal = isHorizontal();
-      const stride = getStride(horizontal);
-      const offset = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
-      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const stride = getStride();
+      const { offset, viewport } = readViewport();
       const visibleStart = Math.floor(Math.max(0, offset) / stride);
       const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
       const range = calculateRange({
@@ -30762,6 +30874,10 @@ function mountAlertsAppearanceEditor(detail) {
         spacerGeometry = nextSpacerGeometry;
       }
       if (before.parentNode !== list) list.replaceChildren(before, after);
+      if (footerText) {
+        if (footer.textContent !== footerText) footer.textContent = footerText;
+        if (after.nextElementSibling !== footer) list.insertBefore(footer, after.nextElementSibling);
+      } else if (footer.parentNode === list) footer.remove();
       for (const [key, row] of mountedRows) {
         if (keys.has(key)) continue;
         row.remove();
@@ -30780,8 +30896,10 @@ function mountAlertsAppearanceEditor(detail) {
         if (previous.nextElementSibling !== row) list.insertBefore(row, previous.nextElementSibling);
         previous = row;
       }
-      if (horizontal) list.scrollLeft = offset;
-      else list.scrollTop = offset;
+      if (scrollsItself) {
+        if (horizontal) list.scrollLeft = offset;
+        else list.scrollTop = offset;
+      }
       if (focused && list.contains(focused) && list.ownerDocument.activeElement !== focused) {
         focused.focus({ preventScroll: true });
       }
@@ -30812,10 +30930,19 @@ function mountAlertsAppearanceEditor(detail) {
     const reveal = (key) => {
       const index = items.findIndex((item) => String(item?.key || '') === String(key || ''));
       if (index < 0) return;
-      const horizontal = isHorizontal();
-      const stride = getStride(horizontal);
-      const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
-      const current = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
+      const stride = getStride();
+      if (!scrollsItself) {
+        // Mount the row's window, then let the page bring the row into view.
+        if (!mountedRows.has(String(key))) {
+          forcedOffset = index * stride;
+          renderNow();
+          forcedOffset = null;
+        }
+        mountedRows.get(String(key))?.scrollIntoView?.({ block: 'nearest' });
+        schedule();
+        return;
+      }
+      const { offset: current, viewport } = readViewport();
       const start = index * stride;
       const end = start + stride;
       let next = current;
@@ -30827,10 +30954,11 @@ function mountAlertsAppearanceEditor(detail) {
       schedule();
     };
 
-    const render = (nextItems, nextSelectedKey) => {
+    const render = (nextItems, nextSelectedKey, { footer: nextFooter = '' } = {}) => {
       const previousSelectedKey = selectedKey;
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
+      footerText = String(nextFooter || '');
       renderNow();
       if (selectedKey !== previousSelectedKey) {
         reveal(selectedKey);
@@ -30860,7 +30988,7 @@ function mountAlertsAppearanceEditor(detail) {
         horizontal: Number(list.scrollLeft) || 0,
         vertical: Number(list.scrollTop) || 0,
       });
-      list.removeEventListener('scroll', schedule);
+      scrollTarget.removeEventListener('scroll', schedule, scrollListenerOptions);
       list.removeEventListener('keydown', handleKeydown);
       global.removeEventListener?.('resize', schedule);
       resizeObserver?.disconnect();
@@ -30871,7 +30999,7 @@ function mountAlertsAppearanceEditor(detail) {
       delete list.dataset.problematicVirtualAxis;
     };
 
-    list.addEventListener('scroll', schedule, { passive: true });
+    scrollTarget.addEventListener('scroll', schedule, scrollListenerOptions);
     list.addEventListener('keydown', handleKeydown);
     global.addEventListener?.('resize', schedule, { passive: true });
     return { render, reveal, dispose };
@@ -31156,6 +31284,9 @@ function initAndroidSettings() {
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
 const problematicNavigationRowContent = new WeakMap();
+const renderedProblematicDetails = new WeakMap();
+// Under the last result while the list or its search has more pages (owner, PF-FIRST-PAGE-LATEST).
+const PROBLEMATIC_LOADING_MORE_TEXT = 'Loading more results…';
 
 let problematicFilesVirtualList = null;
 
@@ -31198,19 +31329,19 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
         onNearEnd: () => {
-          const query = String(state.utility.searchQuery || '').trim();
-          if (query.length >= 2) void loadNextProblematicServerSearchPage();
+          if (problematicServerQuery().key) void loadNextProblematicServerSearchPage();
           void loadNextProblematicFilesPage();
           void loadNextProblematicArtistPage();
         },
       });
     }
     if (problematicFilesVirtualList) {
-      problematicFilesVirtualList.render(items, selectedKey);
+      problematicFilesVirtualList.render(items, selectedKey, { footer: moreToLoad ? PROBLEMATIC_LOADING_MORE_TEXT : '' });
       // A refresh can move the track's album; keep it in view until the user scrolls.
       if (state.utility.focusedTrackPath) problematicFilesVirtualList.reveal(selectedKey);
     } else if (!retainTree) {
-      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
+      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join('')
+        + (moreToLoad ? `<div class="utility-empty-state compact" data-problematic-list-footer>${PROBLEMATIC_LOADING_MORE_TEXT}</div>` : ''));
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
       const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
@@ -31296,35 +31427,29 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
 
   const activeSearchQuery = String(state.utility.searchQuery || '').trim();
-  if (!items.length
-      && activeSearchQuery.length >= 2
-      && state.utility.problematicServerSearchPendingQuery === activeSearchQuery
-      && state.utility.problematicServerSearchSettledQuery !== activeSearchQuery) {
+  const serverQuery = problematicServerQuery();
+  // Rows still to come after the last one shown: the search's or filter's next pages, or the list's.
+  const moreToLoad = serverQuery.key
+    ? state.utility.problematicServerSearchHasMore === true
+    : Boolean(state.utility.problematicHasMore || state.utility.problematicArtistHasMore);
+  if (!items.length && serverQuery.key && state.utility.problematicServerSearchSettledQuery !== serverQuery.key) {
     replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
     return;
   }
-  if (!items.length && activeSearchQuery.length >= 2
-      && state.utility.problematicServerSearchHasMore) {
-    void loadNextProblematicServerSearchPage();
-    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
-    return;
-  }
-  if (!items.length
-      && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)) {
-    if (activeSearchQuery) void loadProblematicPagesUntilLocalQueryMatch(activeSearchQuery);
+  if (!items.length && moreToLoad) {
+    if (serverQuery.key) void loadNextProblematicServerSearchPage();
     else {
       void loadNextProblematicFilesPage();
       void loadNextProblematicArtistPage();
     }
-    replaceListContents('<div class="utility-empty-state compact">Loading more matching albums...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading more matching albums...</div>';
+    replaceListContents(`<div class="utility-empty-state compact">${PROBLEMATIC_LOADING_MORE_TEXT}</div>`);
+    els.detail.innerHTML = `<div class="utility-empty-state">${PROBLEMATIC_LOADING_MORE_TEXT}</div>`;
     return;
   }
   if (!items.length) {
-    replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
+    replaceListContents('<div class="utility-empty-state compact">Nothing found.</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Nothing found.</div>';
     return;
   }
 
@@ -31346,7 +31471,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (
     selectedProblematicMissing
     && state.utility.selectedProblematicKey
-    && state.utility.problematicFilesComplete === false
+    && state.utility.loading
   ) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
@@ -31401,11 +31526,18 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
   initializeRepairSelections(selectedAlbum);
-  els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
-  const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
-  const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
-  if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
-    void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+  const detailHtml = buildProblematicAlbumDetail(selectedAlbum);
+  const shownDetail = renderedProblematicDetails.get(els.detail);
+  // A render that would rebuild the same detail (a later page or Artist page arriving) leaves it in place:
+  // replacing it restarted its cover and looked like the album loading a second time.
+  if (!shownDetail || shownDetail.html !== detailHtml || shownDetail.node !== els.detail.firstElementChild) {
+    els.detail.innerHTML = detailHtml;
+    renderedProblematicDetails.set(els.detail, { html: detailHtml, node: els.detail.firstElementChild });
+    const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
+    const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
+    if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
+      void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+    }
   }
   if (state.utility.focusedTrackPath) {
     const focusedTrackPath = String(state.utility.focusedTrackPath);
@@ -33501,10 +33633,6 @@ async function loadProblematicFiles(force = false, options = {}) {
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
   );
-  const canRenderBoundedPage = () => (
-    !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
-  );
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
@@ -33533,21 +33661,18 @@ async function loadProblematicFiles(force = false, options = {}) {
     if (shouldRender() && !navigationOwnsRendering()) renderProblematicFilesTab();
     return;
   }
-  // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
-  const refreshesCompleteList = state.utility.loaded === true
-    && state.utility.problematicFilesComplete === true;
-  // An open tab's refresh commits the next complete list at once: a bounded page committed first
-  // showed a filtered view's few rows of it until the rest came.
-  const replacesShownList = refreshesCompleteList && problematicFilesTabOnScreen();
-  const completeOnly = options.completeOnly === true || replacesShownList;
+  // The list is paged (owner, BUGFIX-14): a load reads one page, a refresh re-reads the rows already
+  // shown in one request and replaces them in one commit, so the list never shrinks to a page and regrows.
+  const refreshesShownList = state.utility.loaded === true;
+  const pageLimit = refreshesShownList
+    ? Math.min(200, Math.max(50, (state.utility.problematicFiles || []).length))
+    : 50;
   state.utility.loading = true;
-  if (!replacesShownList) {
+  if (!refreshesShownList) {
     state.utility.problematicFilesComplete = false;
     state.utility.problematicArtistItems = [];
   }
-  // The complete list carries every Artist problem, so the paint before it must not page Artists.
-  // A refresh keeps the complete list on screen until its bounded page commits: no Artist page before then.
-  state.utility.problematicArtistHasMore = options.completeOnly !== true && !refreshesCompleteList;
+  state.utility.problematicArtistHasMore = !refreshesShownList;
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
@@ -33567,8 +33692,6 @@ async function loadProblematicFiles(force = false, options = {}) {
     let responseStatus = 0;
     let loadSucceeded = false;
     let loadError = '';
-    let boundedPayloadCommitted = false;
-    let awaitsOpenReconcile = false;
     let previousSummaryItems = [];
     try {
       const fetchSummary = async (url) => {
@@ -33641,16 +33764,29 @@ async function loadProblematicFiles(force = false, options = {}) {
           if (!focusedTrackPath || (!paths.length && album?.detail_loaded !== true)) return true;
           return paths.includes(focusedTrackPath);
         };
+        // A track-opened (or selected) album stays listed while the page cannot say whether it is still a
+        // problem: only when it sorts after the page's last row and more pages follow. Within the page's
+        // range, absent means gone.
+        const pageMayHold = (album) => {
+          if (!album || data.complete !== false || data.has_more === false) return false;
+          const last = summaryItems.at(-1);
+          if (!last) return true;
+          const text = (item, field) => String(item?.[field] || '').toLowerCase();
+          return (text(album, 'name').localeCompare(text(last, 'name'))
+            || text(album, 'album_artist').localeCompare(text(last, 'album_artist'))
+            || String(album.year || '').localeCompare(String(last.year || ''))
+            || text(album, 'key').localeCompare(text(last, 'key'))) > 0;
+        };
         const pinnedKey = String(
           state.utility.pinnedProblematicKey
           || (data.complete === false && selectedAlbum && !state.utility.problematicMutation
             && listsFocusedTrack(selectedAlbum) ? selectedKey : ''),
         );
-        const pinnedAlbum = pinnedKey && data.complete === false
-          && !summaryItems.some((item) => item.key === pinnedKey)
+        const pinCandidate = pinnedKey && !summaryItems.some((item) => item.key === pinnedKey)
           ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
           : null;
-        if (data.complete !== false) state.utility.pinnedProblematicKey = '';
+        const pinnedAlbum = pageMayHold(pinCandidate) ? pinCandidate : null;
+        if (!pinnedAlbum) state.utility.pinnedProblematicKey = '';
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
@@ -33671,76 +33807,27 @@ async function loadProblematicFiles(force = false, options = {}) {
           refreshChangedSelection };
       };
 
-      const commitCompleteList = (completeData) => {
-        // A bounded page's reason catalog served paging; the complete list's own reasons replace it.
-        if (!Array.isArray(completeData?.problem_reason_types)) state.utility.completeProblemReasonTypes = [];
-        const committed = commitSummary(completeData, true, true);
-        state.utility.problematicArtistItems = [];
-        state.utility.problematicHasMore = false;
-        state.utility.problematicNextCursor = '';
-        state.utility.problematicArtistHasMore = false;
-        state.utility.problematicListOutdated = false;
-        return committed;
-      };
-      let data;
-      let committedSelection;
-      if (completeOnly) {
-        // The tab opened on a list loaded in the background (its bounded page is already on screen),
-        // or a complete list on screen is refreshed.
-        data = await fetchSummary('/utilities/problematic-files');
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitCompleteList(data);
-        settleInitialSummary(state.utility.problematicFiles);
-      } else {
-        data = await fetchSummary('/utilities/problematic-files?limit=50');
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(
-          data,
-          options.preserveSelectedDetail === true || data.complete === false,
-        );
-        if (refreshesCompleteList) state.utility.problematicArtistHasMore = true;
-        boundedPayloadCommitted = data.complete === false;
-        state.utility.problematicHasMore = data.has_more === true
-          || (data.has_more === undefined && data.complete === false);
-        state.utility.problematicNextCursor = String(data.next_cursor || '');
-        state.utility.problematicListOutdated = ['stale', 'revalidated']
-          .includes(String(data?.projection_cache_status || ''));
-        settleInitialSummary(state.utility.problematicFiles);
+      const data = await fetchSummary(`/utilities/problematic-files?limit=${pageLimit}`);
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      const committedSelection = commitSummary(
+        data,
+        options.preserveSelectedDetail === true || data.complete === false,
+      );
+      // The page carries the first Artist rows; Artist paging restarts after them.
+      if (refreshesShownList) state.utility.problematicArtistItems = [];
+      state.utility.problematicArtistHasMore = true;
+      state.utility.problematicHasMore = data.has_more === true
+        || (data.has_more === undefined && data.complete === false);
+      state.utility.problematicNextCursor = String(data.next_cursor || '');
+      settleInitialSummary(state.utility.problematicFiles);
+      // Track navigation paints the page it waits on even when this load draws nothing else.
+      if (shouldRenderInitialPage()) {
+        renderProblematicFilesTab();
+        await waitForProblematicUtilityRenderFrame();
       }
-      if (boundedPayloadCommitted) {
-        state.utility.problematicFilesComplete = false;
-        scheduleProblematicServerSearch();
-        // Only an open tab reconciles with the complete list (a whole-library read); background
-        // reloads after tag edits keep paging. The complete list then supersedes paging, so
-        // reaching the bounded list's end must not request more pages.
-        const reconcile = problematicFilesTabOnScreen();
-        // A Settings-intent prefetch is reconciled by the tab about to open; paging first would only be superseded.
-        awaitsOpenReconcile = !reconcile && options.render === 'when-open';
-        if (reconcile || awaitsOpenReconcile) {
-          state.utility.problematicHasMore = false;
-          state.utility.problematicArtistHasMore = false;
-        }
-        if (state.utility.loadPromise === requestPromise) {
-          state.utility.loading = false;
-          state.utility.loadPromise = null;
-        }
-        if ((canRenderBoundedPage()
-            && shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
-            || shouldRenderInitialPage()) {
-          renderProblematicFilesTab();
-          await waitForProblematicUtilityRenderFrame();
-        }
-        if (reconcile) {
-          // Requested only after the bounded page has painted, so it can never arrive first.
-          data = await fetchSummary('/utilities/problematic-files');
-          if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-          committedSelection = commitCompleteList(data);
-        } else if (!awaitsOpenReconcile) {
-          // The complete list already carries Artist problems; only a paged list pages them.
-          scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
-        }
-      }
-      state.utility.problematicFilesComplete = !state.utility.problematicHasMore && !awaitsOpenReconcile;
+      scheduleProblematicServerSearch();
+      scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
@@ -33777,7 +33864,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
-      if (!boundedPayloadCommitted) {
+      if (!refreshesShownList) {
         state.utility.problematicFiles = [];
         state.utility.libraryWatchHealthProblems = [];
         state.utility.detailLoadPromises = {};
@@ -33852,12 +33939,18 @@ async function loadNextProblematicArtistPage() {
       const { summaryItems } = validateProblematicSummaryPayload(data);
       const known = new Set((state.utility.problematicArtistItems || []).map((item) => String(item?.key || '')));
       const additions = summaryItems.filter((item) => item?.key && !known.has(String(item.key)));
-      state.utility.problematicArtistItems = data.cursor_restarted === true
-        ? summaryItems
-        : [...(state.utility.problematicArtistItems || []), ...additions];
+      const changed = additions.length > 0 || data.cursor_restarted === true;
+      // An unchanged owner keeps its array, so the merged list is not built again.
+      if (changed) {
+        state.utility.problematicArtistItems = data.cursor_restarted === true
+          ? summaryItems
+          : [...(state.utility.problematicArtistItems || []), ...additions];
+      }
+      const hadMore = state.utility.problematicArtistHasMore;
       state.utility.problematicArtistNextCursor = String(data.next_cursor || '');
       state.utility.problematicArtistHasMore = data.has_more === true && summaryItems.length > 0;
-      if ((additions.length || data.cursor_restarted === true)
+      // The last Artist page also ends "Loading more results…".
+      if ((changed || hadMore !== state.utility.problematicArtistHasMore)
           && state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) {
         renderProblematicFilesTab();
       }
@@ -33914,49 +34007,24 @@ async function loadNextProblematicFilesPage() {
   return request;
 }
 
-async function loadProblematicPagesUntilLocalQueryMatch(query) {
-  const normalizedQuery = String(query || '').trim();
-  if (!normalizedQuery) return null;
-  while (
-    String(state.utility.searchQuery || '').trim() === normalizedQuery
-    && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)
-    && !(typeof getFilteredProblematicAlbums === 'function' && getFilteredProblematicAlbums().length)
-  ) {
-    const previousBaseCursor = String(state.utility.problematicNextCursor || '');
-    const previousArtistCursor = String(state.utility.problematicArtistNextCursor || '');
-    const previousBaseHasMore = state.utility.problematicHasMore === true;
-    const previousArtistHasMore = state.utility.problematicArtistHasMore === true;
-    await Promise.all([
-      previousBaseHasMore ? loadNextProblematicFilesPage() : null,
-      previousArtistHasMore ? loadNextProblematicArtistPage() : null,
-    ]);
-    const baseProgressed = String(state.utility.problematicNextCursor || '') !== previousBaseCursor
-      || (state.utility.problematicHasMore === true) !== previousBaseHasMore;
-    const artistProgressed = String(state.utility.problematicArtistNextCursor || '') !== previousArtistCursor
-      || (state.utility.problematicArtistHasMore === true) !== previousArtistHasMore;
-    if (!baseProgressed && !artistProgressed) break;
-  }
-  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
-  return typeof getFilteredProblematicAlbums === 'function'
-    ? getFilteredProblematicAlbums()
-    : [];
+// One page of a search or filter (problematicServerQuery) from the server.
+function problematicServerQueryUrl({ q, reasons }, cursor = '') {
+  const params = new URLSearchParams({ limit: '50' });
+  if (q) params.set('q', q);
+  reasons.forEach((reason) => params.append('reason', reason));
+  if (cursor) params.set('cursor', cursor);
+  return `/utilities/problematic-files?${params}`;
 }
 
-function problematicFilesTabOnScreen() {
-  return typeof getUtilityModalElements === 'function' && isUtilityModalOpen();
-}
-
-// Search the server so every album is covered, including matches beyond the
-// bounded local inventory.
 function scheduleProblematicServerSearch() {
   if (problematicServerSearchTimer) clearBrowserTimeout(problematicServerSearchTimer);
   problematicServerSearchTimer = 0;
-  const query = String(state.utility.searchQuery || '').trim();
-  const cacheKey = query.toLocaleLowerCase();
+  const query = problematicServerQuery();
   state.utility.problematicServerSearchRequestToken = Number(
     state.utility.problematicServerSearchRequestToken || 0,
   ) + 1;
-  if (!query && state.utility.problematicServerSearchSettledQuery) {
+  if (!query.key && state.utility.problematicServerSearchSettledQuery) {
+    // The album chosen from the results stays listed once the search is cleared.
     const selectedKey = String(state.utility.selectedProblematicKey || '');
     const selectedSearchItem = (state.utility.problematicServerSearchItems || [])
       .find((item) => String(item?.key || '') === selectedKey);
@@ -33966,29 +34034,24 @@ function scheduleProblematicServerSearch() {
       state.utility.pinnedProblematicKey = selectedKey;
     }
   }
-  if (state.utility.problematicServerSearchSettledQuery !== query) {
+  if (state.utility.problematicServerSearchSettledQuery !== query.key) {
     state.utility.problematicServerSearchItems = [];
     state.utility.problematicServerSearchSettledQuery = '';
     state.utility.problematicServerSearchHasMore = false;
-    state.utility.problematicServerSearchNextOffset = 0;
     state.utility.problematicServerSearchNextCursor = '';
   }
   state.utility.problematicServerSearchPendingQuery = '';
-  if (query.length === 1 && state.utility.problematicFilesComplete === false) {
-    void loadProblematicPagesUntilLocalQueryMatch(query);
-    return;
-  }
-  if (query.length < 2) return;
-  const cached = state.utility.problematicServerSearchCache?.[cacheKey];
+  if (!query.key) return;
+  const cached = state.utility.problematicServerSearchCache?.[query.key];
   if (cached) {
     state.utility.problematicServerSearchItems = cached.items;
-    state.utility.problematicServerSearchSettledQuery = query;
+    state.utility.problematicServerSearchSettledQuery = query.key;
     state.utility.problematicServerSearchHasMore = cached.hasMore;
     state.utility.problematicServerSearchNextCursor = cached.nextCursor;
     if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
     return;
   }
-  state.utility.problematicServerSearchPendingQuery = query;
+  state.utility.problematicServerSearchPendingQuery = query.key;
   problematicServerSearchTimer = scheduleBrowserTimeout(() => {
     problematicServerSearchTimer = 0;
     void searchProblematicFilesOnServer(query);
@@ -34000,9 +34063,7 @@ async function searchProblematicFilesOnServer(query) {
   const searchToken = Number(state.utility.problematicServerSearchRequestToken || 0);
   let data;
   try {
-    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50`, {
-      headers: { Accept: 'application/json' },
-    });
+    const response = await fetch(problematicServerQueryUrl(query), { headers: { Accept: 'application/json' } });
     if (!response.ok) return;
     data = await response.json();
   } catch (error) {
@@ -34010,28 +34071,21 @@ async function searchProblematicFilesOnServer(query) {
     return;
   }
   // A newer query or reload supersedes this answer.
-  if (String(state.utility.searchQuery || '').trim() !== query
+  if (problematicServerQuery().key !== query.key
     || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
     || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return;
   state.utility.problematicServerSearchPendingQuery = '';
-  state.utility.problematicServerSearchSettledQuery = query;
+  state.utility.problematicServerSearchSettledQuery = query.key;
   state.utility.problematicServerSearchItems = Array.isArray(data?.items) ? data.items : [];
   state.utility.problematicServerSearchHasMore = data?.has_more === true;
-  state.utility.problematicServerSearchNextOffset = Number(data?.next_offset || state.utility.problematicServerSearchItems.length);
   state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
-  state.utility.problematicServerSearchCache = {
-    [query.toLocaleLowerCase()]: {
-      items: state.utility.problematicServerSearchItems,
-      hasMore: state.utility.problematicServerSearchHasMore,
-      nextCursor: state.utility.problematicServerSearchNextCursor,
-    },
-  };
+  rememberProblematicServerSearchAnswer();
   if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
 }
 
 async function loadNextProblematicServerSearchPage() {
-  const query = String(state.utility.searchQuery || '').trim();
-  if (query.length < 2 || state.utility.problematicServerSearchSettledQuery !== query
+  const query = problematicServerQuery();
+  if (!query.key || state.utility.problematicServerSearchSettledQuery !== query.key
       || !state.utility.problematicServerSearchHasMore) return null;
   if (state.utility.problematicServerSearchLoadPromise) return state.utility.problematicServerSearchLoadPromise;
   const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
@@ -34039,12 +34093,12 @@ async function loadNextProblematicServerSearchPage() {
   const cursor = String(state.utility.problematicServerSearchNextCursor || '');
   const request = (async () => {
     try {
-      const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50&cursor=${encodeURIComponent(cursor)}`, {
+      const response = await fetch(problematicServerQueryUrl(query, cursor), {
         headers: { Accept: 'application/json' },
       });
       if (!response.ok) return null;
       const data = await response.json();
-      if (String(state.utility.searchQuery || '').trim() !== query
+      if (problematicServerQuery().key !== query.key
           || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
           || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return null;
       const knownSearch = new Set(state.utility.problematicServerSearchItems.map((item) => String(item?.key || '')));
@@ -34055,6 +34109,7 @@ async function loadNextProblematicServerSearchPage() {
         : [...state.utility.problematicServerSearchItems, ...additions];
       state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
       state.utility.problematicServerSearchHasMore = data?.has_more === true;
+      rememberProblematicServerSearchAnswer();
       if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderProblematicFilesTab();
       return additions;
     } finally {
@@ -34065,14 +34120,6 @@ async function loadNextProblematicServerSearchPage() {
   })();
   state.utility.problematicServerSearchLoadPromise = request;
   return request;
-}
-
-async function waitForProblematicFilesComplete() {
-  if (state.utility.problematicFilesComplete !== false) return true;
-  const pending = state.utility.completeLoadPromise || state.utility.loadPromise;
-  if (!pending) return false;
-  await pending;
-  return state.utility.problematicFilesComplete === true;
 }
 
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
@@ -35165,17 +35212,7 @@ function loadActiveUtilityTab(force = false) {
   }
   const freshPrefetch = state.utility.loaded
     && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
-  // A list loaded in the background (bounded, or from an outdated stored copy) reconciles
-  // with the complete list once its tab is open.
-  const reconcileOpenedList = (result) => {
-    const needsCompleteList = state.utility.loaded === true
-      && (state.utility.problematicFilesComplete === false || state.utility.problematicListOutdated === true)
-      && !state.utility.loading
-      && !state.utility.completeLoadPromise
-      && problematicFilesTabOnScreen();
-    return needsCompleteList ? loadProblematicFiles(true, { completeOnly: true }) : result;
-  };
-  return Promise.resolve(loadProblematicFiles(force && !freshPrefetch)).then(reconcileOpenedList);
+  return loadProblematicFiles(force && !freshPrefetch);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {
@@ -37455,6 +37492,14 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
   };
 }
 
+// The cover a lookup notification shows: its best candidate, or its first cover when the task names none.
+function getCoverLookupShownCandidate(candidates, bestCandidateId) {
+  const covers = (Array.isArray(candidates) ? candidates : [])
+    .filter((candidate) => String(candidate?.art_kind || 'cover').trim() === 'cover');
+  const bestId = String(bestCandidateId || '').trim();
+  return covers.find((candidate) => bestId && String(candidate?.id || '').trim() === bestId) || covers[0] || null;
+}
+
 function coverLookupCandidateTimestamp(value) {
   const timestamp = Date.parse(String(value || '').trim());
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -37526,9 +37571,12 @@ function applyCoverLookupCandidateSource(candidateSource) {
     possibleMatches = previousMatches;
     retainedPreviousMatches = true;
   }
-  // The suggestion is the lookup's best selectable cover. It stays marked whatever the user selects,
-  // so the card shown in Notifications is always identifiable in the gallery.
+  // The suggestion is the cover the notification shows: the lookup's best cover, or its first cover when
+  // the task names none. It stays marked whatever the user selects, so it is identifiable in the gallery.
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
+  const shownCandidateId = String(
+    getCoverLookupShownCandidate(candidateSource.candidates, bestCandidateId)?.id || '',
+  ).trim();
   // INT-028: a cover is suggested only after a recent cover search for this album that the user has not acted
   // on yet (or for an album with no cover at all), and only when it is sharper than the current cover (never
   // the same or a lower resolution).
@@ -37573,7 +37621,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
       }
     }
     modal.possibleMatches = possibleMatches;
-    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, bestCandidateId) ? bestCandidateId : '';
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, shownCandidateId) ? shownCandidateId : '';
     modal.selectedRemoteId = String(selectedOverride?.id || '');
     return;
   }
@@ -37599,7 +37647,7 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || modal.album?.cover_selection_origin === 'user'
     || Boolean(task && isActionedCoverLookupNotification(task))
     || Boolean(modal.pendingLocalRef || modal.pendingPastedImageId);
-  modal.suggestedRemoteId = bestCandidateIsSelectable ? bestCandidateId : '';
+  modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, shownCandidateId) ? shownCandidateId : '';
   if (hasPendingNonRemoteSelection) {
     modal.selectedRemoteId = '';
     return;
@@ -39094,13 +39142,8 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
     const currentUserCoverUrl = String(task?.current_user_cover_preview_url || '').trim()
       || payloadUserCoverUrl;
     const possibleMatches = Array.isArray(task?.possible_matches) ? task.possible_matches : [];
-    const bestCandidateId = String(task?.best_candidate_id || '').trim();
-    const bestCandidate = possibleMatches.find((candidate) => (
-      String(candidate?.id || '').trim() === bestCandidateId
-      && String(candidate?.art_kind || 'cover').trim() === 'cover'
-    )) || possibleMatches.find((candidate) => (
-      String(candidate?.art_kind || 'cover').trim() === 'cover'
-    ));
+    const bestCandidate = getCoverLookupShownCandidate(possibleMatches, task?.best_candidate_id);
+    const bestCandidateId = String(bestCandidate?.id || task?.best_candidate_id || '').trim();
     const bestCandidatePreviewUrl = String(
       task?.best_candidate_preview_url
       || bestCandidate?.thumbnail_url
@@ -39110,7 +39153,7 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
     ).trim();
     const bestCandidateCoverUrl = buildRemoteCoverLookupImageUrl(
       bestCandidatePreviewUrl,
-      bestCandidateId || bestCandidate?.id || '',
+      bestCandidateId,
       { preview: true },
     );
     const coverUrl = currentUserCoverUrl
@@ -39341,7 +39384,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   // UI-14 (owner): in the album cover's Cover Look Up, the second artbox's art is dimmed and cannot be chosen.
   const inSecondArtbox = !inFirstArtbox && typeof isCoverLookupItemInSecondArtbox === 'function' && isCoverLookupItemInSecondArtbox(item, kind);
   const inOtherArtbox = inFirstArtbox || inSecondArtbox;
-  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
+  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable-card.webp';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
@@ -41790,9 +41833,12 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.hidden = false;
     ButtonComponent.setDisabled(els.saveRemote, true);
   }
+  // The gallery request leaves before the first render and the drawer's scroll restore (a forced layout),
+  // so its round trip overlaps that work instead of following it.
+  const galleryLoaded = refreshCoverLookupGallery(false);
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
-  await refreshCoverLookupGallery(false);
+  await galleryLoaded;
   reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();
@@ -54401,6 +54447,7 @@ async function handleUtilityBootstrapClick(event) {
       state.utility.selectedProblemFilters = nextSelectedFilters;
       state.utility.deferProblematicAutoSelection = true;
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
+      scheduleProblematicServerSearch();
       state.utility.problemDropdownOpen = true;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
@@ -54420,6 +54467,7 @@ async function handleUtilityBootstrapClick(event) {
     state.utility.selectedProblemFilters = nextSelectedFilters;
     state.utility.deferProblematicAutoSelection = true;
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
+    scheduleProblematicServerSearch();
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
     renderUtilityModalContent();
@@ -59406,10 +59454,12 @@ function initMobileNavigation() {
     if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
 
   });
-  // Enforce presentation restrictions at all delegated mobile action entry points.
+  // Enforce presentation restrictions at all delegated mobile action entry points. Revert rule and
+  // saved-loop Delete are hidden only on the phone page (mobile-layout.css); a mobile client wider
+  // than 900 px shows the desktop layout, where they stay usable.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], .is-mobile-page :is([data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop])')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);

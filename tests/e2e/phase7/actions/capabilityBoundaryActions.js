@@ -97,8 +97,14 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
     await ui.tab('problematic-files').click();
     await expect(ui.tab('problematic-files')).toHaveAttribute('aria-selected', 'true');
     const problems = new UtilityProblematicFilesTab(page, testInfo);
-    await new UtilityProblematicFilesActions(problems).selectAlbumByTitle('Boundary Arrival');
+    const problemActions = new UtilityProblematicFilesActions(problems);
+    await problemActions.selectAlbumByTitle('Boundary Arrival');
     await expect(problems.detailTitle).toContainText('Boundary Arrival');
+    // Owner (2026-11-25): folders reach only path readers; an enrolled member has no library.paths.read.
+    const folders = await problemActions.readSelectedDetailFolders();
+    expect(folders.payload.allowed['library.paths.read'], `${profile.name} reads no paths`).not.toBe(true);
+    expect(folders.payload.hasAlbumFolders || folders.payload.hasDuplicateFolders, `${profile.name} receives no folder`).toBe(false);
+    await expect(problems.detailFolderRows).toHaveCount(0);
     await expect(problems.detectedProblemsHeading).toBeVisible();
     await expect(problems.albumProblemPills.first()).toBeVisible();
     await expect(problems.excludeProblemButton).toBeVisible();

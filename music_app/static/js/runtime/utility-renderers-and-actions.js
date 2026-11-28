@@ -1,4 +1,7 @@
 const problematicNavigationRowContent = new WeakMap();
+const renderedProblematicDetails = new WeakMap();
+// Under the last result while the list or its search has more pages (owner, PF-FIRST-PAGE-LATEST).
+const PROBLEMATIC_LOADING_MORE_TEXT = 'Loading more results…';
 
 let problematicFilesVirtualList = null;
 
@@ -41,19 +44,19 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
         onNearEnd: () => {
-          const query = String(state.utility.searchQuery || '').trim();
-          if (query.length >= 2) void loadNextProblematicServerSearchPage();
+          if (problematicServerQuery().key) void loadNextProblematicServerSearchPage();
           void loadNextProblematicFilesPage();
           void loadNextProblematicArtistPage();
         },
       });
     }
     if (problematicFilesVirtualList) {
-      problematicFilesVirtualList.render(items, selectedKey);
+      problematicFilesVirtualList.render(items, selectedKey, { footer: moreToLoad ? PROBLEMATIC_LOADING_MORE_TEXT : '' });
       // A refresh can move the track's album; keep it in view until the user scrolls.
       if (state.utility.focusedTrackPath) problematicFilesVirtualList.reveal(selectedKey);
     } else if (!retainTree) {
-      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
+      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join('')
+        + (moreToLoad ? `<div class="utility-empty-state compact" data-problematic-list-footer>${PROBLEMATIC_LOADING_MORE_TEXT}</div>` : ''));
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
       const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
@@ -139,35 +142,29 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
 
   const activeSearchQuery = String(state.utility.searchQuery || '').trim();
-  if (!items.length
-      && activeSearchQuery.length >= 2
-      && state.utility.problematicServerSearchPendingQuery === activeSearchQuery
-      && state.utility.problematicServerSearchSettledQuery !== activeSearchQuery) {
+  const serverQuery = problematicServerQuery();
+  // Rows still to come after the last one shown: the search's or filter's next pages, or the list's.
+  const moreToLoad = serverQuery.key
+    ? state.utility.problematicServerSearchHasMore === true
+    : Boolean(state.utility.problematicHasMore || state.utility.problematicArtistHasMore);
+  if (!items.length && serverQuery.key && state.utility.problematicServerSearchSettledQuery !== serverQuery.key) {
     replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
     return;
   }
-  if (!items.length && activeSearchQuery.length >= 2
-      && state.utility.problematicServerSearchHasMore) {
-    void loadNextProblematicServerSearchPage();
-    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
-    return;
-  }
-  if (!items.length
-      && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)) {
-    if (activeSearchQuery) void loadProblematicPagesUntilLocalQueryMatch(activeSearchQuery);
+  if (!items.length && moreToLoad) {
+    if (serverQuery.key) void loadNextProblematicServerSearchPage();
     else {
       void loadNextProblematicFilesPage();
       void loadNextProblematicArtistPage();
     }
-    replaceListContents('<div class="utility-empty-state compact">Loading more matching albums...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading more matching albums...</div>';
+    replaceListContents(`<div class="utility-empty-state compact">${PROBLEMATIC_LOADING_MORE_TEXT}</div>`);
+    els.detail.innerHTML = `<div class="utility-empty-state">${PROBLEMATIC_LOADING_MORE_TEXT}</div>`;
     return;
   }
   if (!items.length) {
-    replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
+    replaceListContents('<div class="utility-empty-state compact">Nothing found.</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Nothing found.</div>';
     return;
   }
 
@@ -189,7 +186,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   if (
     selectedProblematicMissing
     && state.utility.selectedProblematicKey
-    && state.utility.problematicFilesComplete === false
+    && state.utility.loading
   ) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
@@ -244,11 +241,18 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
   initializeRepairSelections(selectedAlbum);
-  els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
-  const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
-  const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
-  if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
-    void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+  const detailHtml = buildProblematicAlbumDetail(selectedAlbum);
+  const shownDetail = renderedProblematicDetails.get(els.detail);
+  // A render that would rebuild the same detail (a later page or Artist page arriving) leaves it in place:
+  // replacing it restarted its cover and looked like the album loading a second time.
+  if (!shownDetail || shownDetail.html !== detailHtml || shownDetail.node !== els.detail.firstElementChild) {
+    els.detail.innerHTML = detailHtml;
+    renderedProblematicDetails.set(els.detail, { html: detailHtml, node: els.detail.firstElementChild });
+    const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
+    const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
+    if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
+      void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+    }
   }
   if (state.utility.focusedTrackPath) {
     const focusedTrackPath = String(state.utility.focusedTrackPath);

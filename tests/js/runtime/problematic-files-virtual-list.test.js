@@ -16,14 +16,13 @@ const sourcePath = path.join(
   'problematic-files-virtual-list.js',
 );
 
-function loadVirtualList({ horizontal = false, ResizeObserver } = {}) {
+function loadVirtualList({ ResizeObserver, getComputedStyle, innerHeight = 800 } = {}) {
   const frames = [];
   const context = {
     window: {
       ResizeObserver,
-      matchMedia() {
-        return { matches: horizontal };
-      },
+      getComputedStyle,
+      innerHeight,
       requestAnimationFrame(callback) {
         frames.push(callback);
         return frames.length;
@@ -239,8 +238,10 @@ test('initial render reveals an offscreen selected row', () => {
   assert.ok(mountedKeys(list.innerHTML).includes('album-700'));
 });
 
-test('mobile mode windows the existing horizontal strip', () => {
-  const { api } = loadVirtualList({ horizontal: true });
+test('a row strip that scrolls sideways is windowed horizontally', () => {
+  const { api } = loadVirtualList({
+    getComputedStyle: () => ({ display: 'flex', flexDirection: 'row', overflowX: 'auto', overflowY: 'hidden' }),
+  });
   const list = createList();
   const virtualList = api.create({
     list,
@@ -252,6 +253,41 @@ test('mobile mode windows the existing horizontal strip', () => {
   assert.equal(list.dataset.problematicVirtualAxis, 'horizontal');
   assert.ok(mountedKeys(list.innerHTML).length < 20);
   assert.match(list.innerHTML, /style="width:/);
+});
+
+test('a column the page scrolls (the phone Settings page) is windowed against the screen, whatever scrolls it', () => {
+  const documentListeners = new Map();
+  let pageScroll = 0;
+  const { api, frames } = loadVirtualList({
+    innerHeight: 700,
+    getComputedStyle: () => ({ display: 'flex', flexDirection: 'column', overflowX: 'visible', overflowY: 'visible' }),
+  });
+  const list = createList({ getBoundingClientRect: () => ({ top: 120 - pageScroll }) });
+  list.ownerDocument.addEventListener = (type, callback, options) => {
+    assert.equal(options.capture, true, 'a scroll of any element that moves the page reaches the list');
+    documentListeners.set(type, callback);
+  };
+  list.ownerDocument.removeEventListener = (type) => documentListeners.delete(type);
+  const virtualList = api.create({
+    list,
+    renderRow: (item) => `<button data-problematic-album-key="${item.key}"></button>`,
+  });
+
+  virtualList.render(makeItems(706), 'album-0');
+  assert.equal(list.dataset.problematicVirtualAxis, 'vertical');
+  assert.match(list.innerHTML, /style="height:0px"/);
+  assert.match(list.innerHTML, new RegExp(`style="height:${(706 - 17) * 68}px"`), 'the column keeps the full height');
+  assert.equal(list.listenerCount(), 1, 'the list itself listens only for keys');
+
+  // Scrolling the page to the end mounts the last rows.
+  pageScroll = 120 + 706 * 68 - 700;
+  documentListeners.get('scroll')();
+  frames.shift()();
+  const keys = mountedKeys(list.innerHTML);
+  assert.equal(keys.at(-1), 'album-705');
+  assert.ok(keys.length < 30);
+  virtualList.dispose();
+  assert.equal(documentListeners.size, 0);
 });
 
 test('dispose removes listeners and cancels later rendering', () => {

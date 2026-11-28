@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.53 - 2026-11-25
+
+- Android key attestation reads revoked certificate serials from indexed database rows instead of reading the configured status list file on every attestation. A server with a configured status list imports that file once at start-up, with logged progress, and never reads it again; until the import finishes, attestation answers "attestation unavailable" without spending the challenge. `scripts/android_attestation_revocations.py` refreshes the list (`import`) and adds or removes the operator's own revocations (`add`, `remove`).
+
 ## 0.11.52 - 2026-11-24
 
 - Cover provider answers (cover searches, MusicBrainz release lists, Cover Art Archive results) are kept in indexed database rows instead of one JSON file that every refresh loaded and every new answer rewrote. An app that may write imports an existing file once, after start-up readiness, with logged progress; the file stays on disk. Cover refreshes in one process share one answer store per database, so a provider miss is not searched again by the next refresh; answers a browse-only app cannot store are kept in memory, capped at 4096.

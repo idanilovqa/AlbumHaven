@@ -57,6 +57,9 @@ function runProblematicRenderer(context) {
   if (typeof context.getProblematicListIndex !== 'function') {
     context.getProblematicListIndex = items => new Map(items.map(item => [item.key, item]));
   }
+  if (typeof context.problematicServerQuery !== 'function') {
+    context.problematicServerQuery = () => ({ q: '', reasons: [], key: '' });
+  }
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 }
 
@@ -320,7 +323,7 @@ test('focused-track navigation keeps the matching album selected during a summar
   assert.match(elements.detail.innerHTML, /Studio Records \(Suffix 5\)/);
 });
 
-test('incomplete problematic summary does not replace a missing existing selection', () => {
+test('a summary still loading does not replace a missing existing selection', () => {
   const boundedAlbum = { key: 'unrelated', name: 'Unrelated', detail_loaded: false };
   const loadCalls = [];
   const elements = {
@@ -337,7 +340,9 @@ test('incomplete problematic summary does not replace a missing existing selecti
       utility: {
         activeTab: 'problematic-files',
         focusedTrackPath: '',
-        loading: false,
+        // A paged list is never complete; only a load in flight may still bring the selected album.
+        loading: true,
+        loaded: true,
         problematicFiles: [boundedAlbum],
         problematicFilesComplete: false,
         searchQuery: '',

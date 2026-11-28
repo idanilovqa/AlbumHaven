@@ -584,6 +584,11 @@ function loadLoopBuilderHelpers() {
   return context;
 }
 
+// The server has answered the current search or filter (its matches here are the loaded rows).
+function settleProblematicServerQuery(context) {
+  context.state.utility.problematicServerSearchSettledQuery = context.problematicServerQuery().key;
+}
+
 function loadProblematicTrackNavigationHelpers() {
   const trackPath = 'C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem.flac';
   const album = {
@@ -4633,6 +4638,9 @@ test('a save entry settles a filtered Problematic Files mutation at once: the al
     loaded: true,
     problematicFiles: [above, hidden, edited, below],
     selectedProblemFilters: ['Missing year'],
+    // The filter's server answer has arrived (its matches are loaded rows here).
+    problematicServerSearchSettledQuery: JSON.stringify(['', ['Missing year']]),
+    problematicServerSearchItems: [],
     selectedProblematicKey: edited.key,
   };
   context.getUtilityModalElements = () => ({ list: { scrollTop: 0, scrollHeight: 0, clientHeight: 0 } });
@@ -7560,6 +7568,7 @@ test('hydrated incomplete-order detail remains visible under the summary problem
   }];
   context.state.utility.selectedProblemFilters = ['Incomplete track order'];
   context.state.utility.searchQuery = '';
+  settleProblematicServerQuery(context);
 
   assert.deepEqual(
     Array.from(context.getProblemReasonTypes()),
@@ -7587,6 +7596,7 @@ test('problematic search always includes structured summary fields beside compac
 
   for (const query of ['structured match album', 'structured raw artist', '2026', 'only track title']) {
     context.state.utility.searchQuery = query;
+    settleProblematicServerQuery(context);
     assert.deepEqual(
       Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
       ['structured-search-album'],
@@ -7605,9 +7615,11 @@ test('problematic search does not treat problem reasons as artist, album, or tra
   context.state.utility.selectedProblemFilters = [];
 
   context.state.utility.searchQuery = 'art';
+  settleProblematicServerQuery(context);
   assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
 
   context.state.utility.searchQuery = 'album artist mismatch';
+  settleProblematicServerQuery(context);
   assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
 });
 
@@ -8075,7 +8087,7 @@ test('Problematic Files detail renders the approved three-column compact table c
   assert.equal(context.lastCompactTableConfig.columnsConfig.length, 3);
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.columnsConfig, (column) => column.label),
-    ['Track / file', 'Problems', 'Suggested edits'],
+    ['Track / file', 'Problems', 'Current Value -> Suggested Value'],
   );
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.rows, (row) => row.key),
@@ -8271,7 +8283,7 @@ test('Problematic Files excludes library-wide warnings from album rows and count
 
   assert.equal(elements.count.textContent, '0');
   assert.doesNotMatch(elements.list.innerHTML, /Some library changes may have been missed|data-status-action/);
-  assert.match(elements.list.innerHTML, /No matching problematic albums found\./);
+  assert.match(elements.list.innerHTML, /Nothing found\./);
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
 });
 
@@ -9164,4 +9176,57 @@ test('a merge completed from a hydrated destination declares every merged track 
     assert.equal(merged.tracks.length, 13);
     assert.deepEqual(new Set(merged.track_paths), new Set(merged.tracks.map((track) => track.path)));
   }
+});
+
+// Owner (2026-11-25): the open entry's info block names its folders, one per line, and the unique
+// duplicate folders with a duplicate problem. The server sends them only to path readers.
+test('the Problematic Files detail header names the album and duplicate folders it was sent', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.buildUtilityAlbumArtbox = () => '<div class="album-artbox"></div>';
+  context.buildAlbumDisplayCoverUrl = () => '';
+  context.getAvailableAlbumMoveActions = () => [];
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/problematic-album-helpers.js'), 'utf8'), context);
+  context.state.utility.selectedProblemFilters = [];
+  const album = {
+    key: 'real', name: 'Real Album', album_artist: 'Artist', year: 2026, tracks: [], problem_reasons: ['Duplicate files'],
+    album_folders: ['D:\Music\Real Album'], duplicate_folders: ['D:\Music\Orphan', 'D:\Music\Random songs'],
+    album_problem_rows: [], track_problem_rows: [], allowed_actions: {},
+  };
+  const folderRows = html => [...html.matchAll(/data-problematic-detail-folders="(\w+)">([^:]*):((?:<br><span data-problematic-detail-folder>[^<]*<\/span>)*)/g)]
+    .map(match => [match[1], match[2], [...match[3].matchAll(/folder>([^<]*)</g)].map(folder => folder[1])]);
+  assert.deepEqual(folderRows(context.buildProblematicAlbumDetail(album)), [
+    ['album', 'Path', ['D:\Music\Real Album']],
+    ['duplicates', 'Duplicate files paths', ['D:\Music\Orphan', 'D:\Music\Random songs']],
+  ]);
+  const { album_folders: _albumFolders, duplicate_folders: _duplicateFolders, ...memberAlbum } = album;
+  assert.deepEqual(folderRows(context.buildProblematicAlbumDetail(memberAlbum)), []);
+  assert.deepEqual(folderRows(context.buildProblematicAlbumDetail({ ...album, duplicate_folders: undefined })),
+    [['album', 'Path', ['D:\Music\Real Album']]]);
+});
+
+// Owner (2026-11-25): the third column is "Current Value -> Suggested Value": a suggested edit shows
+// current -> suggested as before; a row without one shows its current values, so a mixed-folder row
+// names the fields that differ across its folder.
+test('a problem row without a suggested edit shows its current values', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
+  context.state.utility.searchQuery = '';
+  const mixed = 'C:\Music\Mixed\01.flac';
+  const year = 'C:\Music\Mixed\02.flac';
+  const album = {
+    key: 'mixed', tracks: [{ path: mixed }, { path: year }], problem_reasons: ['Mixed album metadata in one folder', 'Missing year'],
+    album_problem_rows: [],
+    track_problem_rows: [
+      { path: mixed, reasons: ['Mixed album metadata in one folder'], ignorable_reasons: [],
+        current_values: [{ field: 'album_artist', label: 'Album artist', value: 'Cyan' }, { field: 'album', label: 'Album', value: 'Crown' }] },
+      { path: year, reasons: ['Missing year'], ignorable_reasons: [], current_values: [{ field: 'year', label: 'Year', value: null }] },
+    ],
+    suggested_edits: [{ id: 'y', path: year, field: 'year', type: 'year', reason: 'Missing year', original: null, corrected: 2008 }],
+    allowed_actions: {},
+  };
+  const html = context.buildDetectedProblemsHtml(album);
+  assert.ok(html.includes('Current Value -&gt; Suggested Value') || html.includes('Current Value -> Suggested Value'));
+  const current = [...html.matchAll(/data-problem-current-values>([^<]*)</g)].map(match => match[1]);
+  assert.deepEqual(current, ['Album artist: Cyan, Album: Crown'], 'only the row without a suggestion shows current values');
+  assert.ok(html.includes('data-problem-suggestion-id="y"'), 'the suggested edit still shows current -> suggested');
 });

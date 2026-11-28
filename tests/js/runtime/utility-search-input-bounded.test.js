@@ -46,10 +46,10 @@ function loadUtilitySearch(loopCount, activeTab) {
     clearTimeout: (id) => { live.delete(id); },
   });
   context.window = { setTimeout: context.setTimeout, clearTimeout: context.clearTimeout };
-  // The real Problematic Files search scheduler (the loaders) and the timers it schedules with: the bundle
-  // carries both, and the Problematic Files keystroke reaches them.
+  // The real Problematic Files search scheduler (the loaders), its query (the list builders) and the timers
+  // it schedules with: the bundle carries them all, and the Problematic Files keystroke reaches them.
   for (const name of [
-    'browser-scheduling-helpers.js', 'utility-loaders-and-cover-lookup.js',
+    'browser-scheduling-helpers.js', 'utility-list-builders.js', 'utility-loaders-and-cover-lookup.js',
     'utility-renderers-and-actions.js', 'track-modal-and-gallery.js',
   ]) {
     vm.runInContext(fs.readFileSync(path.join(root, name), 'utf8'), context);

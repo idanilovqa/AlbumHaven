@@ -128,4 +128,150 @@ function expectContinuousJoin(expect, result, { flushSides, label }) {
   expect(result.separatorRows, `${label}: no separator line between trigger and panel`).toEqual([]);
 }
 
-module.exports = { measureAnchorJoin, expectContinuousJoin };
+// Reads each joined corner of an open trigger/panel pair from a device-pixel
+// screenshot. A side is flush (the panel continues the trigger's side line) or
+// open (the panel's top line runs outward from the trigger's side line).
+async function measureAnchorCorners(page, anchor, surface) {
+  await page.mouse.move(1, 1);
+  await page.waitForTimeout(320);
+  const screenshot = await page.screenshot({ animations: 'disabled', scale: 'device' });
+  const anchorHandle = await anchor.elementHandle();
+  const surfaceHandle = await surface.elementHandle();
+  return page.evaluate(async ({ base64, anchorElement, surfaceElement }) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0);
+    const data = context.getImageData(0, 0, image.width, image.height).data;
+    const scale = image.width / window.innerWidth;
+    const visual = anchorElement.closest('.ui-dropdown-control') || anchorElement;
+    const trigger = visual.getBoundingClientRect();
+    const panel = surfaceElement.getBoundingClientRect();
+    const rgb = color => {
+      const probe = document.createElement('span');
+      probe.style.color = color;
+      document.body.appendChild(probe);
+      const value = getComputedStyle(probe).color.match(/[\d.]+/g).slice(0, 3).map(Number);
+      probe.remove();
+      return value;
+    };
+    const accent = rgb(getComputedStyle(visual).getPropertyValue('--trigger-anchor-accent').trim());
+    const interior = rgb(getComputedStyle(surfaceElement).backgroundColor);
+    const near = (x, y, color, tolerance) => {
+      if (x < 0 || y < 0 || x >= image.width || y >= image.height) return false;
+      const offset = (y * image.width + x) * 4;
+      return color.every((channel, index) => Math.abs(data[offset + index] - channel) <= tolerance);
+    };
+    const isAccent = (x, y) => near(x, y, accent, 48);
+    const px = value => Math.round(value * scale);
+    // The accent run crossing a row, scanned inward from outside the trigger's side.
+    const run = (side, y) => {
+      const outward = side === 'left' ? -1 : 1;
+      const start = px(trigger[side]) + outward * px(6);
+      let x = start;
+      while (!isAccent(x, y) && Math.abs(x - start) < px(14)) x -= outward;
+      if (!isAccent(x, y)) return null;
+      let width = 0;
+      while (isAccent(x - outward * width, y)) width += 1;
+      return { outer: side === 'left' ? x : x + 1, width };
+    };
+    const below = panel.top >= trigger.bottom - 2;
+    const step = below ? 1 : -1;
+    const triggerY = px((trigger.top + trigger.bottom) / 2);
+    const sides = {};
+    for (const side of ['left', 'right']) {
+      const outward = side === 'left' ? -1 : 1;
+      const line = run(side, triggerY);
+      const flush = Math.abs(panel[side] - trigger[side]) <= 4;
+      const result = { flush, triggerLine: line };
+      sides[side] = result;
+      if (!line) continue;
+      const outerColumn = side === 'left' ? line.outer : line.outer - 1;
+      const innerColumn = outerColumn - outward * (line.width - 1);
+      if (flush) {
+        // Below the trigger the side line keeps the trigger's outer edge and width,
+        // and the panel's own edge is that outer edge.
+        result.mismatchedPanelRows = [];
+        const edgeY = below ? panel.top : panel.bottom;
+        for (let dy = 1; dy <= px(12); dy += 1) {
+          const y = px(edgeY) + step * dy;
+          const measured = run(side, y);
+          if (!measured || measured.outer !== line.outer || measured.width !== line.width) {
+            result.mismatchedPanelRows.push({ y: y / scale, ...measured });
+          }
+        }
+        result.panelEdgeOffset = (px(panel[side]) - line.outer) / scale;
+        continue;
+      }
+      // The panel's top line, read in a column just outside the trigger.
+      const column = outerColumn + outward * px(4);
+      const lineRows = [];
+      for (let y = px(below ? trigger.bottom - 4 : panel.bottom - 6); y <= px(below ? panel.top + 6 : trigger.top + 4); y += 1) {
+        if (isAccent(column, y)) lineRows.push(y);
+      }
+      result.panelLineRows = lineRows.length;
+      if (!lineRows.length) continue;
+      const lineNear = below ? Math.min(...lineRows) : Math.max(...lineRows);
+      const lineFar = below ? Math.max(...lineRows) : Math.min(...lineRows);
+      // The side line ends on the panel line's far edge: it neither stops short nor overshoots.
+      result.sideLineOvershoot = [outerColumn, innerColumn].map(x => {
+        let y = triggerY;
+        while (isAccent(x, y + step)) y += step;
+        return ((y - lineFar) * step) / scale;
+      });
+      // The outside corner is filled where the side line and the panel line meet.
+      result.cornerHoles = [];
+      for (let y = Math.min(lineNear, lineFar); y <= Math.max(lineNear, lineFar); y += 1) {
+        for (let x = innerColumn; x !== outerColumn + outward * px(6); x += outward) {
+          if (!isAccent(x, y)) result.cornerHoles.push([x / scale, y / scale]);
+        }
+      }
+      // Inside the corner the trigger runs into the panel: interior colour only,
+      // no notch and no stub of the panel line.
+      result.innerCornerNotches = [];
+      for (let y = Math.min(lineNear, lineFar) - px(3); y <= Math.max(lineNear, lineFar) + px(3); y += 1) {
+        for (let dx = 1; dx <= px(4); dx += 1) {
+          const x = innerColumn - outward * dx;
+          if (!near(x, y, interior, 12)) result.innerCornerNotches.push([x / scale, y / scale]);
+        }
+      }
+    }
+    const joinRadius = style => (below
+      ? { left: style.borderBottomLeftRadius, right: style.borderBottomRightRadius }
+      : { left: style.borderTopLeftRadius, right: style.borderTopRightRadius });
+    const panelStyle = getComputedStyle(surfaceElement);
+    return {
+      sides,
+      triggerJoinRadius: [undefined, '::after', '::before'].map(pseudo => joinRadius(getComputedStyle(visual, pseudo))),
+      panelJoinRadius: below
+        ? { left: panelStyle.borderTopLeftRadius, right: panelStyle.borderTopRightRadius }
+        : { left: panelStyle.borderBottomLeftRadius, right: panelStyle.borderBottomRightRadius },
+    };
+  }, { base64: screenshot.toString('base64'), anchorElement: anchorHandle, surfaceElement: surfaceHandle });
+}
+
+// Every joined corner meets at a right angle, with one 2 px line width on both sides.
+function expectSquareCorners(expect, result, { label, scale }) {
+  const square = { left: '0px', right: '0px' };
+  for (const radius of result.triggerJoinRadius) expect(radius, `${label}: trigger corners at the join are square`).toEqual(square);
+  expect(result.panelJoinRadius, `${label}: panel corners at the join are square`).toEqual(square);
+  for (const side of ['left', 'right']) {
+    const measured = result.sides[side];
+    expect(measured.triggerLine?.width, `${label}: ${side} trigger outline is 2 px`).toBe(2 * scale);
+    if (measured.flush) {
+      expect(measured.mismatchedPanelRows, `${label}: ${side} panel side line keeps the trigger outline's edge and width`).toEqual([]);
+      expect(measured.panelEdgeOffset, `${label}: ${side} panel edge is the outline's outer edge (px)`).toBe(0);
+    } else {
+      expect(measured.panelLineRows, `${label}: ${side} panel top line is 2 px`).toBe(2 * scale);
+      expect(measured.sideLineOvershoot, `${label}: ${side} side line ends on the panel line's far edge (px)`).toEqual([0, 0]);
+      expect(measured.cornerHoles, `${label}: ${side} outer corner is filled`).toEqual([]);
+      expect(measured.innerCornerNotches, `${label}: ${side} inner corner has no notch or stub`).toEqual([]);
+    }
+  }
+}
+
+module.exports = { measureAnchorJoin, expectContinuousJoin, measureAnchorCorners, expectSquareCorners };

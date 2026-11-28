@@ -380,7 +380,10 @@
 .album-card .gallery-source-action svg { width: 24px; height: 24px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .album-card .gallery-source-action span { max-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; font-size: 12px; transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
 .album-card:is(:hover, :focus-within) .gallery-source-action { opacity: 1; pointer-events: auto; }
-.album-card .gallery-source-action:is(:hover, :focus-visible) span { max-width: 150px; margin-left: 6px; opacity: 1; }
+/* Owner (11-25): the label opens to its own width, so the motion runs smoothly from the first frame to the last
+   (150px is the fallback where calc-size is unsupported), and a hovered marker keeps its panel and source border. */
+.album-card .gallery-source-action:is(:hover, :focus-visible) span { max-width: 150px; max-width: calc-size(max-content, size); margin-left: 6px; opacity: 1; }
+.album-card .gallery-source-action.ui-button:is(:hover, :active):not(:disabled) { border-color: currentColor; background: var(--panel); }
 .album-card .gallery-source-action:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .album-card .gallery-source-action--duplicate { position: absolute; right: 9px; bottom: 9px; max-width: calc(100% - 18px); }
 .album-card:has(.album-artbox--missing) .gallery-source-action--duplicate { bottom: 52px; }

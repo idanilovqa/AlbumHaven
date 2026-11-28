@@ -86,7 +86,7 @@ test('connected triggers paint a continuous outline without changing their box g
   );
   assert.match(
     triggerAnchorCssSource,
-    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::before\s*\{[^}]*top:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\); bottom:\s*0;/s,
+    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::before\s*\{[^}]*top:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\); bottom:\s*calc\(var\(--trigger-anchor-inset-bottom, 0px\) \+ 2px\);/s,
   );
 });
 
@@ -3388,4 +3388,51 @@ test('bounded interaction: a GalleryBar refit visits only its own genres and kee
     budgets: { itemsVisited: 12, observers: 0 },
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
+});
+
+// Owner rule: the drawer's mode buttons only switch which tree is shown; only choosing a tree item loads a page.
+test('tree mode buttons switch the shown tree without opening or closing a page', () => {
+  const calls = [];
+  const overlay = { hidden: true };
+  const context = loadRuntime({
+    state: { view: { selected_artist: 'Metallica' }, ui: { nonAlbumLibraryWide: false } },
+    window: {},
+    document: { querySelectorAll: () => [], querySelector: () => null, getElementById: id => (id === 'non-album-modal' ? overlay : null) },
+    usesMobilePageLayout: () => true,
+    openNonAlbumModal: options => calls.push(['open', options]),
+    closeNonAlbumModal: () => calls.push(['close']),
+    closeArtistsDrawer: () => calls.push(['close-drawer']),
+    showLibraryNavigationTree: mode => calls.push(['show', mode]),
+    syncLibraryNavigationMode: mode => calls.push(['sync', mode]),
+  });
+  const click = (mode) => context.handleGalleryMainClick({
+    target: { closest: selector => (selector === '[data-navigation-mode]' ? { dataset: { navigationMode: mode } } : null) },
+    preventDefault() {},
+  });
+
+  assert.equal(click('collections'), true);
+  assert.deepEqual(calls, [['show', 'collections']], 'Loose Tracks mode only shows the Custom Collections tree');
+  overlay.hidden = false;
+  context.state.ui.nonAlbumLibraryWide = true;
+  calls.length = 0;
+  assert.equal(click('artists'), true);
+  assert.deepEqual(calls, [['show', 'artists']], 'Artists mode leaves the open page in place and only shows the Artists tree');
+});
+
+test('choosing library-wide Loose Tracks in the phone drawer opens it and closes the drawer', () => {
+  const calls = [];
+  const item = { dataset: { libraryWide: '1' }, disabled: false, getAttribute: () => null };
+  const context = loadRuntime({
+    state: { view: {}, ui: {} },
+    window: {},
+    document: { querySelectorAll: () => [], querySelector: () => null, getElementById: () => null },
+    usesMobilePageLayout: () => true,
+    openNonAlbumModal: options => calls.push(['open', options.libraryWide]),
+    closeArtistsDrawer: () => calls.push(['close-drawer']),
+  });
+  context.handleGalleryMainClick({
+    target: { closest: selector => (selector === '[data-open-non-album-tracks]' ? item : null) },
+    preventDefault() {},
+  });
+  assert.deepEqual(calls, [['open', true], ['close-drawer']]);
 });

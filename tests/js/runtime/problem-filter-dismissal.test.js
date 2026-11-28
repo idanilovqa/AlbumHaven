@@ -149,5 +149,5 @@ test('list refreshes keep the open filter menu options, so its scroll position s
   assert.match(html, /Poor art quality/);
   state.utility.selectedProblemFilters = ['Missing year'];
   context.renderProblemFilterControls(els);
-  assert.equal(writes, 3, 'a selection change updates the menu');
+  assert.equal(writes, 2, 'a pick re-marks the options in place, so the menu keeps its scroll position');
 });

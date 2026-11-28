@@ -81,8 +81,8 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     expect(summaryResponse.ok()).toBe(true);
     const summary = await summaryResponse.json();
     assertCompactProblematicSummary(summary);
-    assertCompactProblematicSummary(await networkEvidence.completeSummaryResponse.json());
-    expect(networkEvidence.summaryRequestCount, 'One bounded summary and one complete summary only').toBe(2);
+    // The list is paged (BUGFIX-14): opening reads its first page and never the complete list.
+    expect(networkEvidence.summaryRequestCount, 'One first page only').toBe(1);
     const firstSummary = summary.items[0];
     const detail = summary.initial_detail;
     let readinessOutcome;
@@ -113,10 +113,17 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     });
 
     await stepLogger.step('Measure a newly selected populated detail independently', async () => {
+      const detailLoads = await utilityProblematicFilesActions.startDetailLoadObservation();
       const startedAt = performance.now();
-      await utilityProblematicFilesActions.selectListItemByIndex(1);
+      const selected = await utilityProblematicFilesActions.selectListItemByIndex(1);
       const selectedDetail = await utilityProblematicFilesActions.readSelectedDetailSummary();
       detailReadinessOutcome = evaluateTimingBudget(performance.now() - startedAt, READY_BUDGET);
+      // Owner: one click loads and shows its album's detail once, and it stays (no second load or render
+      // when later list pages arrive).
+      const { detailRequests, detailContentRenders } = await detailLoads.finish();
+      expect(detailRequests).toEqual([selected.key]);
+      expect(detailContentRenders).toBe(1);
+      expect((await utilityProblematicFilesActions.readSelectedDetailSummary()).title).toBe(selectedDetail.title);
       expect(selectedDetail.title, 'The selected PF detail must render its album title.').not.toBe('');
       expect(selectedDetail.artist, 'The selected PF detail must render its artist.').not.toBe('');
       expect(selectedDetail.problemReasons.length, 'The selected PF detail must render its problems.').toBeGreaterThan(0);
@@ -233,7 +240,6 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     const focusedMetrics = {
       firstVisibleMs,
       boundedResponseMs: await readCompletedResponseDurationMs(summaryResponse),
-      completeResponseMs: await readCompletedResponseDurationMs(networkEvidence.completeSummaryResponse),
       summaryRequestCount: networkEvidence.summaryRequestCount,
       loadDiagnostics,
       problematicFilesApiMs: readyMs,

@@ -1992,9 +1992,11 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.match(coldBlock, /await coldResponse\.text\(\)/);
   assert.match(coldBlock, /new TextEncoder\(\)\.encode\(coldResponseBody\)\.byteLength/);
   assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('indexed'\)/);
-  assert.match(coldBlock, /completeSummaryResponse\.text\(\)/);
-  assert.match(coldBlock, /JSON\.parse\(completeResponseBody\)/);
-  assert.match(coldBlock, /evaluateProblematicFilesDatasetContract\(/);
+  // The list is paged (BUGFIX-14): the cold open reads one page, and the dataset contract is checked on the
+  // pages the list loads as it scrolls to its end.
+  assert.match(coldBlock, /summaryRequestCount, 'One first page only'\)\.toBe\(1\)/);
+  assert.doesNotMatch(spec, /completeSummaryResponse/);
+  assert.match(spec, /scrollListToEnd\(\)[\s\S]{0,1200}evaluateProblematicFilesDatasetContract\(/);
   assert.match(coldBlock, /coldInitialDetail\.key\)\.toBe\(coldFirstSummaryItem\.key\)/);
   assert.doesNotMatch(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);
   assert.doesNotMatch(spec, /page\.request\.get/);

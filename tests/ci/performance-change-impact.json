@@ -411,7 +411,9 @@
         "music_app/routes/api_wave_d_asgi_routes.py",
         "music_app/services/library_browse_postgres.py",
         "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
-        "tests/e2e/syntheticLargeLibrary/projectionPendingWindows.js"
+        "tests/e2e/syntheticLargeLibrary/projectionPendingWindows.js",
+        "migrations/postgres/0301_create_remote_cover_previews.sql",
+        "music_app/static/images/remote-preview-unavailable-card.webp"
       ],
       "targets": [
         "cover-lookup"

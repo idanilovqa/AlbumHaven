@@ -11289,6 +11289,23 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/dropdownControl.spec.js",
+    "case": "the Edit Tags exception dropdown opens and closes in the frame after the press, all in one step",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared-dropdown-press-toggles-in-next-frame",
+      "shared-dropdown-open-close-single-step",
+      "exception-dropdown-defaults-to-none"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
     "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",

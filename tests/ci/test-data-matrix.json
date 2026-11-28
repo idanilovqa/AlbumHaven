@@ -2145,6 +2145,26 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-050 a cold Album Details opening paints every LOCAL image of an album with files",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:canonical-persistence"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool"
+    ],
+    "expectedContracts": [
+      "cold-album-details-opening-paints-every-local-image"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-048 every Cover Look Up opening shows all of its cards at once",
     "profile": "functional-core",
     "setupScope": "isolated",

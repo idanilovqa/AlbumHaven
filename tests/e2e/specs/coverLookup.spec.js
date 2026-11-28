@@ -9,6 +9,7 @@ import {
   findFixtureCoverBySubtitle,
 } from '../helpers/coverLookupFixtureData.js';
 import { setPastedCoverSaveHeld } from '../helpers/coverLookupProviderHelpers.js';
+import { isDisplayedImageEvidenceReady, waitForDisplayedImageDecode } from '../actions/coverLookupActions.js';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import { coverPathForReference, coverReferenceForPath } from '../helpers/coverReferences.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
@@ -3675,6 +3676,46 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
 
 // Owner (2026-11-18): Cover Look Up was slow and blinking on every open. Every card of an opening shows at
 // once; only an image still loading inside its own card may blink, and an album without art never blinks.
+// Owner (COVER-LOOKUP-FIRST-OPEN): the first opening after a page load must paint the album's own images, not
+// a loading or storage-unavailable state, for an album whose files exist on disk.
+test('FTC-COVERS-050 a cold Album Details opening paints every LOCAL image of an album with files', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  stepLogger,
+  trackModalActions,
+}) => {
+  const lookup = coverLookupActions.coverLookup;
+  await stepLogger.step('Open Album Details on a fresh page load, so nothing of this album is cached in the page', async () => {
+    await galleryActions.goto(COVER_LOOKUP_FILTERED_URL);
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET)).toEqual(COVER_LOOKUP_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+  });
+
+  await stepLogger.step('Open Cover Look Up and require every LOCAL card to show its own decoded image', async () => {
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    await expect(lookup.localCoverCards.first()).toBeVisible();
+    await expect(lookup.modalBody).not.toContainText('Local artwork storage is unavailable');
+    await expect(lookup.localEmptyState).toHaveCount(0);
+    const cardCount = await lookup.localCoverCards.count();
+    expect(cardCount).toBeGreaterThan(0);
+    // The listing is settled (its count is known), not the pending heading without one.
+    await expect(lookup.sectionTitles.filter({ hasText: /^LOCAL/ })).toHaveText(/^LOCAL · \d+ images?$/);
+    for (let index = 0; index < cardCount; index += 1) {
+      const card = lookup.localCoverCards.nth(index);
+      await card.scrollIntoViewIfNeeded();
+      const evidence = await card.locator('img.cover-lookup-art-preview-image').evaluate(waitForDisplayedImageDecode);
+      expect(isDisplayedImageEvidenceReady(evidence), JSON.stringify(evidence)).toBe(true);
+      expect(evidence.currentSrc, 'the card shows its own image, not the unavailable-preview fallback')
+        .not.toContain('remote-preview-unavailable');
+      await expect(card.locator('.cover-lookup-art-preview')).not.toHaveClass(/has-load-error|is-loading/);
+    }
+    await coverLookupActions.closeModal();
+    await trackModalActions.close();
+  });
+});
+
 test('FTC-COVERS-048 every Cover Look Up opening shows all of its cards at once', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,

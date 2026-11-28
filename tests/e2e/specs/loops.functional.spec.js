@@ -22,7 +22,7 @@ const LOOP_ALBUM_TARGET = {
 const LOOP_TRACK_TITLE = 'Fake Loop Source';
 const LOOP_PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
 const MEDIA_DURATION_TOLERANCE_SECONDS = 0.15;
-// The owner's bar: the playing song's waveform appears about a second after its audio starts.
+// The playing song's waveform appears about a second after its audio starts.
 const FIRST_SONG_WAVEFORM_BUDGET = Object.freeze({ targetMaximum: 1100, graceMs: 400 });
 const HANDLE_POSITION_TOLERANCE_SECONDS = 0.25;
 

@@ -16,12 +16,12 @@ const runtimeSource = fs.readFileSync(
 test('connected panel masks the trigger interior seam', () => {
   assert.match(
     css,
-    /\.trigger-anchor-surface::after\s*\{[^}]*linear-gradient\(var\(--trigger-anchor-background\),\s*var\(--trigger-anchor-background\)\)\s*calc\(var\(--trigger-anchor-left\) \+ 2px\) top \/ calc\(var\(--trigger-anchor-width\) - 4px\)/s,
+    /\.trigger-anchor-surface::after\s*\{[^}]*linear-gradient\(var\(--trigger-anchor-background\),\s*var\(--trigger-anchor-background\)\)\s*var\(--trigger-anchor-left\) top \/ var\(--trigger-anchor-width\)/s,
   );
   assert.match(
     css,
     // The continuous outline replaces the separately rasterized bridge stroke.
-    /\.trigger-anchor-open::after\s*\{[^}]*left:\s*-2px; right:\s*-2px; top:\s*-2px;[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 2px\);[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s,
+    /\.trigger-anchor-open::after\s*\{[^}]*left:\s*var\(--trigger-anchor-inset-left, 0px\); right:\s*var\(--trigger-anchor-inset-right, 0px\);\s*top:\s*var\(--trigger-anchor-inset-top, 0px\);[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 2px\);[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s,
   );
   assert.match(
     css,

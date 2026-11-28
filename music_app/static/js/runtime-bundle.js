@@ -7378,29 +7378,38 @@ function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {
 
 // BEGIN js/runtime/trigger-anchor.js
 
-// `borders` holds the trigger's and panel's left/right border widths.
-function getTriggerAnchorGeometry(anchor, surface, borders = {}) {
-  const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+function getTriggerAnchorEdge(anchor, surface) {
+  return surface.bottom <= anchor.top ? 'bottom' : 'top';
+}
+
+// The open trigger's outline is a 2px ring on its border box. The panel continues
+// it with a 2px side line on a shared side (`side-*`, in the panel's padding-box
+// coordinates) and with its joining line (the panel's ::after box) elsewhere, which
+// stays open across the trigger's interior (`left`, `width`, `right`, in that line box).
+// `reach` runs the trigger's ring from its padding box to that line, so both lines
+// end on the same pixel row. `frame` holds the trigger's (`anchor`) and panel's
+// (`surface`) border widths and the panel's line-box insets (`line`).
+function getTriggerAnchorGeometry(anchor, surface, frame = {}) {
+  const border = (owner, side) => frame[owner]?.[side] || 0;
+  const line = { left: -1, right: -1, top: 0, bottom: 0, ...frame.line };
+  const edge = getTriggerAnchorEdge(anchor, surface);
   const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
   const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
-  // The panel's side line continues the trigger's outline, drawn 2px outside the
-  // trigger's padding box. It starts at that outer edge (in the panel's padding-box
-  // coordinates) and covers the panel's own border, so neither border widths nor a
-  // rounded panel position can step the join.
-  const sideLeft = anchor.left + (borders.anchorLeft || 0) - 2 - (surface.left + (borders.surfaceLeft || 0));
-  const sideRight = surface.right - (borders.surfaceRight || 0) - (anchor.right - (borders.anchorRight || 0) + 2);
+  const lineLeft = surface.left + border('surface', 'left') + line.left;
+  const lineRight = surface.right - border('surface', 'right') - line.right;
   return {
     edge,
     side: alignedLeft && alignedRight ? 'none'
       : alignedLeft ? 'left' : alignedRight ? 'right' : 'none',
-    left: Math.max(0, anchor.left - surface.left),
-    right: Math.max(0, surface.right - anchor.right),
-    width: anchor.width,
+    left: Math.max(0, anchor.left + 2 - lineLeft),
+    right: Math.max(0, lineRight - (anchor.right - 2)),
+    width: anchor.width - 4,
     gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
-    'side-left': sideLeft,
-    'side-left-width': Math.max(2, -sideLeft),
-    'side-right': sideRight,
-    'side-right-width': Math.max(2, -sideRight),
+    reach: edge === 'top'
+      ? surface.top + border('surface', 'top') + line.top - (anchor.bottom - border('anchor', 'bottom'))
+      : anchor.top + border('anchor', 'top') - (surface.bottom - border('surface', 'bottom') - line.bottom),
+    'side-left': anchor.left - (surface.left + border('surface', 'left')),
+    'side-right': surface.right - border('surface', 'right') - anchor.right,
   };
 }
 
@@ -7488,11 +7497,26 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
+  const anchorBounds = visualAnchor.getBoundingClientRect();
+  // The joining line's box depends on the edge, so the edge is applied before it is read.
+  const edge = getTriggerAnchorEdge(anchorBounds, bounds);
+  if (surface.dataset.triggerAnchorEdge !== edge) surface.dataset.triggerAnchorEdge = edge;
   const anchorStyle = globalThis.getComputedStyle?.(visualAnchor);
-  const borderWidth = (style, side) => Number.parseFloat(style?.[`border${side}Width`]) || 0;
-  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds, {
-    anchorLeft: borderWidth(anchorStyle, 'Left'), anchorRight: borderWidth(anchorStyle, 'Right'),
-    surfaceLeft: borderWidth(surfaceStyle, 'Left'), surfaceRight: borderWidth(surfaceStyle, 'Right'),
+  const lineStyle = globalThis.getComputedStyle?.(surface, '::after');
+  // Lengths keyed by side, from the style properties `properties` names per side.
+  const lengths = (style, properties) => {
+    const values = {};
+    for (const [side, property] of Object.entries(properties)) {
+      const value = Number.parseFloat(style?.[property]);
+      if (Number.isFinite(value)) values[side] = value;
+    }
+    return values;
+  };
+  const borderWidths = { top: 'borderTopWidth', right: 'borderRightWidth', bottom: 'borderBottomWidth', left: 'borderLeftWidth' };
+  const anchorBorders = lengths(anchorStyle, borderWidths);
+  const geometry = getTriggerAnchorGeometry(anchorBounds, bounds, {
+    anchor: anchorBorders, surface: lengths(surfaceStyle, borderWidths),
+    line: lengths(lineStyle, { top: 'top', right: 'right', bottom: 'bottom', left: 'left' }),
   });
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
@@ -7511,17 +7535,19 @@ function syncTriggerAnchor(surface, anchor) {
   }
   else delete surface.dataset.triggerAnchorSearch;
   if (!visualAnchor.classList.contains('trigger-anchor-open')) visualAnchor.classList.add('trigger-anchor-open');
- if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
   if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
   // Scroll and resize resynchronize often; only changed geometry is written.
-  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-left-width', 'side-right', 'side-right-width']) {
-    const value = `${geometry[name]}px`;
-    if (surface.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
-      surface.style.setProperty(`--trigger-anchor-${name}`, value);
+  const write = (element, name, length) => {
+    const value = `${length}px`;
+    if (element.style.getPropertyValue?.(`--trigger-anchor-${name}`) !== value) {
+      element.style.setProperty(`--trigger-anchor-${name}`, value);
     }
-  }
-  visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  };
+  for (const name of ['left', 'right', 'width', 'gap', 'side-left', 'side-right']) write(surface, name, geometry[name]);
+  // The trigger's ring sits on its border box and reaches the panel's joining line.
+  write(visualAnchor, 'gap', geometry.reach);
+  for (const side of Object.keys(borderWidths)) write(visualAnchor, `inset-${side}`, -(anchorBorders[side] || 0));
   if (previous?.anchor === anchor) return;
   const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
     if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);
@@ -9163,16 +9189,11 @@ function handleGalleryMainClick(event) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
+  // A mode button only shows its tree (owner rule); a page opens when an item of that tree is chosen.
   const navigationMode = event.target.closest?.('[data-navigation-mode]');
   if (navigationMode) {
     event.preventDefault();
-    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
-    if (navigationMode.dataset.navigationMode === 'collections') {
-      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
-      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
-    } else if (pageOpen) {
-      closeNonAlbumModal();
-    }
+    showLibraryNavigationTree(navigationMode.dataset.navigationMode === 'collections' ? 'collections' : 'artists');
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
@@ -9191,6 +9212,9 @@ function handleGalleryMainClick(event) {
       openNonAlbumModal({
         libraryWide,
       });
+      // Choosing the tree item is the navigation: the phone drawer gives way to the page.
+      if (libraryWide && typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function'
+        && usesMobilePageLayout()) closeArtistsDrawer();
     }
     return true;
   }
@@ -16775,10 +16799,11 @@ function buildNonAlbumTrackLoadingMarkup() {
   });
 }
 
-// Choosing an artist or All artists in the tree leaves the Loose Tracks page.
+// Choosing an artist or All artists in the tree leaves the Loose Tracks page, on the desktop page and on a phone
+// (where the drawer's Artists mode button only shows the tree).
 function closeNonAlbumPageOnTreeNavigation(event) {
   if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
-      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+      && document.querySelector('#non-album-modal:not([hidden])')) closeNonAlbumModal();
 }
 
 // Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
@@ -16790,7 +16815,7 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
   if (page && overlay.parentElement !== main) main.appendChild(overlay);
   // Opening from the Album types menu must not leave that menu over the page.
   if (page && typeof closeGalleryMainSurface === 'function' && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
-  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  if (open) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
   else document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
   const dialog = overlay.querySelector('.non-album-modal-dialog');
   if (dialog) {
@@ -16827,7 +16852,8 @@ function syncCompactLibraryNavigation(looseTracks) {
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
-function syncLibraryNavigationMode(mode) {
+// Showing a tree changes neither the page nor the selection (the drawer's mode buttons).
+function showLibraryNavigationTree(mode) {
   const collections = mode === 'collections';
   document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
@@ -16840,7 +16866,13 @@ function syncLibraryNavigationMode(mode) {
   const artistsTree = document.getElementById('sidebar-list');
   if (collectionsTree) collectionsTree.hidden = !collections;
   if (artistsTree) artistsTree.hidden = collections;
-  collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
+}
+
+// The page's navigation: its tree shows and its item is the selection.
+function syncLibraryNavigationMode(mode) {
+  const collections = mode === 'collections';
+  showLibraryNavigationTree(mode);
+  document.getElementById('sidebar-collections')?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
   syncCompactLibraryNavigation(collections);
 }
 
@@ -39365,7 +39397,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   // UI-14 (owner): in the album cover's Cover Look Up, the second artbox's art is dimmed and cannot be chosen.
   const inSecondArtbox = !inFirstArtbox && typeof isCoverLookupItemInSecondArtbox === 'function' && isCoverLookupItemInSecondArtbox(item, kind);
   const inOtherArtbox = inFirstArtbox || inSecondArtbox;
-  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
+  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable-card.webp';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
@@ -41814,9 +41846,12 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.hidden = false;
     ButtonComponent.setDisabled(els.saveRemote, true);
   }
+  // The gallery request leaves before the first render and the drawer's scroll restore (a forced layout),
+  // so its round trip overlaps that work instead of following it.
+  const galleryLoaded = refreshCoverLookupGallery(false);
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
-  await refreshCoverLookupGallery(false);
+  await galleryLoaded;
   reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();
@@ -59432,10 +59467,12 @@ function initMobileNavigation() {
     if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();
 
   });
-  // Enforce presentation restrictions at all delegated mobile action entry points.
+  // Enforce presentation restrictions at all delegated mobile action entry points. Revert rule and
+  // saved-loop Delete are hidden only on the phone page (mobile-layout.css); a mobile client wider
+  // than 900 px shows the desktop layout, where they stay usable.
   document.addEventListener('click', (event) => {
     if (!isMobileClient()) return;
-    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], [data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop]')) {
+    if (event.target.closest?.('[data-open-track-modal-duplicate-folder], [data-open-problematic-album-folder], [data-open-non-album-tag-editor], [data-open-tag-editor], [data-edit-tags], [data-edit-album-tags], [data-edit-track-tags], .is-mobile-page :is([data-revert-version-exception], [data-revert-problem-ignore], [data-delete-saved-loop])')) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }, true);

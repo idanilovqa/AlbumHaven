@@ -139,6 +139,26 @@
     else element.removeAttribute('aria-busy');
   }
 
+  // Shared dropdown control: like a native select, a primary press opens or closes it,
+  // so its menu changes in the same frame as the field's pressed focus, not on release.
+  // The page's click owner runs on the press; the release's click (on the field, or on a
+  // shared ancestor when the pointer moved off before release) is not delivered again.
+  let pressedDropdownField = null;
+  scope?.document?.addEventListener?.('mousedown', (event) => {
+    pressedDropdownField = null;
+    const field = event.button === 0
+      && event.target.closest?.('.ui-dropdown-control > input[role="combobox"]:not(:disabled)');
+    if (!field) return;
+    field.click();
+    pressedDropdownField = field;
+  });
+  scope?.document?.addEventListener?.('click', (event) => {
+    const pressed = pressedDropdownField;
+    pressedDropdownField = null;
+    if (!pressed || event.detail === 0 || !event.target.contains?.(pressed)) return;
+    event.stopImmediatePropagation();
+  }, true);
+
   const api = { renderButton, renderActionButton, renderIconSvg, renderExternalServiceLink, setDisabled, setBusy };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;

@@ -413,6 +413,14 @@ export class MobileLayoutPage {
     await expect(this.securityHeading).toBeVisible();
   }
 
+  // The drawer's mode buttons only show a tree; library-wide Loose Tracks opens from its tree item.
+  async openLooseTracksFromDrawer() {
+    if ((await this.artistRail.getAttribute('aria-hidden')) !== 'false') await this.libraryButton.click();
+    await expect(this.artistRail).toHaveAttribute('aria-hidden', 'false');
+    await this.artistRail.locator('[data-navigation-mode="collections"]').click();
+    await this.artistRail.locator('#sidebar-collections [data-open-non-album-tracks][data-library-wide="1"]').click();
+  }
+
   async search(query) {
     if (!(await this.searchInput.isVisible())) await this.searchButton.click();
     await this.searchInput.fill(query);

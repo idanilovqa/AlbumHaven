@@ -2475,7 +2475,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   // UI-14 (owner): in the album cover's Cover Look Up, the second artbox's art is dimmed and cannot be chosen.
   const inSecondArtbox = !inFirstArtbox && typeof isCoverLookupItemInSecondArtbox === 'function' && isCoverLookupItemInSecondArtbox(item, kind);
   const inOtherArtbox = inFirstArtbox || inSecondArtbox;
-  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
+  const previewFallbackImageUrl = '/static/images/remote-preview-unavailable-card.webp';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
@@ -4924,9 +4924,12 @@ async function openCoverLookupModal(album, options = {}) {
     els.saveRemote.hidden = false;
     ButtonComponent.setDisabled(els.saveRemote, true);
   }
+  // The gallery request leaves before the first render and the drawer's scroll restore (a forced layout),
+  // so its round trip overlaps that work instead of following it.
+  const galleryLoaded = refreshCoverLookupGallery(false);
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
-  await refreshCoverLookupGallery(false);
+  await galleryLoaded;
   reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();

@@ -62,8 +62,7 @@ for (const width of [360, 390, 412]) {
         slots.artist = await readHeaderSlots(page);
       });
       await stepLogger.step('Loose Tracks from the drawer', async () => {
-        await mobileLayout.libraryButton.click();
-        await mobileLayout.artistRail.locator('[data-navigation-mode="collections"]').click();
+        await mobileLayout.openLooseTracksFromDrawer();
         await expect(page.locator('#mobile-page-title')).toHaveText('Loose Tracks');
         slots.looseTracks = await readHeaderSlots(page);
       });

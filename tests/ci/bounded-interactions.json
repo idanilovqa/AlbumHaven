@@ -824,6 +824,23 @@
       "rollback": "Test-only contract; the worklet is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its message entrypoint."
     },
     {
+      "id": "js:button-component.js#<top-level>",
+      "action": "click/mousedown listeners installed by <top-level>",
+      "entrypoints": [
+        "js:music_app/static/js/button-component.js#<top-level>:event:click",
+        "js:music_app/static/js/button-component.js#<top-level>:event:mousedown"
+      ],
+      "owners": [
+        "music_app/static/js/button-component.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:capability-ui.js#install",
       "action": "DOMContentLoaded/click listeners installed by install",
       "entrypoints": [
@@ -13228,6 +13245,22 @@
         "BI-08"
       ],
       "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_lookup_runtime.py#_prepare_remote_cover_card_preview",
+      "action": "Store one finished lookup's remote card previews in the background, one image per task",
+      "entrypoints": [
+        "py:music_app/services/cover_lookup_runtime.py#_prepare_remote_cover_card_preview:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_lookup_runtime.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
     },
     {

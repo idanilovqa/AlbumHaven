@@ -155,11 +155,12 @@ async function readCompoundAnchorPixels(page) {
     const accent = [85, 199, 255];
     const isAccent = (value) => value.slice(0, 3).every((channel, index) => Math.abs(channel - accent[index]) <= 12);
     const triggerPerimeter = [];
-    for (let x = Math.floor(button.left) - 2; x <= Math.ceil(button.right) + 1; x += 1) {
-      triggerPerimeter.push(pixel(x, button.top - 1));
+    // The ring lies on the trigger's border box.
+    for (let x = Math.floor(button.left); x < Math.ceil(button.right); x += 1) {
+      triggerPerimeter.push(pixel(x, button.top));
     }
     for (let y = Math.floor(button.top); y < Math.ceil(button.bottom); y += 1) {
-      triggerPerimeter.push(pixel(button.left - 1, y), pixel(button.right + 1, y));
+      triggerPerimeter.push(pixel(button.left, y), pixel(button.right - 1, y));
     }
     const unrelatedFieldEdge = [];
     for (let x = Math.floor(control.left) + 3; x < Math.floor(button.left) - 4; x += 1) {

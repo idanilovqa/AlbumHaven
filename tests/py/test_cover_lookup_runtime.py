@@ -1332,6 +1332,11 @@ def test_manual_lookup_publishes_each_merged_provider_stage_and_completes_snapsh
     )
     monkeypatch.setattr(cover_lookup_runtime, "log_app_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cover_lookup_runtime, "discard_cover_lookup_future", lambda *_args: None)
+    prepared_previews = []
+    monkeypatch.setattr(
+        cover_lookup_runtime, "prepare_remote_cover_card_previews",
+        lambda candidates, *, config: prepared_previews.append([candidate["id"] for candidate in candidates]),
+    )
 
     cover_lookup_runtime._run_cover_lookup_task(
         "manual-generation-1",
@@ -1357,6 +1362,8 @@ def test_manual_lookup_publishes_each_merged_provider_stage_and_completes_snapsh
         ["apple", "bandcamp", "discogs", "caa", "artist-site"],
     ]
     assert terminal_calls == ["completed"]
+    # Once finished, its cards' previews are prepared so the notification's first opening reads stored rows.
+    assert prepared_previews == [["apple", "bandcamp", "discogs", "caa", "artist-site"]]
 
 
 def test_manual_lookup_task_lists_candidates_in_the_persisted_snapshot_order(
@@ -4648,6 +4655,108 @@ def test_remote_cover_images_are_remembered_and_the_oldest_leave_first(monkeypat
     assert runtime.cached_remote_cover_image("https://images.example/a.jpg") is None
     assert runtime.cached_remote_cover_image("https://images.example/b.jpg") == (b"bbbbbb", "image/png")
     assert runtime._REMOTE_IMAGE_CACHE_BYTES == 6
+
+
+def test_a_finished_lookup_prepares_each_remote_card_preview_once_in_the_background(monkeypatch):
+    """COVER-LOOKUP-FIRST-OPEN: a notification's first opening waited on every provider for its cards."""
+    from music_app.services import cover_lookup_runtime as runtime
+
+    submitted = []
+    monkeypatch.setattr(
+        runtime, "_REMOTE_PREVIEW_PREPARATION_EXECUTOR",
+        SimpleNamespace(submit=lambda function, url, config: submitted.append(url)),
+    )
+    candidates = [
+        {"id": "a", "url": "https://images.example/a-full.jpg", "thumbnail_url": "https://images.example/a-250.jpg"},
+        {"id": "b", "url": "https://images.example/b.jpg"},
+        {"id": "b-again", "url": "https://images.example/b.jpg"},
+        {"id": "no-image", "url": ""},
+        "not a candidate",
+    ]
+    writer = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@127.0.0.1:1/db"}
+
+    runtime.prepare_remote_cover_card_previews(candidates, config=writer)
+    runtime.prepare_remote_cover_card_previews(candidates, config={"ALBUM_HAVEN_APP_DATABASE_URL": ""})
+    runtime.prepare_remote_cover_card_previews(candidates, config={**writer, "SHARED_LIBRARY_BROWSE_ONLY": True})
+
+    # The card's own image (its thumbnail, else its original), once each; nothing without a writable database.
+    assert submitted == ["https://images.example/a-250.jpg", "https://images.example/b.jpg"]
+
+
+def test_a_remote_preview_that_cannot_be_shrunk_is_served_but_never_stored(monkeypatch):
+    from collections import OrderedDict
+
+    from music_app.services import cover_lookup_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_REMOTE_IMAGE_CACHE", OrderedDict())
+    monkeypatch.setattr(runtime, "_REMOTE_IMAGE_CACHE_BYTES", 0)
+    writes = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params):
+            if not sql.lstrip().startswith("select"):
+                writes.append(params[0])
+            return SimpleNamespace(fetchone=lambda: None)
+
+    unshrinkable = b"not an image" * (runtime._STORED_REMOTE_PREVIEW_MAX_BYTES // 10)
+    preview = runtime.remote_cover_card_preview(
+        "https://images.example/huge.bin",
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@127.0.0.1:1/db", "MUSICBRAINZ_USER_AGENT": "t"},
+        connect=lambda _url: Connection(),
+        fetch=lambda _url, **_kwargs: (unshrinkable, "application/octet-stream"),
+    )
+
+    assert preview == (unshrinkable, "application/octet-stream")
+    assert writes == []
+
+
+def test_postgres_remote_card_preview_survives_a_restart_as_one_row_read_by_its_key(monkeypatch):
+    from collections import OrderedDict
+
+    from music_app.services import cover_lookup_runtime as runtime
+    from tests.e2e.support import isolatedPostgres
+    from tests.py.test_isolated_postgres_live import _dedicated_database_urls_or_skip, _drop_application_schemas
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    try:
+        original = io.BytesIO()
+        from PIL import Image
+
+        Image.new("RGB", (900, 900), (30, 160, 90)).save(original, "JPEG", quality=90)
+        fetches = []
+
+        def fetch(image_url, **_kwargs):
+            fetches.append(image_url)
+            return original.getvalue(), "image/jpeg"
+
+        config = {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url, "MUSICBRAINZ_USER_AGENT": "AlbumHavenTests/1.0"}
+        url = "https://coverartarchive.org/release/row/front-500.jpg"
+        for _process in range(2):  # the second pass is a restarted app: nothing in memory
+            monkeypatch.setattr(runtime, "_REMOTE_IMAGE_CACHE", OrderedDict())
+            monkeypatch.setattr(runtime, "_REMOTE_IMAGE_CACHE_BYTES", 0)
+            preview, mime_type = runtime.remote_cover_card_preview(
+                url, config=config, connect=isolatedPostgres._connect, fetch=fetch,
+            )
+            assert mime_type == "image/jpeg" and preview
+
+        assert fetches == [url]
+        with isolatedPostgres._connect(runtime_url) as connection:
+            assert connection.execute("select count(*) as rows from library.remote_cover_previews").fetchone()["rows"] == 1
+            indexes = [row["indexdef"] for row in connection.execute(
+                "select indexdef from pg_indexes where schemaname = 'library' and tablename = 'remote_cover_previews'"
+            ).fetchall()]
+        assert any(definition.startswith("CREATE UNIQUE INDEX") and definition.endswith("(cache_key)")
+                   for definition in indexes), indexes
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
 
 
 def test_remote_cover_preview_is_card_sized_and_passes_through_what_it_cannot_shrink():

@@ -10373,6 +10373,156 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › version exception: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › version exception: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › album exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › album exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › file exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › file exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a desktop browser › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a desktop browser › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › version exception: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › version exception: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › album exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › album exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › file exclusion: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › file exclusion: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › exclusion just added in Problematic Files: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/ruleRevertConfirm.spec.js",
+    "case": "Revert rule on a mobile client wider than 900 px › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Revert rule on a mobile client wider than 900 px › exclusion in the legacy grouped list: No keeps the rule, Yes reverts it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/triggerAnchorSurface.spec.js",
     "case": "nested calendar dates remain clickable beyond the parent panel clipping boundary",
     "profile": null,
@@ -11085,6 +11235,28 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/mobileTreeModeButtons.functional.spec.js",
+    "case": "FTC-MOBILE-TREE-MODE-001 mode buttons switch the tree without loading; choosing an artist loads the gallery once",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:mobile-tree-mode"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "mobile-tree-mode-buttons-never-load",
+      "mobile-tree-mode-buttons-keep-gallery",
+      "mobile-tree-item-loads-gallery-once"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/dropdownControl.spec.js",
@@ -11113,6 +11285,23 @@
     "expectedContracts": [
       "predefined-dropdown-readonly-without-caret",
       "production-dropdown-pointer-toggle"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/dropdownControl.spec.js",
+    "case": "the Edit Tags exception dropdown opens and closes in the frame after the press, all in one step",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared-dropdown-press-toggles-in-next-frame",
+      "shared-dropdown-open-close-single-step",
+      "exception-dropdown-defaults-to-none"
     ],
     "ownerApproval": "approved"
   },
@@ -15175,6 +15364,156 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "the PF filter icon stays put closed, open, and with a selection at 390 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel meet at square corners at 375 px"
     ],
     "ownerApproval": "approved"
   },

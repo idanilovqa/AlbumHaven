@@ -460,6 +460,9 @@ function buildDetectedProblemsHtml(album) {
   proposals.forEach(proposal => {
     if (!rows.some(row => row.path === proposal.path)) rows.push({ path: proposal.path, filename: getFilenameFromPath(proposal.path), reasons: [], ignorable_reasons: [] });
   });
+  // A mixed folder lists its other albums' tracks after this entry's, each with its own problems and values.
+  (Array.isArray(album?.folder_neighbor_rows) ? album.folder_neighbor_rows : [])
+    .forEach(row => rows.push({ ...row, folderNeighbor: true }));
   // Problem filters narrow the list only; an open entry always shows every problem it has (owner, 2026-11-24).
   const coverReasons = new Set(['Missing cover art', 'Poor art quality']);
   const albumRows = Array.isArray(album?.album_problem_rows) ? album.album_problem_rows
@@ -476,12 +479,18 @@ function buildDetectedProblemsHtml(album) {
     });
   }).join('');
   const tableRows = rows.map((row, rowIndex) => {
-    const track = (album.tracks || []).find(item => item.path === row.path) || {};
+    const track = row.folderNeighbor
+      ? { title: row.track_title, track_number: row.track_number, artist: row.album_title }
+      : (album.tracks || []).find(item => item.path === row.path) || {};
     const reasons = (row.reasons || []).filter(reason => !coverReasons.has(reason));
-    const suggestions = proposals.filter(proposal => proposal.path === row.path);
+    const suggestions = row.folderNeighbor ? [] : proposals.filter(proposal => proposal.path === row.path);
+    const neighborSuggestions = row.folderNeighbor && Array.isArray(row.suggested_edits) ? row.suggested_edits : [];
     if (!reasons.length && !suggestions.length) return null;
     return {
-      key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
+      key: String(row.path || ''), dataAttributes: {
+        'problematic-track-path': String(row.path || ''),
+        ...(row.folderNeighbor ? { 'problematic-folder-neighbor': String(row.album_key || '') } : {}),
+      },
       cells: {
         filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${highlightProblematicTrackLabel(formatProblematicTrackLabel(track, row), state.utility.searchQuery)}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
         reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
@@ -499,7 +508,11 @@ function buildDetectedProblemsHtml(album) {
           pressed: Boolean(state.utility.proposalSelections?.[proposal.id]),
           disabled: !album.allowed_actions?.['library.files.edit_tags'] || Boolean(state.utility.proposalApplyBusy),
           className: 'utility-problem-suggestion', attributes: { 'data-problem-suggestion-id': proposal.id, 'data-label-intent': 'proposal' },
-        })).join('')}</span>` : buildProblemCurrentValuesHtml(row.current_values),
+        })).join('')}</span>` : neighborSuggestions.length
+          ? `<span class="utility-suggestion-labels">${neighborSuggestions.map(proposal => buildAlertLabelHtml({
+            severity: 'info', message: formatProblemSuggestionLabel(proposal),
+          })).join('')}</span>`
+          : buildProblemCurrentValuesHtml(row.current_values),
       },
     };
   }).filter(Boolean);

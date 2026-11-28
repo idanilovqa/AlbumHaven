@@ -3552,10 +3552,12 @@ class PostgresLibraryBrowseRepository:
             )
             for album in matching_albums:
                 album["_suggestion_aliases"] = aliases
-                album["_mixed_folder_fields"] = _mixed_folder_fields(connection, [
+                folder_context = _mixed_folder_context(connection, [
                     str(entry.get("path") or "") for entry in album.get("_file_entries") or ()
                     if isinstance(entry, Mapping) and entry.get("_mixed_album_folder") is True
                 ])
+                album["_mixed_folder_fields"] = folder_context["fields"]
+                album["_mixed_folder_files"] = folder_context["files"]
                 detail = _problematic_album_detail_payload(album)
                 if detail is not None:
                     return detail
@@ -7819,29 +7821,42 @@ _MIXED_FOLDER_PARENTS_SQL = """
     where files.private_path = any(%(paths)s::text[]) and files.scan_cache_stale is false
 """
 _MIXED_FOLDER_VALUES_SQL = """
-    select folders.library_root_id, folders.physical_parent,
+    select folders.library_root_id, folders.physical_parent, files.private_path,
       files.metadata #>> '{scan_cache,file_entry,album}' as album,
       coalesce(nullif(files.metadata #>> '{scan_cache,file_entry,album_artist}', ''),
                files.metadata #>> '{scan_cache,file_entry,artist}') as album_artist,
-      files.metadata #>> '{scan_cache,file_entry,year}' as year
+      files.metadata #>> '{scan_cache,file_entry,year}' as year,
+      files.metadata -> 'scan_cache' -> 'file_entry' as file_entry,
+      tracks.album_id, tracks.track_key, tracks.title as track_title, tracks.track_number,
+      albums.album_key, albums.title as album_title, albums.release_year as album_year,
+      array(
+        select ignored.repair_key from library.ignored_repairs ignored
+        where ignored.library_id = tracks.library_id
+          and ((ignored.repair_key ~ '::problem-album::[^:]+$'
+                and nullif(ignored.metadata ->> 'album_key', '') = albums.album_key)
+               or (ignored.repair_key !~ '::problem-album::[^:]+$'
+                   and split_part(ignored.repair_key, '::', 1) = files.private_path))
+      ) as ignored_repair_keys
     from unnest(%(roots)s::bigint[], %(parents)s::text[]) as folders(library_root_id, physical_parent)
     cross join lateral (
-      select files.metadata
+      select files.metadata, files.private_path, files.track_id
       from library.local_track_files files
       where files.library_root_id = folders.library_root_id
         and __FILE_PARENT__ = folders.physical_parent
         and files.scan_cache_stale is false
       offset 0
     ) files
+    left join library.local_tracks tracks on tracks.id = files.track_id
+    left join library.local_albums albums on albums.id = tracks.album_id
 """
 
 
-def _mixed_folder_fields(connection: Any, paths: list[str]) -> dict[str, list[str]]:
-    """The fields that differ across the folders of ``paths``: their files, read by folder (the 0088
-    physical-parent index), never the library."""
+def _mixed_folder_context(connection: Any, paths: list[str]) -> dict[str, object]:
+    """The folders of ``paths``, read by folder (the 0088 physical-parent index), never the library: the fields
+    that differ across each folder, by path, and every file of those folders with its own album and tags."""
     paths = sorted({path for path in paths if path})
     if not paths:
-        return {}
+        return {"fields": {}, "files": []}
     parents = {
         str(row["private_path"]): (int(row["library_root_id"]), str(row["physical_parent"]))
         for row in map(_row_mapping, connection.execute(
@@ -7851,7 +7866,7 @@ def _mixed_folder_fields(connection: Any, paths: list[str]) -> dict[str, list[st
     }
     folders = sorted(set(parents.values()))
     if not folders:
-        return {}
+        return {"fields": {}, "files": []}
     values_by_folder: dict[tuple[int, str], list[dict[str, object]]] = {}
     for row in map(_row_mapping, connection.execute(
         _MIXED_FOLDER_VALUES_SQL.replace("__FILE_PARENT__", _physical_parent_sql("files.private_path")),
@@ -7859,7 +7874,54 @@ def _mixed_folder_fields(connection: Any, paths: list[str]) -> dict[str, list[st
     ).fetchall()):
         values_by_folder.setdefault((int(row["library_root_id"]), str(row["physical_parent"])), []).append(dict(row))
     fields_by_folder = {folder: _differing_fields(values) for folder, values in values_by_folder.items()}
-    return {path: fields_by_folder.get(folder, []) for path, folder in parents.items()}
+    files = [value for values in values_by_folder.values() for value in values]
+    fields = {path: fields_by_folder.get(folder, []) for path, folder in parents.items()}
+    fields.update({
+        str(value["private_path"]): fields_by_folder[folder]
+        for folder, values in values_by_folder.items() for value in values if value.get("private_path")
+    })
+    return {"fields": fields, "files": files}
+
+
+def _mixed_folder_neighbor_rows(album: Mapping[str, object]) -> list[dict[str, object]]:
+    """The rows of the other albums in this entry's mixed folders (owner, 2026-11-25): each album's own
+    problems, values and suggestions, after this entry's rows, from the folder read the detail laid."""
+    own = {str(entry.get("path") or "") for entry in album.get("_file_entries") or () if isinstance(entry, Mapping)}
+    groups: dict[str, list[Mapping[str, object]]] = {}
+    for file in album.get("_mixed_folder_files") or ():
+        path = str(file.get("private_path") or "")
+        if path and path not in own:
+            groups.setdefault(str(file.get("album_key") or ""), []).append(file)
+    rows: list[dict[str, object]] = []
+    for album_key, files in sorted(groups.items(), key=lambda item: str(item[1][0].get("album_title") or "").casefold()):
+        entries = [{**_row_json_mapping(file.get("file_entry")), "path": str(file["private_path"]),
+                    "_mixed_album_folder": True} for file in files]
+        first = files[0]
+        neighbor = {
+            "key": album_key, "album_ref": album_key, "name": str(first.get("album_title") or first.get("album") or ""),
+            "album_artist": str(first.get("album_artist") or ""), "year": first.get("album_year"),
+            "tracks": [{"key": str(file.get("track_key") or ""), "path": str(file["private_path"]),
+                        "title": str(file.get("track_title") or ""), "track_number": file.get("track_number")}
+                       for file in files],
+            "_file_entries": entries,
+            "_ignored_repair_keys": {str(key) for file in files for key in file.get("ignored_repair_keys") or ()},
+            "_mixed_folder_fields": album.get("_mixed_folder_fields") or {},
+            "_text_problem_reason_cache": {},
+        }
+        from music_app.services.problem_suggestions import build_problem_suggestions
+
+        titles = {str(file["private_path"]): file for file in files}
+        entries_by_path = {entry["path"]: entry for entry in entries}
+        aliases = album.get("_suggestion_aliases")
+        for row in _problematic_track_problem_rows(neighbor):
+            path = str(row.get("path") or "")
+            file = titles.get(path, {})
+            rows.append({**row, "album_key": album_key, "album_title": neighbor["name"],
+                         "track_title": str(file.get("track_title") or ""), "track_number": file.get("track_number"),
+                         # Shown beside the row; they are applied from that album's own entry.
+                         "suggested_edits": build_problem_suggestions(path, entries_by_path.get(path) or {},
+                                                                      alias_to_canonical=aliases)})
+    return rows
 
 
 def _problematic_track_problem_rows(
@@ -8279,6 +8341,7 @@ def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, 
             and not _problem_reason_is_ignored(set(album.get("_ignored_repair_keys") or ()), album_problem_identity, proposal['reason'], scope="album")
         ],
         "track_problem_rows": track_problem_rows,
+        "folder_neighbor_rows": _mixed_folder_neighbor_rows(album),
         "track_order_issues": _track_order_issues(album),
         "problematic_track_paths": [
             str(row.get("path") or "")

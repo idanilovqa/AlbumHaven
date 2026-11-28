@@ -786,7 +786,39 @@ class PostgresLibraryBrowseRepository:
         *,
         query_params: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        """Loose Tracks alone: no gallery is built or sent (owner PERF-1). Read from the case 64 store."""
+        """Loose Tracks alone: no gallery is built or sent (owner PERF-1). Read from the case 64 store.
+
+        A track carries the Problematic Files "!" only when Problematic Files lists it, with that entry's
+        reasons, read per track from the persisted index after the store read has left its lease. While no
+        ready index can say, no track carries one."""
+        payload = self._read_library_loose_tracks(query_params=query_params)
+        tracks = [*payload.get("library_non_album_tracks", ()), *payload.get("non_album_tracks", ())]
+        if tracks:
+            listed = problematic_index.listed_track_problems(self, (track["path"] for track in tracks)) or {}
+            for track in tracks:
+                entry = listed.get(track["path"])
+                track["is_problematic"] = entry is not None
+                if entry is not None:
+                    track["problem_reasons"] = entry["problem_reasons"]
+        return payload
+
+    def loose_tracks_preparation(self) -> dict[str, int] | None:
+        """For /status: the one-time Loose Tracks store build's progress while it is needed; one keyed read."""
+        from music_app.services import loose_track_store
+
+        try:
+            with self._browse_connection_context() as connection:
+                return loose_track_store.preparation(loose_track_store.load_state(connection))
+        except Exception:
+            # Status stays observational: an unreadable store state shows no note rather than failing the poll.
+            logging.getLogger(__name__).warning("Loose Tracks preparation state could not be read.", exc_info=True)
+            return None
+
+    def _read_library_loose_tracks(
+        self,
+        *,
+        query_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         params = query_params or {}
         view_state = _root_sidebar_view_state(query_params)
         selected_artist = str(params.get("artist") or "").strip()
@@ -3493,10 +3525,8 @@ class PostgresLibraryBrowseRepository:
                     {"path": path},
                 ).fetchall()
             ]
-            if not album_ids:
-                return None
             # One read covers every album holding the path; aliases are read once, on a match.
-            albums = [
+            albums = [] if not album_ids else [
                 album for album in _problematic_album_projection_payloads(
                     _lay_pending_ignored_repairs(
                         self._load_problematic_file_rows(album_ids=album_ids, connection=connection), connection)
@@ -3511,6 +3541,12 @@ class PostgresLibraryBrowseRepository:
                 self._load_relation_alias_maps(connection=connection).get("alias_to_canonical", {})
                 if albums else {}
             )
+        if not album_ids:
+            # A loose track has no album: the indexed loose-track group that lists it answers instead.
+            entry = (problematic_index.listed_track_problems(self, [path]) or {}).get(path)
+            if entry is None or not _is_problematic_loose_tracks_key(entry["key"]):
+                return None
+            return problematic_index.loose_group_detail(self, entry["key"])
         for album in albums:
             album["_suggestion_aliases"] = aliases
             detail = _problematic_album_detail_payload(album)

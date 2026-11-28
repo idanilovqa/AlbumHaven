@@ -1696,6 +1696,7 @@ function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
   if (typeof syncLooseTracksPartialNote === 'function') syncLooseTracksPartialNote();
+  if (typeof syncLooseTracksPreparationNote === 'function') syncLooseTracksPreparationNote();
   const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
   const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
   state.loopCreateAllowed = loopCreateAllowed;

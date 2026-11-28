@@ -3300,3 +3300,82 @@ test('pointer menus with room below keep opening at the pointer', () => {
   assert.equal(menu.style.left, '120px');
   assert.equal(menu.style.top, '300px');
 });
+
+function openLooseTracksFixture() {
+  const { context } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  for (const element of [overlay, header, table]) context.document.body.appendChild(element);
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.window = {};
+  context.scheduleBrowserTimeout = () => 1;
+  context.clearBrowserTimeout = () => {};
+  context.state.ui = {};
+  return { context, overlay, table };
+}
+
+// Owner bug (2026-11-25): Loose Tracks showed "!" on tracks Problematic Files does not list, hovering said only
+// "Open this track in Problematic Files". The server now sends the flag and reasons from the listing itself.
+test('a listed loose track names its Problematic Files reasons in the hover and an unlisted one has no "!"', () => {
+  const { context, table } = openLooseTracksFixture();
+  context.state.view = { library_non_album_tracks: [
+    { path: 'D:/Music/Listed.flac', title: 'Listed', duration_seconds: 60, is_problematic: true,
+      problem_reasons: ['Missing artist'] },
+    { path: 'D:/Music/Goose.mp3', title: 'Goose', duration_seconds: 60, exception_type: 'Non-album rarity',
+      is_problematic: false },
+  ] };
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
+
+  context.openNonAlbumModal({ libraryWide: true });
+
+  assert.equal(table.innerHTML.split('data-open-track-problematic="1"').length - 1, 1, 'one "!" only');
+  assert.match(table.innerHTML,
+    /data-track-path="D:\/Music\/Listed\.flac" title="Missing artist\. Open this track in Problematic Files"/);
+});
+
+test('the one-time Loose Tracks build shows "Preparing Loose Tracks… N%" from status and asks once when done', async () => {
+  const { context, overlay, table } = openLooseTracksFixture();
+  context.state.view = { library_non_album_tracks: [] };
+  context.state.status = { loose_tracks_preparation: { percent: 42 } };
+  const requests = [];
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: [], non_album_tracks_deferred: true }) };
+  };
+
+  context.openNonAlbumModal({ libraryWide: true });
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  assert.ok(table.innerHTML.startsWith('<div class="utility-empty-state compact" data-loose-tracks-preparation-note>Preparing Loose Tracks… 42%</div>'),
+    'the note leads the page while the build runs');
+  assert.equal(requests.length, 1);
+
+  // A status poll moves the note in place, without another request.
+  const noteHtml = () => table.innerHTML.match(/<div[^>]*data-loose-tracks-preparation-note>[^<]*<\/div>/)?.[0];
+  table.querySelector = (selector) => selector === '[data-loose-tracks-preparation-note]' && noteHtml() ? {
+    set outerHTML(html) { table.innerHTML = table.innerHTML.replace(noteHtml(), html); },
+    remove() { table.innerHTML = table.innerHTML.replace(noteHtml(), ''); },
+  } : null;
+  table.insertAdjacentHTML = (where, html) => { table.innerHTML = where === 'afterbegin' ? html + table.innerHTML : table.innerHTML + html; };
+  overlay.hidden = false;
+  context.state.status = { loose_tracks_preparation: { percent: 87 } };
+  context.syncLooseTracksPreparationNote();
+  assert.match(table.innerHTML, /Preparing Loose Tracks… 87%/);
+  assert.equal(table.innerHTML.includes('42%'), false);
+  assert.equal(requests.length, 1, 'progress costs no request of its own');
+
+  // Done: the note goes and the page asks once for the finished list.
+  context.state.status = { loose_tracks_preparation: null };
+  context.syncLooseTracksPreparationNote();
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  assert.equal(table.innerHTML.includes('Preparing Loose Tracks'), false, 'no note once the build is done');
+  assert.equal(requests.length, 2, 'the finished build is asked for once');
+});

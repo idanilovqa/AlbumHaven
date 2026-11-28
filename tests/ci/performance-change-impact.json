@@ -113,7 +113,8 @@
       "paths": [
         "music_app/services/problematic_index.py",
         "migrations/postgres/0268_create_album_duplicate_results.sql",
-        "migrations/postgres/0269_index_stray_decision_lookups.sql"
+        "migrations/postgres/0269_index_stray_decision_lookups.sql",
+        "migrations/postgres/0302_key_problematic_items_by_track_path.sql"
       ],
       "targets": [
         "selected-artist",

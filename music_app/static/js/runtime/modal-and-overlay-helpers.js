@@ -451,6 +451,37 @@ function syncLooseTracksPartialNote() {
   else if (!wanted) note?.remove();
 }
 
+// While the one-time Loose Tracks build runs, the page says how far it has come (owner, 2026-11-25). The percent
+// arrives with each status poll; no request of its own asks for it.
+function looseTracksPreparationPercent() {
+  const percent = Number(state.status?.loose_tracks_preparation?.percent);
+  return Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.floor(percent))) : null;
+}
+
+function buildLooseTracksPreparationNoteHtml() {
+  const percent = looseTracksPreparationPercent();
+  return percent === null ? '' : '<div class="utility-empty-state compact" data-loose-tracks-preparation-note>'
+    + `Preparing Loose Tracks… ${percent}%</div>`;
+}
+
+// Each status update moves the note; when the build is done the note goes and an unfinished page asks once.
+function syncLooseTracksPreparationNote() {
+  const { overlay, table } = getNonAlbumModalElements();
+  if (!overlay || overlay.hidden || !table) return;
+  const note = table.querySelector('[data-loose-tracks-preparation-note]');
+  const html = buildLooseTracksPreparationNoteHtml();
+  if (html && note) note.outerHTML = html;
+  else if (html) table.insertAdjacentHTML('afterbegin', html);
+  else if (note) {
+    note.remove();
+    const libraryWide = state.ui?.nonAlbumLibraryWide === true;
+    const unfinished = libraryWide ? !hasHydratedLibraryNonAlbumTracks() : Boolean(state.view?.non_album_tracks_deferred);
+    if (!unfinished) return;
+    settleDeferredNonAlbumRetry(libraryWide ? 'library' : 'artist');
+    openNonAlbumModal({ libraryWide, syncNavigation: false });
+  }
+}
+
 // The bounded wait ran out with no stored row (owner-approved wording, 2026-11-22).
 const LOOSE_TRACKS_STILL_PREPARING = 'Loose tracks are still being prepared. Open Loose Tracks again in a moment.';
 
@@ -1054,13 +1085,13 @@ function openNonAlbumModal(options = {}) {
       { syncNavigation: options.syncNavigation !== false });
   }
   const waitExhausted = hydrationPending && libraryWide && libraryNonAlbumWaitExhausted();
-  els.table.innerHTML = waitExhausted
+  els.table.innerHTML = buildLooseTracksPreparationNoteHtml() + (waitExhausted
     ? `<div class="utility-empty-state">${escapeHtml(LOOSE_TRACKS_STILL_PREPARING)}</div>`
     : hydrationPending
     ? buildNonAlbumTrackLoadingMarkup()
     : looseTracks.length
       ? `${buildNonAlbumTrackSectionsMarkup(looseTracks)}${partial || looseTracksScanRunning() ? buildLooseTracksPartialNoteHtml() : ''}`
-      : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+      : '<div class="utility-empty-state">No non-album tracks found in this view.</div>');
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;

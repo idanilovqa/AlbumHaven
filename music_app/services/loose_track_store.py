@@ -41,10 +41,21 @@ _LIBRARY_SQL = """(
 
 def load_state(connection: Any) -> dict[str, object] | None:
     row = connection.execute(
-        f"""select builder_version, status, error, retry_after, built_at
+        f"""select builder_version, status, error, retry_after, built_at, progress_done, progress_total
             from library.non_album_track_store_state where library_id = {_LIBRARY_SQL}"""
     ).fetchone()
     return dict(row) if row else None
+
+
+def preparation(state: Mapping[str, object] | None) -> dict[str, int] | None:
+    """How far the one-time build has come while the page waits for it: no store or a builder change has not
+    started it yet (0%), or its committed batches so far. None once ready, and for a failed build (it says so)."""
+    if state and state.get("status") == "building":
+        total = int(state.get("progress_total") or 0)
+        return {"percent": min(100, int(state.get("progress_done") or 0) * 100 // total) if total else 0}
+    if is_ready(state) or (state and state.get("status") == "failed"):
+        return None
+    return {"percent": 0}
 
 
 def is_ready(state: Mapping[str, object] | None) -> bool:
@@ -167,6 +178,7 @@ def drain(inventory: Any, connection: Any, *, limit: int = DRAIN_BATCH) -> int:
 
 
 def _set_state(connection: Any, status: str, *, error: str | None = None, retry_seconds: int | None = None) -> None:
+    # A new build starts its progress again; ready and failed keep the last one (nothing reads it then).
     connection.execute(
         f"""insert into library.non_album_track_store_state
               (library_id, builder_version, status, error, retry_after, built_at, updated_at)
@@ -176,8 +188,21 @@ def _set_state(connection: Any, status: str, *, error: str | None = None, retry_
             on conflict (library_id) do update set builder_version = excluded.builder_version,
               status = excluded.status, error = excluded.error, retry_after = excluded.retry_after,
               built_at = coalesce(excluded.built_at, library.non_album_track_store_state.built_at),
+              progress_done = case when excluded.status = 'building' then null
+                else library.non_album_track_store_state.progress_done end,
+              progress_total = case when excluded.status = 'building' then null
+                else library.non_album_track_store_state.progress_total end,
               updated_at = now()""",
         {"version": BUILDER_VERSION, "status": status, "error": error, "retry": retry_seconds},
+    )
+
+
+def _set_progress(connection: Any, done: int, total: int) -> None:
+    """Committed with the batch it counts, so a reader never sees progress ahead of the stored rows."""
+    connection.execute(
+        f"""update library.non_album_track_store_state set progress_done = %(done)s, progress_total = %(total)s
+            where library_id = {_LIBRARY_SQL}""",
+        {"done": done, "total": total},
     )
 
 
@@ -222,6 +247,7 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int:
             horizon, build_started, total = (
                 started_row["horizon"], started_row["build_started"], int(started_row["tracks"]),
             )
+            _set_progress(connection, 0, total)
             connection.commit()
             report("reading", total=total)
             written = done = 0
@@ -238,8 +264,9 @@ def build(inventory: Any, connect: Any, *, progress=None) -> int:
                 rows = _rows_by_track(_load_candidates(inventory, connection, track_ids))
                 _write_rows(connection, rows)
                 _delete_rows(connection, sorted(set(track_ids) - set(rows)))
-                connection.commit()
                 after, done, written = track_ids[-1], done + len(track_ids), written + len(rows)
+                _set_progress(connection, done, max(total, done))
+                connection.commit()
                 report("batch", done=done, total=max(total, done), tracks=written)
             # Rows no batch touched belong to tracks that are gone.
             connection.execute(

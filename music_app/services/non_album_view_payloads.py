@@ -352,11 +352,7 @@ def build_non_album_track_list(
             "edition": str(entry.get("edition") or ""),
             "album_rating": entry.get("album_rating"),
             "reason_label": exception_type or membership_label or "Unmarked",
-            "is_problematic": bool(
-                membership_label
-                or not has_meaningful_album_name(album_value)
-                or is_loose_track_album_value(album_value)
-            ),
+            # No "!" here: only a track Problematic Files lists carries one (the Loose Tracks read adds it).
             **({"local_album_membership_problem": membership_label} if membership_label else {}),
             "display_path": _display_path(path, root_paths),
             "duration_seconds": entry.get("duration_seconds"),

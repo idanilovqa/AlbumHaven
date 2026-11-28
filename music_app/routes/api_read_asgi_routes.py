@@ -477,9 +477,15 @@ async def status(request: Request) -> JSONResponse:
     # Test harnesses wait for this with scans and relations: Problematic Files answers from
     # its index only once the one-time backfill and queued album evaluations are done.
     # Status stays observational without the library database: no index, nothing in progress.
-    payload["problematic_index_in_progress"] = problematic_index.in_progress(
+    repository = (
         PostgresLibraryBrowseRepository(_app_config(request))
-    ) if is_library_browse_postgres_available(_app_config(request)) else False
+        if is_library_browse_postgres_available(_app_config(request)) else None
+    )
+    payload["problematic_index_in_progress"] = problematic_index.in_progress(repository) if repository else False
+    # The Loose Tracks page's "Preparing Loose Tracks… N%" note follows this through the existing status poll.
+    payload["loose_tracks_preparation"] = (
+        await run_in_threadpool(repository.loose_tracks_preparation) if repository else None
+    )
     payload["watcher_health"] = await run_in_threadpool(
         _project_library_watch_health_for_request,
         request,

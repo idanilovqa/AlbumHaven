@@ -12945,6 +12945,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/looseTracksProblemAndPreparation.spec.js",
+    "case": "only a loose track Problematic Files lists shows \"!\", naming its reasons, at phone width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-track-problem-flag-from-problematic-files"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksProblemAndPreparation.spec.js",
+    "case": "the one-time Loose Tracks build shows \"Preparing Loose Tracks… N%\" until it is done, at phone width",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-track-store-preparation-progress"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/looseTracksNavigationCycles.spec.js",
     "case": "Loose Tracks open, back and scroll cycles stay bounded at phone width",
     "profile": null,

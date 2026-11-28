@@ -25,7 +25,7 @@ def test_custom_collection_loose_payload_retains_name_and_library_scope():
     assert len(tracks) == 1
     assert tracks[0]["custom_collection_name"] == "Road trip"
     assert tracks[0]["library_category"] == "hoard"
-    assert tracks[0]["is_problematic"] is True
+    assert "is_problematic" not in tracks[0], "only a track Problematic Files lists carries the \"!\""
     assert tracks[0]["total_discs"] == 2
     assert tracks[0]["disc_subtitle"] == "Bonus"
 
@@ -289,7 +289,6 @@ def test_build_non_album_track_list_preserves_editable_tag_values():
         "edition": "Bonus",
         "album_rating": 8,
         "reason_label": "Non-album rarity",
-            "is_problematic": False,
         "display_path": r"C:\Music\Stereolab\Loose\Alpha.mp3",
         "duration_seconds": None,
     }]

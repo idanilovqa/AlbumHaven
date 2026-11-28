@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from threading import Lock
 from typing import Any
@@ -1217,6 +1217,33 @@ def listed_as_missing(repository: Any, item_key: str, connection: Any) -> bool |
             return None
         raise
     return None if row is None else bool(_value(row, "missing"))
+
+
+def listed_track_problems(repository: Any, paths: Iterable[str]) -> dict[str, dict[str, object]] | None:
+    """For each given track path an item Problematic Files lists: that item's key and reasons, the first item in
+    list order winning, with pending ignores laid over as the list shows them. Read per path (0302's index),
+    never the whole list. None while no ready index can say."""
+    wanted = {str(path) for path in paths if str(path or "").strip()}
+    if not refresh(repository):
+        return None
+    if not wanted:
+        return {}
+    with repository._browse_connection_context() as connection:
+        rows = connection.execute(
+            f"""select item from library.problematic_index_items
+                where library_id = ({_LIBRARY_SQL}) and item -> 'track_paths' ?| %(paths)s::text[]
+                order by sort_name, sort_artist, sort_year, sort_key""",
+            {"paths": sorted(wanted)},
+        ).fetchall()
+        items = _with_pending_ignores(repository, connection, [
+            json.loads(item) if isinstance(item, str) else dict(item) for row in rows if (item := _value(row, "item"))
+        ])
+    listed: dict[str, dict[str, object]] = {}
+    for item in items:
+        entry = {"key": str(item.get("key") or ""), "problem_reasons": list(item.get("problem_reasons") or [])}
+        for path in wanted.intersection(map(str, item.get("track_paths") or [])):
+            listed.setdefault(path, entry)
+    return listed
 
 
 def loose_group_detail(repository: Any, item_key: str) -> dict[str, object] | None:

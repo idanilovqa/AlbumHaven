@@ -200,8 +200,8 @@ test('external, logout, API and unrelated routes are not fetched as settings con
 
 test('a rejected protected-page response leaves the current content and history intact', async () => {
   const app = harness();
-  app.respond('Access denied', 'http://localhost:5000/admin/members', 403);
-  assert.equal(await app.navigation.navigate('/admin/members'), false);
+  app.respond('Access denied', 'http://localhost:5000/admin/server', 403);
+  assert.equal(await app.navigation.navigate('/admin/server'), false);
   const error = app.document.querySelector('[data-settings-navigation-error]');
   assert.equal(error.hidden, false);
   assert.equal(error.querySelector('.on-page-alert__message').textContent, 'This page could not be loaded. Please try again.');
@@ -302,8 +302,8 @@ for (const selection of [
       assert.equal(app.historyIndex, 1);
       assert.equal(app.historyEntries.length, 2);
       assert.deepEqual(app.window.history.state, newestState);
-      assert.equal(app.window.history.state.selected_artist, selection.selected_artist);
-      assert.equal(app.window.history.state.all_artists, selection.all_artists);
+      // The address names the choice; the state keeps its place in the navigation and none of the view.
+      assert.deepEqual(Object.keys(app.window.history.state), ['albumHavenNavigationPosition']);
       assert.equal(app.host.hidden, true);
       assert.equal(app.shell.hidden, false);
       assert.equal(app.shell.childNodes[0].textContent, selection.name);
@@ -400,7 +400,7 @@ for (const direction of ['back', 'forward']) {
 
 test('cancelled gallery history navigation preserves the dirty Appearance screen and snapshot', async () => {
   const app = harness({ library: true, initialPath: '/?artist=Initial' });
-  app.pushLibraryView({ url: '/?artist=Current' }, { selected_artist: 'Current' });
+  app.pushLibraryView({ url: '/?artist=Current' });
   let prompts = 0;
   app.window.AlbumHavenAppearance = { instance: { allowLeave() { prompts++; return false; } } };
 
@@ -409,7 +409,7 @@ test('cancelled gallery history navigation preserves the dirty Appearance screen
 
   assert.equal(app.location.search, '?artist=Current');
   assert.equal(app.historyIndex, 1);
-  assert.equal(app.window.history.state.selected_artist, 'Current');
+  assert.equal(app.window.history.state.albumHavenNavigationPosition, 1);
   assert.equal(app.host.hidden, true);
   assert.equal(app.galleryPops.length, 0);
   assert.equal(prompts, 1);
@@ -460,10 +460,9 @@ test('failed Settings history fetch restores the original entry without overwrit
 test('library history retains its existing fallback when Settings navigation is absent', () => {
   const app = harness({ library: true, initialPath: '/' });
   app.window.AlbumHavenSettingsNavigation.instance = null;
-  const snapshot = { selected_artist: 'Standalone' };
-  app.pushLibraryView({ url: '/?artist=Standalone' }, snapshot);
+  app.pushLibraryView({ url: '/?artist=Standalone', selected_artist: 'Standalone' });
   assert.equal(app.location.search, '?artist=Standalone');
-  assert.deepEqual(app.window.history.state, snapshot);
+  assert.equal(JSON.stringify(app.window.history.state), '{}');
 });
 
 test('an untracked pop during rollback releases navigation after restoring the displayed snapshot', async () => {
@@ -498,29 +497,44 @@ test('an untracked pop during rollback releases navigation after restoring the d
 
 // Request-capture contract (tests/ci/bounded-interactions.json): each accepted Settings
 // navigation fetches exactly its own page; every other route stays off the network.
-const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+const { measureInteractionContract } = require('../helpers/request-capture');
 
 test('request capture: Settings navigation fetches only its owned pages, once per navigation', async () => {
   const accepted = [
-    ['/account'], ['/admin/server'], ['/admin/accounts/41'], ['/admin/accounts/new'], ['/admin/members'],
+    // Each pass starts where the previous one landed (/account), so every target differs from the page shown.
+    ['/admin/server'], ['/account'], ['/admin/accounts/41'], ['/admin/accounts/new'], ['/admin/members'],
     ['/account/password', { method: 'POST', body: 'csrf_token=t' }, '/account'],
   ];
   const rejected = ['https://outside.example/account', '/logout', '/login', '/api/admin/members', '/view-data?surface=albums', '/home-data', '/news'];
-  await measureInteractionContract('js:settings-navigation.js#navigate', async (members) => {
-    const app = harness();
-    const roster = Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join('');
-    const paths = [];
-    for (const [target, options, landed = target] of accepted) {
-      app.respond(target === '/admin/members' ? roster : `Page ${target}`, `http://localhost:5000${landed}`);
+  await measureInteractionContract('js:settings-navigation.js#navigate', {
+    // A freshly loaded Settings page navigating to itself, and a history step that stays on it, load nothing.
+    async alreadyShown(members) {
+      const requests = [];
+      for (const page of ['/admin/members', '/account']) {
+        const app = harness({ initialPath: page });
+        app.respond(Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join(''), `http://localhost:5000${page}`);
+        assert.equal(await app.navigation.navigate(page), true, page);
+        app.listeners.get('window:popstate')({ state: app.window.history.state, stopImmediatePropagation() {} });
+        await settleNavigation();
+        requests.push(...app.requests.map(({ url }) => url));
+      }
+      return { requests };
+    },
+    setup: members => ({ app: harness(), roster: Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join('') }),
+    async act({ app, roster }) {
+      const requests = [];
+      for (const [target, options, landed = target] of accepted) {
+        app.respond(target === '/admin/members' ? roster : `Page ${target}`, `http://localhost:5000${landed}`);
+        const before = app.requests.length;
+        assert.equal(await app.navigation.navigate(target, options), true, target);
+        assert.equal(app.requests.length - before, 1, `${target} issues one request`);
+        requests.push({ url: new URL(app.requests.at(-1).url).pathname, method: options?.method });
+      }
       const before = app.requests.length;
-      assert.equal(await app.navigation.navigate(target, options), true, target);
-      assert.equal(app.requests.length - before, 1, `${target} issues one request`);
-      paths.push(new URL(app.requests.at(-1).url).pathname);
-    }
-    for (const target of rejected) assert.equal(await app.navigation.navigate(target), false, target);
-    assert.deepEqual(paths, accepted.map(([target]) => target));
-    assert.equal(app.requests.length, accepted.length);
-    assertInteractionRequests('js:settings-navigation.js#navigate', paths);
-    return { requests: app.requests.length };
+      for (const target of rejected) assert.equal(await app.navigation.navigate(target), false, target);
+      assert.equal(app.requests.length, before, 'rejected routes stay off the network');
+      assert.deepEqual(requests.map(({ url }) => url), accepted.map(([target]) => target));
+      return { requests };
+    },
   });
 });

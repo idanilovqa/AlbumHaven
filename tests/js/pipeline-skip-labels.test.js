@@ -95,7 +95,7 @@ test('CLI emits independent controls while retaining every full test family', ()
     assert.equal(values.pipeline_mode, 'full');
     assert.equal(values.functional_change, 'true');
     assert.equal(JSON.parse(values.functional_shards_json).length, 8);
-    assert.equal(JSON.parse(values.performance_shards_json).length, 5);
+    assert.equal(JSON.parse(values.performance_shards_json).length, 6);
     assert.equal(values.run_phase7_auth, 'true');
     assert.equal(values.run_phase7_admin, 'true');
     assert.equal(values.run_android, 'false');

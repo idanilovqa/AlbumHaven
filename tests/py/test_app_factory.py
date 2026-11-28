@@ -946,7 +946,9 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     assert retry_calls == ["started"]
 
 
-def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch):
+def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
+    monkeypatch, unreachable_postgres_pool,
+):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
         lambda _runtime: None,
@@ -1010,6 +1012,11 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
     monkeypatch.setattr(music_app._LibraryWarmupHandle, "request_stop", request_stop)
+    from music_app.services import cover_provider_cache
+    monkeypatch.setattr(
+        cover_provider_cache, "import_cover_search_cache_file",
+        lambda _config, **_kwargs: calls.append("cover-cache-import"),
+    )
 
     # This case owns relation-worker cancellation; unrelated cover I/O must
     # not contact the deliberately nonexistent database or delay teardown.
@@ -1096,6 +1103,11 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
+    from music_app.services import cover_provider_cache
+    monkeypatch.setattr(
+        cover_provider_cache, "import_cover_search_cache_file",
+        lambda _config, **_kwargs: calls.append("cover-cache-import"),
+    )
 
     with caplog.at_level(logging.ERROR):
         messages = _run_asgi_lifespan(create_asgi_app())
@@ -1104,7 +1116,8 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
-    assert calls == [("prewarm", database_url), "relations"]
+    # The one-time cover cache backfill runs after relation readiness, never before it.
+    assert calls == [("prewarm", database_url), "relations", "cover-cache-import"]
     assert "Postgres connection pool prewarm failed." in caplog.text
 
 
@@ -1198,7 +1211,7 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     from config import Config
     from music_app import create_asgi_app
     from music_app.routes import web_asgi
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
     from music_app.services.library_roots import normalize_persisted_library_root_settings
 
     class MissingSnapshotAdapter:
@@ -1241,6 +1254,8 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         "postgresql://album_haven_app@localhost/app",
     )
     monkeypatch.setattr("music_app.services.library_roots_postgres.psycopg", FakePsycopg())
+    # The placeholder database is unreachable, so prewarming would wait out the pool timeout.
+    monkeypatch.setattr(postgres_connections, "prewarm_connection_pool", lambda _database_url: None)
     monkeypatch.setattr(
         "music_app.services.library_roots.PostgresLibraryRootSettingsStore",
         FakePostgresLibraryRootSettingsStore,

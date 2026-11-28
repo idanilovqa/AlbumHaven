@@ -3,6 +3,9 @@
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
+// Refetches of a view whose gallery projection was stale, after 3, 6, 12, 24, 48 and 96 seconds.
+const STALE_PROJECTION_VIEW_REFRESH_LIMIT = 6;
+const STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS = 3000;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -12,6 +15,10 @@ function isPagedRootGallery(view = state.view) {
     && !String(view.query || '').trim()
     && !String(view.selected_artist || '').trim()
     && surface === 'albums');
+}
+
+function isRootGalleryPageRequestLoading() {
+  return Boolean(rootGalleryPageRequest);
 }
 
 function cancelRootGalleryPageRequest() {
@@ -117,9 +124,18 @@ function buildRootGalleryPageUrl(view) {
 // the artist whose label the scrolled viewport has passed is the one on screen.
 function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop = 0) {
   const albumKey = String(scrollAnchor?.albumKey || '');
-  let viewportIndex = albumKey
-    ? groups.findIndex(group => (group.albums || []).some(album => String(album.key || '') === albumKey))
+  const holdsAnchorAlbum = group => (group.albums || []).some(album => String(album.key || '') === albumKey);
+  // A jointly credited album sits under several artists: the captured card's own section says which
+  // one is on screen. The first group holding it can be far above, and a window anchored there would
+  // end before the artist on screen (FTC-TAGS-011/012).
+  const anchorSection = typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.sectionByRenderedKey?.get?.(String(scrollAnchor?.sectionOccurrenceKey || ''));
+  const anchorSectionArtist = String(anchorSection?.group?.artist || '').trim();
+  let viewportIndex = albumKey && anchorSectionArtist
+    ? groups.findIndex(group => String(group.artist || '').trim() === anchorSectionArtist && holdsAnchorAlbum(group))
     : -1;
+  if (viewportIndex < 0 && albumKey) viewportIndex = groups.findIndex(holdsAnchorAlbum);
   if (viewportIndex < 0 && scrollTop > 0) {
     const visibleArtist = findGalleryMainContextSection(scrollTop)?.artist;
     viewportIndex = visibleArtist ? groups.findIndex(group => galleryMainGroupArtist(group) === visibleArtist) : -1;
@@ -1362,12 +1378,28 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
       return false;
     }
-    // A response dispatched before a tag edit must not replace its optimistic view.
-    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
-      return false;
-    }
-    // Artwork published after this request started owns the album cover state.
-    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
+    if (
+      // A response dispatched before a tag edit must not replace its optimistic view.
+      requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      // Artwork published after this request started owns the album cover state.
+      || requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)
+    ) {
+      // Startup has no other request to finish it. A pending cover draws from its own overlay;
+      // a pending tag edit has none, so that one is not asked again.
+      if (
+        requestOptions.startupRefresh
+        && !state.ui.pendingViewRequest
+        && !(typeof hasPendingTagEditViewMutations === 'function' && hasPendingTagEditViewMutations())
+      ) {
+        state.ui.pendingViewRequest = {
+          url: apiUrl,
+          push: state.ui.activeViewRequestPush,
+          options: retainsMountedSelectedViewState
+            ? { ...requestOptions, retainMountedSelectedViewState: { ...state.view } }
+            : requestOptions,
+          originatingViewStateRevision: requestViewStateRevision,
+        };
+      }
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
@@ -1492,6 +1524,19 @@ async function fetchAndRender(url, push = true, options = {}) {
         && appliedInventoryMutationRevision >= observedInventoryMutationRevision
       ) {
         state.ui.pendingInventoryMutationViewRefresh = false;
+      }
+    }
+    if (responseProjectionIsCurrent) {
+      state.ui.staleProjectionViewRefreshCount = 0;
+      state.ui.staleProjectionViewRefreshDueAt = null;
+    } else {
+      // The library change is not published in the gallery yet, and the status revision has
+      // already moved for it, so nothing else would ask again: an idle poll refetches, backing off.
+      const staleProjectionViewRefreshCount = Number(state.ui.staleProjectionViewRefreshCount || 0);
+      if (staleProjectionViewRefreshCount < STALE_PROJECTION_VIEW_REFRESH_LIMIT) {
+        state.ui.staleProjectionViewRefreshCount = staleProjectionViewRefreshCount + 1;
+        state.ui.staleProjectionViewRefreshDueAt = Date.now()
+          + STALE_PROJECTION_VIEW_REFRESH_BASE_DELAY_MS * (2 ** staleProjectionViewRefreshCount);
       }
     }
     finishPendingViewTransition(requestId);
@@ -2163,7 +2208,9 @@ async function pollStatus() {
     && !startedDuringPendingStart;
   let nextPollDelay = null;
   const knownStatus = state.status || {};
-  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
+  // Like the inventory revision, the first observed watcher health is a baseline: the loaded lists already reflect it.
+  const knownWatcherHealth = Object.prototype.hasOwnProperty.call(knownStatus, 'watcher_health')
+    ? watcherHealthRefreshSignature(knownStatus) : null;
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -2233,7 +2280,8 @@ async function pollStatus() {
       }
     }
     const utility = state.utility;
-    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    const healthChanged = knownWatcherHealth !== null
+      && knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
     if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
       utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
     }
@@ -2382,6 +2430,11 @@ async function pollStatus() {
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    const staleProjectionViewRefreshDueAt = Number(state.ui.staleProjectionViewRefreshDueAt);
+    if (staleProjectionViewRefreshDueAt > 0 && Date.now() >= staleProjectionViewRefreshDueAt) {
+      state.ui.staleProjectionViewRefreshDueAt = null;
+      state.ui.pendingInventoryMutationViewRefresh = true;
+    }
     if (
       state.ui.pendingInventoryMutationViewRefresh
       && !busyNow

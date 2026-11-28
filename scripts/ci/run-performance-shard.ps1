@@ -11,7 +11,7 @@ param(
     [int]$VariantCount = 0,
     [int]$SourceMaxEdge = 0,
     [ValidatePattern('^\d+$')][string]$ExpectedPostgresMajor = '17',
-    [ValidateRange(1, 65535)][int]$PostgresPort = 5432,
+    [ValidateRange(1, 65535)][int]$PostgresPort = $(if ($env:ALBUM_HAVEN_TEST_POSTGRES_PORT) { $env:ALBUM_HAVEN_TEST_POSTGRES_PORT } else { 5432 }),
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
     [string]$RunnerTemp = $env:RUNNER_TEMP,
     [string]$GithubEnv = $env:GITHUB_ENV,
@@ -235,7 +235,8 @@ function Restore-PerformanceDatabase {
         --fixture-root $env:ALBUM_HAVEN_FIXTURE_ROOT `
         --profile $FixtureProfile `
         --database-url $env:DATABASE_MIGRATOR_URL `
-        --replace-existing
+        --replace-existing `
+        @(if ($env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET) { '--synthetic-scale-preset', $env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET })
     if ($LASTEXITCODE -ne 0) { throw "Fixture restoration failed for $FixtureProfile." }
 }
 

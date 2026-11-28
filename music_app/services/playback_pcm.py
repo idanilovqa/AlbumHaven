@@ -10,6 +10,7 @@ import struct
 import subprocess
 from typing import Awaitable, Callable, Literal
 
+from music_app.services.child_process import ChildProcess, start_child_process
 from music_app.services.playback_io import run_playback_io
 from music_app.services.ffmpeg_runtime import (
     hidden_subprocess_creation_flags,
@@ -123,7 +124,7 @@ class PcmChunk:
     pcm: bytes
 
 
-ProcessFactory = Callable[..., Awaitable[asyncio.subprocess.Process]]
+ProcessFactory = Callable[..., Awaitable[ChildProcess]]
 
 
 def pack_pcm_frame(
@@ -217,7 +218,7 @@ class PcmDecoderProcess:
     def __init__(
         self,
         command: PcmOpenCommand,
-        process: asyncio.subprocess.Process,
+        process: ChildProcess,
     ) -> None:
         self.command = command
         self._process = process
@@ -250,7 +251,7 @@ class PcmDecoderProcess:
         command: PcmOpenCommand,
         *,
         ffmpeg_executable: str | None = None,
-        process_factory: ProcessFactory = asyncio.create_subprocess_exec,
+        process_factory: ProcessFactory = start_child_process,
     ) -> "PcmDecoderProcess":
         executable = ffmpeg_executable or resolve_ffmpeg_executable()
         if not executable:
@@ -307,9 +308,7 @@ class PcmDecoderProcess:
             "-ac",
             "2",
             "pipe:1",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             creationflags=hidden_subprocess_creation_flags(),
         )
         if process.stdout is None or process.stderr is None:

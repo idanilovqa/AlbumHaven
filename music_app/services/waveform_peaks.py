@@ -13,6 +13,7 @@ import sys
 import time
 from typing import TYPE_CHECKING, Awaitable, Callable
 
+from music_app.services.child_process import ChildProcess, start_child_process
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
 
 if TYPE_CHECKING:
@@ -183,7 +184,7 @@ async def _discard_stream(stream: object | None) -> None:
         pass
 
 
-async def _terminate_and_wait(process: asyncio.subprocess.Process) -> int:
+async def _terminate_and_wait(process: ChildProcess) -> int:
     if process.returncode is None:
         with suppress(ProcessLookupError):
             process.terminate()
@@ -191,7 +192,7 @@ async def _terminate_and_wait(process: asyncio.subprocess.Process) -> int:
 
 
 async def _stop_and_drain_process(
-    process: asyncio.subprocess.Process,
+    process: ChildProcess,
     *,
     stdout: object | None,
     stderr_task: asyncio.Task[bytes],
@@ -204,7 +205,7 @@ async def _stop_and_drain_process(
 
 
 async def _finish_process_cleanup(
-    process: asyncio.subprocess.Process,
+    process: ChildProcess,
     *,
     stdout: object | None,
     stderr_task: asyncio.Task[bytes],
@@ -252,7 +253,7 @@ async def _stop_feed(feed_task: asyncio.Future[None] | None) -> None:
         await feed_task
 
 
-async def _name_input(process: asyncio.subprocess.Process, path: Path) -> None:
+async def _name_input(process: ChildProcess, path: Path) -> None:
     """Tell a waiting decoder which file to read; it reads the file itself."""
     stdin = process.stdin
     assert stdin is not None
@@ -300,11 +301,11 @@ class WaveformDecoderPool:
 
     def __init__(self, *, size: int = WARM_DECODERS) -> None:
         self._size = size
-        self._idle: list[asyncio.subprocess.Process] = []
+        self._idle: list[ChildProcess] = []
         self._filling: asyncio.Task[None] | None = None
         self._closed = False
 
-    def take(self) -> asyncio.subprocess.Process | None:
+    def take(self) -> ChildProcess | None:
         # Refilling waits for fill(): a decoder starting now would compete with this build.
         while self._idle:
             decoder = self._idle.pop()
@@ -326,7 +327,7 @@ class WaveformDecoderPool:
                 decoder = await _launch_decoder(
                     _warm_decoder_command(executable),
                     current=True,
-                    stdin=asyncio.subprocess.PIPE,
+                    stdin=subprocess.PIPE,
                 )
             except Exception as error:
                 _LOGGER.warning("Waveform decoder start failed: %s", error)
@@ -345,7 +346,7 @@ class WaveformDecoderPool:
         await asyncio.gather(*(_discard_decoder(decoder) for decoder in idle))
 
 
-async def _discard_decoder(decoder: asyncio.subprocess.Process) -> None:
+async def _discard_decoder(decoder: ChildProcess) -> None:
     if decoder.stdin is not None:
         with suppress(OSError):
             decoder.stdin.close()
@@ -411,7 +412,7 @@ class _ChunkPeakBins:
 
 
 async def _build_with_warm_decoder(
-    decoder: asyncio.subprocess.Process,
+    decoder: ChildProcess,
     path: Path,
     *,
     bins: int,
@@ -571,8 +572,8 @@ async def _launch_decoder(
     command: list[str],
     *,
     current: bool,
-    stdin: int | None = None,
-) -> asyncio.subprocess.Process:
+    stdin: int = subprocess.DEVNULL,
+) -> ChildProcess:
     # The playing song's short build runs ahead of background load so its waveform arrives
     # with playback even when the host CPU is saturated; prefetch yields to everything.
     creationflags = 0
@@ -586,17 +587,16 @@ async def _launch_decoder(
         )
     elif not current:
         command = ["nice", "-n", "10", *command]
-    return await asyncio.create_subprocess_exec(
+    return await start_child_process(
         *command,
         stdin=stdin,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=subprocess.PIPE,
         creationflags=creationflags,
     )
 
 
 async def _collect_aggregate_output(
-    process: asyncio.subprocess.Process,
+    process: ChildProcess,
     *,
     cancel_event: asyncio.Event,
     limit: int,

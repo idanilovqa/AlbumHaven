@@ -40,6 +40,11 @@ DOWNLOAD_PATH = "/artifacts/android/download/album-haven-update." + "d" * 43
 INSTALLER_PACKAGES = ("com.google.android.packageinstaller", "com.android.packageinstaller")
 # The reopened page is held back this long, so what covers it before it draws can be seen.
 REOPEN_HOLD_SECONDS = 5
+# The emulator's adb connection can drop around a reinstall. A command it cut off is repeated once the
+# device is back, at most this many times in all; every command here is safe to repeat.
+TRANSPORT_LOST = re.compile(r"device offline|error: closed|device '[^']*' not found|no devices/emulators found")
+ADB_ATTEMPTS = 3
+READY_SECONDS = 180
 
 PAGE = """<!doctype html><title>Update Target</title><body style="background:#2a6">Update Target
 <script>
@@ -158,13 +163,65 @@ class Handler(BaseHTTPRequestHandler):
 
 class Device:
     def __init__(self, adb: str, serial: str):
+        self.serial = serial
         self.adb = [adb, "-s", serial]
+        self.reverse_ports: tuple[int, int] | None = None
+
+    def attempt(self, args: list[str], seconds: float = 180) -> subprocess.CompletedProcess:
+        return subprocess.run(self.adb + args, capture_output=True, text=True, timeout=seconds)
 
     def run(self, *args: str, check: bool = True) -> str:
-        result = subprocess.run(self.adb + list(args), capture_output=True, text=True, timeout=180)
+        for tries in range(1, ADB_ATTEMPTS + 1):
+            result = self.attempt(list(args))
+            lost = result.returncode != 0 and TRANSPORT_LOST.search(result.stdout + result.stderr)
+            if not lost or tries == ADB_ATTEMPTS:
+                break
+            print(f"adb {' '.join(args)}: {result.stderr.strip()}; reconnecting (attempt {tries} of {ADB_ATTEMPTS})", flush=True)
+            self.recover()
         if check and result.returncode != 0:
             raise RuntimeError(f"adb {' '.join(args)} failed: {result.stdout}{result.stderr}")
         return result.stdout
+
+    def recover(self):
+        """Waits until the device is back on adb, booted, with its package manager answering, and the
+        reverse port, which a dropped connection loses, is restored."""
+        deadline = time.time() + READY_SECONDS
+        while True:
+            left = deadline - time.time()
+            if left <= 0:
+                raise RuntimeError(
+                    f"{self.serial} was not back on adb with sys.boot_completed=1 and the package manager "
+                    f"answering and the reverse port restored within {READY_SECONDS} s"
+                )
+            try:
+                self.attempt(["wait-for-device"], left)
+                booted = self.attempt(["shell", "getprop sys.boot_completed"], 30).stdout.strip() == "1"
+                if booted and "package:" in self.attempt(["shell", "pm path android"], 30).stdout:
+                    if not self.reverse_ports:
+                        return
+                    device_port, host_port = self.reverse_ports
+                    restored = self.attempt(["reverse", f"tcp:{device_port}", f"tcp:{host_port}"], 30)
+                    if restored.returncode == 0:
+                        return
+                    # The connection can drop again; any other refusal will not change by waiting.
+                    if not TRANSPORT_LOST.search(restored.stdout + restored.stderr):
+                        raise RuntimeError(f"adb reverse tcp:{device_port} was refused: {restored.stdout}{restored.stderr}")
+            except subprocess.TimeoutExpired:
+                pass
+            time.sleep(1)
+
+    def reverse(self, device_port: int, host_port: int):
+        self.reverse_ports = (device_port, host_port)
+        self.run("reverse", f"tcp:{device_port}", f"tcp:{host_port}")
+
+    def clean_up(self):
+        """Best effort, never waiting for a lost device: the next case recovers it or fails on its own."""
+        self.reverse_ports = None
+        for args in (["reverse", "--remove", f"tcp:{DEV_PORT}"], ["uninstall", PACKAGE]):
+            try:
+                self.attempt(args, 60)
+            except subprocess.TimeoutExpired:
+                pass
 
     def shell(self, command: str, check: bool = True) -> str:
         return self.run("shell", command, check=check)
@@ -195,7 +252,8 @@ class Device:
             self.shell(f"am force-stop {installer}", check=False)
         self.shell("input keyevent KEYCODE_HOME")
         self.run("uninstall", PACKAGE, check=False)
-        self.run("install", "-g", str(apk))
+        self.run("install", "-r", "-g", str(apk))
+        self.recover()
         self.shell(f"appops set {PACKAGE} REQUEST_INSTALL_PACKAGES allow")
         self.shell(f"appops set {PACKAGE} SYSTEM_ALERT_WINDOW {'allow' if overlay else 'deny'}")
 
@@ -242,6 +300,7 @@ def install_confirmed(device: Device, origin: Origin, button: str, new_version: 
     origin.hold_after = time.time()
     device.tap(button)
     wait("the package replaced", lambda: device.version_code() == new_version, 180)
+    device.recover()
     return origin.hold_after
 
 
@@ -276,6 +335,17 @@ def notifies_without_appear_on_top(device: Device, origin: Origin, old: Path, ne
     time.sleep(5)
     expect(not origin.pages_after(installed_at), "the app opened itself without Appear on top")
     expect(not device.resumed(), "the app is on screen without Appear on top")
+
+
+def failure_details(device: Device) -> str:
+    """What Android did with the app since the case began: the replace broadcast, its receiver and notifications."""
+    log = device.run("logcat", "-d", "-v", "time", check=False).splitlines()
+    related = [line for line in log if re.search(r"albumhaven|PACKAGE_REPLACED|UpdatedReceiver", line, re.IGNORECASE)]
+    notifications = [
+        line.strip() for line in device.shell("dumpsys notification --noredact", check=False).splitlines() if PACKAGE in line
+    ]
+    appops = device.shell(f"appops get {PACKAGE}", check=False).strip()
+    return "\n  ".join(["logcat:", *related[-80:], f"notifications: {notifications[-20:]}", f"appops: {appops}"])
 
 
 def signing_certificate(apk: Path) -> str:
@@ -314,18 +384,26 @@ def main():
     for name, case in cases:
         origin = Origin(manifest, apk)
         threading.Thread(target=origin.serve_forever, daemon=True).start()
-        device.run("reverse", f"tcp:{DEV_PORT}", f"tcp:{origin.server_address[1]}")
         try:
+            device.recover()
+            device.run("logcat", "-c", check=False)
+            device.reverse(DEV_PORT, origin.server_address[1])
             case(device, origin, args.old, args.new_version_code)
-            print(f"PASS {name}")
+            print(f"PASS {name}", flush=True)
         except Exception as failure:  # Every case runs; each failure is reported.
             failures += 1
-            screen = [(node.get("package"), node.get("text")) for node in device.nodes() if node.get("text")]
-            print(f"FAIL {name}: {failure}\n  reports: {origin.reports}\n  pages: {origin.pages}\n  screen: {screen}")
+            try:
+                screen = [(node.get("package"), node.get("text")) for node in device.nodes() if node.get("text")]
+                details = failure_details(device)
+            except Exception as unavailable:
+                screen, details = [], f"device details unavailable: {unavailable}"
+            print(
+                f"FAIL {name}: {failure}\n  reports: {origin.reports}\n  pages: {origin.pages}\n  screen: {screen}\n  {details}",
+                flush=True,
+            )
         finally:
-            device.run("reverse", "--remove", f"tcp:{DEV_PORT}", check=False)
             origin.shutdown()
-            device.run("uninstall", PACKAGE, check=False)
+            device.clean_up()
     sys.exit(1 if failures else 0)
 
 

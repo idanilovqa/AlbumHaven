@@ -77,6 +77,49 @@ async def home_data(request):
     assert hazard["via"] == ["ensure_views", "build_relation_views"]
 
 
+def test_a_callback_inside_unpacked_options_is_followed_through_every_hand_off(tmp_path: Path):
+    _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
+    _write(tmp_path, "music_app/services/saves.py", """
+def handle_save(*, reservation=None, **options):
+    return _handle_reserved(reservation=reservation, **options)
+
+def _handle_reserved(*, reservation=None, prevalidate=None, albums=()):
+    if prevalidate is not None:
+        prevalidate(albums=albums)
+""")
+    _write(tmp_path, "music_app/routes/write.py", """
+from fastapi.concurrency import run_in_threadpool
+from music_app.services.relations import build_relation_views
+from music_app.services.saves import handle_save
+
+async def _run_reserved(handler_options, reservation):
+    reserved_options = {**handler_options, "reservation": reservation}
+
+    def run_handler():
+        return handle_save(**reserved_options)
+
+    return await run_in_threadpool(run_handler)
+
+@router.post("/save")
+async def save(request):
+    handler_options = {
+        "albums": request.albums,
+        "prevalidate": (lambda **options: build_relation_views(**options)) if request.structural else None,
+    }
+    return await _run_reserved(handler_options, None)
+
+@router.post("/save-without-check")
+async def save_without_check(request):
+    return await _run_reserved({"albums": request.albums}, None)
+""")
+    analysis = discovery.analyze_python_repository(
+        tmp_path,
+        library_scale_operations=["py:music_app/services/relations.py#build_relation_views"],
+    )
+    rejected = {item["entrypoint"] for item in analysis["hazards"] if item["reject"] and item["rule"] == "BI-04"}
+    assert rejected == {"py:music_app/routes/write.py#save:route:POST /save"}
+
+
 def test_background_closures_are_not_followed_until_called(tmp_path: Path):
     _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
     _write(tmp_path, "music_app/routes/read.py", """
@@ -1340,3 +1383,147 @@ def start(pool, jobs):
 """)
     keys = [item["key"].split("#")[1] for item in discovery.discover_python_entrypoints(tmp_path)]
     assert keys == ["cover_job:background:executor"]
+
+
+def test_a_request_path_opening_its_own_connection_instead_of_leasing_the_pool_is_rejected(tmp_path: Path):
+    # Owner, 11-18 (PR #107): every page render read layout settings through a repository whose
+    # default connect opened a new Postgres connection per call (112-590 ms each), and the preview
+    # storage state polled every 60 s did the same per tick.
+    _write(tmp_path, "music_app/services/postgres_connections.py", """
+from psycopg_pool import ConnectionPool
+
+def pooled_connection(url):
+    return ConnectionPool(url).connection()
+""")
+    _write(tmp_path, "music_app/services/layout.py", """
+import psycopg
+from music_app.services.postgres_connections import pooled_connection
+
+def _connect(url):
+    return psycopg.connect(url)
+
+class LayoutPreferences:
+    def __init__(self, config, *, connect=None):
+        self._url = config["url"]
+        self._connect = connect or _connect
+
+    def load(self):
+        with self._connect(self._url) as connection:
+            return connection.execute("select 1").fetchone()
+
+def load_pooled(config):
+    with pooled_connection(config["url"]) as connection:
+        return connection.execute("select 1").fetchone()
+
+def move_previews(config):
+    with psycopg.connect(config["url"]) as connection:
+        connection.execute("select pg_advisory_lock(1)")
+""")
+    _write(tmp_path, "music_app/routes/pages.py", """
+import threading
+from music_app.services.layout import LayoutPreferences, load_pooled, move_previews
+
+@router.get('/')
+def gallery(request):
+    return LayoutPreferences(request.app.state.config).load()
+
+@router.get('/pooled')
+def pooled(request):
+    return load_pooled(request.app.state.config)
+
+def poll_preview_storage(config):
+    return LayoutPreferences(config).load()
+
+@router.post('/move')
+def move(request):
+    threading.Thread(target=move_previews, args=(request.app.state.config,)).start()
+""")
+    hazards = _hazards(tmp_path, "BI-15")
+    assert sorted(hazard["entrypoint"].split("#")[1] for hazard in hazards) == [
+        "gallery:route:GET /",
+        "poll_preview_storage:poller:name",
+    ]
+    for hazard in hazards:
+        assert hazard["reject"] is True
+        assert hazard["operation"] == "database-connect-per-request:psycopg.connect"
+        assert (hazard["path"], hazard["function"]) == ("music_app/services/layout.py", "_connect")
+    # A background worker may hold a connection of its own; the pool's own module is the pool.
+    assert not _hazards(tmp_path, "BI-05")
+
+
+def test_session_state_is_rejected_unless_its_function_takes_a_connection_nobody_borrows_next(tmp_path: Path):
+    # 0.11.45 (PR #113): a session advisory lock and a session setting reached shared leases.
+    _write(tmp_path, "music_app/services/postgres_connections.py", """
+def leased_connection(url):
+    pass
+
+def session_connection(url):
+    pass
+""")
+    _write(tmp_path, "music_app/services/locks.py", """
+import psycopg
+from music_app.services.postgres_connections import leased_connection, session_connection
+
+_LISTEN_SQL = "listen library_changes"
+
+class Holder:
+    def __init__(self, connect=None):
+        self._lock_connect = connect or session_connection
+
+    def _connect_for_lock(self, url):
+        return self._lock_connect(url)
+
+    def lock(self, url):
+        with self._connect_for_lock(url) as connection:
+            connection.execute("select pg_try_advisory_lock(1)")
+
+def lock_on_own_connection(url):
+    with psycopg.connect(url) as connection:
+        connection.execute("select pg_advisory_lock(1)")
+
+def lock_on_shared_lease(url):
+    with leased_connection(url) as connection:
+        connection.execute("select pg_advisory_lock(1)")
+
+def set_on_shared_lease(url):
+    with leased_connection(url) as connection:
+        connection.execute("set statement_timeout = 0")
+
+def set_named_by_placeholder_on_shared_lease(url, name):
+    with leased_connection(url) as connection:
+        connection.execute(f"set {name} = 0")
+
+def set_after_statement_in_f_string(connection, table):
+    connection.execute(f"delete from {table}; set app.{table} = 0")
+
+def set_config_on_callers_connection(connection):
+    connection.execute("select set_config('search_path', 'public', false)")
+
+def keep_temporary_table(connection):
+    connection.execute("create temporary table picked (id bigint)")
+
+def transaction_scoped(connection):
+    connection.execute("set local jit = off")
+    connection.execute("set transaction isolation level repeatable read, read only")
+    connection.execute("select pg_advisory_xact_lock(1)")
+    connection.execute("create temporary table picked (id bigint) on commit drop")
+    connection.execute("update albums as a " "set title = excluded.title")
+
+def update_named_by_placeholder(connection, table, column):
+    connection.execute(f"update {table} set track_id = %s where library_id = %s")
+    connection.execute(f"update {table} " f"set {column} = %s")
+    connection.execute(f"set local {column} = 0")
+""")
+
+    hazards = [hazard for hazard in _hazards(tmp_path, "BI-15") if "session-state" in hazard["operation"]]
+
+    assert sorted((hazard["function"], hazard["operation"].split(":")[1]) for hazard in hazards) == [
+        ("_LISTEN_SQL", "listen"),
+        ("keep_temporary_table", "temp-table"),
+        ("lock_on_shared_lease", "advisory-lock"),
+        ("set_after_statement_in_f_string", "set"),
+        ("set_config_on_callers_connection", "set-config"),
+        ("set_named_by_placeholder_on_shared_lease", "set"),
+        ("set_on_shared_lease", "set"),
+    ]
+    assert all(hazard["reject"] is True for hazard in hazards)

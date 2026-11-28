@@ -77,7 +77,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
     await trackModalActions.pressSpaceOnFocusedLightboxClose({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await globalPlayerActions.expectSettledPlaybackSummary(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,
@@ -87,7 +87,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
   await stepLogger.step('Keep the player foregrounded and close Album Details with native Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('albumDetails', { paused: true });
     await globalPlayerActions.waitForPlaybackState({ paused: true });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await globalPlayerActions.expectSettledPlaybackSummary(expectedPlayback(true));
     await trackModalActions.pressSpaceOnFocusedCloseControl({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
@@ -100,7 +100,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
     await coverLookupActions.pressSpaceOnFocusedDrawerOpener({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await globalPlayerActions.expectSettledPlaybackSummary(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,
@@ -110,7 +110,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
   await stepLogger.step('Keep the player foregrounded and close Notifications with Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('notifications', { paused: true });
     await globalPlayerActions.waitForPlaybackState({ paused: true });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await globalPlayerActions.expectSettledPlaybackSummary(expectedPlayback(true));
     await coverLookupActions.pressSpaceOnFocusedDrawerClose({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
@@ -123,7 +123,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
     await settingsModalAppBarActions.pressSpaceOnFocusedSettingsOpener({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await globalPlayerActions.expectSettledPlaybackSummary(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,
@@ -132,7 +132,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
 
   await stepLogger.step('Keep the player foregrounded and close Settings with Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('settings', { paused: true });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await globalPlayerActions.expectSettledPlaybackSummary(expectedPlayback(true));
     await settingsModalAppBarActions.pressSpaceOnFocusedSettingsClose({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });

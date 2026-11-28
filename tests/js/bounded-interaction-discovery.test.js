@@ -852,3 +852,23 @@ test('a function that passes its own parameter to fetch becomes a request helper
     ['requestJson:request:fetch', ['delegated']],
   ]);
 });
+
+test('navigation is a history step reaching a request, or a GET whose own function records the view in history', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { entrypoints } = analyzeJavaScriptSources({ [FILE]: `
+function pushBrowserViewState(view) { window.history.pushState(view, '', view.url); }
+function fetchAndRender(url) { pushBrowserViewState({ url }); return fetch(url); }
+function openArtist(artist) { pushBrowserViewState({ url: '/?artist=' + artist }); return fetch('/view-data?artist=' + artist); }
+function saveCover(album) { fetchAndRender('/view-data'); return fetch('/covers/' + album, { method: 'POST' }); }
+function loadStatus() { return fetch('/status'); }
+window.addEventListener('popstate', () => fetchAndRender(window.location.href));
+window.addEventListener('hashchange', () => loadStatus());
+window.addEventListener('resize', () => loadStatus());
+` });
+  const navigation = entrypoints.filter(item => item.navigation).map(item => item.key.split('#')[1]).sort();
+  assert.deepEqual(navigation, [
+    '<top-level>:event:hashchange',
+    '<top-level>:event:popstate',
+    'openArtist:request:fetch',
+  ]);
+});

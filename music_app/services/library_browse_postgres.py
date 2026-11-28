@@ -82,12 +82,12 @@ from music_app.services.utils import (
 )
 from version import RELEASE_VERSION
 
+from music_app.services.postgres_connections import leased_connection as _leased_connection
+
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
-    from psycopg.rows import dict_row
 except ImportError:  # pragma: no cover - keeps the module importable without psycopg.
     psycopg = None
-    dict_row = None
 
 
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -3582,8 +3582,9 @@ class PostgresLibraryBrowseRepository:
             str(identity_payload.get("relation_alias_fingerprint") or ""),
         )
         cacheable = bool(fingerprint[0] and fingerprint[1])
+        # Every caller reads these library-sized maps and none changes them, so a hit shares them.
         cached = (
-            self._get_cached_utility_projection("relation-alias-maps")
+            self._get_cached_utility_projection("relation-alias-maps", copy_payload=False)
             if cacheable
             else None
         )
@@ -4161,9 +4162,7 @@ def _non_album_entries_from_inventory_candidates(
     return entries
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for Postgres library browse.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _row_mapping(row: object) -> Mapping[str, object]:

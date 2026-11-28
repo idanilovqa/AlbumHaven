@@ -2169,6 +2169,38 @@ for (const discarded of ['detached', 'mode-off']) {
   });
 }
 
+for (const left of ['overlay', 'tab', 'canvas']) {
+  test(`a saved loop stops waiting when its ${left} goes away and reloads at once when shown again`, async () => {
+    const canvas = { hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } } };
+    const overlay = { hidden: false };
+    const state = {
+      player: { appearance: { seekbarMode: 'waveform' } },
+      utility: { activeTab: 'loops', loopEditors: {} },
+    };
+    const context = loadHelper({ state, document: { querySelector: () => canvas }, drawCombinedLoopWaveform() {} });
+    context.getUtilityModalElements = () => ({ overlay });
+    const loads = [];
+    context.loadSavedLoopWaveformPeaks = (_id, isWanted) => new Promise(resolve => loads.push({ isWanted, resolve }));
+    const audio = { duration: 20, currentTime: 0 };
+
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    assert.equal(loads[0].isWanted(), true);
+    if (left === 'overlay') overlay.hidden = true;
+    if (left === 'tab') state.utility.activeTab = 'appearance';
+    if (left === 'canvas') canvas.isConnected = false;
+    assert.equal(loads[0].isWanted(), false);
+    loads[0].resolve(null);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(loads.length, 1, 'an unwanted loop must not restart its own wait');
+
+    overlay.hidden = false;
+    state.utility.activeTab = 'loops';
+    canvas.isConnected = true;
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    assert.equal(loads.length, 2, 'showing the loop again must not wait out a failure cooldown');
+  });
+}
+
 for (const failure of ['null', 'reject']) {
   test(`saved loop retains regular seeking and retries a ${failure} waveform failure after backoff`, async () => {
     let waveformMode = false;

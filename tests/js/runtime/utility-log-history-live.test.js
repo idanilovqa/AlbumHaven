@@ -177,8 +177,10 @@ test('actual download owner attaches its link until the browser accepts the down
   };
 
   await h.context.downloadUtilityLogHistory();
+  assert.deepEqual(events, ['create', 'append', 'click', 'remove'], 'the browser may still be reading the URL');
 
-  assert.deepEqual(events, ['create', 'append', 'click', 'remove', 'revoke']);
+  await h.context.downloadUtilityLogHistory();
+  assert.deepEqual(events.slice(4), ['revoke', 'create', 'append', 'click', 'remove']);
 });
 
 test('period query uses the SearchInput anchored variant of the shared form owner', async () => {

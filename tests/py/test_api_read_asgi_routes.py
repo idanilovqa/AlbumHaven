@@ -2048,40 +2048,68 @@ def test_asgi_selected_artist_root_sidebar_composes_only_root_sidebar_fields(
     assert payload["view_data_source"] == "postgres_library_browse"
 
 
-def test_asgi_selected_artist_root_sidebar_retries_while_projection_is_rebuilding(
-    monkeypatch,
-):
+def _selected_artist_request_with_pending_root_header(monkeypatch, direct_root_sidebar):
     from starlette.datastructures import QueryParams
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
-    class PendingRepository:
+    class PendingHeaderRepository:
         def __init__(self, _config):
             pass
 
         def build_selected_artist_payload(self, **_kwargs):
-            return {"selected_artist": "Broadcast", "artist_groups": []}
+            return {
+                "selected_artist": "Broadcast",
+                "artist_groups": [{"artist": "Broadcast", "albums": [{"key": "broadcast-tender-buttons"}]}],
+            }
 
         def build_projected_root_sidebar_payload(self, **_kwargs):
             raise asgi_read_routes.GalleryProjectionPending("Gallery is being prepared.")
 
+        def build_root_sidebar_payload(self, *, query_params=None):
+            assert query_params.getlist("category") == ["main_library"]
+            return direct_root_sidebar()
+
     request = SimpleNamespace(
-        query_params=QueryParams("surface=albums&artist=Broadcast&root_sidebar=1"),
+        query_params=QueryParams("surface=albums&artist=Broadcast&root_sidebar=1&category=main_library"),
         app=SimpleNamespace(state=SimpleNamespace(config={}, library_state={})),
     )
-    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", PendingRepository)
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", PendingHeaderRepository)
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_root_album_browse_request", lambda _request: False)
     monkeypatch.setattr(asgi_read_routes, "_should_use_transient_scan_browse_state", lambda *_args: False)
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_root_sidebar_request", lambda _request: False)
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_selected_artist_request", lambda _request: True)
+    monkeypatch.setattr(asgi_read_routes, "_project_missing_album_actions_for_request", lambda *_args: None)
+    return asgi_read_routes.view_data(request)
 
-    response = asgi_read_routes.view_data(request)
+
+def test_asgi_selected_artist_serves_its_gallery_and_sidebar_while_the_root_header_is_rebuilding(monkeypatch):
+    """A pending root header doesn't hold the selected gallery: the sidebar route's own builder answers."""
+    response = _selected_artist_request_with_pending_root_header(monkeypatch, lambda: {
+        "artist_groups": [{"artist": "Root preview", "albums": []}],
+        "artists_sidebar": [{"artist": "Broadcast", "count": 1}, {"artist": "Mono", "count": 2}],
+        "artist_count": 2,
+        "show_all_artists_sidebar_link": True,
+    })
+
+    assert response.status_code == 200
+    payload = json.loads(response.body)
+    assert payload["selected_artist"] == "Broadcast"
+    assert payload["artist_groups"] == [{"artist": "Broadcast", "albums": [{"key": "broadcast-tender-buttons"}]}]
+    assert payload["artists_sidebar"] == [{"artist": "Broadcast", "count": 1}, {"artist": "Mono", "count": 2}]
+    assert payload["artist_count"] == 2
+    assert payload["show_all_artists_sidebar_link"] is True
+
+
+def test_asgi_selected_artist_still_retries_when_no_root_sidebar_can_be_built(monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    def relations_pending():
+        raise asgi_read_routes.SearchProjectionPending("Artist relationships are being prepared.")
+
+    response = _selected_artist_request_with_pending_root_header(monkeypatch, relations_pending)
 
     assert response.status_code == 503
-    assert json.loads(response.body) == {
-        "ok": False,
-        "code": "gallery_projection_pending",
-        "error": "Gallery is being prepared.",
-    }
+    assert json.loads(response.body)["code"] == "gallery_projection_pending"
     assert response.headers["Retry-After"] == "1"
 
 
@@ -5003,6 +5031,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     monkeypatch.setattr(asgi_read_routes, "build_problematic_albums_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    # The placeholder database is unreachable: the owner's MusicBrainz Artist rows
+    # would wait out the pool timeout on every listing request.
+    monkeypatch.setattr(asgi_read_routes, "load_problematic_artist_items", lambda _request: [])
     asgi_app.state.library_watch_health_service = SimpleNamespace(
         load_problems=lambda: [],
     )

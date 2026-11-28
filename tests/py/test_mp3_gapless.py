@@ -176,7 +176,7 @@ def test_probe_reads_through_fragmented_headers_and_avoids_double_trimming(monke
             asyncio.create_task(finish())
             return process
         monkeypatch.setattr(mp3_gapless, "read_mp3_gapless_info", lambda _path: mp3_gapless.Mp3GaplessInfo(44100, 132300, 576, 1000))
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+        monkeypatch.setattr(mp3_gapless, "start_child_process", launch)
         assert await mp3_gapless.ignored_mp3_gapless_info(Path("fixture.mp3"), "ffmpeg") is None
     asyncio.run(run())
 
@@ -204,7 +204,7 @@ def test_probe_cancellation_reaps_its_exact_process(monkeypatch, cancellation_ki
             launched.set()
             return process
         monkeypatch.setattr(mp3_gapless, "read_mp3_gapless_info", lambda _path: mp3_gapless.Mp3GaplessInfo(44100, 132300, 576, 1000))
-        monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+        monkeypatch.setattr(mp3_gapless, "start_child_process", launch)
         event = asyncio.Event()
         task = asyncio.create_task(mp3_gapless.ignored_mp3_gapless_info(Path("fixture.mp3"), "ffmpeg", cancel_event=event))
         await launched.wait()
@@ -255,7 +255,7 @@ def counted_gapless_probe(monkeypatch, tmp_path):
         calls.append(process)
         return process
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(mp3_gapless, "start_child_process", launch)
     return media, executable, info, calls, state
 
 

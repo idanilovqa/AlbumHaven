@@ -13,7 +13,9 @@ from typing import Any, Protocol
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
+    split_folder_covers,
 )
+from music_app.services.album_local_membership import physical_album_folder
 from music_app.services.album_ratings_postgres import (
     PostgresAlbumRatingsService,
     tag_disc_rating_candidates,
@@ -62,14 +64,13 @@ from music_app.services.relation_projection_postgres import (
     relation_source_fingerprint,
     replace_artist_search_projection_in_transaction,
 )
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
-    from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover - keeps migration and diagnostic imports available.
     psycopg = None
-    dict_row = None
     Jsonb = None
 
 
@@ -2108,10 +2109,14 @@ class _SharedConnection:
         self._connect = connect
         self._lock = threading.Lock()
         self._connection: Any = None
+        self._closed = False
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         with self._lock:
+            if self._closed:
+                # A lease opened now would never be returned to the pool.
+                raise RuntimeError("The cover run's shared connection is closed.")
             if self._connection is None:
                 self._connection = self._connect()
             connection = self._connection
@@ -2139,6 +2144,7 @@ class _SharedConnection:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._connection is not None:
                 self._discard()
 
@@ -2182,9 +2188,7 @@ def select_scan_cache_adapter(config: dict[str, object]) -> ScanCacheAdapter:
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for Postgres scan_cache persistence.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _jsonb(value: object) -> object:
@@ -3894,6 +3898,8 @@ def _restore_structurally_inherited_covers(
     persisted_entries: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
     restored_entries = dict(incoming_entries)
+    # A fresh read carries no inheritance marks, so the folder pass dropped the cover of both halves.
+    kept_split_covers = split_folder_covers(persisted_entries)
     for path, incoming_entry in incoming_entries.items():
         persisted_entry = persisted_entries.get(path)
         if not isinstance(persisted_entry, dict):
@@ -3901,15 +3907,16 @@ def _restore_structurally_inherited_covers(
         cover_path = str(persisted_entry.get("cover_path") or "").strip()
         if (
             incoming_entry.get("cover_path")
-            or persisted_entry.get("cover_inherited_from_structural_edit") is not True
             or not cover_path
+            or (physical_album_folder(path), cover_path.casefold()) not in kept_split_covers
             or not Path(cover_path).is_file()
             or not inferred_local_cover_belongs_to_track(cover_path, path)
         ):
             continue
         restored_entry = dict(incoming_entry)
         restored_entry["cover_path"] = cover_path
-        restored_entry["cover_inherited_from_structural_edit"] = True
+        if persisted_entry.get("cover_inherited_from_structural_edit") is True:
+            restored_entry["cover_inherited_from_structural_edit"] = True
         restored_entries[path] = restored_entry
     return restored_entries
 

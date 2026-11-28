@@ -307,6 +307,50 @@ test('a transient busy response retries within the same identity until backend c
   assert.equal(peaks.left[0], 0.375);
 });
 
+test('a displayed saved loop keeps waiting while the other loops are being built', async () => {
+  let attempts = 0;
+  const delays = [];
+  const context = loadPeaksRuntime(async () => {
+    attempts += 1;
+    if (attempts <= 8) return { ok: false, status: 429 };
+    return { ok: true, status: 200, json: async () => peakPayload(0.4) };
+  }, {
+    setTimeout(callback, delay) {
+      delays.push(delay);
+      callback();
+      return delays.length;
+    },
+  });
+
+  const peaks = await context.loadSavedLoopWaveformPeaks('fifth-loop', () => true);
+
+  assert.equal(peaks?.left[0], 0.4, 'four builds ahead of it must not leave a displayed loop blank');
+  assert.deepEqual(delays, [50, 100, 200, 400, 800, 2000, 2000, 2000]);
+});
+
+test('a busy saved-loop wait ends once no caller still shows that loop', async () => {
+  let attempts = 0;
+  let shownInList = true;
+  let shownInEditor = true;
+  const context = loadPeaksRuntime(async () => {
+    attempts += 1;
+    if (attempts === 7) shownInList = false;
+    if (attempts === 10) shownInEditor = false;
+    return { ok: false, status: 429 };
+  }, {
+    setTimeout(callback) {
+      queueMicrotask(callback);
+      return 1;
+    },
+  });
+
+  const list = context.loadSavedLoopWaveformPeaks('shared-loop', () => shownInList);
+  const editor = context.loadSavedLoopWaveformPeaks('shared-loop', () => shownInEditor);
+
+  assert.deepEqual(await Promise.all([list, editor]), [null, null]);
+  assert.equal(attempts, 10, 'the shared wait lasts as long as any caller shows the loop, and no longer');
+});
+
 test('the current track keeps waiting out a long busy build instead of dropping its waveform', async () => {
   let attempts = 0;
   const delays = [];

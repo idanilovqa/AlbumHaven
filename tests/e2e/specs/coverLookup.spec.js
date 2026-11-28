@@ -3678,7 +3678,7 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
 // once; only an image still loading inside its own card may blink, and an album without art never blinks.
 // Owner (COVER-LOOKUP-FIRST-OPEN): the first opening after a page load must paint the album's own images, not
 // a loading or storage-unavailable state, for an album whose files exist on disk.
-test('FTC-COVERS-050 a cold Album Details opening paints every LOCAL image of an album with files', { tag: '@area:cover-providers' }, async ({
+test('FTC-COVERS-058 a cold Album Details opening paints every LOCAL image of an album with files', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,

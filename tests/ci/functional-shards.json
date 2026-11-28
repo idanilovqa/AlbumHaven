@@ -938,7 +938,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
-              "case": "FTC-COVERS-050 a cold Album Details opening paints every LOCAL image of an album with files",
+              "case": "FTC-COVERS-058 a cold Album Details opening paints every LOCAL image of an album with files",
               "area": "cover-providers"
             },
             {

@@ -9230,3 +9230,29 @@ test('a problem row without a suggested edit shows its current values', () => {
   assert.deepEqual(current, ['Album artist: Cyan, Album: Crown'], 'only the row without a suggestion shows current values');
   assert.ok(html.includes('data-problem-suggestion-id="y"'), 'the suggested edit still shows current -> suggested');
 });
+
+// Owner (2026-11-25): a mixed-folder entry lists the folder's other album after its own tracks, in one table,
+// each row with its own problems and values.
+test('a mixed folder entry lists the other album\'s tracks after its own, with their own values', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
+  context.state.utility.searchQuery = '';
+  const own = 'C:\Music\Are You There\01.flac';
+  const other = 'C:\Music\Are You There\Breathe.flac';
+  const album = {
+    key: 'michal::are you there', tracks: [{ path: own, title: 'Intro', track_number: 1 }],
+    problem_reasons: ['Mixed album metadata in one folder'], album_problem_rows: [], allowed_actions: {},
+    track_problem_rows: [{ path: own, reasons: ['Mixed album metadata in one folder'], ignorable_reasons: [],
+      current_values: [{ field: 'album_artist', label: 'Album artist', value: 'Michał Łapaj' }] }],
+    folder_neighbor_rows: [{ path: other, album_key: 'are you there::breathe', album_title: 'Breathe', track_title: 'Breathe',
+      track_number: 1, reasons: ['Mixed album metadata in one folder'], ignorable_reasons: [], suggested_edits: [],
+      current_values: [{ field: 'album_artist', label: 'Album artist', value: 'Are You There' }] }],
+  };
+  const html = context.buildDetectedProblemsHtml(album);
+  const order = [...html.matchAll(/data-problematic-track-path="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual([...new Set(order)], [own, other], 'own tracks first, then the other album');
+  assert.ok(html.includes('data-problematic-folder-neighbor="are you there::breathe"'));
+  assert.deepEqual([...html.matchAll(/data-problem-current-values>([^<]*)</g)].map(match => match[1]),
+    ['Album artist: Michał Łapaj', 'Album artist: Are You There']);
+  assert.ok(html.includes('01. Breathe'), 'the other album\'s row names its track');
+});

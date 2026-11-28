@@ -191,14 +191,18 @@ async function readConnectedOutline(page, anchor, surface) {
       if (x >= Math.floor(trigger.left - 1) && x <= Math.ceil(trigger.right + 1)) continue;
       if (![pixel(x, topY - 1), pixel(x, topY), pixel(x, topY + 1)].some(differsFromFill)) topGaps.push(x);
     }
-    const topLineSizes = getComputedStyle(document.querySelector(surfaceSelector), '::after').backgroundSize
-      .split(',').map(layer => Number.parseFloat(layer.trim()));
+    const surfaceStyle = getComputedStyle(document.querySelector(surfaceSelector));
+    const lineStyle = getComputedStyle(document.querySelector(surfaceSelector), '::after');
+    const topLineSizes = lineStyle.backgroundSize.split(',').map(layer => Number.parseFloat(layer.trim()));
+    // The panel's top line is laid out in its ::after box, which may overhang the panel.
+    const lineLeft = panel.left + Number.parseFloat(surfaceStyle.borderLeftWidth) + Number.parseFloat(lineStyle.left);
+    const lineRight = panel.right - Number.parseFloat(surfaceStyle.borderRightWidth) - Number.parseFloat(lineStyle.right);
     return {
       connectorGaps,
       connectorAccentGaps,
       topGaps,
       topLineSideWidths: { left: topLineSizes[1], right: topLineSizes[2] },
-      triggerOffsets: { left: trigger.left - panel.left, right: panel.right - trigger.right },
+      triggerOffsets: { left: trigger.left - lineLeft, right: lineRight - trigger.right },
     };
   }, {
     base64: screenshot.toString('base64'),
@@ -304,14 +308,18 @@ async function mountScrollableArtistInfo(page) {
     const p = panel.getBoundingClientRect();
     const edge = p.bottom <= a.top ? 'bottom' : 'top';
     const gap = Math.max(0, edge === 'top' ? p.top - a.bottom : a.top - p.bottom);
+    // The trigger's ring runs from its padding box to the panel's joining line.
+    const style = getComputedStyle(trigger);
+    const reach = gap + Number.parseFloat(edge === 'top' ? style.borderBottomWidth : style.borderTopWidth);
     return {
       edge: panel.dataset.triggerAnchorEdge,
       gap: Number.parseFloat(panel.style.getPropertyValue('--trigger-anchor-gap')),
       synchronized: panel.dataset.triggerAnchorEdge === edge
         && trigger.dataset.triggerAnchorEdge === edge
         && Number.parseFloat(panel.style.getPropertyValue('--trigger-anchor-gap')) === gap
-        && Number.parseFloat(trigger.style.getPropertyValue('--trigger-anchor-gap')) === gap
-        && Number.parseFloat(panel.style.getPropertyValue('--trigger-anchor-width')) === a.width,
+        && Number.parseFloat(trigger.style.getPropertyValue('--trigger-anchor-gap')) === reach
+        // The panel line stays open across the trigger's interior, inside its 2px ring.
+        && Number.parseFloat(panel.style.getPropertyValue('--trigger-anchor-width')) === a.width - 4,
       scrollTop: document.getElementById('scroll-owner').scrollTop,
     };
   });
@@ -399,13 +407,14 @@ test('Artist Family opening keeps its top shadow clip stationary', async ({ page
     expect(samples[index].clipBottom).toBeLessThan(samples[index - 1].clipBottom);
   }
 
-  // The phone drawer deliberately leaves room for its joined edge and shadow.
+  // The phone drawer deliberately leaves room for its joined edge (both rows of its
+  // 2px joining line) and shadow.
   // Exercise both sides of the breakpoint without replacing the desktop fold.
   await page.locator('aside').evaluate(panel => {
     for (const animation of panel.getAnimations()) animation.finish();
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(-1px -80px -80px)');
   const seam = await page.locator('aside').evaluate(panel => {
     const style = getComputedStyle(panel, '::after');
     return { top: style.top, height: style.height, width: style.getPropertyValue('--trigger-top-line-width').trim() };
@@ -414,7 +423,7 @@ test('Artist Family opening keeps its top shadow clip stationary', async ({ page
   await page.setViewportSize({ width: 901, height: 844 });
   await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(-1px 0px 0px)');
   await page.setViewportSize({ width: 900, height: 844 });
-  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(0px -80px -80px)');
+  await expect(page.locator('aside')).toHaveCSS('clip-path', 'inset(-1px -80px -80px)');
 });
 
  test('a dropdown extending both sides has mirrored left and right joins', async ({ page, browser }) => {
@@ -658,10 +667,11 @@ for (const name of [
     expect(outline.connectorGaps, 'trigger outline reaches the panel without a detached fragment').toEqual([]);
     expect(outline.connectorAccentGaps, 'the connected trigger-to-panel outline stays blue').toEqual([]);
     expect(outline.topGaps, 'panel top edge is continuous outside the open trigger').toEqual([]);
+    // The trigger's 2px ring lies on its border box; the panel line ends on its inner edge.
     expect(outline.topLineSideWidths.left, 'left panel line stops at the trigger corner')
-      .toBeLessThanOrEqual(outline.triggerOffsets.left + 0.01);
+      .toBeLessThanOrEqual(outline.triggerOffsets.left + 2 + 0.01);
     expect(outline.topLineSideWidths.right, 'right panel line stops at the trigger corner')
-      .toBeLessThanOrEqual(outline.triggerOffsets.right + 0.01);
+      .toBeLessThanOrEqual(outline.triggerOffsets.right + 2 + 0.01);
     await expect(page).toHaveScreenshot(`gallery-${name.toLowerCase().replaceAll(' ', '-')}-anchor.png`, {
       animations: 'disabled',
       clip: { x: 48, y: 0, width: 392, height: 240 },

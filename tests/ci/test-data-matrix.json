@@ -15203,6 +15203,156 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel meet at square corners at 1440 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel meet at square corners at 1440 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Artist Family trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Artist Family trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "PF filter trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "PF filter trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Log History calendar trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History calendar trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Appearance sections trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Appearance sections trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/anchorJoinGeometry.spec.js",
+    "case": "Settings trigger and panel meet at square corners at 375 px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Settings trigger and panel meet at square corners at 375 px"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artistInfoScrollAnchor.spec.js",
     "case": "the panel closes once the header moves on to the next artist",
     "profile": null,

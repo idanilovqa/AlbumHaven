@@ -11,10 +11,29 @@ const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), context);
 test('connector follows the actual trigger position within a clamped popup', () => {
   const geometry = context.getTriggerAnchorGeometry({ left: 250, right: 284, top: 10, bottom: 44, width: 34 }, { left: 30, right: 300, top: 54, bottom: 200 });
-  assert.equal(geometry.left, 220);
-  assert.equal(geometry.right, 16);
+  // The trigger's interior in the panel's joining-line box, which starts 1px outside its padding box.
+  assert.equal(geometry.left, 223);
+  assert.equal(geometry.width, 30);
+  assert.equal(geometry.right, 19);
   assert.equal(geometry.gap, 10);
+  assert.equal(geometry.reach, 10);
   assert.equal(geometry.edge, 'top');
+});
+test('the trigger ring and the panel side line meet on the same rows and columns', () => {
+  // A bordered trigger over a panel whose joining line sits 1px above its top edge.
+  const geometry = context.getTriggerAnchorGeometry({ left: 557, right: 591, top: 210, bottom: 244, width: 34 },
+    { left: 557, right: 849, top: 248, bottom: 496 },
+    { anchor: { top: 1, right: 1, bottom: 1, left: 1 }, surface: { right: 1, bottom: 1, left: 1 }, line: { top: -1 } });
+  // The ring runs from the trigger's padding box (243) to the line's top row (247).
+  assert.equal(geometry.reach, 4);
+  // The panel's side line (padding-box coordinates) is the ring's outer column.
+  assert.equal(geometry['side-left'], -1);
+  assert.equal(geometry.side, 'left');
+  assert.equal(geometry.left, 2);
+  assert.equal(geometry.right, 849 - 589);
+  const above = context.getTriggerAnchorGeometry({ left: 100, right: 134, top: 300, bottom: 334, width: 34 },
+    { left: 20, right: 200, top: 100, bottom: 292 }, { anchor: { top: 1 } });
+  assert.equal(above.reach, 9);
 });
 test('upward dropdown joins its bottom edge to the trigger', () => {
   const geometry = context.getTriggerAnchorGeometry({ left: 100, right: 134, top: 300, bottom: 334, width: 34 }, { left: 20, right: 200, top: 100, bottom: 292 });
@@ -110,8 +129,8 @@ test('connector tracks sibling-driven trigger movement during expansion and stop
   for (const x of [242, 234, 218, 250]) {
     left = x;
     onResize();
-    assert.equal(props.get('--trigger-anchor-left'), `${x}px`);
-    assert.equal(props.get('--trigger-anchor-right'), `${400 - x - 34}px`);
+    assert.equal(props.get('--trigger-anchor-left'), `${x + 3}px`);
+    assert.equal(props.get('--trigger-anchor-right'), `${400 - x - 34 + 3}px`);
   }
   local.clearTriggerAnchor(surface);
   assert.equal(disconnected, true);

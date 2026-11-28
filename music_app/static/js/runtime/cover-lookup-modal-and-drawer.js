@@ -137,6 +137,108 @@ function bindCoverLookupMobileSheetSwipe(overlay) {
   bindTarget(body, () => Number(body.scrollTop || 0) <= 0);
 }
 
+// Owner (11-28): a user's PASTED IMAGES stay with the album between opens. The server keeps the pasting user's
+// images per album (at most 10, each removed after 7 days unused); a kept image is shown from its own URL.
+const COVER_LOOKUP_PASTED_IMAGES_URL = '/utilities/cover-lookup/pasted-images';
+
+// The picture a PASTED IMAGES card shows and saves: the pasted data, or the kept image's URL after a reopen.
+function coverLookupPastedImageUrl(item) {
+  return String(item?.data_url || item?.preview_url || '').trim();
+}
+
+function coverLookupAlbumId(album) {
+  const albumId = Number(album?.album_id ?? album?.id);
+  return Number.isInteger(albumId) && albumId > 0 ? albumId : 0;
+}
+
+function coverLookupPastedImagesRequest(body) {
+  return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+async function readCoverLookupPastedImagesResponse(response) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'Pasted images are unavailable.');
+  return data;
+}
+
+function keptCoverLookupPastedImage(albumId, item) {
+  return {
+    id: `kept-${item.id}`,
+    stored_id: String(item.id),
+    filename: String(item.filename || 'Pasted image'),
+    album: 'Pasted image',
+    resolution: '',
+    width: Number(item.width || 0) || 0,
+    height: Number(item.height || 0) || 0,
+    mime_type: String(item.mime_type || ''),
+    size_bytes: Number(item.size_bytes || 0) || 0,
+    preview_url: `${COVER_LOOKUP_PASTED_IMAGES_URL}/${albumId}/${encodeURIComponent(String(item.id))}`,
+  };
+}
+
+async function loadCoverLookupPastedImages(album, session) {
+  const albumId = coverLookupAlbumId(album);
+  if (!albumId || typeof fetch !== 'function') return;
+  try {
+    const data = await readCoverLookupPastedImagesResponse(await fetch(
+      '/utilities/cover-lookup/pasted-images/list', coverLookupPastedImagesRequest({ album_id: albumId }),
+    ));
+    if (session !== coverLookupModalSession) return;
+    const current = Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : [];
+    const shown = new Set(current.map((item) => item.stored_id).filter(Boolean));
+    // Newest first, like images pasted in this opening.
+    const kept = (Array.isArray(data.items) ? data.items : []).slice().reverse()
+      .filter((item) => !shown.has(String(item?.id || '')))
+      .map((item) => keptCoverLookupPastedImage(albumId, item));
+    if (!kept.length) return;
+    state.coverLookup.modal.pastedImages = [...current, ...kept];
+    renderCoverLookupModal();
+  } catch (error) {
+    console.warn('[AlbumHaven][CoverLookup] Failed to load kept pasted images.', error);
+  }
+}
+
+// Keeps newly extracted images for this user and album. A copy the server already keeps is not shown twice,
+// and an eleventh image drops the oldest with a short note.
+async function keepCoverLookupPastedImages(album, items) {
+  const albumId = coverLookupAlbumId(album);
+  if (!albumId || !items.length || typeof fetch !== 'function') return;
+  const session = coverLookupModalSession;
+  for (const item of items) {
+    let data;
+    try {
+      data = await readCoverLookupPastedImagesResponse(await fetch(
+        '/utilities/cover-lookup/pasted-images',
+        coverLookupPastedImagesRequest({
+          album_id: albumId, data_url: item.data_url, filename: item.filename, width: item.width, height: item.height,
+        }),
+      ));
+    } catch (error) {
+      console.warn('[AlbumHaven][CoverLookup] Failed to keep a pasted image.', error);
+      continue;
+    }
+    if (session !== coverLookupModalSession) return;
+    const storedId = String(data.item?.id || '');
+    const evicted = new Set((data.evicted_ids || []).map(String));
+    let images = state.coverLookup.modal.pastedImages || [];
+    const copy = images.find((image) => image !== item && image.stored_id === storedId);
+    if (copy) {
+      images = images.filter((image) => image !== item);
+      if (String(item.object_url || '').startsWith('blob:')) URL.revokeObjectURL(item.object_url);
+      state.coverLookup.modal.suggestedCardKey = `pasted:${copy.id}`;
+    } else {
+      item.stored_id = storedId;
+    }
+    if (evicted.size) {
+      images = images.filter((image) => !evicted.has(String(image.stored_id || '')));
+      state.coverLookup.modal.manualStatusText = 'Only the 10 newest pasted images are kept; the oldest was removed.';
+      state.coverLookup.modal.manualStatusTone = 'neutral';
+    }
+    state.coverLookup.modal.pastedImages = images;
+    if (copy || evicted.size) renderCoverLookupModal();
+  }
+}
+
 function revokeCoverLookupPastedImageUrls() {
   const items = [
     ...(Array.isArray(state.coverLookup.modal.pastedImages) ? state.coverLookup.modal.pastedImages : []),
@@ -252,10 +354,9 @@ async function addPastedImageToCoverLookup(file) {
   if (Number(file.size || 0) > MAX_COVER_LOOKUP_IMAGE_BYTES) {
     throw new Error('Images must be 32 MB or smaller.');
   }
-  const stagedCount = (Array.isArray(state.coverLookup.modal.pastedImages)
-    ? state.coverLookup.modal.pastedImages.length : 0)
-    + (Array.isArray(state.coverLookup.modal.manualImageAttachments)
-      ? state.coverLookup.modal.manualImageAttachments.length : 0);
+  // PASTED IMAGES are kept by the server (the oldest leaves past 10); this bounds one Extract.
+  const stagedCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
+    ? state.coverLookup.modal.manualImageAttachments.length : 0;
   if (stagedCount >= MAX_COVER_LOOKUP_STAGED_IMAGES) {
     throw new Error(`You can stage up to ${MAX_COVER_LOOKUP_STAGED_IMAGES} images.`);
   }
@@ -336,6 +437,14 @@ function removePastedImageFromCoverLookup(imageId) {
   const objectUrl = String(removed.object_url || '').trim();
   if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
   state.coverLookup.modal.pastedImages = items.filter(item => String(item?.id || '') !== id);
+  const albumId = coverLookupAlbumId(state.coverLookup.modal.album);
+  if (removed.stored_id && albumId && typeof fetch === 'function') {
+    fetch('/utilities/cover-lookup/pasted-images/delete', coverLookupPastedImagesRequest({
+      album_id: albumId, image_id: removed.stored_id,
+    })).then(readCoverLookupPastedImagesResponse).catch((error) => {
+      console.warn('[AlbumHaven][CoverLookup] Failed to forget a pasted image.', error);
+    });
+  }
   if (String(state.coverLookup.modal.pendingPastedImageId || '') === id) {
     state.coverLookup.modal.pendingPastedImageId = '';
   }
@@ -382,6 +491,7 @@ function extractCoverLookupPendingAttachments() {
       ? state.coverLookup.modal.pastedImages : []),
   ];
   state.coverLookup.modal.manualImageAttachments = [];
+  keepCoverLookupPastedImages(state.coverLookup.modal.album, staged);
   return matchedCardKey;
 }
 
@@ -1632,7 +1742,7 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverRef) {
 
 function applyOptimisticPastedCoverSelection(album, pastedItem) {
   if (!album || !pastedItem) return;
-  const imageUrl = String(pastedItem?.data_url || pastedItem?.preview_url || '').trim();
+  const imageUrl = coverLookupPastedImageUrl(pastedItem);
   if (!imageUrl) return;
   const updatedAlbum = {
     ...album,
@@ -2522,7 +2632,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     : kind === 'saved-remote'
       ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`, { preview: true })
       : kind === 'pasted'
-        ? String(item?.object_url || item?.data_url || '').trim()
+        ? String(item?.object_url || coverLookupPastedImageUrl(item)).trim()
       : String(item?.preview_url || '').trim() || buildCoverUrl(item?.candidate_cover_ref || '', {
         size: 480,
         revision: localCardImageRevision(item),
@@ -2533,7 +2643,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     : kind === 'saved-remote'
       ? buildRemoteCoverLookupDisplayUrl(item, item?.url || item?.thumbnail_url || '', `full:saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
-        ? String(item?.object_url || item?.data_url || '').trim()
+        ? String(item?.object_url || coverLookupPastedImageUrl(item)).trim()
       : String(item?.preview_url || '').trim() || buildCoverUrl(item?.candidate_cover_ref || '', { revision: localCardImageRevision(item), preferRevision: true });
   const isActive = !inOtherArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
@@ -4168,7 +4278,7 @@ function getCoverLookupSelectedSaveChoice() {
   }
   if (modal.pendingPastedImageId) {
     const image = (modal.pastedImages || []).find((item) => String(item?.id || '') === String(modal.pendingPastedImageId));
-    return `pasted:${image?.data_url || ''}`;
+    return `pasted:${image?.data_url || image?.stored_id || ''}`;
   }
   return `local:${modal.pendingLocalRef || ''}`;
 }
@@ -4965,6 +5075,7 @@ async function openCoverLookupModal(album, options = {}) {
   // The gallery request leaves before the first render and the drawer's scroll restore (a forced layout),
   // so its round trip overlaps that work instead of following it.
   const galleryLoaded = refreshCoverLookupGallery(false);
+  if (!state.coverLookup.modal.artboxSlot) loadCoverLookupPastedImages(album, coverLookupModalSession);
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
   await galleryLoaded;
@@ -5770,9 +5881,9 @@ async function savePastedCoverFromLookup(imageId) {
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   const pastedItem = (state.coverLookup.modal.pastedImages || []).find((item) => String(item?.id || '') === String(imageId || ''));
-  if (!album || !pastedItem?.data_url || state.coverLookup.modal.saving
+  if (!album || !coverLookupPastedImageUrl(pastedItem) || state.coverLookup.modal.saving
       || isCoverLookupMutationBlockingControls(album)) return;
-  const choice = `pasted:${pastedItem.data_url}`;
+  const choice = `pasted:${pastedItem.data_url || pastedItem.stored_id}`;
   if (repeatsPendingCoverLookupSave(album, choice)) return;
   const inventoryKey = buildCoverLookupGalleryCacheKey(album);
   let previousAlbum = null;
@@ -5799,7 +5910,7 @@ async function savePastedCoverFromLookup(imageId) {
     }
     cacheOptimisticLocalCoverGallery(album, {
       candidate_cover_ref: optimisticPath,
-      preview_url: pastedItem.data_url,
+      preview_url: coverLookupPastedImageUrl(pastedItem),
       filename: optimisticFilename,
       width: pastedItem.width,
       height: pastedItem.height,
@@ -5837,6 +5948,7 @@ async function savePastedCoverFromLookup(imageId) {
         task_id: taskId,
         image_id: String(pastedItem.id || ''),
         data_url: String(pastedItem.data_url || ''),
+        pasted_image_id: String(pastedItem.stored_id || ''),
         mime_type: String(pastedItem.mime_type || ''),
         filename: String(pastedItem.filename || 'pasted-image'),
       }),
@@ -5863,7 +5975,7 @@ async function savePastedCoverFromLookup(imageId) {
       cacheReplacedLocalCoverBackup(album, selectedCoverPath, data.replaced_cover_backup);
       cacheOptimisticLocalCoverGallery(album, {
         candidate_cover_ref: selectedCoverPath,
-        preview_url: pastedItem.data_url,
+        preview_url: coverLookupPastedImageUrl(pastedItem),
         // A pasted image is always saved as the album folder's cover.jpg.
         filename: 'cover.jpg',
         width: pastedItem.width,

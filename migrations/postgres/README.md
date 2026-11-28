@@ -348,6 +348,14 @@ has never been loaded, startup imports the old file once, off the request path, 
 `scripts/android_attestation_revocations.py` makes later updates through the migrator role. For rollback, roll back the application first
 (the older version reads the file again); the tables can stay.
 
+Migration `0309_create_cover_lookup_pasted_images.sql` adds
+`library.cover_lookup_pasted_images`: the images a signed-in user pasted into an album's Cover Look Up
+(PASTED IMAGES), keyed by account, album and content hash, so they are shown again on the next opening. Only
+the pasting account reads its rows. The application keeps at most 10 per account and album (an eleventh
+drops the oldest), 32 MB each, and removes a row when its card is deleted, when it is saved as the album
+cover, or after 7 days unused (found through the `last_used_at` index); deleting the album or the account
+cascades. For rollback, roll back the application first; the table can stay or be dropped.
+
 Migration `0086_create_root_gallery_projection.sql` adds the derived,
 library-scoped Gallery projection and its transactional invalidation boundary.
 Rollback first disables projection readers and writers, then removes its triggers,

@@ -16501,6 +16501,144 @@
       "command": "python -m pytest tests/py/test_ignored_repair_intents_bounded_postgres.py::test_live_drain_applies_only_the_kept_intents",
       "testIdentity": "test_live_drain_applies_only_the_kept_intents",
       "rollback": "The drain reads and writes only the kept intents, plus one stuck check (6.5, 11-24: due since the lock was free, a partial index on due_since); reading or rewriting every ignored repair makes sql_statements grow."
+    },
+    {
+      "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_images_list",
+      "action": "List the signed-in user's kept pasted images for one album, by key",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_images_list:route:POST /utilities/cover-lookup/pasted-images/list"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_lookup_pasted_images_postgres.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_images_add",
+      "action": "Keep one pasted image for the signed-in user and album, dropping the oldest past ten",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_images_add:route:POST /utilities/cover-lookup/pasted-images"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_lookup_pasted_images_postgres.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_images_delete",
+      "action": "Forget one kept pasted image by key",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_images_delete:route:POST /utilities/cover-lookup/pasted-images/delete"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_lookup_pasted_images_postgres.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image",
+      "action": "Serve one kept pasted image by key",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image:route:GET /utilities/cover-lookup/pasted-images/{album_id}/{image_id}"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_lookup_pasted_images_postgres.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/cover-lookup-modal-and-drawer.js#loadCoverLookupPastedImages",
+      "action": "List the user's kept pasted images when Cover Look Up opens",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#loadCoverLookupPastedImages:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/cover-lookup/pasted-images/list"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/cover-lookup-modal-and-drawer.js#keepCoverLookupPastedImages",
+      "action": "Keep each image of one Extract (at most eight) for the user and album",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#keepCoverLookupPastedImages:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/cover-lookup/pasted-images"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/cover-lookup-modal-and-drawer.js#removePastedImageFromCoverLookup",
+      "action": "Forget a deleted pasted image card",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#removePastedImageFromCoverLookup:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/cover-lookup/pasted-images/delete"
+        ],
+        "forbidden": []
+      }
     }
   ]
 }

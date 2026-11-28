@@ -3,10 +3,14 @@ from __future__ import annotations
 from music_app.services.log_history import HistoryScope, history_scope_for_request
 
 import asyncio
+import base64
+import binascii
 from collections.abc import Mapping
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from threading import Event
 from time import perf_counter
@@ -2122,6 +2126,96 @@ def _delete_cover_and_repoint(
     return updated_albums, updated_problematic_album, resolved
 
 
+def _pasted_images_scope(request: Request, album_id: object):
+    """(repository, account, album) for the requesting user's PASTED IMAGES, or an error response."""
+    from music_app.services.cover_lookup_pasted_images_postgres import CoverLookupPastedImageRepository
+
+    actor = getattr(request.state, "current_actor", None)
+    account_id = getattr(actor, "account_id", None)
+    if account_id is None:
+        return None, ({"ok": False, "error": "Pasted images are kept only for a signed-in user."}, 403)
+    resolved_album_id = _album_id({"album_id": album_id})
+    if resolved_album_id is None:
+        return None, ({"ok": False, "error": "Album identity is missing"}, 400)
+    return (CoverLookupPastedImageRepository(_app_config(request)), int(account_id), resolved_album_id), None
+
+
+def _pasted_image_bytes(data_url: str) -> tuple[str, bytes]:
+    """(mime type, image bytes) of a pasted image data URL; ValueError when it is not one."""
+    match = re.match(
+        r"^data:(image/[a-z0-9.+-]+);base64,(.+)$", str(data_url or "").strip(), flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        raise ValueError("Clipboard image format is invalid.")
+    try:
+        return match.group(1).casefold(), base64.b64decode(re.sub(r"\s+", "", match.group(2)), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Clipboard image data could not be decoded.") from exc
+
+
+@router.post("/utilities/cover-lookup/pasted-images/list")
+async def utilities_cover_lookup_pasted_images_list(request: Request) -> JSONResponse:
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    scope, error = _pasted_images_scope(request, payload.get("album_id"))
+    if error is not None:
+        return _json_response(error)
+    repository, account_id, album_id = scope
+    items = await run_in_threadpool(repository.list_for_album, account_id=account_id, album_id=album_id)
+    return JSONResponse({"ok": True, "items": items})
+
+
+@router.post("/utilities/cover-lookup/pasted-images")
+async def utilities_cover_lookup_pasted_images_add(request: Request) -> JSONResponse:
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    scope, error = _pasted_images_scope(request, payload.get("album_id"))
+    if error is not None:
+        return _json_response(error)
+    repository, account_id, album_id = scope
+    try:
+        mime_type, image = _pasted_image_bytes(str(payload.get("data_url") or ""))
+        added = await run_in_threadpool(
+            repository.add, account_id=account_id, album_id=album_id, image=image, mime_type=mime_type,
+            filename=str(payload.get("filename") or ""), width=payload.get("width"), height=payload.get("height"),
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    return JSONResponse({"ok": True, **added})
+
+
+@router.post("/utilities/cover-lookup/pasted-images/delete")
+async def utilities_cover_lookup_pasted_images_delete(request: Request) -> JSONResponse:
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    scope, error = _pasted_images_scope(request, payload.get("album_id"))
+    if error is not None:
+        return _json_response(error)
+    repository, account_id, album_id = scope
+    deleted = await run_in_threadpool(
+        repository.delete, account_id=account_id, album_id=album_id, image_id=str(payload.get("image_id") or ""),
+    )
+    return JSONResponse({"ok": True, "deleted": deleted})
+
+
+@router.get("/utilities/cover-lookup/pasted-images/{album_id}/{image_id}")
+async def utilities_cover_lookup_pasted_image(request: Request, album_id: str, image_id: str) -> Response:
+    scope, error = _pasted_images_scope(request, album_id)
+    if error is not None:
+        return _json_response(error)
+    repository, account_id, resolved_album_id = scope
+    stored = await run_in_threadpool(
+        repository.read_image, account_id=account_id, album_id=resolved_album_id, image_id=image_id,
+    )
+    if stored is None:
+        return _json_response(({"ok": False, "error": "This pasted image is no longer kept."}, 404))
+    image, mime_type = stored
+    return Response(image, media_type=mime_type, headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.post("/utilities/cover-lookup/pasted-image-save")
 async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResponse:
     config = _app_config(request)
@@ -2134,6 +2228,16 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     if album_error is not None:
         return _json_response(album_error)
     data_url = str(payload.get("data_url") or "").strip()
+    pasted_image_id = str(payload.get("pasted_image_id") or "").strip()
+    pasted_scope, _scope_error = _pasted_images_scope(request, _album_id(album or {}))
+    if not data_url and pasted_image_id and pasted_scope is not None:
+        repository, account_id, album_id = pasted_scope
+        stored = await run_in_threadpool(
+            repository.read_image, account_id=account_id, album_id=album_id, image_id=pasted_image_id,
+        )
+        if stored is None:
+            return _json_response(({"ok": False, "error": "This pasted image is no longer kept."}, 404))
+        data_url = f"data:{stored[1]};base64,{base64.b64encode(stored[0]).decode('ascii')}"
     if not data_url:
         return _json_response(({"ok": False, "error": "Clipboard image payload is missing"}, 400))
     album, album_context = await _resolve_album_payload_context(config, album or {})
@@ -2167,6 +2271,16 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
                     logger.exception(
                         "Failed to schedule local cover inventory invalidation retry"
                     )
+    if pasted_scope is not None:
+        # Saved as the album cover, the pasted image is no longer one of the user's PASTED IMAGES.
+        repository, account_id, album_id = pasted_scope
+        try:
+            await run_in_threadpool(
+                repository.delete, account_id=account_id, album_id=album_id,
+                image_id=hashlib.sha256(_pasted_image_bytes(data_url)[1]).hexdigest(),
+            )
+        except Exception:
+            logger.exception("Failed to forget a pasted image saved as the album cover")
     task_id = str(payload.get("task_id") or "").strip()
     try:
         if task_id:

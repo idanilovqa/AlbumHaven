@@ -70,6 +70,10 @@ function harness() {
         'cover-lookup-delete-confirm-modal': confirm, 'track-modal': { hidden: true }, 'utility-modal': { hidden: true } }[id] || null) },
     fetch: (url, options) => {
       const body = JSON.parse(options.body);
+      // Opening a lookup also lists the user's kept pasted images; this album has none.
+      if (url === '/utilities/cover-lookup/pasted-images/list') {
+        return Promise.resolve({ ok: true, json: async () => ({ ok: true, items: [] }) });
+      }
       if (url === '/utilities/cover-lookup/gallery') {
         galleries.push(body.album.name);
         return Promise.resolve({ ok: true, json: async () => clone(server.get(body.album.name)) });

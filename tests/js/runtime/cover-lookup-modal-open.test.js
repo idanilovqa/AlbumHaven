@@ -1029,7 +1029,8 @@ test('split album conflict closes Cover Lookup, asks in a compact chooser, then 
     buildTrackPathSignature: () => '',
     sanitizeCoverLookupPossibleMatches: () => [],
     showToast: (...args) => toasts.push(args),
-    fetch: async (_url, options) => {
+    fetch: async (url, options) => {
+      if (url === '/utilities/cover-lookup/pasted-images/list') return { ok: true, json: async () => ({ ok: true, items: [] }) };
       const request = JSON.parse(options.body);
       requests.push(request);
       if (requests.length === 1) {

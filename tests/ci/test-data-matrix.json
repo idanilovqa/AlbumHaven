@@ -14920,6 +14920,51 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupPastedKept.spec.js",
+    "case": "pasted images are shown again when the lookup is opened again",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "kept-pasted-images-return-on-reopen"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedKept.spec.js",
+    "case": "pasting an eleventh image keeps the 10 newest and says the oldest was removed",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "eleventh-pasted-image-drops-oldest-with-note"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedKept.spec.js",
+    "case": "deleting a pasted image card forgets it for later openings",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "deleted-pasted-image-is-forgotten"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/sourceMarkerHover.spec.js",
     "case": "Gallery card hoard marker widens and narrows smoothly with its own width",
     "profile": null,

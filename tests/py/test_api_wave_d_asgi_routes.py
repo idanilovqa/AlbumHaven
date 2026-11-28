@@ -6656,3 +6656,121 @@ def test_selected_cover_inventory_contract_builds_only_the_selected_album_at_pro
         counts = run(album_count)
         assert counts.builder_calls == 1 and counts.candidate_rows == 2
         assert counts.filesystem_enumerations == 0 and counts.stat_calls == 0
+
+
+def _with_signed_in_actor(asgi_app):
+    """The bare route app has no auth middleware: name the fixture's owner as this request's actor."""
+
+    @asgi_app.middleware("http")
+    async def signed_in(request, call_next):
+        request.state.current_actor = asgi_app.state.current_actor_resolver.resolve(None)
+        return await call_next(request)
+
+    return asgi_app
+
+
+class _FakePastedImages:
+    """Per-key double of CoverLookupPastedImageRepository: (account, album, hash) -> (bytes, mime)."""
+
+    rows: dict[tuple[int, int, str], tuple[bytes, str]] = {}
+
+    def __init__(self, _config):
+        pass
+
+    def list_for_album(self, *, account_id, album_id):
+        return [{"id": key[2]} for key in self.rows if key[:2] == (account_id, album_id)]
+
+    def add(self, *, account_id, album_id, image, mime_type, filename, width, height):
+        import hashlib
+
+        image_id = hashlib.sha256(image).hexdigest()
+        self.rows[(account_id, album_id, image_id)] = (image, mime_type)
+        return {"item": {"id": image_id, "filename": filename}, "evicted_ids": []}
+
+    def read_image(self, *, account_id, album_id, image_id):
+        return self.rows.get((account_id, album_id, image_id))
+
+    def delete(self, *, account_id, album_id, image_id):
+        return self.rows.pop((account_id, album_id, image_id), None) is not None
+
+
+def test_asgi_pasted_images_are_kept_per_signed_in_user_and_read_back_by_key(app, monkeypatch):
+    from music_app.services import cover_lookup_pasted_images_postgres as pasted_images
+
+    monkeypatch.setattr(_FakePastedImages, "rows", {})
+    monkeypatch.setattr(pasted_images, "CoverLookupPastedImageRepository", _FakePastedImages)
+    asgi_app = _with_signed_in_actor(_make_wave_d_app(app))
+    data_url = _jpeg_data_url((20, 40, 220))
+    image = base64.b64decode(data_url.split(",", 1)[1])
+    image_id = hashlib.sha256(image).hexdigest()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/pasted-images",
+        json_body={"album_id": 41, "data_url": data_url, "filename": "front.jpg", "width": 12, "height": 12},
+    )
+    assert status == 200 and _decode_json(body)["item"]["id"] == image_id
+    assert set(_FakePastedImages.rows) == {(1, 41, image_id)}, "rows belong to the signed-in account"
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/pasted-images/list", json_body={"album_id": 41},
+    )
+    assert status == 200 and _decode_json(body)["items"] == [{"id": image_id}]
+
+    status, headers, body = _run_asgi_request(asgi_app, "GET", f"/utilities/cover-lookup/pasted-images/41/{image_id}")
+    assert status == 200 and body == image
+    assert dict(headers).get("content-type", "").startswith("image/jpeg")
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/pasted-images/delete", json_body={"album_id": 41, "image_id": image_id},
+    )
+    assert status == 200 and _decode_json(body)["deleted"] is True
+    status, _headers, _body = _run_asgi_request(asgi_app, "GET", f"/utilities/cover-lookup/pasted-images/41/{image_id}")
+    assert status == 404
+
+    status, _headers, _body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/pasted-images",
+        json_body={"album_id": 41, "data_url": "data:text/plain;base64,aGVsbG8="},
+    )
+    assert status == 400
+
+
+def test_asgi_pasted_image_routes_require_cover_upload_permission():
+    from music_app.services.private_route_boundary import _PRIVATE_ROUTE_ACTIONS
+
+    for method, path in (
+        ("POST", "/utilities/cover-lookup/pasted-images/list"),
+        ("POST", "/utilities/cover-lookup/pasted-images"),
+        ("POST", "/utilities/cover-lookup/pasted-images/delete"),
+        ("GET", "/utilities/cover-lookup/pasted-images/{album_id}/{image_id}"),
+    ):
+        assert _PRIVATE_ROUTE_ACTIONS[(method, path)] == "library.covers.upload"
+
+
+def test_asgi_saving_a_kept_pasted_image_as_the_cover_reads_it_by_key_and_forgets_it(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_pasted_images_postgres as pasted_images
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Kept Paste" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    _seed_album_state(app.library_state, track_path)
+    asgi_app = _with_signed_in_actor(_make_wave_d_app(app))
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    monkeypatch.setattr(asgi_routes, "apply_cover_path_for_tracks", lambda *_args, **_kwargs: ([], None))
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        asgi_routes, "mark_cover_lookup_notifications_action_taken_for_track_paths", lambda *_a, **_k: [],
+    )
+    image = base64.b64decode(_jpeg_data_url((20, 200, 40)).split(",", 1)[1])
+    image_id = hashlib.sha256(image).hexdigest()
+    monkeypatch.setattr(_FakePastedImages, "rows", {(1, 41, image_id): (image, "image/jpeg")})
+    monkeypatch.setattr(pasted_images, "CoverLookupPastedImageRepository", _FakePastedImages)
+
+    status, _headers, _body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/pasted-image-save",
+        json_body={"album": {**_album_payload(track_path), "album_id": 41}, "pasted_image_id": image_id},
+    )
+
+    assert status == 200
+    assert (track_path.parent / "cover.jpg").read_bytes() == image
+    assert _FakePastedImages.rows == {}, "a pasted image saved as the cover leaves PASTED IMAGES"

@@ -9163,16 +9163,11 @@ function handleGalleryMainClick(event) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
+  // A mode button only shows its tree (owner rule); a page opens when an item of that tree is chosen.
   const navigationMode = event.target.closest?.('[data-navigation-mode]');
   if (navigationMode) {
     event.preventDefault();
-    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
-    if (navigationMode.dataset.navigationMode === 'collections') {
-      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
-      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
-    } else if (pageOpen) {
-      closeNonAlbumModal();
-    }
+    showLibraryNavigationTree(navigationMode.dataset.navigationMode === 'collections' ? 'collections' : 'artists');
     return true;
   }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
@@ -9191,6 +9186,9 @@ function handleGalleryMainClick(event) {
       openNonAlbumModal({
         libraryWide,
       });
+      // Choosing the tree item is the navigation: the phone drawer gives way to the page.
+      if (libraryWide && typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function'
+        && usesMobilePageLayout()) closeArtistsDrawer();
     }
     return true;
   }
@@ -16775,10 +16773,11 @@ function buildNonAlbumTrackLoadingMarkup() {
   });
 }
 
-// Choosing an artist or All artists in the tree leaves the Loose Tracks page.
+// Choosing an artist or All artists in the tree leaves the Loose Tracks page, on the desktop page and on a phone
+// (where the drawer's Artists mode button only shows the tree).
 function closeNonAlbumPageOnTreeNavigation(event) {
   if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
-      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+      && document.querySelector('#non-album-modal:not([hidden])')) closeNonAlbumModal();
 }
 
 // Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
@@ -16790,7 +16789,7 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syn
   if (page && overlay.parentElement !== main) main.appendChild(overlay);
   // Opening from the Album types menu must not leave that menu over the page.
   if (page && typeof closeGalleryMainSurface === 'function' && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
-  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  if (open) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
   else document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
   const dialog = overlay.querySelector('.non-album-modal-dialog');
   if (dialog) {
@@ -16827,7 +16826,8 @@ function syncCompactLibraryNavigation(looseTracks) {
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
-function syncLibraryNavigationMode(mode) {
+// Showing a tree changes neither the page nor the selection (the drawer's mode buttons).
+function showLibraryNavigationTree(mode) {
   const collections = mode === 'collections';
   document.querySelectorAll('[data-navigation-mode]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.navigationMode === mode));
@@ -16840,7 +16840,13 @@ function syncLibraryNavigationMode(mode) {
   const artistsTree = document.getElementById('sidebar-list');
   if (collectionsTree) collectionsTree.hidden = !collections;
   if (artistsTree) artistsTree.hidden = collections;
-  collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
+}
+
+// The page's navigation: its tree shows and its item is the selection.
+function syncLibraryNavigationMode(mode) {
+  const collections = mode === 'collections';
+  showLibraryNavigationTree(mode);
+  document.getElementById('sidebar-collections')?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
   syncCompactLibraryNavigation(collections);
 }
 

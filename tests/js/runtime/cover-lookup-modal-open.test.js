@@ -2172,7 +2172,8 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     const f = loadCapabilityCoverRoute(actions, { initial: true });
     f.restore();
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(f.effects, ['present', 'body', 'render', 'gallery', 'history', 'poll']);
+    // The gallery request leaves first, so its round trip overlaps the first render.
+    assert.deepEqual(f.effects, ['present', 'body', 'gallery', 'render', 'history', 'poll']);
     assert.equal(f.overlay.hidden, false);
     assert.equal(f.context.state.coverLookup.modal.album.key, 'one');
     assert.equal(vm.runInContext('coverLookupModalSession', f.context), 1);
@@ -2345,4 +2346,69 @@ test('BUGFIX-19: the selected cover shows its picture in the first loading card;
   assert.equal(cards.length, 3);
   assert.match(cards[0], /<img class="cover-lookup-art-preview-image" src="\/cover\?path=a&amp;size=480"/);
   assert.ok(cards.slice(1).every((card) => !card.includes('<img')));
+});
+
+// COVER-LOOKUP-FIRST-OPEN: opening from a notification card waited for the first render and the drawer's
+// scroll restore (a forced layout of the open drawer) before the gallery request even left.
+test('opening Cover Look Up sends its gallery request before the first render and drawer scroll restore', async () => {
+  class TestButton {}
+  const events = [];
+  const overlay = { hidden: true, classList: { toggle() {} }, toggleAttribute() {}, removeAttribute() {} };
+  const drawerBody = {
+    set scrollTop(_value) { events.push('drawer-scroll-restore'); },
+    get scrollTop() { return 0; },
+  };
+  const context = {
+    ButtonComponent,
+    window: { requestAnimationFrame: () => 0 },
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    state: {
+      coverLookup: {
+        tasks: [],
+        drawerOpen: true,
+        drawerScrollTop: 120,
+        modal: { pastedImages: [] },
+      },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    showToast: () => {},
+    fetch: async (url) => {
+      events.push(`request ${url}`);
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => ({ 'cover-lookup-modal': overlay, 'cover-lookup-drawer-body': drawerBody }[id] || null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.renderCoverLookupModal = () => events.push('render');
+  context.ensureCoverLookupPolling = () => {};
+  context.applyCoverLookupGalleryPayload = () => {};
+  context.markCoverLookupAutomaticImprovementSeen = async () => {};
+
+  await context.openCoverLookupModal({ album_artist: 'Artist', name: 'Album' }, { taskId: 'notification-task' });
+
+  assert.equal(events[0], 'request /utilities/cover-lookup/gallery');
+  assert.ok(events.indexOf('render') > 0 && events.indexOf('drawer-scroll-restore') > 0, JSON.stringify(events));
+});
+
+// Every Cover Look Up card carries this fallback image (hidden until its preview fails), so a first opening
+// downloaded and decoded a 1254 px, 2 MB picture before and beside the real card previews.
+test('the card fallback image every Cover Look Up card carries is card-sized', () => {
+  const match = helperSource.match(/const previewFallbackImageUrl = '\/static\/(images\/[^']+)'/);
+  assert.ok(match, 'the card fallback image is named once');
+  const file = path.join(__dirname, '..', '..', '..', 'music_app', 'static', match[1]);
+  const bytes = fs.readFileSync(file);
+  assert.ok(bytes.length <= 64 * 1024, `${match[1]} is ${bytes.length} bytes`);
+  // A RIFF/WEBP VP8X header stores width-1 and height-1 as 24-bit little-endian values at bytes 24 and 27.
+  assert.equal(bytes.toString('ascii', 0, 4), 'RIFF');
+  assert.equal(bytes.toString('ascii', 8, 16), 'WEBPVP8X');
+  const width = 1 + bytes.readUIntLE(24, 3);
+  const height = 1 + bytes.readUIntLE(27, 3);
+  assert.ok(width <= 480 && height <= 480, `${width}x${height}`);
 });

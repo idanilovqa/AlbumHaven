@@ -13234,6 +13234,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/cover_lookup_runtime.py#_prepare_remote_cover_card_preview",
+      "action": "Store one finished lookup's remote card previews in the background, one image per task",
+      "entrypoints": [
+        "py:music_app/services/cover_lookup_runtime.py#_prepare_remote_cover_card_preview:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_lookup_runtime.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/cover_lookup_runtime.py#_publish_candidate_runtime_phase_metrics",
       "action": "Run publisher _publish_candidate_runtime_phase_metrics",
       "entrypoints": [

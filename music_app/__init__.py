@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import AsyncIterator
@@ -14,6 +15,14 @@ from music_app.services.app_copy import APP_COPY_HEADER
 
 
 _POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
+# Startup stages are logged with the time since this package was imported, so a slow cold start
+# shows where its time went.
+_STARTUP_STARTED = time.perf_counter()
+
+
+def _startup_timing(logger, stage: str) -> None:
+    logger.info("Startup timing stage=%s elapsed_ms=%d", stage,
+                round((time.perf_counter() - _STARTUP_STARTED) * 1000))
 
 
 class _BoundedExecutorAdmission:
@@ -89,10 +98,12 @@ def _start_library_warmup(
                     prewarm_postgres(database_url)
                 except Exception:
                     runtime.logger.exception("Postgres connection pool prewarm failed.")
+                _startup_timing(runtime.logger, "warmup-pool")
                 if stop_requested.is_set():
                     return
                 if recover_persistence is not None:
                     recover_persistence(runtime)
+                _startup_timing(runtime.logger, "warmup-recovery")
                 if stop_requested.is_set():
                     return
                 if hydrate_metadata is not None:
@@ -102,14 +113,17 @@ def _start_library_warmup(
                         raise
                     except Exception:
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
+                _startup_timing(runtime.logger, "warmup-scan-metadata")
                 if import_attestation_revocations is not None:
                     try:
                         import_attestation_revocations(runtime.config, stop_requested=stop_requested)
                     except Exception:
                         runtime.logger.exception("Attestation status list import failed.")
+                _startup_timing(runtime.logger, "warmup-attestations")
                 if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
                     return
                 ensure_relations(runtime, cancel_requested=stop_requested)
+                _startup_timing(runtime.logger, "warmup-relations-ready")
                 # After relation readiness: the one-time backfill never delays artist pages at startup.
                 if import_cover_cache is not None and not stop_requested.is_set():
                     try:
@@ -468,6 +482,7 @@ def create_asgi_app():
         configure_shared_cover_search_cache,
         import_cover_search_cache_file,
     )
+    from music_app.services.mp3_stream_map import configure_stream_map_store
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
@@ -494,11 +509,14 @@ def create_asgi_app():
     )
 
     runtime = _create_asgi_runtime_state()
+    _startup_timing(runtime.logger, "imports")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        _startup_timing(runtime.logger, "lifespan")
         for template_name in _app.state.templates.env.list_templates():
             _app.state.templates.env.get_template(template_name)
+        _startup_timing(runtime.logger, "templates")
         from music_app.services.log_history import resolve_media_host_history_scope
         host_scope = resolve_media_host_history_scope(runtime.config)
         _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
@@ -581,6 +599,8 @@ def create_asgi_app():
         else:
             _app.state.cover_preview_backfill.start()
         configure_shared_cover_search_cache(runtime.config)
+        configure_stream_map_store(runtime.config)
+        _startup_timing(runtime.logger, "previews-and-cover-cache")
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -880,6 +900,7 @@ def create_asgi_app():
         except BaseException:
             await shutdown_resources()
             raise
+        _startup_timing(runtime.logger, "ready")
         try:
             yield
         finally:
@@ -894,4 +915,5 @@ def create_asgi_app():
         openapi_url=None,
     )
     _configure_asgi_app(app, runtime)
+    _startup_timing(runtime.logger, "configured")
     return app

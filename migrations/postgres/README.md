@@ -452,3 +452,12 @@ the table under an exclusive lock, so apply it in a controlled migration window
 before starting application writers. Problematic Files falls back to the inline
 expressions on databases without these columns, so rollback only drops the index
 and the columns; a running server retries with the inline form once it finds them gone.
+
+Migration `0308_create_mp3_stream_maps.sql` adds `library.mp3_stream_maps`, the frame
+map of an MP3 file (where each frame starts, its sample rate and gapless trim), one row per
+media file keyed by path and valid only while the file's size and modified time match. The
+server reads a row on a stream's first open and writes one after scanning a file it had no row
+for, so the first play after a restart reads one row instead of the whole file. Nothing is
+filled at startup. A browse-only app reads rows but never writes them. Rows are derived from
+the files and hold no user choice. For rollback, roll back the application first; the table
+can stay unused.

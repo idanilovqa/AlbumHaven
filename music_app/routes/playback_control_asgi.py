@@ -26,7 +26,7 @@ from music_app.services.listen_history import (
     is_meaningful_listen_session,
     update_listen_history_entry,
 )
-from music_app.services.mp3_stream_map import mp3_stream_map
+from music_app.services.mp3_stream_map import prepare_mp3_stream_maps
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.playback_claims_postgres import PostgresPlaybackClaims
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
@@ -124,11 +124,8 @@ def _prepare_streams(paths: list[Path]) -> None:
     if not mp3_paths:
         return
 
-    async def prepare() -> None:
-        for path in mp3_paths:
-            await asyncio.to_thread(mp3_stream_map, path)
-
-    task = asyncio.create_task(prepare())
+    # The kept maps in one query and the rest scanned and kept in one transaction, off the loop.
+    task = asyncio.create_task(asyncio.to_thread(prepare_mp3_stream_maps, mp3_paths))
     _preparing.add(task)
     task.add_done_callback(_preparing.discard)
 

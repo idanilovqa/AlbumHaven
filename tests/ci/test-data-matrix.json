@@ -14860,6 +14860,66 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting the same pasted image again keeps one PASTED card, scrolled to and glowing",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "repeated-paste-reveals-existing-pasted-card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "pasting the same image twice before one Extract stages it once, scrolled to and glowing",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "same-batch-paste-stages-once"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a pasted copy of an OTHER ART image adds no card and glows on that card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "other-art-paste-reveals-other-art-card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupPastedDuplicate.spec.js",
+    "case": "extracting a pasted copy of OTHER ART held by the second artbox adds no card and glows on that card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artbox-other-art-paste-reveals-card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/sourceMarkerHover.spec.js",
     "case": "Gallery card hoard marker widens and narrows smoothly with its own width",
     "profile": null,

@@ -37114,10 +37114,31 @@ function isSameCoverLookupPicture(left, right) {
   return distance <= COVER_LOOKUP_SAME_PICTURE_DISTANCE;
 }
 
-// The local card already showing this picture, read from its loaded preview; a card still loading never matches.
-function findCoverLookupLocalCardShowing(fingerprint) {
+// A LOCAL, OTHER ART or PASTED IMAGES card is named by its item key: `local:<cover ref>` or `pasted:<image id>`.
+function parseCoverLookupCardKey(key) {
+  const match = /^(local|pasted):(.+)$/.exec(String(key || ''));
+  return match ? { kind: match[1], ref: match[2] } : null;
+}
+
+function coverLookupCardKeyMatches(left, right) {
+  const a = parseCoverLookupCardKey(left);
+  const b = parseCoverLookupCardKey(right);
+  if (!a || !b || a.kind !== b.kind) return false;
+  return a.kind === 'local' ? coverLookupLocalPathMatches(a.ref, b.ref) : a.ref === b.ref;
+}
+
+function isSuggestedCoverLookupCard(kind, ref) {
+  const suggested = String(state.coverLookup.modal.suggestedCardKey || '');
+  return Boolean(suggested && ref) && coverLookupCardKeyMatches(suggested, `${kind}:${ref}`);
+}
+
+// The LOCAL, OTHER ART or PASTED IMAGES card already showing this picture, read from its loaded preview; a card
+// still loading never matches.
+function findCoverLookupCardShowing(fingerprint) {
   if (!fingerprint || typeof document === 'undefined') return '';
-  const cards = document.querySelectorAll?.('#cover-lookup-modal [data-select-local-cover]') || [];
+  const cards = document.querySelectorAll?.(
+    '#cover-lookup-modal [data-cover-lookup-item-key^="local:"], #cover-lookup-modal [data-cover-lookup-item-key^="pasted:"]',
+  ) || [];
   for (const card of cards) {
     const image = card.querySelector('img.cover-lookup-art-preview-image');
     if (!image?.complete || !image.naturalWidth) continue;
@@ -37126,7 +37147,7 @@ function findCoverLookupLocalCardShowing(fingerprint) {
       image.__coverLookupFingerprint = coverLookupPictureFingerprint(image, image.naturalWidth, image.naturalHeight);
     }
     if (isSameCoverLookupPicture(fingerprint, image.__coverLookupFingerprint)) {
-      return String(card.getAttribute('data-select-local-cover') || '');
+      return String(card.getAttribute('data-cover-lookup-item-key') || '');
     }
   }
   return '';
@@ -37249,31 +37270,35 @@ function removeCoverLookupPendingAttachment(imageId) {
 function extractCoverLookupPendingAttachments() {
   const attachments = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments : [];
-  let matchedLocalRef = '';
-  const staged = attachments.filter((item) => {
-    const localRef = findCoverLookupLocalCardShowing(item.fingerprint);
-    if (!localRef) return true;
-    // Already one of the album's images: point at it instead of staging a copy.
-    state.coverLookup.modal.suggestedLocalRef = localRef;
-    matchedLocalRef = localRef;
+  let matchedCardKey = '';
+  const staged = [];
+  for (const item of attachments) {
+    const stagedCopy = staged.find((earlier) => isSameCoverLookupPicture(item.fingerprint, earlier.fingerprint));
+    const cardKey = stagedCopy ? `pasted:${stagedCopy.id}` : findCoverLookupCardShowing(item.fingerprint);
+    if (!cardKey) {
+      staged.push(item);
+      continue;
+    }
+    // The lookup already shows this picture: point at that card instead of staging a copy.
+    matchedCardKey = cardKey;
     const objectUrl = String(item.object_url || '').trim();
     if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl);
-    return false;
-  });
+  }
+  if (matchedCardKey) state.coverLookup.modal.suggestedCardKey = matchedCardKey;
   state.coverLookup.modal.pastedImages = [
     ...staged,
     ...(Array.isArray(state.coverLookup.modal.pastedImages)
       ? state.coverLookup.modal.pastedImages : []),
   ];
   state.coverLookup.modal.manualImageAttachments = [];
-  return matchedLocalRef;
+  return matchedCardKey;
 }
 
-// Owner (sandbox2): after Extract, the gallery scrolls to the local card a pasted copy matched.
-function revealCoverLookupLocalCard(localRef) {
-  if (!localRef || typeof document === 'undefined') return;
-  const card = Array.from(document.querySelectorAll('#cover-lookup-modal [data-select-local-cover]'))
-    .find((node) => coverLookupLocalPathMatches(node.getAttribute('data-select-local-cover'), localRef));
+// Owner (sandbox2): after Extract, the gallery scrolls to the card a pasted copy matched.
+function revealCoverLookupCard(cardKey) {
+  if (!cardKey || typeof document === 'undefined') return;
+  const card = Array.from(document.querySelectorAll('#cover-lookup-modal [data-cover-lookup-item-key]'))
+    .find((node) => coverLookupCardKeyMatches(node.getAttribute('data-cover-lookup-item-key'), cardKey));
   card?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'smooth' });
 }
 
@@ -38140,8 +38165,7 @@ function syncCoverLookupSelectionUi() {
         : card.hasAttribute('data-cover-lookup-local-active') && !state.coverLookup.modal.artboxCleared
     );
     card.classList.toggle('is-active', shouldBeActive);
-    card.classList.toggle('is-suggested', Boolean(state.coverLookup.modal.suggestedLocalRef)
-      && coverLookupLocalPathMatches(localPath, state.coverLookup.modal.suggestedLocalRef));
+    card.classList.toggle('is-suggested', isSuggestedCoverLookupCard('local', localPath));
     if (shouldBeActive) {
       card.setAttribute('data-cover-lookup-local-active', '1');
     } else {
@@ -38205,8 +38229,10 @@ function syncCoverLookupSelectionUi() {
     }
   });
   modal.querySelectorAll('[data-select-pasted-cover]').forEach((card) => {
-    const isActive = String(card.getAttribute('data-select-pasted-cover') || '') === pendingPastedImageId;
+    const imageId = String(card.getAttribute('data-select-pasted-cover') || '');
+    const isActive = imageId === pendingPastedImageId;
     card.classList.toggle('is-active', isActive);
+    card.classList.toggle('is-suggested', isSuggestedCoverLookupCard('pasted', imageId));
     let check = card.querySelector('.cover-lookup-art-check');
     if (isActive && !check) {
       check = document.createElement('span');
@@ -39440,9 +39466,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && (state.coverLookup.modal.selectedRemoteId === String(item?.id || '')
           || (typeof isSecondArtboxSavedRemoteActive === 'function' && isSecondArtboxSavedRemoteActive(item)))));
-  const isSuggested = kind === 'local'
-    ? Boolean(String(state.coverLookup.modal.suggestedLocalRef || ''))
-      && coverLookupLocalPathMatches(item?.candidate_cover_ref, state.coverLookup.modal.suggestedLocalRef)
+  const isSuggested = kind === 'local' || kind === 'pasted'
+    ? isSuggestedCoverLookupCard(kind, kind === 'local' ? item?.candidate_cover_ref : item?.id)
     : kind === 'remote'
     && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
@@ -41807,7 +41832,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.activeLocalSelectionRef = '';
   // UI-14: the second artbox's lookup starts with its own saved art selected; deselecting it lets Save empty it.
   state.coverLookup.modal.artboxCleared = false;
-  state.coverLookup.modal.suggestedLocalRef = '';
+  state.coverLookup.modal.suggestedCardKey = '';
   if (state.coverLookup.modal.artboxSlot && typeof getAlbumAdditionalArtwork === 'function') {
     state.coverLookup.modal.activeLocalSelectionRef = String(getAlbumAdditionalArtwork(album)?.cover_ref || '');
   }
@@ -41882,7 +41907,7 @@ function closeCoverLookupModal({ immediate = false } = {}) {
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
-  state.coverLookup.modal.suggestedLocalRef = '';
+  state.coverLookup.modal.suggestedCardKey = '';
   state.coverLookup.modal.manualBusy = false;
   state.coverLookup.modal.manualPendingCount = 0;
   state.coverLookup.modal.manualStatusText = '';
@@ -42591,12 +42616,12 @@ async function addRemoteCoverLinksFromLookup() {
   const attachmentCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments.length : 0;
   if (!album || (!urls.length && !attachmentCount)) return;
-  const matchedLocalRef = extractCoverLookupPendingAttachments();
+  const matchedCardKey = extractCoverLookupPendingAttachments();
   if (!urls.length) {
     state.coverLookup.modal.manualStatusText = '';
     state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
-    revealCoverLookupLocalCard(matchedLocalRef);
+    revealCoverLookupCard(matchedCardKey);
     return;
   }
   try {
@@ -42606,7 +42631,7 @@ async function addRemoteCoverLinksFromLookup() {
     state.coverLookup.modal.manualStatusText = '';
     state.coverLookup.modal.manualStatusTone = 'neutral';
     renderCoverLookupModal();
-    revealCoverLookupLocalCard(matchedLocalRef);
+    revealCoverLookupCard(matchedCardKey);
     const response = await fetch('/utilities/cover-lookup/add-remote', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

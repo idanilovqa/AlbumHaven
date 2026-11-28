@@ -965,11 +965,19 @@ def _load_notification_summaries_sql() -> str:
                 end,
                 'current_cover_path', current_album.cover_path,
                 'current_cover_revision', current_album.metadata ->> 'cover_revision',
-                'best_candidate_preview_url', (
-                    select coalesce(
-                        nullif(candidate ->> 'thumbnail_url', ''),
-                        nullif(candidate ->> 'preview_url', ''),
-                        nullif(candidate ->> 'url', '')
+                'current_cover_width', current_album.metadata -> 'local_cover_width',
+                'current_cover_height', current_album.metadata -> 'local_cover_height',
+                'best_candidate', (
+                    select jsonb_build_object(
+                        'id', candidate -> 'id',
+                        'preview_url', coalesce(
+                            nullif(candidate ->> 'thumbnail_url', ''),
+                            nullif(candidate ->> 'preview_url', ''),
+                            nullif(candidate ->> 'url', '')
+                        ),
+                        'width', candidate -> 'width',
+                        'height', candidate -> 'height',
+                        'display_only', candidate -> 'display_only'
                     )
                     from jsonb_array_elements(
                         coalesce(
@@ -1161,12 +1169,20 @@ def _load_notification_summary_page_sql(
               end,
               'current_cover_path', current_album.cover_path,
               'current_cover_revision', current_album.metadata ->> 'cover_revision',
-              'best_candidate_preview_url', (
-                select coalesce(
-                  nullif(candidate ->> 'thumbnail_url', ''),
-                  nullif(candidate ->> 'preview_url', ''),
-                  nullif(candidate ->> 'url', '')
-                )
+              'current_cover_width', current_album.metadata -> 'local_cover_width',
+              'current_cover_height', current_album.metadata -> 'local_cover_height',
+              'best_candidate', (
+                  select jsonb_build_object(
+                      'id', candidate -> 'id',
+                      'preview_url', coalesce(
+                          nullif(candidate ->> 'thumbnail_url', ''),
+                          nullif(candidate ->> 'preview_url', ''),
+                          nullif(candidate ->> 'url', '')
+                      ),
+                      'width', candidate -> 'width',
+                      'height', candidate -> 'height',
+                      'display_only', candidate -> 'display_only'
+                  )
                 from jsonb_array_elements(
                   coalesce(
                     task_document.source_payload -> 'possible_matches',

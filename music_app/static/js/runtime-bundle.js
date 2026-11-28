@@ -37500,6 +37500,26 @@ function getCoverLookupShownCandidate(candidates, bestCandidateId) {
   return covers.find((candidate) => bestId && String(candidate?.id || '').trim() === bestId) || covers[0] || null;
 }
 
+function coverLookupShortEdge(width, height) {
+  return Math.min(Number(width) || 0, Number(height) || 0);
+}
+
+// INT-028: a cover is suggested only after a recent cover search for this album that the user has not acted
+// on yet (or for an album with no cover at all), and only when it is sharper than the current cover (never
+// the same or a lower resolution).
+function isCoverLookupSuggestable(candidate, { awaitsDecision, currentCoverEdge }) {
+  return Boolean(awaitsDecision && candidate)
+    && String(candidate?.art_kind || 'cover') === 'cover'
+    && !candidate?.display_only
+    && (!currentCoverEdge || coverLookupShortEdge(candidate?.width, candidate?.height) > currentCoverEdge);
+}
+
+// The suggestion both the notification card and Cover Look Up show (the green frame), or null.
+function getCoverLookupSuggestion(candidates, bestCandidateId, rule) {
+  const shown = getCoverLookupShownCandidate(candidates, bestCandidateId);
+  return isCoverLookupSuggestable(shown, rule) ? shown : null;
+}
+
 function coverLookupCandidateTimestamp(value) {
   const timestamp = Date.parse(String(value || '').trim());
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -37577,25 +37597,21 @@ function applyCoverLookupCandidateSource(candidateSource) {
   const shownCandidateId = String(
     getCoverLookupShownCandidate(candidateSource.candidates, bestCandidateId)?.id || '',
   ).trim();
-  // INT-028: a cover is suggested only after a recent cover search for this album that the user has not acted
-  // on yet (or for an album with no cover at all), and only when it is sharper than the current cover (never
-  // the same or a lower resolution).
   const suggestionTask = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(modal.taskId || ''));
   const activeLocalCover = (modal.localCovers || []).find((cover) => cover?.is_active);
   const hasCurrentCover = Boolean(activeLocalCover || String(modal.album?.cover_ref || '').trim()
     || String(modal.album?.remote_cover_url || '').trim());
   const searchAwaitsDecision = !hasCurrentCover
     || (Boolean(suggestionTask) && !isActionedCoverLookupNotification(suggestionTask));
-  const shortEdge = (width, height) => Math.min(Number(width) || 0, Number(height) || 0);
-  const currentCoverEdge = shortEdge(
-    activeLocalCover?.width ?? modal.album?.local_cover_width,
-    activeLocalCover?.height ?? modal.album?.local_cover_height,
-  );
-  const isSelectableSuggestion = (matches, candidateId) => searchAwaitsDecision && Boolean(candidateId) && matches.some((candidate) => (
-    String(candidate?.id || '') === candidateId
-    && String(candidate?.art_kind || 'cover') === 'cover'
-    && !Boolean(candidate?.display_only)
-    && (!currentCoverEdge || shortEdge(candidate?.width, candidate?.height) > currentCoverEdge)
+  const suggestionRule = {
+    awaitsDecision: searchAwaitsDecision,
+    currentCoverEdge: coverLookupShortEdge(
+      activeLocalCover?.width ?? modal.album?.local_cover_width,
+      activeLocalCover?.height ?? modal.album?.local_cover_height,
+    ),
+  };
+  const isSelectableSuggestion = (matches, candidateId) => Boolean(candidateId) && matches.some((candidate) => (
+    String(candidate?.id || '') === candidateId && isCoverLookupSuggestable(candidate, suggestionRule)
   ));
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
@@ -39141,24 +39157,21 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAn
       : '';
     const currentUserCoverUrl = String(task?.current_user_cover_preview_url || '').trim()
       || payloadUserCoverUrl;
-    const possibleMatches = Array.isArray(task?.possible_matches) ? task.possible_matches : [];
-    const bestCandidate = getCoverLookupShownCandidate(possibleMatches, task?.best_candidate_id);
-    const bestCandidateId = String(bestCandidate?.id || task?.best_candidate_id || '').trim();
-    const bestCandidatePreviewUrl = String(
-      task?.best_candidate_preview_url
-      || bestCandidate?.thumbnail_url
-      || bestCandidate?.preview_url
-      || bestCandidate?.url
-      || '',
-    ).trim();
-    const bestCandidateCoverUrl = buildRemoteCoverLookupImageUrl(
-      bestCandidatePreviewUrl,
-      bestCandidateId,
+    const currentCoverUrl = currentUserCoverUrl || String(task?.current_cover_preview_url || '').trim();
+    // A summary names only the candidate it shows; a full task lists them all.
+    const candidates = Array.isArray(task?.possible_matches) && task.possible_matches.length
+      ? task.possible_matches
+      : [task?.best_candidate].filter(Boolean);
+    const suggestion = !savePending && getCoverLookupSuggestion(candidates, task?.best_candidate_id, {
+      awaitsDecision: !currentCoverUrl || !isActionedCoverLookupNotification(task),
+      currentCoverEdge: coverLookupShortEdge(task?.current_cover_width, task?.current_cover_height),
+    });
+    const suggestionUrl = suggestion ? buildRemoteCoverLookupImageUrl(
+      suggestion.thumbnail_url || suggestion.preview_url || suggestion.url,
+      suggestion.id,
       { preview: true },
-    );
-    const coverUrl = currentUserCoverUrl
-      || bestCandidateCoverUrl
-      || String(task?.current_cover_preview_url || '').trim();
+    ) : '';
+    const coverUrl = suggestionUrl || currentCoverUrl;
     const coverMarkup = coverUrl
       ? `<img class="cover-lookup-task-cover" data-gallery-cover-src="${escapeHtml(coverUrl)}" data-production-cover-src="${escapeHtml(coverUrl)}" alt="" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';

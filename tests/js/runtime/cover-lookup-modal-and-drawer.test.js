@@ -961,7 +961,8 @@ require('node:test')('notification thumbnails prefer the current user cover over
     album: 'Ангелы',
     album_payload: { cover_preview_url: '/images/stale-lookup-cover.jpg' },
     current_user_cover_preview_url: '/cover?album=angels&v=user-selection',
-    best_candidate_preview_url: 'https://images.example/angels-candidate.jpg',
+    best_candidate: { id: 'angels-candidate', preview_url: 'https://images.example/angels-candidate.jpg' },
+    notification_action_taken: true,
   }];
 
   context.renderCoverLookupDrawer();
@@ -982,7 +983,7 @@ require('node:test')('notification thumbnails show the best candidate when no us
     album_payload: { cover_preview_url: '/images/automatic-or-stale-cover.jpg' },
     current_cover_preview_url: '/cover?album=revelations&v=current-art',
     best_candidate_id: 'revelations-best',
-    best_candidate_preview_url: 'https://images.example/revelations-best.jpg',
+    best_candidate: { id: 'revelations-best', preview_url: 'https://images.example/revelations-best.jpg' },
   }];
 
   context.renderCoverLookupDrawer();
@@ -9117,14 +9118,14 @@ require('node:test')('optimistic notification art updates without marking a runn
   context.renderCoverLookupDrawer = () => {};
   const album = { key: 'hunchback', name: 'Hunchback', album_artist: 'Cast' };
   context.state.coverLookup.optimisticAlbumCovers = { 'hunchback::Hunchback::Cast': { src: '/applied.jpg' } };
-  context.state.coverLookup.tasks = [{ id: 'task', status: 'running', album_payload: album, best_candidate_preview_url: '/suggested.jpg' }];
+  context.state.coverLookup.tasks = [{ id: 'task', status: 'running', album_payload: album, best_candidate: { id: 'suggested', preview_url: '/suggested.jpg' } }];
   context.syncCoverLookupAlbumReferences([album]);
   assert.equal(context.state.coverLookup.tasks[0].current_user_cover_preview_url, '/applied.jpg');
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, undefined);
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.syncCoverLookupAlbumReferences([album]);
   assert.equal(context.state.coverLookup.tasks[0].current_user_cover_preview_url, '');
-  assert.equal(context.state.coverLookup.tasks[0].best_candidate_preview_url, '/suggested.jpg');
+  assert.equal(context.state.coverLookup.tasks[0].best_candidate.preview_url, '/suggested.jpg');
 });
 
 require('node:test')('failed gallery loading shows an error instead of a false empty gallery', async () => {
@@ -9755,4 +9756,55 @@ require('node:test')('the notification card and the lookup agree on a named best
   });
   context.applyCoverLookupCandidateSource(context.getCoverLookupCandidateSource(task, null));
   assert.equal(context.state.coverLookup.modal.suggestedRemoteId, 'apple-2400');
+});
+
+require('node:test')('a notification card shows the top match only when Cover Look Up marks it as the suggestion (owner, 11-25)', () => {
+  const currentCover = '/cover?path=current.jpg&size=480';
+  const render = (task) => {
+    const { context, bodyElement } = createDrawerHarness();
+    context.state.coverLookup.tasks = [{
+      id: 'card-rule', status: 'completed', artist: 'Artist', album: 'Album',
+      current_cover_preview_url: currentCover, ...task,
+    }];
+    context.renderCoverLookupDrawer();
+    const src = bodyElement.innerHTML.match(/class="cover-lookup-task-cover"[^>]*data-gallery-cover-src="([^"]+)"/)?.[1] || '';
+    return src.replaceAll('&amp;', '&');
+  };
+  const best = (edge) => ({ id: `match-${edge}`, preview_url: `https://images.example/m${edge}.jpg`, width: edge, height: edge });
+
+  // Summary payloads name the shown candidate with its size and the current cover's size.
+  assert.equal(render({ best_candidate: best(2400), current_cover_width: 3000, current_cover_height: 3000 }), currentCover,
+    'a match no sharper than the current cover is not suggested, so the card shows the current cover');
+  assert.match(render({ best_candidate: best(3600), current_cover_width: 3000, current_cover_height: 3000 }), /key=match-3600/);
+  assert.equal(render({ best_candidate: best(3600), notification_action_taken: true, current_cover_width: 3000, current_cover_height: 3000 }),
+    currentCover, 'an acted-on lookup suggests nothing');
+  assert.match(render({ best_candidate: best(600), current_cover_preview_url: '', notification_action_taken: true }), /key=match-600/,
+    'an album without a cover is always offered the match');
+  assert.equal(render({ best_candidate: { ...best(3600), display_only: true }, current_cover_width: 3000, current_cover_height: 3000 }), currentCover);
+  assert.equal(
+    render({ best_candidate: best(2400), current_user_cover_preview_url: '/cover?path=user.jpg', current_cover_width: 3000, current_cover_height: 3000 }),
+    '/cover?path=user.jpg',
+  );
+  // A full task applies the same rule to its candidates.
+  assert.equal(render({
+    possible_matches: [{ id: 'small', art_kind: 'cover', url: 'https://images.example/s.jpg', width: 1000, height: 1000 }],
+    current_cover_width: 3000, current_cover_height: 3000,
+  }), currentCover);
+});
+
+require('node:test')('Cover Look Up and its notification card read one suggestion rule', () => {
+  const { context } = createDrawerHarness();
+  const local = { candidate_cover_ref: 'C:/Fixture/cover.jpg', is_active: true, width: 3000, height: 3000 };
+  const task = { id: 'rule-task', status: 'completed', notification_action_taken: false };
+  context.state.coverLookup.tasks = [task];
+  Object.assign(context.state.coverLookup.modal, {
+    taskId: task.id, album: { key: 'a', cover_ref: local.candidate_cover_ref }, localCovers: [local],
+    selectedRemoteId: '', pendingLocalRef: '', pendingPastedImageId: '',
+  });
+  for (const edge of [2400, 3600]) {
+    const match = { id: `m-${edge}`, art_kind: 'cover', url: `https://images.example/${edge}.jpg`, width: edge, height: edge };
+    context.applyCoverLookupCandidateSource({ generation: `g-${edge}`, status: 'completed', bestCandidateId: match.id, candidates: [match] });
+    const suggestion = context.getCoverLookupSuggestion([match], match.id, { awaitsDecision: true, currentCoverEdge: 3000 });
+    assert.equal(context.state.coverLookup.modal.suggestedRemoteId, suggestion?.id || '');
+  }
 });

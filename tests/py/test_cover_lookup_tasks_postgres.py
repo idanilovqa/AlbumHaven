@@ -437,13 +437,16 @@ def test_notification_summary_page_items_omit_tracks_and_local_paths():
     assert "album_payload -> 'album_id'" in page_sql
 
 
-def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_candidate_preview():
+def test_notification_summary_page_prefers_current_user_cover_and_names_the_shown_candidate_with_sizes():
     row = _row("angels", "2026-10-17T18:00:00+00:00")
     row["task_summary"].update(
         {
             "current_user_cover_path": "C:/Music/Black Obelisk/Angels/selected.jpg",
             "current_user_cover_revision": "current-user-revision",
-            "best_candidate_preview_url": "https://images.example/angels-best.jpg",
+            "best_candidate": {"id": "angels-best", "preview_url": "https://images.example/angels-best.jpg",
+                               "width": 1200, "height": 1200},
+            "current_cover_width": 600,
+            "current_cover_height": 600,
         }
     )
     connection = _Connection(
@@ -462,9 +465,9 @@ def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_can
         "/cover?path=C%3A/Music/Black%20Obelisk/Angels/selected.jpg"
         "&size=480&v=current-user-revision"
     )
-    assert item["best_candidate_preview_url"] == (
-        "https://images.example/angels-best.jpg"
-    )
+    # The card applies the suggestion rule: it needs the shown candidate's size and the current cover's.
+    assert item["best_candidate"]["preview_url"] == "https://images.example/angels-best.jpg"
+    assert (item["current_cover_width"], item["current_cover_height"]) == (600, 600)
     page_sql = connection.operations[-1][0]
     assert "left join library.local_albums as current_album_by_id" in page_sql
     assert "current_album_by_id.id = identity.album_id" in page_sql
@@ -477,6 +480,8 @@ def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_can
     assert "album_payload ->> 'key'" in page_sql
     assert "from library.local_albums as album" not in page_sql
     assert "with ordinality as candidates(candidate, ordinal)" in page_sql
+    assert "'width', candidate -> 'width'" in page_sql
+    assert "'current_cover_width', current_album.metadata -> 'local_cover_width'" in page_sql
     assert page_sql.count(
         "coalesce(candidate ->> 'art_kind', 'cover') = 'cover'"
     ) == 1

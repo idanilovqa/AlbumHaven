@@ -95,6 +95,53 @@ class _PipeReader:
                 self._loop.call_soon_threadsafe(self.stream.feed_eof)
 
 
+class _PipeWriter:
+    """A child's stdin: a thread does each blocking write, so a full pipe never holds the loop."""
+
+    def __init__(self, pipe: BinaryIO) -> None:
+        self._pipe = pipe
+        self._pending = bytearray()
+        self._writing: asyncio.Future[None] | None = None
+        self._closing = False
+
+    def write(self, data: bytes) -> None:
+        self._pending.extend(data)
+
+    async def drain(self) -> None:
+        data = bytes(self._pending)
+        self._pending.clear()
+        if not data:
+            return
+        self._writing = asyncio.ensure_future(asyncio.to_thread(self._write_all, data))
+        try:
+            await asyncio.shield(self._writing)
+        finally:
+            if self._writing.done():
+                self._writing = None
+
+    def _write_all(self, data: bytes) -> None:
+        view = memoryview(data)
+        while view:
+            view = view[self._pipe.write(view):]
+
+    def close(self) -> None:
+        """End the input; a write still on its thread finishes or fails first."""
+        if self._closing:
+            return
+        self._closing = True
+        writing = self._writing
+        if writing is None or writing.done():
+            with suppress(OSError):
+                self._pipe.close()
+            return
+
+        def close_after(_written: asyncio.Future[None]) -> None:
+            with suppress(OSError):
+                self._pipe.close()
+
+        writing.add_done_callback(close_after)
+
+
 class ChildProcess:
     """The part of asyncio.subprocess.Process the app uses."""
 
@@ -104,16 +151,19 @@ class ChildProcess:
         self._stderr = _PipeReader(self._loop) if piped_stderr else None
         self.stdout = self._stdout.stream
         self.stderr = self._stderr.stream if self._stderr else None
+        self.stdin: _PipeWriter | None = None
         self._exited = self._loop.create_future()
         self._popen: subprocess.Popen[bytes]
 
-    def launch(self, command: tuple[str, ...], stderr: int, creationflags: int) -> None:
+    def launch(
+        self, command: tuple[str, ...], stderr: int, creationflags: int, stdin: int
+    ) -> None:
         output, child_output = _stdout_pipe()
         try:
             with child_output:
                 self._popen = subprocess.Popen(
                     command,
-                    stdin=subprocess.DEVNULL,
+                    stdin=stdin,
                     stdout=child_output,
                     stderr=stderr,
                     creationflags=creationflags,
@@ -122,6 +172,8 @@ class ChildProcess:
         except BaseException:
             output.close()
             raise
+        if self._popen.stdin is not None:
+            self.stdin = _PipeWriter(self._popen.stdin)
         pipes = [(self._stdout, output)]
         if self._stderr:
             pipes.append((self._stderr, self._popen.stderr))
@@ -139,6 +191,9 @@ class ChildProcess:
         except BaseException:
             # Out of threads: nobody would read or reap this child.
             self._popen.kill()
+            if self._popen.stdin is not None:
+                with suppress(OSError):
+                    self._popen.stdin.close()
             for reader, _pipe in pipes:
                 reader.release()
             for _reader, pipe in pipes[len(pumps):]:
@@ -174,10 +229,13 @@ async def start_child_process(
     *command: str,
     stderr: int = subprocess.DEVNULL,
     creationflags: int = 0,
+    stdin: int = subprocess.DEVNULL,
 ) -> ChildProcess:
-    """Start a child with no stdin and a piped stdout."""
+    """Start a child with a piped stdout, and no stdin unless `stdin` is subprocess.PIPE."""
+    if stdin not in (subprocess.DEVNULL, subprocess.PIPE):
+        raise ValueError("a child's stdin is DEVNULL or PIPE")
     process = ChildProcess(piped_stderr=stderr == subprocess.PIPE)
-    starting = _STARTER.submit(process.launch, command, stderr, creationflags)
+    starting = _STARTER.submit(process.launch, command, stderr, creationflags, stdin)
     try:
         await asyncio.wrap_future(starting)
     except asyncio.CancelledError:

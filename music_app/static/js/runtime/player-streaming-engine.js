@@ -2512,18 +2512,19 @@ function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
   return roleState;
 }
 
-function probeStreamingTrackWaveform(track) {
-  if (typeof probeCachedWaveformPeaks !== 'function') return;
+// The waveform is part of starting a song, so it is asked for when its stream opens.
+function loadStreamingTrackWaveform(track) {
+  if (typeof loadPlayingWaveformPeaks !== 'function') return;
   try {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
+    const playingWaveform = loadPlayingWaveformPeaks(
       String(track?.path || ''),
       streamingEngineState().generation,
     );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   } catch (_error) {
-    // Cached waveform probing is optional and must never interrupt playback.
+    // Waveform loading is optional and must never interrupt playback.
   }
 }
 
@@ -2593,7 +2594,7 @@ async function startBrowserStreamingTrack(track, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
     });
     if (!replacement) return null;
-    probeStreamingTrackWaveform(track);
+    loadStreamingTrackWaveform(track);
     replacement.targetBufferFrames = Math.min(
       streamingRoleCapacityFrames(replacement),
       streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
@@ -2693,7 +2694,7 @@ async function startBrowserStreamingTrack(track, {
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
-  probeStreamingTrackWaveform(track);
+  loadStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
     generation: engine.generation,

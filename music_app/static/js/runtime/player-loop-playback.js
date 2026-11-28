@@ -263,13 +263,13 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.current = track;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
+  if (typeof loadPlayingWaveformPeaks === 'function') {
+    const playingWaveform = loadPlayingWaveformPeaks(
       String(track?.path || ''),
       Number(state.player.streaming?.generation) || 0,
     );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   }
   state.player.waveform.renderToken += 1;
@@ -368,6 +368,10 @@ async function playTrackFromPayload(track, options = {}) {
     ? canStartPlaybackInThisTab(track)
     : true;
   if (pendingClaim === false) return false;
+  if (shouldAutoplay && typeof startSelectedTrackWaveformPeaks === 'function') {
+    // The waveform builds while the stream opens, not after it.
+    startSelectedTrackWaveformPeaks(requestedTrackPath);
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
@@ -999,6 +1003,9 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
+    // The controls follow the sound as soon as it stops, not after the listen-session and
+    // ownership round trips below.
+    updatePlayerUi();
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {

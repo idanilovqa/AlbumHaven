@@ -152,6 +152,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/api/library/albums/{album_key:path}/rescan"): "library.inventory.manage",
     ("POST", "/api/library/albums/{album_key:path}/keep-missing"): "library.inventory.manage",
     ("POST", "/cancel-refresh-api"): "library.refresh.cancel",
+    ("POST", "/library/relations/retry"): "library.relations.retry",
     ("GET", "/refresh"): "library.refresh.read",
     ("GET", "/library-settings"): "library.settings.read",
     ("GET", "/library-settings/browse"): "library.filesystem.browse",

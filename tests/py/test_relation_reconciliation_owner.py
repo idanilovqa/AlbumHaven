@@ -5,6 +5,7 @@ explicit initialization reconciles, and is cancellable at shutdown.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from types import SimpleNamespace
@@ -235,3 +236,105 @@ def test_a_backfill_already_recorded_for_the_state_parks_without_work_and_a_canc
         scoped.run_relation_compatibility_backfill({}, evidence, progress=reported.append)
     assert records == ["running"] and forgotten == [evidence], "a shutdown leaves the state to the next start"
     assert [update["state"] for update in reported] == ["running", "cancelled"]
+
+
+# Owner decision (c): a background catch-up that keeps failing writes one Log History entry for the streak, a
+# recovery entry when it works again, and an owner-only retry starts it again (UI pending owner approval).
+def _recording_owner(outcomes, waits, history):
+    owner = _owner(outcomes, [], waits)
+    owner._history = lambda event, message: history.append((event, message))
+    return owner
+
+
+def test_a_failing_catch_up_writes_one_history_entry_per_streak_and_one_when_it_recovers():
+    waits, history = [], []
+    owner = _recording_owner([RuntimeError("database unavailable"), RuntimeError("database unavailable"),
+                              RuntimeError("database unavailable"), True], waits, history)
+
+    owner._run()
+
+    assert [event for event, _ in history] == ["failed", "recovered"]
+    assert "RuntimeError" in history[0][1] and "database unavailable" in history[0][1]
+
+
+def test_a_catch_up_that_succeeds_first_time_writes_no_history():
+    history = []
+    owner = _recording_owner([True], [], history)
+
+    owner._run()
+
+    assert history == []
+
+
+def test_a_parked_catch_up_writes_history_and_an_owner_retry_runs_it_again(monkeypatch):
+    from music_app.services import scoped_relation_projection as scoped
+
+    history, forgotten = [], []
+    owner = _recording_owner([relations.RelationInitializationRequired("The compatibility backfill failed (x)."),
+                              True], [], history)
+    owner._run()
+    assert history == [("parked", "The compatibility backfill failed (x).")]
+    assert owner.request() is False, "parked: nothing re-runs it on its own"
+
+    monkeypatch.setattr(scoped, "forget_compatibility_backfill_attempt", lambda config: forgotten.append(config))
+    started = []
+    monkeypatch.setattr(owner, "request", lambda: started.append(True) or True)
+
+    assert owner.retry() is True
+    assert forgotten == [owner._config], "the retry may run the backfill again for the same state"
+    assert started == [True] and owner._parked_reason is None
+    owner._run()
+    assert [event for event, _ in history] == ["parked", "recovered"]
+
+
+def test_an_owner_retry_never_starts_a_second_run_while_one_is_running():
+    owner = RelationReconciliationOwner({}, reconciled=lambda: None, logger=logging.getLogger("test"))
+    owner._thread = SimpleNamespace(is_alive=lambda: True)
+
+    assert owner.retry() is False
+
+
+def test_the_history_writer_records_catch_up_events_in_log_history(monkeypatch):
+    from music_app.services import relation_reconciliation
+
+    written = []
+    scope = object()
+    monkeypatch.setattr(relation_reconciliation, "resolve_media_host_history_scope", lambda _config: scope)
+    monkeypatch.setattr(relation_reconciliation, "log_app_event", lambda config, logger, action, **fields: written.append(
+        (action, fields)))
+    write = relation_reconciliation.history_writer({"ALBUM_HAVEN_APP_DATABASE_URL": "x"}, logging.getLogger("test"))
+
+    write("failed", "RuntimeError: database unavailable")
+    write("recovered", "")
+
+    (failed_action, failed), (recovered_action, recovered) = written
+    assert failed_action == "Relation catch-up failed" and recovered_action == "Relation catch-up recovered"
+    assert failed["history"] is True and failed["history_scope"] is scope
+    assert failed["level"] == "error" and failed["retryable"] is True
+    assert failed["event_type"] == "relation_catch_up" and failed["error"] == "RuntimeError: database unavailable"
+    assert recovered["level"] == "success" and recovered["event_type"] == "relation_catch_up"
+
+
+def test_relation_retry_is_an_owner_only_capability_on_its_own_route():
+    from music_app.services.capabilities import ROLE_PRESETS, capability_keys_for_roles
+    from music_app.services.private_route_boundary import _PRIVATE_ROUTE_ACTIONS
+
+    assert _PRIVATE_ROUTE_ACTIONS[("POST", "/library/relations/retry")] == "library.relations.retry"
+    assert "library.relations.retry" in ROLE_PRESETS["owner"]
+    for role in ("viewer", "listener", "musician", "admin"):
+        assert "library.relations.retry" not in capability_keys_for_roles([role])
+
+
+def test_the_relation_retry_route_starts_the_owners_retry():
+    import asyncio
+
+    from music_app.routes import web_asgi
+
+    calls = []
+    owner = SimpleNamespace(retry=lambda: calls.append(True) or True)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(relation_reconciliation=owner)))
+
+    response = asyncio.run(web_asgi.retry_relation_catch_up(request))
+
+    assert calls == [True]
+    assert json.loads(response.body) == {"ok": True, "started": True}

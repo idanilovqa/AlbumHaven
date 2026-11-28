@@ -1341,6 +1341,14 @@ async def cancel_refresh_api(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "cancelled": bool(cancelled)})
 
 
+@router.post("/library/relations/retry")
+async def retry_relation_catch_up(request: Request) -> JSONResponse:
+    """The owner's retry of the background relation catch-up named in its Log History entry."""
+    owner = getattr(request.app.state, "relation_reconciliation", None)
+    started = bool(owner is not None and await run_in_threadpool(owner.retry))
+    return JSONResponse({"ok": True, "started": started})
+
+
 @router.get("/refresh")
 async def refresh(request: Request) -> RedirectResponse:
     query_args = request.query_params

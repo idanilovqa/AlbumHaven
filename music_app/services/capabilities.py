@@ -91,7 +91,7 @@ _OWNER_ADDITIONAL_ACTIONS = frozenset({
     "library.playlists.create", "library.playlists.manage",
     "library.playlists.items.manage", "library.playlists.cover.manage",
     "library.playlists.settings.manage", "library.playlists.access.manage",
-    "library.ratings.import", "library.refresh", "library.refresh.cancel",
+    "library.ratings.import", "library.refresh", "library.refresh.cancel", "library.relations.retry",
     "library.refresh.read", "library.settings.read", "library.settings.manage",
     "library.tasks.read", "library.track_preferences.manage",
 })

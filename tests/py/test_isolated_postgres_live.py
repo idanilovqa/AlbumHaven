@@ -9166,6 +9166,9 @@ def test_live_relation_snapshot_decodes_stay_on_start_up_and_saves_never_rebuild
     assert [update.get("phase") for update in reported] == [
         "Reading the published relations", "Reading the published relations"], "its phase, then where it parked"
     assert scoped.relation_reconciliation_plan(fixture.config)["attempted"]["status"] == "parked"
+    # The owner's retry forgets the attempt, so the backfill may run again for the same evidence state.
+    scoped.forget_compatibility_backfill_attempt(fixture.config)
+    assert scoped.relation_reconciliation_plan(fixture.config)["attempted"] is None
     monkeypatch.undo()
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         # The explicit initialization's outcome, for the rest of this test: evidence for the published index.

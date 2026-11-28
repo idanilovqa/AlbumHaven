@@ -12636,6 +12636,23 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:routes/web_asgi.py#retry_relation_catch_up",
+      "action": "Serve POST /library/relations/retry: start the background relation catch-up again",
+      "entrypoints": [
+        "py:music_app/routes/web_asgi.py#retry_relation_catch_up:route:POST /library/relations/retry"
+      ],
+      "owners": [
+        "music_app/routes/web_asgi.py",
+        "music_app/services/relation_reconciliation.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/web_asgi.py#cancel_refresh_api",
       "action": "Serve POST /cancel-refresh-api",
       "entrypoints": [

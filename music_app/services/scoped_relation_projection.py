@@ -1216,6 +1216,12 @@ def _forget_compatibility_backfill(config, connect, evidence):
         "metadata->'relation_compatibility_backfill'->>'status'='running' and " + _SAME_BACKFILL_STATE)
 
 
+def forget_compatibility_backfill_attempt(config, *, connect=None):
+    """The owner's retry: the recorded backfill attempt no longer stops a run for the same evidence state."""
+    _update_backfill_record(config, connect, {}, "metadata-'relation_compatibility_backfill'",
+                            "coalesce(metadata,'{}'::jsonb) ? 'relation_compatibility_backfill'")
+
+
 # Reading or replaying, both builds, the contract check and the evidence write.
 BACKFILL_STEPS = 6
 

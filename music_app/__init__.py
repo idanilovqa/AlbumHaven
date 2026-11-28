@@ -679,6 +679,7 @@ def create_asgi_app():
         _app.state.loose_track_store_owner.start()
         # 005Q: start-up readiness starts it when tag edits would refuse for want of reconciliation.
         from music_app.services.relation_reconciliation import RelationReconciliationOwner
+        from music_app.services.relation_reconciliation import history_writer as relation_history_writer
 
         runtime.relation_reconciliation = RelationReconciliationOwner(
             runtime.config,
@@ -696,8 +697,10 @@ def create_asgi_app():
             }),
             # The one-time compatibility backfill's phase shows in /status (relation_projection.backfill).
             progress=lambda update: runtime.library_state.update({"relation_compatibility_backfill": dict(update)}),
+            history=relation_history_writer(runtime.config, runtime.logger),
             logger=runtime.logger,
         )
+        _app.state.relation_reconciliation = runtime.relation_reconciliation
         configure_shared_cover_search_cache(runtime.config)
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,

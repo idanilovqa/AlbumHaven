@@ -7,6 +7,7 @@ from inspect import isawaitable
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import AsyncIterator, NoReturn
@@ -54,9 +55,15 @@ class _BoundedExecutorAdmission:
 
 
 class _LibraryWarmupHandle:
-    def __init__(self, worker: threading.Thread, stop_requested: threading.Event) -> None:
+    def __init__(
+        self,
+        worker: threading.Thread,
+        stop_requested: threading.Event,
+        pool_prewarm: threading.Thread | None = None,
+    ) -> None:
         self._worker = worker
         self._stop_requested = stop_requested
+        self._pool_prewarm = pool_prewarm
 
     @property
     def daemon(self) -> bool:
@@ -67,8 +74,11 @@ class _LibraryWarmupHandle:
 
     async def stop(self, *, timeout_seconds: float = 30.0) -> None:
         self.request_stop()
-        await asyncio.to_thread(self._worker.join, timeout_seconds)
-        if self._worker.is_alive():
+        deadline = time.monotonic() + timeout_seconds
+        for thread in (self._worker, self._pool_prewarm):
+            if thread is not None:
+                await asyncio.to_thread(thread.join, max(0.0, deadline - time.monotonic()))
+        if self._worker.is_alive() or (self._pool_prewarm is not None and self._pool_prewarm.is_alive()):
             raise TimeoutError(
                 "Library background warm-up did not stop within "
                 f"{timeout_seconds:g} seconds."
@@ -101,15 +111,22 @@ def _start_library_warmup(
             "Startup scan-cache hydration deferred; Postgres browse remains authoritative."
         )
 
+    def prewarm_pools() -> None:
+        try:
+            prewarm_postgres(database_url)
+        except Exception:
+            runtime.logger.exception("Postgres connection pool prewarm failed.")
+
+    # Beside the start-up work rather than before it: running the first-request reads on every warm
+    # connection takes seconds, which recovery and the relation warm-up never wait for.
+    pool_prewarm = None
+    if postgres_authoritative:
+        pool_prewarm = threading.Thread(target=prewarm_pools, name="albumhaven-postgres-prewarm", daemon=True)
+        pool_prewarm.start()
+
     def warm_library_state() -> None:
         try:
             if postgres_authoritative:
-                try:
-                    prewarm_postgres(database_url)
-                except Exception:
-                    runtime.logger.exception("Postgres connection pool prewarm failed.")
-                if stop_requested.is_set():
-                    return
                 if recover_persistence is not None:
                     recover_persistence(runtime)
                 if stop_requested.is_set():
@@ -228,7 +245,7 @@ def _start_library_warmup(
         daemon=True,
     )
     worker.start()
-    return _LibraryWarmupHandle(worker, stop_requested)
+    return _LibraryWarmupHandle(worker, stop_requested, pool_prewarm)
 
 
 def _stop_library_watch_runtime(
@@ -542,6 +559,7 @@ def create_asgi_app():
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.runtime_asset_versions import runtime_asset_version_cache
     from music_app.services.postgres_connections import prewarm_connection_pool
+    from music_app.services.postgres_first_requests import first_request_warmers
     from music_app.services.android_attestation_revocations import import_status_list_on_startup
     from music_app.services.cover_provider_cache import (
         configure_shared_cover_search_cache,
@@ -683,7 +701,9 @@ def create_asgi_app():
             hydrate_runtime_library_state_on_startup,
             ensure_runtime_relation_projection_ready,
             start_background_refresh_for_state,
-            prewarm_connection_pool,
+            lambda database_url: prewarm_connection_pool(
+                database_url, warmers=first_request_warmers(runtime.config)
+            ),
             hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
             recover_persistence=recover_runtime_library_persistence_on_startup,
             metadata_repair_required=file_metadata_repair_required_on_startup,

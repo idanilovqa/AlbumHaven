@@ -51,6 +51,8 @@ test('sensitive browse, sidebar, modal, status, and mobile changes select their 
     ['music_app/static/js/runtime/status-ui-helpers.js', ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']],
     ['music_app/static/css/mobile-layout.css', ['selected-artist', 'all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/static/js/runtime/discovery-center-navigation.js', ['search-browse', 'all-artists', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
+    // Shared Postgres pool policy and the first-request warm-up reach every browse, search and Cover Look Up read.
+    ['music_app/services/postgres_connections.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'utility-problematic-files', 'problematic-files-focused', 'cover-lookup']],
   ];
   for (const [changedPath, expectedTargets] of cases) {
     assert.deepEqual(resolveRequiredPerformanceTargets(contract, [changedPath]), expectedTargets, changedPath);

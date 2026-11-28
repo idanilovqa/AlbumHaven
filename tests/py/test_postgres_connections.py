@@ -60,15 +60,16 @@ def test_connection_pool_prewarm_is_bounded_to_one_released_lease_per_workload(m
 
     postgres_connections.prewarm_connection_pool("postgresql://isolated/test")
 
-    assert set(postgres_connections._pools) == {
-        ("postgresql://isolated/test", "default"),
+    assert list(postgres_connections._pools) == [
         ("postgresql://isolated/test", "browse"),
-    }
-    assert len(_FakePool.created) == 2
-    assert [pool.options["max_size"] for pool in _FakePool.created] == [8, 4]
-    # Pools start cold; only gallery and search reads keep a connection once one succeeded.
-    assert [pool.options["min_size"] for pool in _FakePool.created] == [0, 0]
-    assert [pool.min_size for pool in _FakePool.created] == [0, 1]
+        ("postgresql://isolated/test", "default"),
+        ("postgresql://isolated/test", "cover-references"),
+        ("postgresql://isolated/test", "cover_inventory"),
+    ]
+    assert [pool.options["max_size"] for pool in _FakePool.created] == [4, 8, 4, 4]
+    # Pools start cold; the request-path pools keep two connections once one succeeded.
+    assert [pool.options["min_size"] for pool in _FakePool.created] == [0, 0, 0, 0]
+    assert [pool.min_size for pool in _FakePool.created] == [2, 2, 2, 2]
     for pool in _FakePool.created:
         assert pool.options["max_waiting"] == 32
         assert pool.options["timeout"] == 30
@@ -219,6 +220,8 @@ def driver(monkeypatch):
     monkeypatch.setattr(postgres_connections, "_pools", {})
     monkeypatch.setattr(postgres_connections, "_connect_states", {})
     monkeypatch.setattr(postgres_connections, "_held", {})
+    # No warm minimum unless a test asks for one, so "the pool's connection" is a single object.
+    monkeypatch.setattr(postgres_connections, "POOL_MIN_CONNECTIONS", 0)
     yield driver
     postgres_connections.close_pools()
 
@@ -492,3 +495,91 @@ def test_a_cover_runs_shared_connection_never_leases_again_after_the_run(driver)
         with shared.transaction():
             pass
     assert leased == []
+
+
+def _open_connections(driver):
+    return [connection for connection in driver.connections if not connection.closed]
+
+
+def _wait_until(condition, timeout=5.0):
+    deadline = time.perf_counter() + timeout
+    while not condition():
+        assert time.perf_counter() < deadline, "timed out"
+        time.sleep(0.02)
+
+
+def test_a_request_pool_keeps_its_warm_minimum_open_past_the_idle_timeout(driver, monkeypatch):
+    # 11-25: the first request after a restart or an idle spell connected and planned cold (0.4-3.5 s).
+    monkeypatch.setattr(postgres_connections, "_MAX_IDLE_SECONDS", 0.1)
+    monkeypatch.setattr(postgres_connections, "POOL_MIN_CONNECTIONS", 2)
+
+    for workload in ("default", "browse", "cover-references", "cover_inventory"):
+        with postgres_connections.pooled_connection(_URL, workload=workload):
+            pass
+    pools = {workload: postgres_connections._pools[(_URL, workload)] for workload in (
+        "default", "browse", "cover-references", "cover_inventory")}
+    _wait_until(lambda: len(_open_connections(driver)) == 8)
+    time.sleep(0.6)  # several idle periods
+
+    assert {workload: pool.get_stats()["pool_size"] for workload, pool in pools.items()} == dict.fromkeys(pools, 2)
+    assert len(_open_connections(driver)) == 8
+
+
+def test_a_broken_idle_connection_is_replaced_and_warmed_before_it_is_lent(driver, monkeypatch):
+    monkeypatch.setattr(postgres_connections, "POOL_MIN_CONNECTIONS", 2)
+    monkeypatch.setattr(postgres_connections, "_IDLE_CHECK_SECONDS", 0.0)
+    warmed = []
+    postgres_connections.prewarm_connection_pool(
+        _URL, warmers={"browse": lambda connect: warmed.append(connect(_URL).execute("select warm"))}
+    )
+    browse = postgres_connections._pools[(_URL, "browse")]
+    broken = list(browse._pool)
+    assert len(broken) >= 2
+    for connection in broken:
+        connection.close()  # the server restarted under the idle pool
+
+    with postgres_connections.pooled_connection(_URL, workload="browse") as served:
+        assert served not in broken and not served.closed
+    _wait_until(lambda: len(browse._pool) >= 2)
+    replacements = list(browse._pool)
+    assert not set(map(id, replacements)) & set(map(id, broken))
+    assert set(map(id, replacements)) <= set(map(id, warmed)), "each replacement is warmed before it is lent"
+
+
+def test_startup_warm_up_runs_each_workloads_statements_on_every_warm_connection_before_the_first_request(
+    driver, monkeypatch
+):
+    monkeypatch.setattr(postgres_connections, "POOL_MIN_CONNECTIONS", 2)
+    executed = []
+
+    def warmer(name):
+        def warm(connect):
+            with connect(_URL) as connection:
+                # The test driver's execute returns its connection.
+                executed.append((name, connection.execute(f"select {name}"), connection.read_only))
+        return warm
+
+    warmers = {workload: warmer(workload) for workload in ("default", "browse", "cover-references", "cover_inventory")}
+    postgres_connections.prewarm_connection_pool(_URL, warmers=warmers)
+
+    for workload in warmers:
+        pool = postgres_connections._pools[(_URL, workload)]
+        idle = list(pool._pool)
+        assert len(idle) >= 2, (workload, pool.get_stats())
+        warmed = [connection for name, connection, _read_only in executed if name == workload]
+        assert {id(connection) for connection in idle} <= {id(connection) for connection in warmed}
+        assert all(connection.read_only is None for connection in idle), "warm-up settings never reach a request"
+    assert all(read_only is True for _name, _connection, read_only in executed), "warm-up never writes"
+    with postgres_connections.pooled_connection(_URL, workload="browse") as first_request:
+        assert first_request in [connection for name, connection, _read_only in executed if name == "browse"]
+
+
+def test_a_failing_warm_statement_never_fails_the_prewarm_or_leaves_a_transaction_open(driver):
+    def failing(connect):
+        with connect(_URL):
+            raise psycopg.errors.UndefinedTable("relation does not exist")
+
+    postgres_connections.prewarm_connection_pool(_URL, warmers={"browse": failing})
+
+    with postgres_connections.pooled_connection(_URL, workload="browse") as connection:
+        assert connection.pgconn.transaction_status == TransactionStatus.IDLE

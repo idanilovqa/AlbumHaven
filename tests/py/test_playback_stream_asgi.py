@@ -152,7 +152,7 @@ def playback_app(tmp_path, monkeypatch, request):
     )
     monkeypatch.setattr(
         "music_app.services.postgres_connections.prewarm_connection_pool",
-        lambda _database_url: None,
+        lambda _database_url, **_kwargs: None,
     )
     app = create_test_asgi_app(tmp_path, monkeypatch)
     app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (

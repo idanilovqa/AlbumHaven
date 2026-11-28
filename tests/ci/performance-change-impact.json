@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "requiredPaths": [
+    "music_app/services/postgres_connections.py",
+    "music_app/services/postgres_first_requests.py",
     "music_app/services/problematic_index.py",
     "migrations/postgres/0268_create_album_duplicate_results.sql",
     "migrations/postgres/0269_index_stray_decision_lookups.sql",
@@ -459,6 +461,13 @@
         "tests/e2e/syntheticLargeLibrary/editTagsApiConsecutivePerformance.spec.js"
       ],
       "targets": ["edit-tags-split-merge", "edit-tags-api-consecutive"]
+    },
+    {
+      "paths": [
+        "music_app/services/postgres_connections.py",
+        "music_app/services/postgres_first_requests.py"
+      ],
+      "targets": ["all-artists", "selected-artist", "root-album-browse", "app-open-all-artists", "artist-tree-scroll-navigation", "artist-family", "search-all-artists", "search-browse", "utility-problematic-files", "problematic-files-focused", "cover-lookup"]
     }
   ]
 }

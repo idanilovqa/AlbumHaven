@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import atexit
 import contextvars
+import logging
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from threading import Condition, Lock, get_ident
-from time import perf_counter
+from time import monotonic, perf_counter, sleep
 from weakref import WeakSet
 
 try:  # Keep schema-independent tooling importable.
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover
     PoolTimeout = TimeoutError
     dict_row = None
 
+_LOGGER = logging.getLogger(__name__)
 _pools = {}
 _lock = Lock()
 # The pool connects in the background and retries a failed attempt, so against an unreachable
@@ -96,11 +98,22 @@ _held: dict[int, int] = {}
 # The default workload carries every request-path repository; the others keep their small pools.
 _DEFAULT_WORKLOAD_MAX_SIZE = 8
 _MAX_SIZE = 4
-# Gallery and search reads keep one connection open: a fresh backend spends 0.4-2.7 s planning the
-# search query, so a search after an idle spell would otherwise pay that again (owner, 11-19). The pool
-# starts cold and keeps that connection only after one succeeded, so an unreachable database never
-# leaves a reconnect loop behind (shutdown waits on it).
-_WARM_WORKLOADS = frozenset({"browse"})
+# The request-path pools keep this many connections open (11-25): opening one costs 75-210 ms and a fresh
+# backend spends 0.4-2.7 s planning the search query, so the first request after a start or an idle spell
+# paid both. Each pool starts cold and keeps its minimum only after a connection succeeded, so an
+# unreachable database never leaves a reconnect loop behind (shutdown waits on it).
+POOL_MIN_CONNECTIONS = 2
+# Gallery and search; Cover Look Up and the other request repositories; every response naming covers; and
+# Cover Look Up's local images. Background, save and session work stays cold.
+_WARM_WORKLOADS = ("browse", "default", "cover-references", "cover_inventory")
+# Connections above the minimum close after this long unused.
+_MAX_IDLE_SECONDS = 120
+# A connection last lent this long ago is checked with one empty round trip before it is lent again, so one
+# the server dropped while it sat idle is replaced instead of failing its request.
+_IDLE_CHECK_SECONDS = 30.0
+# Each workload's first-request statements, run on every connection its warm pool opens: by the start-up
+# warm-up, and by the pool itself when it replaces an expired or broken one with no request waiting.
+_connection_warmers: dict[tuple[str, str], Callable[[Callable[..., object]], None]] = {}
 # What a borrower can change on the connection object. The pool's own reset only rolls back, so each
 # checkout restores these (none needs a round trip): one caller's autocommit must never turn the next
 # caller's transaction into separate commits.
@@ -183,15 +196,17 @@ def pooled_connection(
         pool = _pools.get(pool_key)
         if pool is None:
             connect_state = _connect_states[pool_key] = _ConnectState()
+            warmer_key = (database_url, normalized_workload) if depth == 0 else None
             pool = ConnectionPool(
                 conninfo=database_url,
                 connection_class=_state_recording_connection_class(connect_state),
                 min_size=0,
                 max_size=_pool_max_size(normalized_workload, depth),
                 max_waiting=32,
-                timeout=30, max_idle=120,
+                timeout=30, max_idle=_MAX_IDLE_SECONDS,
                 max_lifetime=0 if normalized_workload == _SESSION_WORKLOAD else 600,
-                check=_restore_session_defaults,
+                configure=lambda connection: _configure_new_connection(connection, pool_key, warmer_key),
+                check=_prepare_loan,
                 reconnect_timeout=_RECONNECT_GIVE_UP_SECONDS,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,
@@ -232,6 +247,22 @@ def _restore_session_defaults(connection) -> None:
     for name, default in _SESSION_DEFAULTS:
         if getattr(connection, name) != default:
             setattr(connection, name, default)
+
+
+def _prepare_loan(connection) -> None:
+    now = monotonic()
+    if now - getattr(connection, "_album_haven_lent_at", now) >= _IDLE_CHECK_SECONDS:
+        ConnectionPool.check_connection(connection)  # raising makes the pool discard and replace it
+    connection._album_haven_lent_at = now
+    _restore_session_defaults(connection)
+
+
+def _configure_new_connection(connection, pool_key, warmer_key) -> None:
+    warm = _connection_warmers.get(warmer_key)
+    pool = _pools.get(pool_key)
+    # A request waiting for this connection gets it at once and plans its own statements.
+    if warm is not None and pool is not None and not pool.get_stats().get("requests_waiting"):
+        _warm_connection(connection, warm)
 
 
 def _state_recording_connection_class(connect_state: _ConnectState):
@@ -277,8 +308,8 @@ def _lease_connection(
             acquired = True
             holder = get_ident()
             _held[holder] = _held.get(holder, 0) + 1
-            if keep_warm and pool.min_size == 0:
-                pool.resize(1, pool.max_size)
+            if keep_warm and pool.min_size < POOL_MIN_CONNECTIONS:
+                pool.resize(POOL_MIN_CONNECTIONS, pool.max_size)
             _observe_pool_lease(
                 lease_observer,
                 "acquired",
@@ -382,16 +413,78 @@ def session_connection(database_url: str) -> _LeasedConnection:
     return _LeasedConnection(database_url, _SESSION_WORKLOAD)
 
 
-def prewarm_connection_pool(database_url: str) -> None:
-    for workload in ("default", "browse"):
+class _BorrowedConnection:
+    """A warm-up's connection, used like a `psycopg.connect()` one: leaving `with` or closing only rolls back."""
+
+    def __init__(self, connection):
+        object.__setattr__(self, "_connection", connection)
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(self._connection, name, value)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc_info):
+        self._connection.rollback()
+
+    def close(self) -> None:
+        self._connection.rollback()
+
+
+def _warm_connection(connection, warm: Callable[[Callable[..., object]], None]) -> None:
+    """Run `warm` on this connection in read-only transactions, then leave it as a request expects it."""
+    try:
+        connection.read_only = True
+        warm(lambda *_args, **_kwargs: _BorrowedConnection(connection))
+        connection._album_haven_warmed = True
+    except Exception:
+        _LOGGER.warning("Postgres connection warm-up failed", exc_info=True)
+    finally:
+        connection.rollback()
+        _restore_session_defaults(connection)
+
+
+def prewarm_connection_pool(
+    database_url: str,
+    warmers: Mapping[str, Callable[[Callable[..., object]], None]] | None = None,
+) -> None:
+    """Open every request-path pool to its warm minimum and run each workload's first-request statements on
+    every connection it keeps, so the first request after a start neither connects nor plans cold. A warmer
+    is called with a `connect(database_url)` to hand the repositories it reads through."""
+    for workload, warm in (warmers or {}).items():
+        _connection_warmers[(database_url, workload)] = warm
+    for workload in _WARM_WORKLOADS:
         with pooled_connection(database_url, workload=workload):
-            pass
+            pass  # proves the database reachable and keeps the minimum
+        warm = _connection_warmers.get((database_url, workload))
+        if warm is None:
+            continue
+        pool = _pools[(database_url, workload)]
+        # A borrower waiting on the minimum's last connection would make the pool open one more.
+        deadline = monotonic() + pool.timeout
+        while pool.get_stats().get("pool_available", 0) < pool.min_size and monotonic() < deadline:
+            sleep(0.01)
+        borrowed = []  # held together, so each is a different connection
+        try:
+            for _ in range(pool.min_size):
+                borrowed.append(pool.getconn())
+            for connection in borrowed:
+                if not getattr(connection, "_album_haven_warmed", False):  # the pool warmed it as it opened
+                    _warm_connection(connection, warm)
+        finally:
+            for connection in borrowed:
+                pool.putconn(connection)
 
 
 def close_pools() -> None:
     with _lock:
         pools = list(_pools.values())
         _pools.clear()
+        _connection_warmers.clear()
     for pool in pools:
         pool.close()
 

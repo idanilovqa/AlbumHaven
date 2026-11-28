@@ -879,6 +879,36 @@ def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection()
     assert relation_calls == []
 
 
+def test_postgres_pool_prewarm_never_delays_startup_recovery_and_stop_waits_for_it():
+    from music_app import _start_library_warmup
+
+    release_prewarm = threading.Event()
+    recovered = threading.Event()
+    runtime = types.SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        logger=logging.getLogger("test-library-warmup-prewarm"),
+        library_state={},
+    )
+
+    handle = _start_library_warmup(
+        runtime,
+        lambda _runtime: (_ for _ in ()).throw(AssertionError("hydrate must not run")),
+        lambda _runtime, **_kwargs: None,
+        lambda *_args, **_kwargs: None,
+        lambda _database_url: release_prewarm.wait(timeout=5),
+        recover_persistence=lambda _runtime: recovered.set(),
+    )
+    try:
+        # The first-request warm-up takes seconds; recovery starts without waiting for it.
+        assert recovered.wait(timeout=2)
+        prewarm = next(thread for thread in threading.enumerate() if thread.name == "albumhaven-postgres-prewarm")
+        assert prewarm.is_alive()
+    finally:
+        release_prewarm.set()
+        asyncio.run(handle.stop(timeout_seconds=5))
+    assert not prewarm.is_alive()
+
+
 def test_postgres_relation_warmup_waits_for_startup_grace(monkeypatch):
     import music_app
 
@@ -937,7 +967,7 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     monkeypatch.setattr(
         postgres_connections,
         "prewarm_connection_pool",
-        lambda _database_url: None,
+        lambda _database_url, **_kwargs: None,
     )
     monkeypatch.setattr(cover_preview_backfill.CoverPreviewBackfill, "start", lambda _self: None)
     monkeypatch.setattr(cover_preview_backfill.CoverPreviewBackfill, "stop", lambda _self: None)
@@ -1010,7 +1040,7 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
     monkeypatch.setattr(
         postgres_connections,
         "prewarm_connection_pool",
-        lambda database_url: calls.append(("prewarm", database_url)),
+        lambda database_url, **_kwargs: calls.append(("prewarm", database_url)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -1050,11 +1080,9 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(
         assert projection_started.wait(timeout=2)
         assert shutdown_requested.wait(timeout=2)
         assert lifespan_finished.wait(timeout=2)
-        assert calls == [
-            ("prewarm", "postgresql://album_haven_app@localhost/app"),
-            "relations",
-            "lastfm",
-        ]
+        # The pool prewarm runs on its own thread, beside the start-up work.
+        assert ("prewarm", "postgresql://album_haven_app@localhost/app") in calls
+        assert [call for call in calls if call[0] != "prewarm"] == ["relations", "lastfm"]
         assert asgi_app.state.library_warmup_thread is not None
         assert asgi_app.state.library_warmup_thread.daemon is True
         assert projection_finished.is_set()
@@ -1084,8 +1112,11 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     database_url = "postgresql://album_haven_app@localhost/app"
     monkeypatch.setattr(music_app, "_POSTGRES_RELATION_WARMUP_DELAY_SECONDS", 0)
 
-    def fail_prewarm(url):
+    warmed_workloads = []
+
+    def fail_prewarm(url, *, warmers):
         calls.append(("prewarm", url))
+        warmed_workloads.extend(warmers)
         raise RuntimeError("pool unavailable")
 
     monkeypatch.setattr(Config, "ALBUM_HAVEN_APP_DATABASE_URL", database_url)
@@ -1127,7 +1158,10 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
         {"type": "lifespan.shutdown.complete"},
     ]
     # The one-time cover cache backfill runs after relation readiness, never before it.
-    assert calls == [("prewarm", database_url), "relations", "cover-cache-import"]
+    assert ("prewarm", database_url) in calls
+    assert [call for call in calls if call != ("prewarm", database_url)] == ["relations", "cover-cache-import"]
+    # Every request-path pool runs its first-request reads on each warm connection.
+    assert sorted(warmed_workloads) == ["browse", "cover-references", "cover_inventory", "default"]
     assert "Postgres connection pool prewarm failed." in caplog.text
 
 
@@ -1266,7 +1300,7 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     )
     monkeypatch.setattr("music_app.services.library_roots_postgres.psycopg", FakePsycopg())
     # The placeholder database is unreachable, so prewarming would wait out the pool timeout.
-    monkeypatch.setattr(postgres_connections, "prewarm_connection_pool", lambda _database_url: None)
+    monkeypatch.setattr(postgres_connections, "prewarm_connection_pool", lambda _database_url, **_kwargs: None)
     monkeypatch.setattr(
         "music_app.services.library_roots.PostgresLibraryRootSettingsStore",
         FakePostgresLibraryRootSettingsStore,
@@ -1755,9 +1789,9 @@ def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration(mo
         hydrate_metadata=lambda _runtime: calls.append("metadata"),
         recover_persistence=lambda _runtime: calls.append("recovery"),
     )
-    handle._worker.join(timeout=2)
-    assert not handle._worker.is_alive()
-    assert calls == ["prewarm", "recovery", "metadata", "relations"]
+    asyncio.run(handle.stop(timeout_seconds=2))
+    assert "prewarm" in calls
+    assert [call for call in calls if call != "prewarm"] == ["recovery", "metadata", "relations"]
 
 
 @pytest.mark.parametrize("outdated", [True, False])

@@ -167,6 +167,9 @@ def test_pool_forwards_an_explicit_bounded_checkout_timeout(monkeypatch):
     connection_calls = []
 
     class FakePool:
+        min_size = 2  # already warm
+        max_size = 8
+
         def __init__(self, **_kwargs):
             pass
 
@@ -206,6 +209,9 @@ def test_pool_lease_observer_reports_acquired_and_released(monkeypatch):
             return None
 
     class FakePool:
+        min_size = 2  # already warm
+        max_size = 8
+
         def __init__(self, **_kwargs):
             pass
 
@@ -243,6 +249,9 @@ def test_pool_lease_observer_reports_timeout_and_reraises(monkeypatch):
         pass
 
     class FakePool:
+        min_size = 2  # already warm
+        max_size = 8
+
         def __init__(self, **_kwargs):
             pass
 
@@ -286,6 +295,9 @@ def test_pool_lease_observer_does_not_misclassify_application_timeout(monkeypatc
             return None
 
     class FakePool:
+        min_size = 2  # already warm
+        max_size = 8
+
         def __init__(self, **_kwargs):
             pass
 
@@ -344,7 +356,7 @@ def test_pool_isolates_browse_capacity_from_authentication(monkeypatch):
     postgres_connections.close_pools()
 
 
-def test_pool_prewarm_opens_and_returns_default_and_browse_connections(monkeypatch):
+def test_pool_prewarm_opens_and_returns_one_connection_per_request_pool(monkeypatch):
     events = []
     pools = []
 
@@ -381,6 +393,6 @@ def test_pool_prewarm_opens_and_returns_default_and_browse_connections(monkeypat
     assert callable(prewarm), "shared Postgres connection pools need an explicit prewarm boundary"
     prewarm("postgresql://prewarm")
 
-    assert len(pools) == 2
-    assert events == ["acquired", "returned", "acquired", "returned"]
+    assert len(pools) == 4
+    assert events == ["acquired", "returned"] * 4
     postgres_connections.close_pools()
